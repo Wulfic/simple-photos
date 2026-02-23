@@ -117,6 +117,14 @@ export default function App() {
           }
         />
         <Route
+          path="/photo/plain/:id"
+          element={
+            <ProtectedRoute>
+              <Viewer />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/photo/:id"
           element={
             <ProtectedRoute>

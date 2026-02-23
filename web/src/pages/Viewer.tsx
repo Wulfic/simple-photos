@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { decrypt } from "../crypto/crypto";
+import { useAuthStore } from "../store/auth";
 import { db, type MediaType } from "../db";
 
-// ── Payload shape ─────────────────────────────────────────────────────────────
+// ── Payload shape (encrypted mode) ───────────────────────────────────────────
 interface MediaPayload {
   v: number;
   filename: string;
@@ -23,6 +24,8 @@ interface MediaPayload {
 
 export default function Viewer() {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
+  const isPlainMode = location.pathname.startsWith("/photo/plain/");
   const navigate = useNavigate();
 
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -40,15 +43,18 @@ export default function Viewer() {
   useEffect(() => {
     if (!id) return;
 
-    // Show cached thumbnail immediately for a live-preview feel
-    db.photos.get(id).then((cached) => {
-      if (cached?.thumbnailData) {
-        const url = URL.createObjectURL(new Blob([cached.thumbnailData], { type: "image/jpeg" }));
-        setPreviewUrl(url);
-      }
-    });
-
-    loadMedia(id);
+    if (isPlainMode) {
+      loadPlainMedia(id);
+    } else {
+      // Show cached thumbnail immediately for a live-preview feel
+      db.photos.get(id).then((cached) => {
+        if (cached?.thumbnailData) {
+          const url = URL.createObjectURL(new Blob([cached.thumbnailData], { type: "image/jpeg" }));
+          setPreviewUrl(url);
+        }
+      });
+      loadEncryptedMedia(id);
+    }
 
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") navigate("/gallery");
@@ -65,7 +71,42 @@ export default function Viewer() {
     };
   }, [mediaUrl, previewUrl]);
 
-  async function loadMedia(blobId: string) {
+  /** Load a plain-mode photo — fetch with auth and create object URL */
+  async function loadPlainMedia(photoId: string) {
+    setLoading(true);
+    setError("");
+    try {
+      // Fetch photo metadata to get filename and media type
+      const res = await api.photos.list({ limit: 500 });
+      const photo = res.photos.find((p) => p.id === photoId);
+      if (photo) {
+        setFilename(photo.filename);
+        setMimeType(photo.mime_type);
+        const resolved: MediaType =
+          photo.media_type === "gif" ? "gif"
+          : photo.media_type === "video" ? "video"
+          : "photo";
+        setMediaType(resolved);
+      }
+
+      // Fetch the file with auth headers and create a local object URL
+      const { accessToken } = useAuthStore.getState();
+      const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
+      if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+      const fileRes = await fetch(api.photos.fileUrl(photoId), { headers });
+      if (!fileRes.ok) throw new Error(`Failed to load photo: ${fileRes.status}`);
+      const blob = await fileRes.blob();
+      const url = URL.createObjectURL(blob);
+      setMediaUrl(url);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load media");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** Load an encrypted blob, decrypt, and display */
+  async function loadEncryptedMedia(blobId: string) {
     setLoading(true);
     setError("");
     try {
@@ -107,12 +148,16 @@ export default function Viewer() {
   async function handleDelete() {
     if (!id || !confirm("Permanently delete this item?")) return;
     try {
-      await api.blobs.delete(id);
-      const cached = await db.photos.get(id);
-      if (cached?.thumbnailBlobId) {
-        await api.blobs.delete(cached.thumbnailBlobId).catch(() => {});
+      if (isPlainMode) {
+        await api.photos.delete(id);
+      } else {
+        await api.blobs.delete(id);
+        const cached = await db.photos.get(id);
+        if (cached?.thumbnailBlobId) {
+          await api.blobs.delete(cached.thumbnailBlobId).catch(() => {});
+        }
+        await db.photos.delete(id);
       }
-      await db.photos.delete(id);
       navigate("/gallery");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Delete failed");
@@ -170,7 +215,7 @@ export default function Viewer() {
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-white text-sm bg-black/50 px-4 py-2 rounded-full">
-              Decrypting…
+              {isPlainMode ? "Loading…" : "Decrypting…"}
             </div>
           </div>
         )}

@@ -10,7 +10,28 @@ import {
   ACCEPTED_MIME_TYPES,
 } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
+import { useAuthStore } from "../store/auth";
 import AppHeader from "../components/AppHeader";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type EncryptionMode = "plain" | "encrypted";
+
+/** A plain-mode photo from the server. */
+interface PlainPhoto {
+  id: string;
+  filename: string;
+  file_path: string;
+  mime_type: string;
+  media_type: string;
+  size_bytes: number;
+  width: number;
+  height: number;
+  duration_secs: number | null;
+  taken_at: string | null;
+  thumb_path: string | null;
+  created_at: string;
+}
 
 // ── Payload shapes ────────────────────────────────────────────────────────────
 
@@ -181,24 +202,74 @@ export default function Gallery() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState("");
+  const [mode, setMode] = useState<EncryptionMode | null>(null);
+  const [plainPhotos, setPlainPhotos] = useState<PlainPhoto[]>([]);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Encrypted-mode: cached photos from IndexedDB (only used in encrypted mode)
   const photos = useLiveQuery(() =>
     db.photos.orderBy("takenAt").reverse().toArray()
   );
 
   useEffect(() => {
-    if (!hasCryptoKey()) {
-      navigate("/setup");
-      return;
+    async function init() {
+      try {
+        const settings = await api.encryption.getSettings();
+        const detected = settings.encryption_mode as EncryptionMode;
+        setMode(detected);
+
+        if (detected === "encrypted") {
+          if (!hasCryptoKey()) {
+            navigate("/setup");
+            return;
+          }
+          await loadEncryptedPhotos();
+        } else {
+          await loadPlainPhotos();
+        }
+      } catch {
+        // Fallback: if encryption settings endpoint doesn't exist yet, assume encrypted (legacy)
+        setMode("encrypted");
+        if (!hasCryptoKey()) {
+          navigate("/setup");
+          return;
+        }
+        await loadEncryptedPhotos();
+      }
     }
-    loadPhotos();
+    init();
   }, []);
 
-  // ── Load / sync from server ──────────────────────────────────────────────────
+  // ── Load plain-mode photos from server ─────────────────────────────────────
 
-  async function loadPhotos() {
+  async function loadPlainPhotos() {
+    setLoading(true);
+    try {
+      const allPhotos: PlainPhoto[] = [];
+      let cursor: string | undefined;
+      do {
+        const res = await api.photos.list({ after: cursor, limit: 200 });
+        allPhotos.push(...res.photos);
+        cursor = res.next_cursor ?? undefined;
+      } while (cursor);
+
+      setPlainPhotos(allPhotos.sort((a, b) => {
+        // Sort by taken_at descending, fallback to created_at
+        const aDate = a.taken_at || a.created_at;
+        const bDate = b.taken_at || b.created_at;
+        return bDate.localeCompare(aDate);
+      }));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load photos");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ── Load encrypted-mode photos from blobs + IndexedDB ───────────────────────
+
+  async function loadEncryptedPhotos() {
     setLoading(true);
     try {
       // Fetch ALL blob types that represent media, with full pagination
@@ -207,6 +278,19 @@ export default function Gallery() {
         ...(await fetchAllPages("gif")),
         ...(await fetchAllPages("video")),
       ];
+
+      // Build set of server-side blob IDs for stale-entry cleanup
+      const serverBlobIds = new Set(allMedia.map((b) => b.id));
+
+      // Remove stale entries from IndexedDB that no longer exist on server
+      // (e.g. after a server DB reset or blob deletion)
+      const cachedPhotos = await db.photos.toArray();
+      const staleIds = cachedPhotos
+        .map((p) => p.blobId)
+        .filter((id) => !serverBlobIds.has(id));
+      if (staleIds.length > 0) {
+        await db.photos.bulkDelete(staleIds);
+      }
 
       for (const blob of allMedia) {
         const existing = await db.photos.get(blob.id);
@@ -258,6 +342,27 @@ export default function Gallery() {
   // ── Upload ───────────────────────────────────────────────────────────────────
 
   const handleUpload = useCallback(async (files: FileList) => {
+    if (mode === "plain") {
+      // In plain mode, files must already be in the storage directory.
+      // Trigger a server-side scan to register them.
+      setUploading(true);
+      setError("");
+      try {
+        const res = await api.admin.scanAndRegister();
+        if (res.registered > 0) {
+          await loadPlainPhotos();
+        } else {
+          setError("No new files found. Place files in the storage directory first.");
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Scan failed");
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
+
+    // Encrypted mode: encrypt and upload
     setUploading(true);
     setError("");
 
@@ -274,7 +379,7 @@ export default function Gallery() {
         await uploadSingleFile(file);
       }
       setUploadProgress({ done: fileArray.length, total: fileArray.length });
-      await loadPhotos();
+      await loadEncryptedPhotos();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -361,28 +466,57 @@ export default function Gallery() {
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
+  // Determine which items to display based on mode
+  const hasContent = mode === "plain"
+    ? plainPhotos.length > 0
+    : (photos && photos.length > 0);
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <AppHeader>
-        <label className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 cursor-pointer text-sm font-medium transition-colors select-none shadow-sm shadow-blue-900/20">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          {uploading
-            ? uploadProgress
-              ? `${uploadProgress.done + 1}/${uploadProgress.total}`
-              : "Uploading…"
-            : "Upload"}
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            accept={ACCEPTED_MIME_TYPES}
-            className="hidden"
-            onChange={handleFileInput}
+        {mode === "plain" ? (
+          <button
+            onClick={() => {
+              // In plain mode, trigger server scan to pick up new files
+              setUploading(true);
+              setError("");
+              api.admin.scanAndRegister()
+                .then(async (res) => {
+                  if (res.registered > 0) await loadPlainPhotos();
+                  else setError("No new files found. Place files in the storage directory first.");
+                })
+                .catch((err: any) => setError(err.message))
+                .finally(() => setUploading(false));
+            }}
             disabled={uploading}
-          />
-        </label>
+            className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors select-none shadow-sm shadow-blue-900/20 disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+            {uploading ? "Scanning…" : "Scan for New Files"}
+          </button>
+        ) : (
+          <label className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 cursor-pointer text-sm font-medium transition-colors select-none shadow-sm shadow-blue-900/20">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            {uploading
+              ? uploadProgress
+                ? `${uploadProgress.done + 1}/${uploadProgress.total}`
+                : "Uploading…"
+              : "Upload"}
+            <input
+              ref={inputRef}
+              type="file"
+              multiple
+              accept={ACCEPTED_MIME_TYPES}
+              className="hidden"
+              onChange={handleFileInput}
+              disabled={uploading}
+            />
+          </label>
+        )}
       </AppHeader>
 
       <main className="p-4">
@@ -393,20 +527,32 @@ export default function Gallery() {
           onDrop={handleDrop}
           className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2"
         >
-        {loading && (!photos || photos.length === 0) && (
+        {loading && !hasContent && (
           <p className="col-span-full text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
         )}
 
-        {!loading && (!photos || photos.length === 0) && (
+        {!loading && !hasContent && (
           <div className="col-span-full text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
             <p className="text-gray-500 dark:text-gray-400 mb-2">No media yet</p>
             <p className="text-gray-400 text-sm">
-              Drag and drop photos, GIFs, or videos here — or click Upload
+              {mode === "plain"
+                ? "Place photos in the storage directory, then click \"Scan for New Files\""
+                : "Drag and drop photos, GIFs, or videos here — or click Upload"}
             </p>
           </div>
         )}
 
-        {photos?.map((photo) => (
+        {/* Plain mode tiles */}
+        {mode === "plain" && plainPhotos.map((photo) => (
+          <PlainMediaTile
+            key={photo.id}
+            photo={photo}
+            onClick={() => navigate(`/photo/plain/${photo.id}`)}
+          />
+        ))}
+
+        {/* Encrypted mode tiles */}
+        {mode === "encrypted" && photos?.map((photo) => (
           <MediaTile
             key={photo.blobId}
             photo={photo}
@@ -490,4 +636,89 @@ function formatDuration(secs: number): string {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// ── PlainMediaTile ────────────────────────────────────────────────────────────
+
+interface PlainMediaTileProps {
+  photo: PlainPhoto;
+  onClick: () => void;
+}
+
+function PlainMediaTile({ photo, onClick }: PlainMediaTileProps) {
+  const [visible, setVisible] = useState(false);
+  const [thumbSrc, setThumbSrc] = useState<string | null>(null);
+  const tileRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = tileRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Fetch thumbnail with auth header when visible
+  useEffect(() => {
+    if (!visible) return;
+    let revoked = false;
+    (async () => {
+      try {
+        const { accessToken } = useAuthStore.getState();
+        const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
+        if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+        const res = await fetch(api.photos.thumbUrl(photo.id), { headers });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        if (revoked) return;
+        const url = URL.createObjectURL(blob);
+        setThumbSrc(url);
+      } catch {
+        // Thumbnail load failed — show filename instead
+      }
+    })();
+    return () => { revoked = true; };
+  }, [visible, photo.id]);
+
+  return (
+    <div
+      ref={tileRef}
+      className="relative aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group"
+      onClick={onClick}
+    >
+      {thumbSrc ? (
+        <img
+          src={thumbSrc}
+          alt={photo.filename}
+          className="w-full h-full object-cover"
+          loading="lazy"
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center">
+          {photo.filename}
+        </div>
+      )}
+
+      {/* Media type badge */}
+      {photo.media_type === "video" && (
+        <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+          <span>▶</span>
+          {photo.duration_secs ? <span>{formatDuration(photo.duration_secs)}</span> : null}
+        </div>
+      )}
+      {photo.media_type === "gif" && (
+        <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
+          GIF
+        </div>
+      )}
+    </div>
+  );
 }

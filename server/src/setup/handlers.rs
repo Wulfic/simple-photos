@@ -10,8 +10,9 @@
 //! Security: `POST /api/setup/init` only works when zero users exist in the DB.
 //! Once the first user is created, these endpoints become effectively read-only.
 
+use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -440,6 +441,166 @@ fn update_config_toml_storage(new_root: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Read config.toml, update [server] port (and base_url), and write it back.
+fn update_config_toml_port(new_port: u16) -> anyhow::Result<()> {
+    let config_path = std::env::var("SIMPLE_PHOTOS_CONFIG")
+        .unwrap_or_else(|_| "config.toml".into());
+    let contents = std::fs::read_to_string(&config_path)?;
+    let mut doc: toml::Table = contents.parse()?;
+
+    if let Some(server) = doc.get_mut("server").and_then(|v| v.as_table_mut()) {
+        server.insert("port".to_string(), toml::Value::Integer(new_port as i64));
+
+        // Also update base_url to reflect the new port.
+        // Replace the port portion of URLs like "http://localhost:8080" or "http://host:1234"
+        if let Some(base_url) = server.get("base_url").and_then(|v| v.as_str()) {
+            let updated = if let Some(colon_pos) = base_url.rfind(':') {
+                // Check that after the colon we have digits (port), possibly followed by a path
+                let after_colon = &base_url[colon_pos + 1..];
+                let port_end = after_colon.find('/').unwrap_or(after_colon.len());
+                if after_colon[..port_end].parse::<u16>().is_ok() {
+                    format!(
+                        "{}:{}{}",
+                        &base_url[..colon_pos],
+                        new_port,
+                        &after_colon[port_end..]
+                    )
+                } else {
+                    base_url.to_string()
+                }
+            } else {
+                base_url.to_string()
+            };
+            server.insert("base_url".to_string(), toml::Value::String(updated));
+        }
+    }
+
+    std::fs::write(&config_path, toml::to_string_pretty(&doc)?)?;
+    Ok(())
+}
+
+// ── Port configuration endpoints ────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct PortResponse {
+    pub port: u16,
+    pub message: String,
+}
+
+/// Admin-only: Get the current server port from config.
+///
+/// GET /api/admin/port
+pub async fn get_port(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<PortResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    Ok(Json(PortResponse {
+        port: state.config.server.port,
+        message: "Current server port".into(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePortRequest {
+    pub port: u16,
+}
+
+/// Admin-only: Update the server port in config.toml.
+///
+/// PUT /api/admin/port
+///
+/// This only persists the change to config.toml. The server must be
+/// restarted for the new port to take effect.
+pub async fn update_port(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    Json(req): Json<UpdatePortRequest>,
+) -> Result<Json<PortResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    // Validate port range (1024–65535 for non-privileged ports)
+    if req.port < 1024 {
+        return Err(AppError::BadRequest(
+            "Port must be 1024 or higher (non-privileged range)".into(),
+        ));
+    }
+
+    // Persist to config.toml
+    update_config_toml_port(req.port).map_err(|e| {
+        tracing::error!("Failed to update port in config.toml: {}", e);
+        AppError::Internal(format!("Failed to save port configuration: {}", e))
+    })?;
+
+    audit::log(
+        &state.pool,
+        AuditEvent::AdminAction,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "action": "update_port",
+            "new_port": req.port,
+        })),
+    )
+    .await;
+
+    tracing::info!("Server port updated to {} in config (restart required)", req.port);
+
+    Ok(Json(PortResponse {
+        port: req.port,
+        message: format!(
+            "Port updated to {}. Server restart required for the change to take effect.",
+            req.port
+        ),
+    }))
+}
+
+// ── Server restart endpoint ─────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct RestartResponse {
+    pub message: String,
+}
+
+/// Admin-only: Trigger a graceful server restart.
+///
+/// POST /api/admin/restart
+///
+/// The server exits after a short delay (to allow the HTTP response to be sent).
+/// A service manager (systemd, Docker, etc.) or the user is expected to restart
+/// the process, which will pick up any config.toml changes (e.g. new port).
+pub async fn restart_server(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+) -> Result<Json<RestartResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    audit::log(
+        &state.pool,
+        AuditEvent::AdminAction,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({ "action": "server_restart" })),
+    )
+    .await;
+
+    tracing::info!("Server restart requested by admin — shutting down in 1 second");
+
+    // Spawn a task that exits after a brief delay so the HTTP response is sent first
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tracing::info!("Exiting for restart…");
+        std::process::exit(0);
+    });
+
+    Ok(Json(RestartResponse {
+        message: "Server is restarting. Please wait…".into(),
+    }))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct BrowseQuery {
     pub path: Option<String>,
@@ -565,4 +726,234 @@ pub struct UserInfo {
     pub role: String,
     pub totp_enabled: bool,
     pub created_at: String,
+}
+
+// ── Server-side Import: Scan & Serve ──────────────────────────────────────────
+
+/// Valid media file extensions for server-side scanning.
+const MEDIA_EXTENSIONS: &[&str] = &[
+    // Images
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "heic", "heif", "bmp", "tiff", "tif",
+    "svg", "dng", "cr2", "nef", "arw", "raw",
+    // Videos
+    "mp4", "mov", "mkv", "webm", "avi", "3gp", "m4v",
+];
+
+fn is_media_file(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    MEDIA_EXTENSIONS
+        .iter()
+        .any(|ext| lower.ends_with(&format!(".{}", ext)))
+}
+
+fn mime_from_extension(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "heic" => "image/heic",
+        "heif" => "image/heif",
+        "bmp" => "image/bmp",
+        "tiff" | "tif" => "image/tiff",
+        "svg" => "image/svg+xml",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "3gp" => "video/3gpp",
+        "m4v" => "video/x-m4v",
+        _ => "application/octet-stream",
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportScanQuery {
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportScanResponse {
+    pub directory: String,
+    pub files: Vec<MediaFileEntry>,
+    pub total_size: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MediaFileEntry {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub mime_type: String,
+    pub modified: Option<String>,
+}
+
+/// Admin-only: Scan a directory for importable media files.
+///
+/// GET /api/admin/import/scan?path=/some/path
+///
+/// If no path is given, scans the current storage root.
+/// Returns all image/video files (non-recursive — one level only).
+pub async fn import_scan(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Query(query): axum::extract::Query<ImportScanQuery>,
+) -> Result<Json<ImportScanResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let scan_path = match &query.path {
+        Some(p) if !p.is_empty() => PathBuf::from(p),
+        _ => state.storage_root.read().await.clone(),
+    };
+
+    let path_str = scan_path.display().to_string();
+    if path_str.contains("..") {
+        return Err(AppError::BadRequest("Path must not contain '..'".into()));
+    }
+
+    let canonical = tokio::fs::canonicalize(&scan_path).await.map_err(|e| {
+        AppError::BadRequest(format!("Cannot resolve path '{}': {}", scan_path.display(), e))
+    })?;
+
+    let meta = tokio::fs::metadata(&canonical).await.map_err(|e| {
+        AppError::BadRequest(format!("Cannot access '{}': {}", canonical.display(), e))
+    })?;
+
+    if !meta.is_dir() {
+        return Err(AppError::BadRequest(format!(
+            "'{}' is not a directory",
+            canonical.display()
+        )));
+    }
+
+    let mut files = Vec::new();
+    let mut total_size: u64 = 0;
+
+    // Scan directory entries — files only, skip hidden
+    let mut entries = tokio::fs::read_dir(&canonical).await.map_err(|e| {
+        AppError::BadRequest(format!("Cannot read directory '{}': {}", canonical.display(), e))
+    })?;
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+
+        if let Ok(ft) = entry.file_type().await {
+            if ft.is_file() && is_media_file(&name) {
+                let full_path = entry.path().display().to_string();
+                let file_meta = entry.metadata().await.ok();
+                let size = file_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                let modified = file_meta.and_then(|m| {
+                    m.modified().ok().map(|t| {
+                        let dt: chrono::DateTime<chrono::Utc> = t.into();
+                        dt.to_rfc3339()
+                    })
+                });
+                let mime = mime_from_extension(&name).to_string();
+
+                total_size += size;
+                files.push(MediaFileEntry {
+                    name,
+                    path: full_path,
+                    size,
+                    mime_type: mime,
+                    modified,
+                });
+            }
+        }
+    }
+
+    // Sort by name
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    tracing::info!(
+        "Import scan: {} media files ({} bytes) in {:?}",
+        files.len(),
+        total_size,
+        canonical
+    );
+
+    Ok(Json(ImportScanResponse {
+        directory: canonical.display().to_string(),
+        files,
+        total_size,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportFileQuery {
+    pub path: String,
+}
+
+/// Admin-only: Stream a raw file from the server filesystem for client-side import.
+///
+/// GET /api/admin/import/file?path=/path/to/photo.jpg
+///
+/// The client downloads the raw file, encrypts it locally, then uploads as a blob.
+/// This enables importing photos already on the server without going through the browser file picker.
+pub async fn import_file(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Query(query): axum::extract::Query<ImportFileQuery>,
+) -> Result<axum::response::Response, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let file_path = PathBuf::from(&query.path);
+
+    // Security checks
+    if query.path.contains("..") {
+        return Err(AppError::BadRequest("Path must not contain '..'".into()));
+    }
+
+    let canonical = tokio::fs::canonicalize(&file_path).await.map_err(|e| {
+        AppError::BadRequest(format!("Cannot resolve path '{}': {}", query.path, e))
+    })?;
+
+    // Verify it's a file and it's a media file
+    let meta = tokio::fs::metadata(&canonical).await.map_err(|_e| {
+        AppError::NotFound
+    })?;
+
+    if !meta.is_file() {
+        return Err(AppError::BadRequest("Path is not a file".into()));
+    }
+
+    let name = canonical
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    if !is_media_file(&name) {
+        return Err(AppError::BadRequest("Not a supported media file".into()));
+    }
+
+    let mime = mime_from_extension(&name);
+    let size = meta.len();
+
+    // Stream the file
+    let file = tokio::fs::File::open(&canonical).await.map_err(|e| {
+        AppError::Internal(format!("Failed to open file: {}", e))
+    })?;
+
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
+    Ok(axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", HeaderValue::from_static(mime))
+        .header("Content-Length", HeaderValue::from(size))
+        .header(
+            "Content-Disposition",
+            HeaderValue::from_str(&format!("inline; filename=\"{}\"", name)).unwrap_or_else(|_| {
+                HeaderValue::from_static("inline")
+            }),
+        )
+        .header("Cache-Control", HeaderValue::from_static("no-store"))
+        .body(body)
+        .map_err(|e| AppError::Internal(e.to_string()))?)
 }

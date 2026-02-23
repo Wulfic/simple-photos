@@ -6,6 +6,7 @@ mod db;
 mod downloads;
 mod error;
 mod health;
+mod photos;
 mod ratelimit;
 mod security;
 mod setup;
@@ -146,7 +147,33 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/users", get(setup::handlers::list_users))
         .route("/admin/storage", get(setup::handlers::get_storage))
         .route("/admin/storage", put(setup::handlers::update_storage))
-        .route("/admin/browse", get(setup::handlers::browse_directory));
+        .route("/admin/browse", get(setup::handlers::browse_directory))
+        // Server port configuration (admin only)
+        .route("/admin/port", get(setup::handlers::get_port))
+        .route("/admin/port", put(setup::handlers::update_port))
+        .route("/admin/restart", post(setup::handlers::restart_server))
+        // Server-side import — scan directories and serve raw files for client-side encryption
+        .route("/admin/import/scan", get(setup::handlers::import_scan))
+        .route("/admin/import/file", get(setup::handlers::import_file))
+        // Plain-mode photos — list, serve, register, thumbnail
+        .route("/photos", get(photos::handlers::list_photos))
+        .route("/photos/register", post(photos::handlers::register_photo))
+        .route("/photos/{id}/file", get(photos::handlers::serve_photo))
+        .route("/photos/{id}/thumb", get(photos::handlers::serve_thumbnail))
+        .route("/photos/{id}", delete(photos::handlers::delete_photo))
+        // Plain-mode scan & register all files on disk
+        .route("/admin/photos/scan", post(photos::handlers::scan_and_register))
+        // Encryption settings
+        .route("/settings/encryption", get(photos::handlers::get_encryption_settings))
+        .route("/admin/encryption", put(photos::handlers::set_encryption_mode))
+        .route("/admin/encryption/progress", post(photos::handlers::report_migration_progress))
+        // Encrypted galleries
+        .route("/galleries/encrypted", get(photos::handlers::list_encrypted_galleries))
+        .route("/galleries/encrypted", post(photos::handlers::create_encrypted_gallery))
+        .route("/galleries/encrypted/{id}", delete(photos::handlers::delete_encrypted_gallery))
+        .route("/galleries/encrypted/{id}/unlock", post(photos::handlers::unlock_encrypted_gallery))
+        .route("/galleries/encrypted/{id}/items", get(photos::handlers::list_gallery_items))
+        .route("/galleries/encrypted/{id}/items", post(photos::handlers::add_gallery_item));
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))

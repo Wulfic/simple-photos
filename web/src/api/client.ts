@@ -52,7 +52,10 @@ async function request<T>(
   }
 
   // ── Automatic token refresh on 401 ──────────────────────────────────────
-  if (res.status === 401) {
+  // Skip refresh logic for auth endpoints — their 401s are real errors
+  // (wrong password, invalid token), not expired-session indicators.
+  const isAuthEndpoint = path.startsWith("/auth/");
+  if (res.status === 401 && !isAuthEndpoint) {
     const refreshed = await tryRefresh();
     if (refreshed) {
       const newToken = useAuthStore.getState().accessToken;
@@ -347,5 +350,210 @@ export const api = {
         directories: Array<{ name: string; path: string }>;
         writable: boolean;
       }>(`/admin/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+
+    importScan: (path?: string) =>
+      request<{
+        directory: string;
+        files: Array<{
+          name: string;
+          path: string;
+          size: number;
+          mime_type: string;
+          modified: string | null;
+        }>;
+        total_size: number;
+      }>(`/admin/import/scan${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+
+    importFile: async (filePath: string): Promise<ArrayBuffer> => {
+      const { accessToken } = useAuthStore.getState();
+      const headers: Record<string, string> = {
+        "X-Requested-With": "SimplePhotos",
+      };
+      if (accessToken) {
+        headers["Authorization"] = `Bearer ${accessToken}`;
+      }
+
+      const url = `${BASE}/admin/import/file?path=${encodeURIComponent(filePath)}`;
+      const res = await fetch(url, { headers });
+
+      if (res.status === 401) {
+        const refreshed = await tryRefresh();
+        if (refreshed) {
+          const newToken = useAuthStore.getState().accessToken;
+          headers["Authorization"] = `Bearer ${newToken}`;
+          const retry = await fetch(url, { headers });
+          if (!retry.ok) throw new Error(`Download failed: ${retry.status}`);
+          return retry.arrayBuffer();
+        }
+        useAuthStore.getState().logout();
+        throw new Error("Session expired");
+      }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      return res.arrayBuffer();
+    },
+
+    getPort: () =>
+      request<{ port: number; message: string }>("/admin/port"),
+
+    updatePort: (port: number) =>
+      request<{ port: number; message: string }>("/admin/port", {
+        method: "PUT",
+        body: JSON.stringify({ port }),
+      }),
+
+    restart: () =>
+      request<{ message: string }>("/admin/restart", {
+        method: "POST",
+      }),
+
+    /** Scan storage and register all unregistered media files (plain mode) */
+    scanAndRegister: () =>
+      request<{ registered: number; message: string }>("/admin/photos/scan", {
+        method: "POST",
+      }),
+  },
+
+  // ── Plain-mode Photos ─────────────────────────────────────────────────────
+
+  photos: {
+    list: (params?: { after?: string; limit?: number; media_type?: string }) => {
+      const query = new URLSearchParams();
+      if (params?.after) query.set("after", params.after);
+      if (params?.limit) query.set("limit", params.limit.toString());
+      if (params?.media_type) query.set("media_type", params.media_type);
+      const qs = query.toString();
+      return request<{
+        photos: Array<{
+          id: string;
+          filename: string;
+          file_path: string;
+          mime_type: string;
+          media_type: string;
+          size_bytes: number;
+          width: number;
+          height: number;
+          duration_secs: number | null;
+          taken_at: string | null;
+          latitude: number | null;
+          longitude: number | null;
+          thumb_path: string | null;
+          created_at: string;
+        }>;
+        next_cursor: string | null;
+      }>(`/photos${qs ? `?${qs}` : ""}`);
+    },
+
+    register: (data: {
+      filename: string;
+      file_path: string;
+      mime_type: string;
+      size_bytes: number;
+      media_type?: string;
+      width?: number;
+      height?: number;
+      duration_secs?: number;
+      taken_at?: string;
+      latitude?: number;
+      longitude?: number;
+    }) =>
+      request<{ photo_id: string; thumb_path: string }>("/photos/register", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+
+    /** Get the URL for serving a plain photo file */
+    fileUrl: (photoId: string) => `${BASE}/photos/${photoId}/file`,
+
+    /** Get the URL for serving a plain photo thumbnail */
+    thumbUrl: (photoId: string) => `${BASE}/photos/${photoId}/thumb`,
+
+    delete: (photoId: string) =>
+      request<void>(`/photos/${photoId}`, { method: "DELETE" }),
+  },
+
+  // ── Encryption Settings ───────────────────────────────────────────────────
+
+  encryption: {
+    getSettings: () =>
+      request<{
+        encryption_mode: string;
+        migration_status: string;
+        migration_total: number;
+        migration_completed: number;
+        migration_error: string | null;
+      }>("/settings/encryption"),
+
+    setMode: (mode: "plain" | "encrypted") =>
+      request<{ message: string; mode: string; migration_items: number }>(
+        "/admin/encryption",
+        {
+          method: "PUT",
+          body: JSON.stringify({ mode }),
+        }
+      ),
+
+    reportProgress: (data: {
+      completed_count: number;
+      error?: string;
+      done?: boolean;
+    }) =>
+      request<{ ok: boolean }>("/admin/encryption/progress", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+  },
+
+  // ── Encrypted Galleries ───────────────────────────────────────────────────
+
+  encryptedGalleries: {
+    list: () =>
+      request<{
+        galleries: Array<{
+          id: string;
+          name: string;
+          created_at: string;
+          item_count: number;
+        }>;
+      }>("/galleries/encrypted"),
+
+    create: (name: string, password: string) =>
+      request<{ gallery_id: string; name: string }>("/galleries/encrypted", {
+        method: "POST",
+        body: JSON.stringify({ name, password }),
+      }),
+
+    delete: (galleryId: string) =>
+      request<void>(`/galleries/encrypted/${galleryId}`, {
+        method: "DELETE",
+      }),
+
+    unlock: (galleryId: string, password: string) =>
+      request<{ gallery_token: string; expires_in: number }>(
+        `/galleries/encrypted/${galleryId}/unlock`,
+        {
+          method: "POST",
+          body: JSON.stringify({ password }),
+        }
+      ),
+
+    listItems: (galleryId: string, galleryToken: string) =>
+      request<{
+        items: Array<{ id: string; blob_id: string; added_at: string }>;
+      }>(`/galleries/encrypted/${galleryId}/items`, {
+        headers: { "X-Gallery-Token": galleryToken },
+      }),
+
+    addItem: (galleryId: string, blobId: string) =>
+      request<{ item_id: string }>(
+        `/galleries/encrypted/${galleryId}/items`,
+        {
+          method: "POST",
+          body: JSON.stringify({ blob_id: blobId }),
+        }
+      ),
   },
 };
