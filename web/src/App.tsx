@@ -13,6 +13,7 @@ import Viewer from "./pages/Viewer";
 import Settings from "./pages/Settings";
 import Welcome from "./pages/Welcome";
 import Import from "./pages/Import";
+import Trash from "./pages/Trash";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
@@ -145,6 +146,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Import />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/trash"
+          element={
+            <ProtectedRoute>
+              <Trash />
             </ProtectedRoute>
           }
         />

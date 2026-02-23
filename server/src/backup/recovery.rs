@@ -1,0 +1,405 @@
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::Json;
+use chrono::Utc;
+use uuid::Uuid;
+
+use crate::auth::middleware::AuthUser;
+use crate::error::AppError;
+use crate::state::AppState;
+
+use super::models::*;
+
+// ── Recovery ─────────────────────────────────────────────────────────────────
+
+/// POST /api/admin/backup/servers/:id/recover
+/// Recover all photos from a backup server that don't already exist locally.
+/// Runs as a background task; returns immediately with a recovery_id.
+///
+/// This endpoint:
+/// 1. Connects to the backup server's /api/backup/list endpoint
+/// 2. Compares filenames with local photos
+/// 3. Downloads any missing photos and stores them locally
+/// 4. Registers them in the photos table
+pub async fn recover_from_backup(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(server_id): Path<String>,
+) -> Result<(StatusCode, Json<RecoveryResponse>), AppError> {
+    require_admin(&state, &auth).await?;
+
+    // Fetch backup server details
+    let server = sqlx::query_as::<_, BackupServer>(
+        "SELECT id, name, address, sync_frequency_hours, last_sync_at, \
+         last_sync_status, last_sync_error, enabled, created_at \
+         FROM backup_servers WHERE id = ?",
+    )
+    .bind(&server_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    // Fetch the API key for the remote server
+    let api_key: Option<String> = sqlx::query_scalar(
+        "SELECT api_key FROM backup_servers WHERE id = ?",
+    )
+    .bind(&server_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+
+    // Create a sync log entry for tracking
+    let recovery_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let server_name = server.name.clone();
+
+    sqlx::query(
+        "INSERT INTO backup_sync_log (id, server_id, started_at, status) \
+         VALUES (?, ?, ?, 'recovering')",
+    )
+    .bind(&recovery_id)
+    .bind(&server_id)
+    .bind(&now)
+    .execute(&state.pool)
+    .await?;
+
+    // Spawn recovery as a background task
+    let pool = state.pool.clone();
+    let storage_root = state.storage_root.read().await.clone();
+    let user_id = auth.user_id.clone();
+    let recovery_id_clone = recovery_id.clone();
+
+    tokio::spawn(async move {
+        run_recovery(
+            &pool,
+            &storage_root,
+            &server,
+            &api_key,
+            &user_id,
+            &recovery_id_clone,
+        )
+        .await;
+    });
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RecoveryResponse {
+            message: format!("Recovery from '{}' started", server_name),
+            recovery_id,
+        }),
+    ))
+}
+
+/// Execute the actual recovery from a backup server.
+/// Downloads all photos that don't exist locally (by filename comparison).
+async fn run_recovery(
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+    server: &BackupServer,
+    api_key: &Option<String>,
+    user_id: &str,
+    recovery_id: &str,
+) {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            update_recovery_log(pool, recovery_id, "error", 0, 0, Some(&e.to_string())).await;
+            return;
+        }
+    };
+
+    let base_url = format!("http://{}/api", server.address);
+
+    // 1. Fetch remote photo list
+    let mut list_req = client.get(format!("{}/backup/list", base_url));
+    if let Some(ref key) = api_key {
+        list_req = list_req.header("X-API-Key", key.as_str());
+    }
+
+    let remote_photos: Vec<BackupPhotoRecord> = match list_req.send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json().await {
+            Ok(photos) => photos,
+            Err(e) => {
+                update_recovery_log(
+                    pool,
+                    recovery_id,
+                    "error",
+                    0,
+                    0,
+                    Some(&format!("Failed to parse backup photo list: {}", e)),
+                )
+                .await;
+                return;
+            }
+        },
+        Ok(resp) => {
+            update_recovery_log(
+                pool,
+                recovery_id,
+                "error",
+                0,
+                0,
+                Some(&format!(
+                    "Backup server returned HTTP {}",
+                    resp.status()
+                )),
+            )
+            .await;
+            return;
+        }
+        Err(e) => {
+            update_recovery_log(
+                pool,
+                recovery_id,
+                "error",
+                0,
+                0,
+                Some(&format!("Failed to connect to backup server: {}", e)),
+            )
+            .await;
+            return;
+        }
+    };
+
+    tracing::info!(
+        "Recovery from '{}': found {} photos on backup",
+        server.name,
+        remote_photos.len()
+    );
+
+    // 2. Get local filenames for comparison
+    let local_filenames: Vec<String> = match sqlx::query_scalar::<_, String>(
+        "SELECT filename FROM photos",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(names) => names,
+        Err(e) => {
+            update_recovery_log(pool, recovery_id, "error", 0, 0, Some(&e.to_string())).await;
+            return;
+        }
+    };
+
+    let local_set: std::collections::HashSet<String> =
+        local_filenames.into_iter().collect();
+
+    // 3. Filter to photos not already on this server
+    let missing: Vec<&BackupPhotoRecord> = remote_photos
+        .iter()
+        .filter(|p| !local_set.contains(&p.filename))
+        .collect();
+
+    tracing::info!(
+        "Recovery from '{}': {} photos to download ({} already exist locally)",
+        server.name,
+        missing.len(),
+        remote_photos.len() - missing.len()
+    );
+
+    let mut photos_recovered = 0i64;
+    let mut bytes_recovered = 0i64;
+
+    // 4. Download and register each missing photo
+    for photo in &missing {
+        // Download the file from the backup
+        let mut dl_req = client.get(format!("{}/backup/download/{}", base_url, photo.id));
+        if let Some(ref key) = api_key {
+            dl_req = dl_req.header("X-API-Key", key.as_str());
+        }
+
+        let file_data = match dl_req.send().await {
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!("Recovery: failed to read bytes for {}: {}", photo.filename, e);
+                    continue;
+                }
+            },
+            Ok(resp) => {
+                tracing::warn!(
+                    "Recovery: backup returned HTTP {} for photo {}",
+                    resp.status(),
+                    photo.filename
+                );
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!("Recovery: download failed for {}: {}", photo.filename, e);
+                continue;
+            }
+        };
+
+        // Determine storage path — use the original file_path from the backup
+        let file_path = &photo.file_path;
+        let full_path = storage_root.join(file_path);
+
+        // Ensure parent directory exists
+        if let Some(parent) = full_path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                tracing::warn!("Recovery: failed to create dir for {}: {}", file_path, e);
+                continue;
+            }
+        }
+
+        // Write file to disk
+        if let Err(e) = tokio::fs::write(&full_path, &file_data).await {
+            tracing::warn!("Recovery: failed to write {}: {}", file_path, e);
+            continue;
+        }
+
+        // Register in the photos table
+        let new_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let thumb_filename = format!("{}.thumb.jpg", new_id);
+        let thumb_rel = format!(".thumbnails/{}", thumb_filename);
+
+        if let Err(e) = sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
+             thumb_path, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&new_id)
+        .bind(user_id)
+        .bind(&photo.filename)
+        .bind(file_path)
+        .bind(&photo.mime_type)
+        .bind(&photo.media_type)
+        .bind(file_data.len() as i64)
+        .bind(photo.width)
+        .bind(photo.height)
+        .bind(photo.duration_secs)
+        .bind(&photo.taken_at)
+        .bind(photo.latitude)
+        .bind(photo.longitude)
+        .bind(&thumb_rel)
+        .bind(&now)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!("Recovery: failed to register {}: {}", photo.filename, e);
+            // Clean up the written file on DB failure
+            let _ = tokio::fs::remove_file(&full_path).await;
+            continue;
+        }
+
+        photos_recovered += 1;
+        bytes_recovered += file_data.len() as i64;
+    }
+
+    // 5. Update recovery log
+    update_recovery_log(
+        pool,
+        recovery_id,
+        "success",
+        photos_recovered,
+        bytes_recovered,
+        None,
+    )
+    .await;
+
+    tracing::info!(
+        "Recovery from '{}' complete: {} photos, {} bytes recovered",
+        server.name,
+        photos_recovered,
+        bytes_recovered
+    );
+}
+
+/// Update the sync log entry used for tracking recovery progress.
+async fn update_recovery_log(
+    pool: &sqlx::SqlitePool,
+    log_id: &str,
+    status: &str,
+    photos_synced: i64,
+    bytes_synced: i64,
+    error: Option<&str>,
+) {
+    let now = Utc::now().to_rfc3339();
+    let _ = sqlx::query(
+        "UPDATE backup_sync_log SET completed_at = ?, status = ?, photos_synced = ?, \
+         bytes_synced = ?, error = ? WHERE id = ?",
+    )
+    .bind(&now)
+    .bind(status)
+    .bind(photos_synced)
+    .bind(bytes_synced)
+    .bind(error)
+    .bind(log_id)
+    .execute(pool)
+    .await;
+}
+
+// ── Backup View Proxy ────────────────────────────────────────────────────────
+
+/// GET /api/admin/backup/servers/:id/photos
+/// Proxy endpoint: fetches the photo list from a backup server and returns it.
+/// Used by the frontend to show a backup view of photos.
+pub async fn proxy_backup_photos(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(server_id): Path<String>,
+) -> Result<Json<Vec<BackupPhotoRecord>>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let address: String = sqlx::query_scalar(
+        "SELECT address FROM backup_servers WHERE id = ?",
+    )
+    .bind(&server_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let api_key: Option<String> = sqlx::query_scalar(
+        "SELECT api_key FROM backup_servers WHERE id = ?",
+    )
+    .bind(&server_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .flatten();
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
+
+    let mut req = client.get(format!("http://{}/api/backup/list", address));
+    if let Some(ref key) = api_key {
+        req = req.header("X-API-Key", key.as_str());
+    }
+
+    match req.send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let photos: Vec<BackupPhotoRecord> = resp
+                .json()
+                .await
+                .map_err(|e| AppError::Internal(format!("Failed to parse response: {}", e)))?;
+            Ok(Json(photos))
+        }
+        Ok(resp) => Err(AppError::Internal(format!(
+            "Backup server returned HTTP {}",
+            resp.status()
+        ))),
+        Err(e) => Err(AppError::Internal(format!(
+            "Failed to connect to backup server: {}",
+            e
+        ))),
+    }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+async fn require_admin(state: &AppState, auth: &AuthUser) -> Result<(), AppError> {
+    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+        .bind(&auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".into()));
+    }
+    Ok(())
+}

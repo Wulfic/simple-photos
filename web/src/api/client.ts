@@ -556,4 +556,182 @@ export const api = {
         }
       ),
   },
+
+  // ── Trash ─────────────────────────────────────────────────────────────────
+
+  trash: {
+    /** List all items in the user's trash */
+    list: (params?: { after?: string; limit?: number }) => {
+      const query = new URLSearchParams();
+      if (params?.after) query.set("after", params.after);
+      if (params?.limit) query.set("limit", params.limit.toString());
+      const qs = query.toString();
+      return request<{
+        items: Array<{
+          id: string;
+          photo_id: string;
+          filename: string;
+          file_path: string;
+          mime_type: string;
+          media_type: string;
+          size_bytes: number;
+          width: number;
+          height: number;
+          duration_secs: number | null;
+          taken_at: string | null;
+          latitude: number | null;
+          longitude: number | null;
+          thumb_path: string | null;
+          deleted_at: string;
+          expires_at: string;
+        }>;
+        next_cursor: string | null;
+      }>(`/trash${qs ? `?${qs}` : ""}`);
+    },
+
+    /** Restore a photo from trash back to the gallery */
+    restore: (trashId: string) =>
+      request<void>(`/trash/${trashId}/restore`, { method: "POST" }),
+
+    /** Permanently delete a single trash item */
+    permanentDelete: (trashId: string) =>
+      request<void>(`/trash/${trashId}`, { method: "DELETE" }),
+
+    /** Empty the entire trash (permanently delete all items) */
+    emptyTrash: () =>
+      request<{ deleted: number; message: string }>("/trash", {
+        method: "DELETE",
+      }),
+
+    /** Get the URL for a trashed photo's thumbnail */
+    thumbUrl: (trashId: string) => `${BASE}/trash/${trashId}/thumb`,
+  },
+
+  // ── Backup Servers (Admin) ────────────────────────────────────────────────
+
+  backup: {
+    /** List all configured backup servers */
+    listServers: () =>
+      request<{
+        servers: Array<{
+          id: string;
+          name: string;
+          address: string;
+          sync_frequency_hours: number;
+          last_sync_at: string | null;
+          last_sync_status: string;
+          last_sync_error: string | null;
+          enabled: boolean;
+          created_at: string;
+        }>;
+      }>("/admin/backup/servers"),
+
+    /** Add a new backup server */
+    addServer: (data: {
+      name: string;
+      address: string;
+      api_key?: string;
+      sync_frequency_hours?: number;
+    }) =>
+      request<{
+        id: string;
+        name: string;
+        address: string;
+        sync_frequency_hours: number;
+      }>("/admin/backup/servers", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+
+    /** Update a backup server's configuration */
+    updateServer: (
+      serverId: string,
+      data: {
+        name?: string;
+        address?: string;
+        api_key?: string;
+        sync_frequency_hours?: number;
+        enabled?: boolean;
+      }
+    ) =>
+      request<{ message: string; id: string }>(
+        `/admin/backup/servers/${serverId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify(data),
+        }
+      ),
+
+    /** Remove a backup server */
+    removeServer: (serverId: string) =>
+      request<void>(`/admin/backup/servers/${serverId}`, {
+        method: "DELETE",
+      }),
+
+    /** Check if a backup server is reachable */
+    checkStatus: (serverId: string) =>
+      request<{
+        reachable: boolean;
+        version: string | null;
+        error: string | null;
+      }>(`/admin/backup/servers/${serverId}/status`),
+
+    /** Get sync logs for a backup server */
+    getSyncLogs: (serverId: string) =>
+      request<
+        Array<{
+          id: string;
+          server_id: string;
+          started_at: string;
+          completed_at: string | null;
+          status: string;
+          photos_synced: number;
+          bytes_synced: number;
+          error: string | null;
+        }>
+      >(`/admin/backup/servers/${serverId}/logs`),
+
+    /** Trigger an immediate sync to a backup server */
+    triggerSync: (serverId: string) =>
+      request<{ message: string; sync_id: string }>(
+        `/admin/backup/servers/${serverId}/sync`,
+        { method: "POST" }
+      ),
+
+    /** Discover Simple Photos servers on the local network */
+    discover: () =>
+      request<{
+        servers: Array<{
+          address: string;
+          name: string;
+          version: string;
+        }>;
+      }>("/admin/backup/discover"),
+
+    /** List photos on a backup server (proxy) */
+    listBackupPhotos: (serverId: string) =>
+      request<
+        Array<{
+          id: string;
+          filename: string;
+          file_path: string;
+          mime_type: string;
+          media_type: string;
+          size_bytes: number;
+          width: number;
+          height: number;
+          duration_secs: number | null;
+          taken_at: string | null;
+          thumb_path: string | null;
+          created_at: string;
+        }>
+      >(`/admin/backup/servers/${serverId}/photos`),
+
+    /** Trigger recovery from a backup server (downloads all missing photos) */
+    recover: (serverId: string) =>
+      request<{ message: string; recovery_id: string }>(
+        `/admin/backup/servers/${serverId}/recover`,
+        { method: "POST" }
+      ),
+  },
 };

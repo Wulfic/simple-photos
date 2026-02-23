@@ -1,16 +1,19 @@
 mod audit;
 mod auth;
+mod backup;
 mod blobs;
 mod config;
 mod db;
 mod downloads;
 mod error;
 mod health;
+mod media;
 mod photos;
 mod ratelimit;
 mod security;
 mod setup;
 mod state;
+mod trash;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -113,6 +116,28 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn background task to purge expired trash items every hour
+    {
+        let pool_clone = pool.clone();
+        let storage_root_clone = config.storage.root.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                trash::handlers::purge_expired_trash(&pool_clone, &storage_root_clone).await;
+            }
+        });
+    }
+
+    // Spawn background task for backup server syncing
+    {
+        let pool_clone = pool.clone();
+        let storage_root_clone = config.storage.root.clone();
+        tokio::spawn(async move {
+            backup::handlers::background_sync_task(pool_clone, storage_root_clone).await;
+        });
+    }
+
     let state = AppState {
         pool,
         config: Arc::new(config.clone()),
@@ -143,37 +168,59 @@ async fn main() -> anyhow::Result<()> {
         // Downloads — Android APK, etc.
         .route("/downloads/android", get(downloads::handlers::android_apk))
         // Admin — user management, server config (requires admin role)
-        .route("/admin/users", post(setup::handlers::create_user))
-        .route("/admin/users", get(setup::handlers::list_users))
-        .route("/admin/storage", get(setup::handlers::get_storage))
-        .route("/admin/storage", put(setup::handlers::update_storage))
-        .route("/admin/browse", get(setup::handlers::browse_directory))
+        .route("/admin/users", post(setup::admin::create_user))
+        .route("/admin/users", get(setup::admin::list_users))
+        .route("/admin/storage", get(setup::storage::get_storage))
+        .route("/admin/storage", put(setup::storage::update_storage))
+        .route("/admin/browse", get(setup::storage::browse_directory))
         // Server port configuration (admin only)
-        .route("/admin/port", get(setup::handlers::get_port))
-        .route("/admin/port", put(setup::handlers::update_port))
-        .route("/admin/restart", post(setup::handlers::restart_server))
+        .route("/admin/port", get(setup::port::get_port))
+        .route("/admin/port", put(setup::port::update_port))
+        .route("/admin/restart", post(setup::port::restart_server))
         // Server-side import — scan directories and serve raw files for client-side encryption
-        .route("/admin/import/scan", get(setup::handlers::import_scan))
-        .route("/admin/import/file", get(setup::handlers::import_file))
+        .route("/admin/import/scan", get(setup::import::import_scan))
+        .route("/admin/import/file", get(setup::import::import_file))
         // Plain-mode photos — list, serve, register, thumbnail
         .route("/photos", get(photos::handlers::list_photos))
         .route("/photos/register", post(photos::handlers::register_photo))
         .route("/photos/{id}/file", get(photos::handlers::serve_photo))
         .route("/photos/{id}/thumb", get(photos::handlers::serve_thumbnail))
-        .route("/photos/{id}", delete(photos::handlers::delete_photo))
+        // Delete now soft-deletes to trash (30-day retention)
+        .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Plain-mode scan & register all files on disk
         .route("/admin/photos/scan", post(photos::handlers::scan_and_register))
         // Encryption settings
-        .route("/settings/encryption", get(photos::handlers::get_encryption_settings))
-        .route("/admin/encryption", put(photos::handlers::set_encryption_mode))
-        .route("/admin/encryption/progress", post(photos::handlers::report_migration_progress))
+        .route("/settings/encryption", get(photos::encryption::get_encryption_settings))
+        .route("/admin/encryption", put(photos::encryption::set_encryption_mode))
+        .route("/admin/encryption/progress", post(photos::encryption::report_migration_progress))
         // Encrypted galleries
-        .route("/galleries/encrypted", get(photos::handlers::list_encrypted_galleries))
-        .route("/galleries/encrypted", post(photos::handlers::create_encrypted_gallery))
-        .route("/galleries/encrypted/{id}", delete(photos::handlers::delete_encrypted_gallery))
-        .route("/galleries/encrypted/{id}/unlock", post(photos::handlers::unlock_encrypted_gallery))
-        .route("/galleries/encrypted/{id}/items", get(photos::handlers::list_gallery_items))
-        .route("/galleries/encrypted/{id}/items", post(photos::handlers::add_gallery_item));
+        .route("/galleries/encrypted", get(photos::galleries::list_encrypted_galleries))
+        .route("/galleries/encrypted", post(photos::galleries::create_encrypted_gallery))
+        .route("/galleries/encrypted/{id}", delete(photos::galleries::delete_encrypted_gallery))
+        .route("/galleries/encrypted/{id}/unlock", post(photos::galleries::unlock_encrypted_gallery))
+        .route("/galleries/encrypted/{id}/items", get(photos::galleries::list_gallery_items))
+        .route("/galleries/encrypted/{id}/items", post(photos::galleries::add_gallery_item))
+        // Trash — soft-deleted photos with 30-day retention
+        .route("/trash", get(trash::handlers::list_trash))
+        .route("/trash", delete(trash::handlers::empty_trash))
+        .route("/trash/{id}", delete(trash::handlers::permanent_delete))
+        .route("/trash/{id}/restore", post(trash::handlers::restore_from_trash))
+        .route("/trash/{id}/thumb", get(trash::handlers::serve_trash_thumbnail))
+        // Backup servers — admin only
+        .route("/admin/backup/servers", get(backup::handlers::list_backup_servers))
+        .route("/admin/backup/servers", post(backup::handlers::add_backup_server))
+        .route("/admin/backup/servers/{id}", put(backup::handlers::update_backup_server))
+        .route("/admin/backup/servers/{id}", delete(backup::handlers::remove_backup_server))
+        .route("/admin/backup/servers/{id}/status", get(backup::handlers::check_backup_server_status))
+        .route("/admin/backup/servers/{id}/logs", get(backup::handlers::get_sync_logs))
+        .route("/admin/backup/servers/{id}/sync", post(backup::handlers::trigger_sync))
+        .route("/admin/backup/servers/{id}/recover", post(backup::recovery::recover_from_backup))
+        .route("/admin/backup/servers/{id}/photos", get(backup::recovery::proxy_backup_photos))
+        .route("/admin/backup/discover", get(backup::handlers::discover_servers))
+        // Backup serve — API-key authenticated, for server-to-server recovery
+        .route("/backup/list", get(backup::serve::backup_list_photos))
+        .route("/backup/download/{photo_id}", get(backup::serve::backup_download_photo))
+        .route("/backup/download/{photo_id}/thumb", get(backup::serve::backup_download_thumb));
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))

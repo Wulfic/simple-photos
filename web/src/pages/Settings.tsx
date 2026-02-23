@@ -3,32 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { QRCodeSVG } from "qrcode.react";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
+import { useBackupStore } from "../store/backup";
 import AppHeader from "../components/AppHeader";
-
-/** Password strength check — same logic as Register page. */
-function checkPasswordStrength(pw: string) {
-  const checks = {
-    length: pw.length >= 8,
-    uppercase: /[A-Z]/.test(pw),
-    lowercase: /[a-z]/.test(pw),
-    digit: /\d/.test(pw),
-    long: pw.length >= 12,
-    special: /[^A-Za-z0-9]/.test(pw),
-  };
-  const core = checks.length && checks.uppercase && checks.lowercase && checks.digit;
-  const score = Object.values(checks).filter(Boolean).length;
-  const label =
-    score <= 2 ? "Weak" : score <= 3 ? "Fair" : score <= 4 ? "Good" : "Strong";
-  const color =
-    score <= 2
-      ? "bg-red-500"
-      : score <= 3
-        ? "bg-yellow-500"
-        : score <= 4
-          ? "bg-blue-500"
-          : "bg-green-500";
-  return { checks, core, score, label, color, max: 6 };
-}
+import EncryptedGalleries from "../components/EncryptedGalleries";
+import { checkPasswordStrength } from "../utils/validation";
+import { Checkmark } from "../components/PasswordFields";
 
 export default function Settings() {
   const { username } = useAuthStore();
@@ -63,12 +42,11 @@ export default function Settings() {
   const [showEncryptionWarning, setShowEncryptionWarning] = useState(false);
 
   // ── Encrypted galleries state ────────────────────────────────────────────
-  const [galleries, setGalleries] = useState<Array<{ id: string; name: string; created_at: string; item_count: number }>>([]);
-  const [galleriesLoading, setGalleriesLoading] = useState(true);
-  const [showCreateGallery, setShowCreateGallery] = useState(false);
-  const [newGalleryName, setNewGalleryName] = useState("");
-  const [newGalleryPassword, setNewGalleryPassword] = useState("");
-  const [newGalleryConfirm, setNewGalleryConfirm] = useState("");
+  // (Managed by EncryptedGalleries component)
+
+  // ── Backup recovery state ────────────────────────────────────────────────
+  const [showRecoverWarning, setShowRecoverWarning] = useState(false);
+  const { backupServers, loaded: backupLoaded, recovering, setRecovering, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
 
   const pw = useMemo(() => checkPasswordStrength(newPassword), [newPassword]);
 
@@ -178,21 +156,26 @@ export default function Settings() {
   }, []);
 
   const loadGalleries = useCallback(async () => {
-    try {
-      const res = await api.encryptedGalleries.list();
-      setGalleries(res.galleries);
-    } catch {
-      // Ignore if galleries table doesn't exist yet
-    } finally {
-      setGalleriesLoading(false);
-    }
+    // Galleries now managed by EncryptedGalleries component
   }, []);
 
-  // Fetch encryption settings and galleries on mount
+  // Load backup servers on mount
+  const loadBackupServers = useCallback(async () => {
+    try {
+      const res = await api.backup.listServers();
+      setBackupServers(res.servers);
+    } catch {
+      // Ignore if backup isn't configured
+    } finally {
+      setBackupLoaded(true);
+    }
+  }, [setBackupServers, setBackupLoaded]);
+
+  // Fetch encryption settings and backup servers on mount
   useEffect(() => {
     loadEncryptionSettings();
-    loadGalleries();
-  }, [loadEncryptionSettings, loadGalleries]);
+    loadBackupServers();
+  }, [loadEncryptionSettings, loadBackupServers]);
 
   // Poll migration progress when a migration is active
   useEffect(() => {
@@ -219,46 +202,22 @@ export default function Settings() {
     }
   }
 
-  async function handleCreateGallery(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleRecover() {
+    if (backupServers.length === 0) return;
+    setShowRecoverWarning(false);
+    setRecovering(true);
     setError("");
-    if (newGalleryPassword !== newGalleryConfirm) {
-      setError("Gallery passwords do not match.");
-      return;
-    }
-    setLoading(true);
     try {
-      await api.encryptedGalleries.create(newGalleryName, newGalleryPassword);
-      setSuccess(`Encrypted gallery "${newGalleryName}" created.`);
-      setShowCreateGallery(false);
-      setNewGalleryName("");
-      setNewGalleryPassword("");
-      setNewGalleryConfirm("");
-      await loadGalleries();
+      // Recover from the first enabled backup server (or fallback to first one)
+      const target = backupServers.find((s) => s.enabled) ?? backupServers[0];
+      const res = await api.backup.recover(target.id);
+      setSuccess(res.message);
     } catch (err: any) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      setRecovering(false);
     }
   }
-
-  async function handleDeleteGallery(id: string, name: string) {
-    if (!confirm(`Delete encrypted gallery "${name}"? All items inside will be removed.`)) return;
-    setError("");
-    try {
-      await api.encryptedGalleries.delete(id);
-      setSuccess(`Encrypted gallery "${name}" deleted.`);
-      await loadGalleries();
-    } catch (err: any) {
-      setError(err.message);
-    }
-  }
-
-  const Checkmark = ({ ok }: { ok: boolean }) => (
-    <span className={ok ? "text-green-600 dark:text-green-400" : "text-gray-400"}>
-      {ok ? "✓" : "○"}
-    </span>
-  );
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -398,130 +357,74 @@ export default function Settings() {
       </section>
 
       {/* ── Encrypted Galleries ──────────────────────────────────────────── */}
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Encrypted Galleries</h2>
-          {!showCreateGallery && (
-            <button
-              onClick={() => {
-                setShowCreateGallery(true);
-                setError("");
-              }}
-              className="bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700 text-sm"
-            >
-              + New Gallery
-            </button>
-          )}
-        </div>
+      <EncryptedGalleries onError={setError} onSuccess={setSuccess} />
 
+      {/* ── Backup Recovery ─────────────────────────────────────────────────── */}
+      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <h2 className="text-lg font-semibold mb-3">Backup Recovery</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-          Encrypted galleries are always end-to-end encrypted and password-protected, independent of<br className="hidden sm:inline" /> your global storage mode. Use them to keep sensitive photos separate and secure.
+          Recover photos from a configured backup server. Any photos on the backup
+          that don't already exist on this server (by filename) will be downloaded and imported.
         </p>
 
-        {/* Create gallery form */}
-        {showCreateGallery && (
-          <form onSubmit={handleCreateGallery} className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 mb-4 space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Gallery Name
-              </label>
-              <input
-                type="text"
-                value={newGalleryName}
-                onChange={(e) => setNewGalleryName(e.target.value)}
-                placeholder="e.g. Private Photos"
-                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-600"
-                required
-                maxLength={100}
-                autoFocus
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Gallery Password
-              </label>
-              <input
-                type="password"
-                value={newGalleryPassword}
-                onChange={(e) => setNewGalleryPassword(e.target.value)}
-                placeholder="At least 4 characters"
-                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-600"
-                required
-                minLength={4}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Confirm Password
-              </label>
-              <input
-                type="password"
-                value={newGalleryConfirm}
-                onChange={(e) => setNewGalleryConfirm(e.target.value)}
-                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:border-gray-600"
-                required
-                minLength={4}
-              />
-              {newGalleryConfirm.length > 0 && newGalleryPassword !== newGalleryConfirm && (
-                <p className="text-xs text-red-500 dark:text-red-400 mt-1">Passwords do not match</p>
-              )}
-            </div>
+        {!backupLoaded ? (
+          <div className="text-gray-400 text-sm">Loading backup servers…</div>
+        ) : backupServers.length === 0 ? (
+          <div className="text-center py-4 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
+            <p className="text-gray-400 text-sm">No backup servers configured.</p>
+            <p className="text-xs text-gray-400 mt-1">
+              Add a backup server in the Setup wizard to enable recovery.
+            </p>
+          </div>
+        ) : !showRecoverWarning ? (
+          <button
+            onClick={() => {
+              setShowRecoverWarning(true);
+              setError("");
+              setSuccess("");
+            }}
+            disabled={recovering}
+            className="bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 disabled:opacity-50 text-sm"
+          >
+            {recovering ? (
+              <span className="flex items-center gap-2">
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Recovering…
+              </span>
+            ) : (
+              "Recover from Backup Server"
+            )}
+          </button>
+        ) : (
+          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+            <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">
+              ⚠️ Confirm Recovery
+            </h4>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mb-1">
+              This will download <strong>all photos</strong> from the backup server
+              {" "}<strong>"{backupServers.find((s) => s.enabled)?.name ?? backupServers[0]?.name}"</strong> to
+              this server.
+            </p>
+            <ul className="text-sm text-amber-700 dark:text-amber-400 list-disc list-inside mb-3 space-y-0.5">
+              <li>Photos with the same filename will be <strong>skipped</strong> (not overwritten).</li>
+              <li>This process runs in the background and may take a while for large libraries.</li>
+              <li>The backup server must be reachable and have its API key configured.</li>
+            </ul>
             <div className="flex gap-2">
               <button
-                type="submit"
-                disabled={loading || !newGalleryName || newGalleryPassword.length < 4 || newGalleryPassword !== newGalleryConfirm}
-                className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+                onClick={handleRecover}
+                disabled={recovering}
+                className="bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 disabled:opacity-50 text-sm"
               >
-                {loading ? "Creating…" : "Create Gallery"}
+                {recovering ? "Starting…" : "Confirm Recovery"}
               </button>
               <button
-                type="button"
-                onClick={() => {
-                  setShowCreateGallery(false);
-                  setNewGalleryName("");
-                  setNewGalleryPassword("");
-                  setNewGalleryConfirm("");
-                }}
+                onClick={() => setShowRecoverWarning(false)}
                 className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
               >
                 Cancel
               </button>
             </div>
-          </form>
-        )}
-
-        {/* Gallery list */}
-        {galleriesLoading ? (
-          <div className="text-gray-400 text-sm">Loading galleries…</div>
-        ) : galleries.length === 0 ? (
-          <div className="text-center py-6 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-400 text-sm">No encrypted galleries yet.</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {galleries.map((g) => (
-              <div
-                key={g.id}
-                className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
-              >
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm">🔒</span>
-                    <span className="font-medium text-gray-900 dark:text-gray-100">{g.name}</span>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {g.item_count} item{g.item_count !== 1 ? "s" : ""} · Created {new Date(g.created_at).toLocaleDateString()}
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleDeleteGallery(g.id, g.name)}
-                  className="text-red-500 hover:text-red-600 text-sm px-2 py-1"
-                  title="Delete gallery"
-                >
-                  Delete
-                </button>
-              </div>
-            ))}
           </div>
         )}
       </section>

@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     pub auth: AuthConfig,
     pub web: WebConfig,
+    #[serde(default)]
+    pub backup: BackupConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -59,6 +61,17 @@ pub struct AuthConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct WebConfig {
     pub static_root: String,
+}
+
+/// Configuration for backup server features.
+/// `api_key` is the key that OTHER servers must provide (via X-API-Key header)
+/// to access this server's backup list/download endpoints.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct BackupConfig {
+    /// API key that remote servers use to pull data from this instance.
+    /// If empty/unset, backup serving endpoints are disabled.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl AppConfig {
@@ -143,6 +156,10 @@ impl AppConfig {
 
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_WEB_STATIC_ROOT") {
             config.web.static_root = v;
+        }
+
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_BACKUP_API_KEY") {
+            config.backup.api_key = Some(v);
         }
 
         Ok(config)

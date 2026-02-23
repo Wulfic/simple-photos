@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -12,172 +12,12 @@ use crate::error::AppError;
 use crate::ratelimit::extract_client_ip;
 use crate::state::AppState;
 
+use super::lockout::{check_account_lockout, clear_failed_logins, record_failed_login};
 use super::middleware::AuthUser;
 use super::models::*;
-
-// ── Security constants ──────────────────────────────────────────────────────
-
-/// Maximum failed login attempts before account lockout.
-const MAX_LOGIN_ATTEMPTS: i32 = 5;
-
-/// Account lockout duration after exceeding max attempts.
-const LOCKOUT_DURATION_MINS: i64 = 15;
-
-/// Maximum password length to prevent DoS via bcrypt (bcrypt truncates at 72 bytes anyway)
-const MAX_PASSWORD_LENGTH: usize = 128;
-
-/// Username validation: alphanumeric + underscore, 3–50 chars
-fn validate_username(username: &str) -> Result<(), AppError> {
-    if username.len() < 3 || username.len() > 50 {
-        return Err(AppError::BadRequest(
-            "Username must be between 3 and 50 characters".into(),
-        ));
-    }
-    if !username
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
-        return Err(AppError::BadRequest(
-            "Username may only contain letters, numbers, and underscores".into(),
-        ));
-    }
-    Ok(())
-}
-
-/// Password validation: length + complexity
-fn validate_password(password: &str) -> Result<(), AppError> {
-    if password.len() < 8 {
-        return Err(AppError::BadRequest(
-            "Password must be at least 8 characters".into(),
-        ));
-    }
-    if password.len() > MAX_PASSWORD_LENGTH {
-        return Err(AppError::BadRequest(
-            format!("Password must not exceed {} characters", MAX_PASSWORD_LENGTH),
-        ));
-    }
-    // Require at least one uppercase, one lowercase, one digit
-    let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
-    let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
-    let has_digit = password.chars().any(|c| c.is_ascii_digit());
-    if !has_upper || !has_lower || !has_digit {
-        return Err(AppError::BadRequest(
-            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".into(),
-        ));
-    }
-    Ok(())
-}
-
-// ── Account lockout helpers ─────────────────────────────────────────────────
-
-async fn check_account_lockout(
-    state: &AppState,
-    user_id: &str,
-) -> Result<(), AppError> {
-    let row = sqlx::query_as::<_, (i32, Option<String>)>(
-        "SELECT failed_attempts, lockout_until FROM account_lockouts WHERE user_id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    if let Some((_attempts, lockout_until)) = row {
-        if let Some(until) = lockout_until {
-            if let Ok(lock_time) = chrono::DateTime::parse_from_rfc3339(&until) {
-                let lock_time_utc = lock_time.with_timezone(&Utc);
-                if Utc::now() < lock_time_utc {
-                    let remaining = (lock_time_utc - Utc::now()).num_seconds();
-                    return Err(AppError::Forbidden(format!(
-                        "Account is temporarily locked. Try again in {} seconds.",
-                        remaining.max(0)
-                    )));
-                }
-                // Lockout expired — reset
-                sqlx::query(
-                    "UPDATE account_lockouts SET failed_attempts = 0, lockout_until = NULL WHERE user_id = ?",
-                )
-                .bind(user_id)
-                .execute(&state.pool)
-                .await?;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn record_failed_login(
-    state: &AppState,
-    user_id: &str,
-    headers: &HeaderMap,
-) {
-    let now = Utc::now().to_rfc3339();
-
-    // Upsert: increment or insert
-    let result = sqlx::query(
-        "INSERT INTO account_lockouts (user_id, failed_attempts, last_attempt_at) \
-         VALUES (?, 1, ?) \
-         ON CONFLICT(user_id) DO UPDATE SET \
-           failed_attempts = failed_attempts + 1, \
-           last_attempt_at = ?",
-    )
-    .bind(user_id)
-    .bind(&now)
-    .bind(&now)
-    .execute(&state.pool)
-    .await;
-
-    if let Err(e) = result {
-        tracing::error!("Failed to record failed login: {}", e);
-        return;
-    }
-
-    // Check if we should lock the account
-    let attempts: Option<i32> = sqlx::query_scalar(
-        "SELECT failed_attempts FROM account_lockouts WHERE user_id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
-
-    if let Some(count) = attempts {
-        if count >= MAX_LOGIN_ATTEMPTS {
-            let lockout_until =
-                (Utc::now() + chrono::Duration::minutes(LOCKOUT_DURATION_MINS)).to_rfc3339();
-
-            let _ = sqlx::query(
-                "UPDATE account_lockouts SET lockout_until = ? WHERE user_id = ?",
-            )
-            .bind(&lockout_until)
-            .bind(user_id)
-            .execute(&state.pool)
-            .await;
-
-            tracing::warn!(
-                user_id = user_id,
-                attempts = count,
-                "Account locked after {} failed attempts",
-                count
-            );
-
-            audit::log(
-                &state.pool,
-                AuditEvent::AccountLocked,
-                Some(user_id),
-                headers,
-                Some(serde_json::json!({ "attempts": count })),
-            )
-            .await;
-        }
-    }
-}
-
-async fn clear_failed_logins(state: &AppState, user_id: &str) {
-    let _ = sqlx::query("DELETE FROM account_lockouts WHERE user_id = ?")
-        .bind(user_id)
-        .execute(&state.pool)
-        .await;
-}
+use super::tokens::{create_jwt, hash_token, issue_tokens};
+use super::totp::{verify_backup_code, verify_totp_code};
+use super::validation::{validate_password, validate_username};
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -186,7 +26,6 @@ pub async fn register(
     headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AppError> {
-    // Rate limit
     let ip = extract_client_ip(&headers);
     state.rate_limiters.register.check(ip)?;
 
@@ -194,7 +33,6 @@ pub async fn register(
         return Err(AppError::Forbidden("Registration is disabled".into()));
     }
 
-    // Validate inputs
     validate_username(&req.username)?;
     validate_password(&req.password)?;
 
@@ -252,7 +90,6 @@ pub async fn login(
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Rate limit
     let ip = extract_client_ip(&headers);
     state.rate_limiters.login.check(ip)?;
 
@@ -267,7 +104,6 @@ pub async fn login(
     let user = match user {
         Some(u) => u,
         None => {
-            // Perform a dummy bcrypt verify to prevent timing attacks
             let _ = bcrypt::verify(
                 &req.password,
                 "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK",
@@ -286,7 +122,6 @@ pub async fn login(
         }
     };
 
-    // Check account lockout before password verification
     check_account_lockout(&state, &user.id).await?;
 
     let valid = bcrypt::verify(&req.password, &user.password_hash)
@@ -309,7 +144,6 @@ pub async fn login(
         ));
     }
 
-    // Password correct — clear lockout counters
     clear_failed_logins(&state, &user.id).await;
 
     if user.totp_enabled {
@@ -348,12 +182,10 @@ pub async fn login_totp(
     headers: HeaderMap,
     Json(req): Json<TotpLoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    // Rate limit TOTP separately — only 1M possible codes
     let ip = extract_client_ip(&headers);
     state.rate_limiters.totp.check(ip)?;
 
     let key = DecodingKey::from_secret(state.config.auth.jwt_secret.as_bytes());
-    // Strictly require HS256 — prevent algorithm confusion attacks
     let mut validation = Validation::new(Algorithm::HS256);
     validation.set_required_spec_claims(&["exp", "sub"]);
 
@@ -366,7 +198,6 @@ pub async fn login_totp(
 
     let user_id = &token_data.claims.sub;
 
-    // Check lockout before TOTP attempt
     check_account_lockout(&state, user_id).await?;
 
     let user = sqlx::query_as::<_, User>(
@@ -423,7 +254,6 @@ pub async fn login_totp(
         ));
     }
 
-    // Successful TOTP — clear lockout counters
     clear_failed_logins(&state, user_id).await;
 
     let (access_token, refresh_token) = issue_tokens(&state, user_id).await?;
@@ -462,8 +292,6 @@ pub async fn refresh(
 
     let (token_id, user_id, revoked) = row;
     if revoked {
-        // A revoked token being used is suspicious — possible token theft.
-        // Revoke ALL tokens for this user as a precaution.
         tracing::warn!(
             user_id = user_id,
             "Revoked refresh token reused — possible token theft, revoking all tokens"
@@ -518,7 +346,6 @@ pub async fn logout(
 ) -> Result<StatusCode, AppError> {
     let token_hash = hash_token(&req.refresh_token);
 
-    // Get user_id before revoking for audit log
     let user_id: Option<String> = sqlx::query_scalar(
         "SELECT user_id FROM refresh_tokens WHERE token_hash = ?",
     )
@@ -593,7 +420,6 @@ pub async fn setup_2fa(
             .collect()
     };
 
-    // Delete old backup codes
     sqlx::query("DELETE FROM totp_backup_codes WHERE user_id = ?")
         .bind(&auth.user_id)
         .execute(&state.pool)
@@ -777,125 +603,4 @@ pub async fn change_password(
 
     tracing::info!("Password changed for user {}", auth.user_id);
     Ok(StatusCode::OK)
-}
-
-// ── Helper functions ────────────────────────────────────────────────────────
-
-fn create_jwt(
-    user_id: &str,
-    totp_required: bool,
-    ttl_secs: u64,
-    secret: &str,
-) -> Result<String, AppError> {
-    let exp = (Utc::now().timestamp() as u64 + ttl_secs) as usize;
-    let jti = Uuid::new_v4().to_string();
-    let claims = Claims {
-        sub: user_id.to_string(),
-        exp,
-        jti,
-        totp_required,
-    };
-    // Explicitly HS256 — prevent algorithm confusion attacks
-    let header = Header::new(Algorithm::HS256);
-    encode(
-        &header,
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
-    .map_err(|e| AppError::Internal(format!("JWT encoding error: {}", e)))
-}
-
-async fn issue_tokens(
-    state: &AppState,
-    user_id: &str,
-) -> Result<(String, String), AppError> {
-    let access_token = create_jwt(
-        user_id,
-        false,
-        state.config.auth.access_token_ttl_secs,
-        &state.config.auth.jwt_secret,
-    )?;
-
-    let raw_refresh = Uuid::new_v4().to_string();
-    let refresh_hash = hash_token(&raw_refresh);
-    let expires_at = Utc::now()
-        + chrono::Duration::days(state.config.auth.refresh_token_ttl_days as i64);
-
-    sqlx::query(
-        "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(Uuid::new_v4().to_string())
-    .bind(user_id)
-    .bind(&refresh_hash)
-    .bind(expires_at.to_rfc3339())
-    .bind(Utc::now().to_rfc3339())
-    .execute(&state.pool)
-    .await?;
-
-    Ok((access_token, raw_refresh))
-}
-
-fn hash_token(token: &str) -> String {
-    hex::encode(Sha256::digest(token.as_bytes()))
-}
-
-fn verify_totp_code(
-    secret_b32: &str,
-    code: &str,
-    _issuer: &str,
-    account: &str,
-) -> Result<(), AppError> {
-    // Validate TOTP code format: must be exactly 6 digits
-    if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
-        return Err(AppError::BadRequest(
-            "TOTP code must be exactly 6 digits".into(),
-        ));
-    }
-
-    let secret = totp_rs::Secret::Encoded(secret_b32.to_string());
-    let totp = totp_rs::TOTP::new(
-        totp_rs::Algorithm::SHA1,
-        6,
-        1,
-        30,
-        secret
-            .to_bytes()
-            .map_err(|e| AppError::Internal(format!("TOTP secret error: {}", e)))?,
-        Some("SimplePhotos".to_string()),
-        account.to_string(),
-    )
-    .map_err(|e| AppError::Internal(format!("TOTP error: {}", e)))?;
-
-    if totp
-        .check_current(code)
-        .map_err(|e| AppError::Internal(format!("TOTP time error: {}", e)))?
-    {
-        Ok(())
-    } else {
-        Err(AppError::Unauthorized("Invalid TOTP code".into()))
-    }
-}
-
-async fn verify_backup_code(
-    state: &AppState,
-    user_id: &str,
-    backup_code: &str,
-) -> Result<(), AppError> {
-    let code_hash = hex::encode(Sha256::digest(backup_code.as_bytes()));
-
-    let row = sqlx::query_as::<_, (String,)>(
-        "SELECT id FROM totp_backup_codes WHERE user_id = ? AND code_hash = ? AND used = 0",
-    )
-    .bind(user_id)
-    .bind(&code_hash)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::Unauthorized("Invalid or already used backup code".into()))?;
-
-    sqlx::query("UPDATE totp_backup_codes SET used = 1 WHERE id = ?")
-        .bind(&row.0)
-        .execute(&state.pool)
-        .await?;
-
-    Ok(())
 }
