@@ -1,0 +1,116 @@
+# =============================================================================
+# Simple Photos — Root .gitignore
+# =============================================================================
+
+# ── Secrets & Environment ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+*.keystore
+
+# ── Server (Rust / Cargo) ────────────────────────────────────────────────────
+server/target/
+# Use config.example.toml as the committed template; config.toml holds local secrets
+server/config.toml
+server/data/                 # runtime DB + blob storage (can be huge)
+server/data/                # runtime DB + blob storage (can be huge)
+**/*.rs.bk
+Cargo.lock                  # keep in libraries; optional for binaries — remove
+                            # this line if you want to pin exact dependencies
+
+# ── Web (Node / Vite) ────────────────────────────────────────────────────────
+web/node_modules/
+web/dist/
+web/.vite/
+web/.parcel-cache/
+*.tsbuildinfo
+
+# ── Android (Gradle) ─────────────────────────────────────────────────────────
+android/.gradle/
+android/local.properties
+android/app/release/
+android/app/*.aab
+android/app/*.apk
+android/**/*.apk
+android/**/*.aab
+android/build/
+android/app/build/
+android/**/build/
+android/.idea/
+android/*.iml
+android/**/*.iml
+android/.DS_Store
+android/keystore/
+android/signing.properties
+android/google-services.json   # if ever added
+
+# ── IDE & Editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/settings.json
+.vscode/launch.json
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+nbproject/
+.project
+.classpath
+.settings/
+*.swp
+*~
+\#*\#
+.#*
+
+# ── OS Generated ─────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ── Network Drive Artifacts ──────────────────────────────────────────────────
+# SMB / Samba / CIFS temporary and lock files
+.~lock.*
+*.lnk
+~$*
+desktop.ini
+# NFS temporary files
+.nfs*
+# Synology / QNAP NAS metadata
+@eaDir/
+#recycle/
+.AppleDouble/
+.LSOverrideWasEmpty
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+# Docker volumes are managed outside git; don't accidentally commit runtime data
+docker-compose.override.yml
+
+# ── Logs & Runtime ───────────────────────────────────────────────────────────
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+coverage/
+.nyc_output/
+
+# ── Compiled / Generated ─────────────────────────────────────────────────────
+*.o
+*.so
+*.dylib
+*.dll
+*.class
+*.jar
+__pycache__/
+*.pyc

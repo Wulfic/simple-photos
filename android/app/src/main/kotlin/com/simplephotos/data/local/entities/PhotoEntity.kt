@@ -1,0 +1,31 @@
+package com.simplephotos.data.local.entities
+
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
+enum class SyncStatus { PENDING, UPLOADING, SYNCED, FAILED }
+
+@Entity(tableName = "photos")
+data class PhotoEntity(
+    @PrimaryKey val localId: String,
+    val serverBlobId: String? = null,
+    val thumbnailBlobId: String? = null,
+    val filename: String,
+    val takenAt: Long,
+    val mimeType: String,
+    /** "photo" | "gif" | "video" */
+    val mediaType: String = "photo",
+    val width: Int,
+    val height: Int,
+    /** Duration in seconds for videos, null for photos/GIFs */
+    val durationSecs: Float? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    /** content:// URI for locally-captured media, null for server-only */
+    val localPath: String? = null,
+    /** File path to cached thumbnail JPEG in app-internal storage */
+    val thumbnailPath: String? = null,
+    val syncStatus: SyncStatus = SyncStatus.PENDING,
+    val encryptedBlobSize: Long? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)

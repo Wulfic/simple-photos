@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ── Dark-mode defaults ──────────────────────────────────────── */
+  .dark {
+    color-scheme: dark;
+  }
+
+  /* Form elements automatically inherit dark styling */
+  .dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  .dark select,
+  .dark textarea {
+    @apply bg-gray-700 text-gray-200 border-gray-600 placeholder-gray-400;
+  }
+
+  .dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus,
+  .dark select:focus,
+  .dark textarea:focus {
+    @apply ring-blue-400 border-blue-400;
+  }
+}

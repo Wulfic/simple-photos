@@ -1,0 +1,50 @@
+[server]
+host = "0.0.0.0"
+port = 3000
+base_url = "http://localhost:3000"
+
+[database]
+path = "/data/db/simple-photos.db"
+max_connections = 5
+
+[storage]
+# ── Storage root ─────────────────────────────────────────────────────────────
+# Can be any path reachable by the server process:
+#
+#   Local directory:
+#     root = "/data/storage"
+#
+#   Network drive (SMB/CIFS) — mount first, then point here:
+#     sudo mount -t cifs //vault.local/vault/Files/Simple-Photos /mnt/simple-photos \
+#          -o username=YOUR_USER,password=YOUR_PASS,uid=1000,gid=1000,vers=3.0
+#     root = "/mnt/simple-photos"
+#
+#   Or use /etc/fstab for persistent mounts:
+#     //vault.local/vault/Files/Simple-Photos /mnt/simple-photos cifs \
+#       credentials=/etc/samba/credentials,uid=1000,gid=1000,vers=3.0 0 0
+#
+#   NFS:
+#     root = "/mnt/nfs/simple-photos"
+#
+# The server uses only standard POSIX file I/O, so any POSIX-compatible
+# mount (SMB/CIFS, NFS, SSHFS, etc.) works transparently.
+root = "/data/storage"
+
+# Per-user quota in bytes. 0 = unlimited.
+default_quota_bytes = 10737418240   # 10 GB
+
+# Max size per single upload. 5 GiB default to support large video files.
+max_blob_size_bytes = 5368709120    # 5 GB
+
+[auth]
+# IMPORTANT: Change this to a random 64-char hex string in production!
+# Generate with: openssl rand -hex 32
+jwt_secret = "CHANGE_ME_RANDOM_64_CHAR_HEX"
+access_token_ttl_secs = 3600
+refresh_token_ttl_days = 30
+allow_registration = true           # set false after initial setup
+bcrypt_cost = 12
+
+[web]
+# Path to built React SPA (web/dist/). Set to "" to disable web frontend.
+static_root = "./web/dist"

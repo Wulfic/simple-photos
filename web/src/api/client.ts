@@ -1,0 +1,351 @@
+import { useAuthStore } from "../store/auth";
+
+const BASE = "/api";
+
+/**
+ * Centralized, security-hardened API client.
+ *
+ * Security features:
+ * - X-Requested-With header on all requests (basic CSRF protection)
+ * - Full refresh-token rotation (server returns new refresh token on each refresh)
+ * - Automatic token refresh on 401, with single-flight deduplication
+ * - Rate-limit aware: surfaces 429 messages to the user
+ * - Rejects blobs with non-2xx status even on download
+ * - Never logs tokens
+ */
+
+// ── Single-flight refresh deduplication ──────────────────────────────────────
+// If multiple requests 401 at the same time, only one refresh attempt runs.
+let refreshPromise: Promise<boolean> | null = null;
+
+async function request<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const { accessToken } = useAuthStore.getState();
+
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+    // Basic CSRF protection — server can reject requests without this header
+    "X-Requested-With": "SimplePhotos",
+  };
+
+  if (accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
+  // Only set Content-Type for JSON bodies (not raw blob uploads)
+  if (options.body && typeof options.body === "string") {
+    headers["Content-Type"] = "application/json";
+  }
+
+  const res = await fetch(`${BASE}${path}`, { ...options, headers });
+
+  // ── Rate limiting ────────────────────────────────────────────────────────
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("Retry-After");
+    const err = await res.json().catch(() => ({ error: "Too many requests" }));
+    const msg = retryAfter
+      ? `${err.error || "Too many requests"}. Try again in ${retryAfter}s.`
+      : err.error || "Too many requests. Please wait and try again.";
+    throw new Error(msg);
+  }
+
+  // ── Automatic token refresh on 401 ──────────────────────────────────────
+  if (res.status === 401) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      const newToken = useAuthStore.getState().accessToken;
+      headers["Authorization"] = `Bearer ${newToken}`;
+      const retry = await fetch(`${BASE}${path}`, { ...options, headers });
+
+      if (retry.status === 429) {
+        throw new Error("Too many requests. Please wait and try again.");
+      }
+      if (!retry.ok) {
+        const err = await retry.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(err.error || `HTTP ${retry.status}`);
+      }
+      if (retry.status === 204) return undefined as T;
+      const retryText = await retry.text();
+      if (!retryText) return undefined as T;
+      return JSON.parse(retryText) as T;
+    }
+    // Refresh failed — force logout
+    useAuthStore.getState().logout();
+    throw new Error("Session expired. Please sign in again.");
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+
+  if (res.status === 204) return undefined as T;
+
+  // Handle empty response bodies (e.g. 200 OK with no content)
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
+}
+
+/**
+ * Attempt to refresh the access token.
+ *
+ * Supports full token rotation: the server returns a NEW refresh token
+ * alongside the new access token. Both are persisted.
+ *
+ * Uses single-flight deduplication so concurrent 401s don't cause
+ * multiple refresh attempts (which would fail with revoked-token detection).
+ */
+async function tryRefresh(): Promise<boolean> {
+  // If a refresh is already in flight, piggyback on it
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    const { refreshToken, setTokens } = useAuthStore.getState();
+    if (!refreshToken) return false;
+
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Requested-With": "SimplePhotos",
+        },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!res.ok) return false;
+
+      const data = await res.json();
+      // Server returns rotated refresh token — persist both new tokens
+      const newRefresh = data.refresh_token || refreshToken;
+      setTokens(data.access_token, newRefresh);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  try {
+    return await refreshPromise;
+  } finally {
+    refreshPromise = null;
+  }
+}
+
+// ── Type definitions ─────────────────────────────────────────────────────────
+
+export interface RegisterResponse {
+  user_id: string;
+  username: string;
+}
+
+export interface LoginResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  requires_totp?: boolean;
+  totp_session_token?: string;
+}
+
+export interface TotpSetupResponse {
+  otpauth_uri: string;
+  backup_codes: string[];
+}
+
+export interface ChangePasswordResponse {
+  message: string;
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+export const api = {
+  auth: {
+    register: (username: string, password: string) =>
+      request<RegisterResponse>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      }),
+
+    login: (username: string, password: string) =>
+      request<LoginResponse>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      }),
+
+    loginTotp: (
+      totp_session_token: string,
+      totp_code?: string,
+      backup_code?: string
+    ) =>
+      request<{
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+      }>("/auth/login/totp", {
+        method: "POST",
+        body: JSON.stringify({ totp_session_token, totp_code, backup_code }),
+      }),
+
+    refresh: (refresh_token: string) =>
+      request<{
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+      }>("/auth/refresh", {
+        method: "POST",
+        body: JSON.stringify({ refresh_token }),
+      }),
+
+    logout: (refresh_token: string) =>
+      request<void>("/auth/logout", {
+        method: "POST",
+        body: JSON.stringify({ refresh_token }),
+      }),
+
+    changePassword: (currentPassword: string, newPassword: string) =>
+      request<ChangePasswordResponse>("/auth/password", {
+        method: "PUT",
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      }),
+
+    setup2fa: () =>
+      request<TotpSetupResponse>("/auth/2fa/setup", { method: "POST" }),
+
+    confirm2fa: (totp_code: string) =>
+      request<void>("/auth/2fa/confirm", {
+        method: "POST",
+        body: JSON.stringify({ totp_code }),
+      }),
+
+    disable2fa: (totp_code: string) =>
+      request<void>("/auth/2fa/disable", {
+        method: "POST",
+        body: JSON.stringify({ totp_code }),
+      }),
+  },
+
+  blobs: {
+    upload: (data: ArrayBuffer, blobType: string, clientHash?: string) => {
+      const headers: Record<string, string> = {
+        "X-Blob-Type": blobType,
+        "X-Blob-Size": data.byteLength.toString(),
+      };
+      if (clientHash) headers["X-Client-Hash"] = clientHash;
+
+      return request<{
+        blob_id: string;
+        upload_time: string;
+        size: number;
+      }>("/blobs", {
+        method: "POST",
+        headers,
+        body: data,
+      });
+    },
+
+    list: (params?: {
+      blob_type?: string;
+      after?: string;
+      limit?: number;
+    }) => {
+      const query = new URLSearchParams();
+      if (params?.blob_type) query.set("blob_type", params.blob_type);
+      if (params?.after) query.set("after", params.after);
+      if (params?.limit) query.set("limit", params.limit.toString());
+      const qs = query.toString();
+      return request<{
+        blobs: Array<{
+          id: string;
+          blob_type: string;
+          size_bytes: number;
+          client_hash: string | null;
+          upload_time: string;
+        }>;
+        next_cursor: string | null;
+      }>(`/blobs${qs ? `?${qs}` : ""}`);
+    },
+
+    download: async (blobId: string): Promise<ArrayBuffer> => {
+      const { accessToken } = useAuthStore.getState();
+      const headers: Record<string, string> = {
+        "X-Requested-With": "SimplePhotos",
+      };
+      if (accessToken) {
+        headers["Authorization"] = `Bearer ${accessToken}`;
+      }
+
+      const res = await fetch(`${BASE}/blobs/${blobId}`, { headers });
+
+      if (res.status === 401) {
+        // Try one refresh then retry
+        const refreshed = await tryRefresh();
+        if (refreshed) {
+          const newToken = useAuthStore.getState().accessToken;
+          headers["Authorization"] = `Bearer ${newToken}`;
+          const retry = await fetch(`${BASE}/blobs/${blobId}`, { headers });
+          if (!retry.ok) throw new Error(`Download failed: ${retry.status}`);
+          return retry.arrayBuffer();
+        }
+        useAuthStore.getState().logout();
+        throw new Error("Session expired");
+      }
+
+      if (!res.ok) throw new Error(`Failed to download blob: ${res.status}`);
+      return res.arrayBuffer();
+    },
+
+    delete: (blobId: string) =>
+      request<void>(`/blobs/${blobId}`, { method: "DELETE" }),
+  },
+
+  admin: {
+    createUser: (username: string, password: string, role: "admin" | "user" = "user") =>
+      request<{
+        user_id: string;
+        username: string;
+        role: string;
+      }>("/admin/users", {
+        method: "POST",
+        body: JSON.stringify({ username, password, role }),
+      }),
+
+    listUsers: () =>
+      request<
+        Array<{
+          id: string;
+          username: string;
+          role: string;
+          totp_enabled: boolean;
+          created_at: string;
+        }>
+      >("/admin/users"),
+
+    getStorage: () =>
+      request<{
+        storage_path: string;
+        message: string;
+      }>("/admin/storage"),
+
+    updateStorage: (path: string) =>
+      request<{
+        storage_path: string;
+        message: string;
+      }>("/admin/storage", {
+        method: "PUT",
+        body: JSON.stringify({ path }),
+      }),
+
+    browseDirectory: (path?: string) =>
+      request<{
+        current_path: string;
+        parent_path: string | null;
+        directories: Array<{ name: string; path: string }>;
+        writable: boolean;
+      }>(`/admin/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  },
+};

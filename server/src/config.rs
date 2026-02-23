@@ -1,0 +1,150 @@
+use serde::Deserialize;
+use std::path::PathBuf;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AppConfig {
+    pub server: ServerConfig,
+    pub database: DatabaseConfig,
+    pub storage: StorageConfig,
+    pub auth: AuthConfig,
+    pub web: WebConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: u16,
+    pub base_url: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DatabaseConfig {
+    pub path: PathBuf,
+    pub max_connections: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StorageConfig {
+    /// Root directory for all blob storage.
+    ///
+    /// Supports any path accessible from the server process:
+    ///   - Local:         "./data/storage"  or  "/var/simple-photos/storage"
+    ///   - Network (SMB): "/mnt/vault/Files/Simple-Photos"
+    ///     Mount first:  sudo mount -t cifs //vault.local/vault/Files/Simple-Photos \
+    ///                        /mnt/simple-photos -o username=...,password=...,uid=$(id -u),gid=$(id -g)
+    ///     Then set:     root = "/mnt/simple-photos"
+    ///   - NFS:           "/mnt/nfs/simple-photos"
+    ///
+    /// The server uses only standard POSIX file operations (create/read/delete),
+    /// so any POSIX-compatible mount (SMB/CIFS, NFS, SSHFS, etc.) works out of the box.
+    pub root: PathBuf,
+
+    /// Per-user storage quota in bytes (0 = unlimited).
+    pub default_quota_bytes: u64,
+
+    /// Maximum size of a single upload in bytes.
+    /// Default 5 GiB to accommodate large video files.
+    pub max_blob_size_bytes: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AuthConfig {
+    pub jwt_secret: String,
+    pub access_token_ttl_secs: u64,
+    pub refresh_token_ttl_days: u64,
+    pub allow_registration: bool,
+    pub bcrypt_cost: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct WebConfig {
+    pub static_root: String,
+}
+
+impl AppConfig {
+    /// Load configuration from TOML file, then apply env var overrides.
+    ///
+    /// Config file path: `$SIMPLE_PHOTOS_CONFIG` or `./config.toml`
+    ///
+    /// Any field can be overridden by an env var:
+    ///   `SIMPLE_PHOTOS_<SECTION>_<KEY>=value`
+    ///
+    /// Examples:
+    ///   SIMPLE_PHOTOS_AUTH_JWT_SECRET=mysecret
+    ///   SIMPLE_PHOTOS_STORAGE_ROOT=/mnt/vault/Files/Simple-Photos
+    ///   SIMPLE_PHOTOS_SERVER_PORT=8080
+    pub fn load() -> anyhow::Result<Self> {
+        let path = std::env::var("SIMPLE_PHOTOS_CONFIG")
+            .unwrap_or_else(|_| "config.toml".into());
+
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("Failed to read config file '{}': {}", path, e))?;
+
+        let mut config: AppConfig = toml::from_str(&contents)?;
+
+        // ── Apply environment variable overrides ─────────────────────────────
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_SERVER_HOST") {
+            config.server.host = v;
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_SERVER_PORT") {
+            config.server.port = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_SERVER_PORT"))?;
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_SERVER_BASE_URL") {
+            config.server.base_url = v;
+        }
+
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_DATABASE_PATH") {
+            config.database.path = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_DATABASE_MAX_CONNECTIONS") {
+            config.database.max_connections = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_DATABASE_MAX_CONNECTIONS"))?;
+        }
+
+        // Storage — accepts local paths AND mounted network shares (SMB/NFS/SSHFS)
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_STORAGE_ROOT") {
+            config.storage.root = PathBuf::from(v);
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_STORAGE_DEFAULT_QUOTA_BYTES") {
+            config.storage.default_quota_bytes = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_STORAGE_DEFAULT_QUOTA_BYTES"))?;
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_STORAGE_MAX_BLOB_SIZE_BYTES") {
+            config.storage.max_blob_size_bytes = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_STORAGE_MAX_BLOB_SIZE_BYTES"))?;
+        }
+
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AUTH_JWT_SECRET") {
+            config.auth.jwt_secret = v;
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AUTH_ACCESS_TOKEN_TTL_SECS") {
+            config.auth.access_token_ttl_secs = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_AUTH_ACCESS_TOKEN_TTL_SECS"))?;
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AUTH_REFRESH_TOKEN_TTL_DAYS") {
+            config.auth.refresh_token_ttl_days = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_AUTH_REFRESH_TOKEN_TTL_DAYS"))?;
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AUTH_ALLOW_REGISTRATION") {
+            config.auth.allow_registration = v.to_lowercase() == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AUTH_BCRYPT_COST") {
+            config.auth.bcrypt_cost = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_AUTH_BCRYPT_COST"))?;
+        }
+
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_WEB_STATIC_ROOT") {
+            config.web.static_root = v;
+        }
+
+        Ok(config)
+    }
+}
