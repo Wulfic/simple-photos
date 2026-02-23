@@ -193,13 +193,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/settings/encryption", get(photos::encryption::get_encryption_settings))
         .route("/admin/encryption", put(photos::encryption::set_encryption_mode))
         .route("/admin/encryption/progress", post(photos::encryption::report_migration_progress))
-        // Encrypted galleries
-        .route("/galleries/encrypted", get(photos::galleries::list_encrypted_galleries))
-        .route("/galleries/encrypted", post(photos::galleries::create_encrypted_gallery))
-        .route("/galleries/encrypted/{id}", delete(photos::galleries::delete_encrypted_gallery))
-        .route("/galleries/encrypted/{id}/unlock", post(photos::galleries::unlock_encrypted_gallery))
-        .route("/galleries/encrypted/{id}/items", get(photos::galleries::list_gallery_items))
-        .route("/galleries/encrypted/{id}/items", post(photos::galleries::add_gallery_item))
+        // Secure galleries
+        .route("/galleries/secure", get(photos::galleries::list_secure_galleries))
+        .route("/galleries/secure", post(photos::galleries::create_secure_gallery))
+        .route("/galleries/secure/unlock", post(photos::galleries::unlock_secure_galleries))
+        .route("/galleries/secure/{id}", delete(photos::galleries::delete_secure_gallery))
+        .route("/galleries/secure/{id}/items", get(photos::galleries::list_gallery_items))
+        .route("/galleries/secure/{id}/items", post(photos::galleries::add_gallery_item))
         // Trash — soft-deleted photos with 30-day retention
         .route("/trash", get(trash::handlers::list_trash))
         .route("/trash", delete(trash::handlers::empty_trash))

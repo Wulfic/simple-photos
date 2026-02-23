@@ -69,9 +69,9 @@ pub struct EncryptionSettingsResponse {
     pub migration_error: Option<String>,
 }
 
-/// Response for encrypted gallery listing.
+/// Response for secure gallery listing.
 #[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct EncryptedGalleryRecord {
+pub struct SecureGalleryRecord {
     pub id: String,
     pub name: String,
     pub created_at: String,
@@ -79,23 +79,22 @@ pub struct EncryptedGalleryRecord {
 }
 
 #[derive(Debug, Serialize)]
-pub struct EncryptedGalleryListResponse {
-    pub galleries: Vec<EncryptedGalleryRecord>,
+pub struct SecureGalleryListResponse {
+    pub galleries: Vec<SecureGalleryRecord>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateEncryptedGalleryRequest {
+pub struct CreateSecureGalleryRequest {
     pub name: String,
-    pub password: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UnlockEncryptedGalleryRequest {
+pub struct UnlockSecureGalleryRequest {
     pub password: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct EncryptedGalleryUnlockResponse {
+pub struct SecureGalleryUnlockResponse {
     pub gallery_token: String,
     pub expires_in: u64,
 }

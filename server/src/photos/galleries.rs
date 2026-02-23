@@ -1,4 +1,7 @@
-//! Encrypted gallery management endpoints.
+//! Secure gallery management endpoints.
+//!
+//! Secure galleries use the user's account password for authentication,
+//! not a separate gallery-specific password.
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -13,13 +16,13 @@ use crate::state::AppState;
 
 use super::models::*;
 
-/// GET /api/galleries/encrypted
-/// List encrypted galleries for the authenticated user.
-pub async fn list_encrypted_galleries(
+/// GET /api/galleries/secure
+/// List secure galleries for the authenticated user.
+pub async fn list_secure_galleries(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<Json<EncryptedGalleryListResponse>, AppError> {
-    let galleries = sqlx::query_as::<_, EncryptedGalleryRecord>(
+) -> Result<Json<SecureGalleryListResponse>, AppError> {
+    let galleries = sqlx::query_as::<_, SecureGalleryRecord>(
         "SELECT g.id, g.name, g.created_at, \
          (SELECT COUNT(*) FROM encrypted_gallery_items WHERE gallery_id = g.id) as item_count \
          FROM encrypted_galleries g WHERE g.user_id = ? ORDER BY g.created_at DESC",
@@ -28,32 +31,27 @@ pub async fn list_encrypted_galleries(
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(EncryptedGalleryListResponse { galleries }))
+    Ok(Json(SecureGalleryListResponse { galleries }))
 }
 
-/// POST /api/galleries/encrypted
-/// Create a new encrypted gallery with its own password.
-pub async fn create_encrypted_gallery(
+/// POST /api/galleries/secure
+/// Create a new secure gallery (no separate password — uses account password).
+pub async fn create_secure_gallery(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(req): Json<CreateEncryptedGalleryRequest>,
+    Json(req): Json<CreateSecureGalleryRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     if req.name.is_empty() || req.name.len() > 100 {
         return Err(AppError::BadRequest(
             "Gallery name must be 1-100 characters".into(),
         ));
     }
-    if req.password.len() < 4 {
-        return Err(AppError::BadRequest(
-            "Gallery password must be at least 4 characters".into(),
-        ));
-    }
 
     let gallery_id = Uuid::new_v4().to_string();
-    let password_hash = bcrypt::hash(&req.password, 10)
-        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
     let now = Utc::now().to_rfc3339();
 
+    // Store a placeholder for password_hash (column is NOT NULL for legacy compat).
+    // Auth is handled via the user's account password at unlock time.
     sqlx::query(
         "INSERT INTO encrypted_galleries (id, user_id, name, password_hash, created_at) \
          VALUES (?, ?, ?, ?, ?)",
@@ -61,7 +59,7 @@ pub async fn create_encrypted_gallery(
     .bind(&gallery_id)
     .bind(&auth.user_id)
     .bind(&req.name)
-    .bind(&password_hash)
+    .bind("account-auth") // placeholder — not used for verification
     .bind(&now)
     .execute(&state.pool)
     .await?;
@@ -75,48 +73,47 @@ pub async fn create_encrypted_gallery(
     ))
 }
 
-/// POST /api/galleries/encrypted/:id/unlock
-/// Verify gallery password. Returns a short-lived token for accessing gallery items.
-pub async fn unlock_encrypted_gallery(
+/// POST /api/galleries/secure/unlock
+/// Verify the user's account password. Returns a short-lived token for accessing
+/// all secure galleries belonging to this user.
+pub async fn unlock_secure_galleries(
     State(state): State<AppState>,
     auth: AuthUser,
-    Path(gallery_id): Path<String>,
-    Json(req): Json<UnlockEncryptedGalleryRequest>,
-) -> Result<Json<EncryptedGalleryUnlockResponse>, AppError> {
+    Json(req): Json<UnlockSecureGalleryRequest>,
+) -> Result<Json<SecureGalleryUnlockResponse>, AppError> {
+    // Verify against the user's account password
     let password_hash: String = sqlx::query_scalar(
-        "SELECT password_hash FROM encrypted_galleries WHERE id = ? AND user_id = ?",
+        "SELECT password_hash FROM users WHERE id = ?",
     )
-    .bind(&gallery_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    .fetch_one(&state.pool)
+    .await?;
 
     let valid = bcrypt::verify(&req.password, &password_hash)
         .map_err(|e| AppError::Internal(format!("Bcrypt verify failed: {}", e)))?;
 
     if !valid {
-        return Err(AppError::Unauthorized("Invalid gallery password".into()));
+        return Err(AppError::Unauthorized("Invalid password".into()));
     }
 
     let now = Utc::now().timestamp();
-    let expires_in = 3600u64;
-    let payload = format!("{}:{}:{}", gallery_id, auth.user_id, now);
+    let expires_in = 3600u64; // 1 hour
+    let payload = format!("secure:{}:{}", auth.user_id, now);
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(payload.as_bytes());
     hasher.update(state.config.auth.jwt_secret.as_bytes());
-    let token = format!("gal_{}_{}", now, hex::encode(hasher.finalize()));
+    let token = format!("sec_{}_{}", now, hex::encode(hasher.finalize()));
 
-    Ok(Json(EncryptedGalleryUnlockResponse {
+    Ok(Json(SecureGalleryUnlockResponse {
         gallery_token: token,
         expires_in,
     }))
 }
 
-/// DELETE /api/galleries/encrypted/:id
-/// Delete an encrypted gallery and its items.
-pub async fn delete_encrypted_gallery(
+/// DELETE /api/galleries/secure/:id
+/// Delete a secure gallery and its items.
+pub async fn delete_secure_gallery(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(gallery_id): Path<String>,
@@ -141,8 +138,8 @@ pub async fn delete_encrypted_gallery(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/galleries/encrypted/:id/items
-/// Add a blob to an encrypted gallery.
+/// POST /api/galleries/secure/:id/items
+/// Add a blob to a secure gallery.
 #[derive(Debug, Deserialize)]
 pub struct AddGalleryItemRequest {
     pub blob_id: String,
@@ -198,8 +195,8 @@ pub async fn add_gallery_item(
     ))
 }
 
-/// GET /api/galleries/encrypted/:id/items
-/// List items in an encrypted gallery (requires unlock token in header).
+/// GET /api/galleries/secure/:id/items
+/// List items in a secure gallery (requires unlock token in header).
 pub async fn list_gallery_items(
     State(state): State<AppState>,
     auth: AuthUser,

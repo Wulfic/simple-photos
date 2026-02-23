@@ -507,9 +507,9 @@ export const api = {
       }),
   },
 
-  // ── Encrypted Galleries ───────────────────────────────────────────────────
+  // ── Secure Galleries ─────────────────────────────────────────────────────
 
-  encryptedGalleries: {
+  secureGalleries: {
     list: () =>
       request<{
         galleries: Array<{
@@ -518,22 +518,23 @@ export const api = {
           created_at: string;
           item_count: number;
         }>;
-      }>("/galleries/encrypted"),
+      }>("/galleries/secure"),
 
-    create: (name: string, password: string) =>
-      request<{ gallery_id: string; name: string }>("/galleries/encrypted", {
+    create: (name: string) =>
+      request<{ gallery_id: string; name: string }>("/galleries/secure", {
         method: "POST",
-        body: JSON.stringify({ name, password }),
+        body: JSON.stringify({ name }),
       }),
 
     delete: (galleryId: string) =>
-      request<void>(`/galleries/encrypted/${galleryId}`, {
+      request<void>(`/galleries/secure/${galleryId}`, {
         method: "DELETE",
       }),
 
-    unlock: (galleryId: string, password: string) =>
+    /** Unlock all secure galleries using the user's account password */
+    unlock: (password: string) =>
       request<{ gallery_token: string; expires_in: number }>(
-        `/galleries/encrypted/${galleryId}/unlock`,
+        `/galleries/secure/unlock`,
         {
           method: "POST",
           body: JSON.stringify({ password }),
@@ -543,13 +544,13 @@ export const api = {
     listItems: (galleryId: string, galleryToken: string) =>
       request<{
         items: Array<{ id: string; blob_id: string; added_at: string }>;
-      }>(`/galleries/encrypted/${galleryId}/items`, {
+      }>(`/galleries/secure/${galleryId}/items`, {
         headers: { "X-Gallery-Token": galleryToken },
       }),
 
     addItem: (galleryId: string, blobId: string) =>
       request<{ item_id: string }>(
-        `/galleries/encrypted/${galleryId}/items`,
+        `/galleries/secure/${galleryId}/items`,
         {
           method: "POST",
           body: JSON.stringify({ blob_id: blobId }),

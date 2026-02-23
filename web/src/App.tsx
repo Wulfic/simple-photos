@@ -14,6 +14,7 @@ import Settings from "./pages/Settings";
 import Welcome from "./pages/Welcome";
 import Import from "./pages/Import";
 import Trash from "./pages/Trash";
+import SecureGallery from "./pages/SecureGallery";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
@@ -154,6 +155,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Trash />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/secure-gallery"
+          element={
+            <ProtectedRoute>
+              <SecureGallery />
             </ProtectedRoute>
           }
         />

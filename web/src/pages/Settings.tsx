@@ -5,7 +5,6 @@ import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
 import AppHeader from "../components/AppHeader";
-import EncryptedGalleries from "../components/EncryptedGalleries";
 import { checkPasswordStrength } from "../utils/validation";
 import { Checkmark } from "../components/PasswordFields";
 
@@ -40,9 +39,6 @@ export default function Settings() {
   const [encryptionLoading, setEncryptionLoading] = useState(true);
   const [togglingEncryption, setTogglingEncryption] = useState(false);
   const [showEncryptionWarning, setShowEncryptionWarning] = useState(false);
-
-  // ── Encrypted galleries state ────────────────────────────────────────────
-  // (Managed by EncryptedGalleries component)
 
   // ── Backup recovery state ────────────────────────────────────────────────
   const [showRecoverWarning, setShowRecoverWarning] = useState(false);
@@ -155,10 +151,6 @@ export default function Settings() {
     }
   }, []);
 
-  const loadGalleries = useCallback(async () => {
-    // Galleries now managed by EncryptedGalleries component
-  }, []);
-
   // Load backup servers on mount
   const loadBackupServers = useCallback(async () => {
     try {
@@ -250,39 +242,36 @@ export default function Settings() {
           <div className="text-gray-400 text-sm">Loading encryption settings…</div>
         ) : (
           <div className="space-y-4">
-            {/* Current mode display */}
+            {/* Toggle switch */}
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Storage Mode
+                  End-to-End Encryption
                 </h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {encryptionMode === "encrypted" ? (
-                    <>
-                      <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
-                        🔒 Encrypted
-                      </span>
-                      {" — "}All photos are end-to-end encrypted in blob storage.
-                    </>
-                  ) : (
-                    <>
-                      <span className="inline-flex items-center gap-1 text-green-600 dark:text-green-400 font-medium">
-                        📁 Standard
-                      </span>
-                      {" — "}Photos are stored as regular files on disk.
-                    </>
-                  )}
+                  {encryptionMode === "encrypted"
+                    ? "Photos are encrypted — only you can view them."
+                    : "Photos are stored as regular files on disk."}
                 </p>
               </div>
-              {migrationStatus === "idle" && (
-                <button
-                  onClick={() => setShowEncryptionWarning(true)}
-                  disabled={togglingEncryption}
-                  className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm whitespace-nowrap disabled:opacity-50"
-                >
-                  {encryptionMode === "plain" ? "Enable Encryption" : "Disable Encryption"}
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  if (migrationStatus !== "idle") return;
+                  setShowEncryptionWarning(true);
+                }}
+                disabled={togglingEncryption || migrationStatus !== "idle"}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
+                  encryptionMode === "encrypted" ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
+                }`}
+                role="switch"
+                aria-checked={encryptionMode === "encrypted"}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    encryptionMode === "encrypted" ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </button>
             </div>
 
             {/* Migration progress */}
@@ -322,9 +311,8 @@ export default function Settings() {
                   ⚠️ {encryptionMode === "plain" ? "Enable Encryption?" : "Disable Encryption?"}
                 </h4>
                 <p className="text-sm text-amber-700 dark:text-amber-400 mb-3">
-                  {encryptionMode === "plain"
-                    ? "All existing photos will be encrypted and stored as opaque blobs. This process runs in the background and may take a while for large libraries. Files will no longer be directly accessible on disk."
-                    : "All encrypted photos will be decrypted and stored as regular files on disk. Anyone with server access will be able to view the files directly. Encrypted galleries are not affected by this change."}
+                  This process can take a significant amount of time depending on your library size.
+                  It will run in the background — you can continue using the app while it processes.
                 </p>
                 <div className="flex gap-2">
                   <button
@@ -347,17 +335,9 @@ export default function Settings() {
                 </div>
               </div>
             )}
-
-            {/* Info about encrypted galleries */}
-            <p className="text-xs text-gray-400 dark:text-gray-500">
-              Encrypted galleries are always encrypted regardless of the global setting above.
-            </p>
           </div>
         )}
       </section>
-
-      {/* ── Encrypted Galleries ──────────────────────────────────────────── */}
-      <EncryptedGalleries onError={setError} onSuccess={setSuccess} />
 
       {/* ── Backup Recovery ─────────────────────────────────────────────────── */}
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
