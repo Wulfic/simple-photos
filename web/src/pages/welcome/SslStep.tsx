@@ -276,7 +276,7 @@ export default function SslStep({ setStep, setError, error }: SslStepProps) {
         <button
           onClick={() => {
             setError("");
-            setStep("backup");
+            setStep("storage");
           }}
           className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 text-sm"
         >

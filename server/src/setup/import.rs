@@ -40,7 +40,7 @@ pub struct MediaFileEntry {
 /// GET /api/admin/import/scan?path=/some/path
 ///
 /// If no path is given, scans the current storage root.
-/// Returns all image/video files (non-recursive — one level only).
+/// Returns all image/video files (recursive scan through subdirectories).
 pub async fn import_scan(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -76,37 +76,44 @@ pub async fn import_scan(
     let mut files = Vec::new();
     let mut total_size: u64 = 0;
 
-    let mut entries = tokio::fs::read_dir(&canonical).await.map_err(|e| {
-        AppError::BadRequest(format!("Cannot read directory '{}': {}", canonical.display(), e))
-    })?;
+    // Recursively scan directories for media files
+    let mut queue = vec![canonical.clone()];
 
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
-        }
+    while let Some(dir) = queue.pop() {
+        let mut entries = tokio::fs::read_dir(&dir).await.map_err(|e| {
+            AppError::BadRequest(format!("Cannot read directory '{}': {}", dir.display(), e))
+        })?;
 
-        if let Ok(ft) = entry.file_type().await {
-            if ft.is_file() && is_media_file(&name) {
-                let full_path = entry.path().display().to_string();
-                let file_meta = entry.metadata().await.ok();
-                let size = file_meta.as_ref().map(|m| m.len()).unwrap_or(0);
-                let modified = file_meta.and_then(|m| {
-                    m.modified().ok().map(|t| {
-                        let dt: chrono::DateTime<chrono::Utc> = t.into();
-                        dt.to_rfc3339()
-                    })
-                });
-                let mime = mime_from_extension(&name).to_string();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
 
-                total_size += size;
-                files.push(MediaFileEntry {
-                    name,
-                    path: full_path,
-                    size,
-                    mime_type: mime,
-                    modified,
-                });
+            if let Ok(ft) = entry.file_type().await {
+                if ft.is_dir() {
+                    queue.push(entry.path());
+                } else if ft.is_file() && is_media_file(&name) {
+                    let full_path = entry.path().display().to_string();
+                    let file_meta = entry.metadata().await.ok();
+                    let size = file_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                    let modified = file_meta.and_then(|m| {
+                        m.modified().ok().map(|t| {
+                            let dt: chrono::DateTime<chrono::Utc> = t.into();
+                            dt.to_rfc3339()
+                        })
+                    });
+                    let mime = mime_from_extension(&name).to_string();
+
+                    total_size += size;
+                    files.push(MediaFileEntry {
+                        name,
+                        path: full_path,
+                        size,
+                        mime_type: mime,
+                        modified,
+                    });
+                }
             }
         }
     }

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{self, AuditEvent};
+use crate::auth::tokens::issue_tokens;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -167,6 +168,227 @@ pub async fn init(
             user_id,
             username: req.username,
             message: "Setup complete! You can now log in.".into(),
+        }),
+    ))
+}
+
+// ── Backup Pairing ──────────────────────────────────────────────────────────
+
+// ── Server Discovery (during first-run setup) ───────────────────────────────
+
+/// GET /api/setup/discover
+///
+/// Discover Simple Photos servers on the local network via UDP broadcast.
+/// Only works during first-run setup (zero users in DB) — no auth required.
+pub async fn discover(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Guard: only works when no users exist
+    let user_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&state.pool)
+            .await?;
+
+    if user_count > 0 {
+        return Err(AppError::Forbidden(
+            "Setup has already been completed.".into(),
+        ));
+    }
+
+    // UDP broadcast discovery — completes in ~6 seconds
+    let broadcast_results = tokio::task::spawn_blocking(|| {
+        crate::backup::broadcast::discover_via_broadcast(std::time::Duration::from_secs(6))
+    })
+    .await
+    .unwrap_or_default();
+
+    let servers: Vec<serde_json::Value> = broadcast_results
+        .into_iter()
+        .map(|b| serde_json::json!({
+            "address": b.address,
+            "name": b.name,
+            "version": b.version,
+        }))
+        .collect();
+
+    tracing::info!("Setup discovery: found {} servers via broadcast", servers.len());
+
+    Ok(Json(serde_json::json!({ "servers": servers })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PairRequest {
+    /// The address of the primary server (e.g. "192.168.1.10:8080")
+    pub main_server_url: String,
+    /// Admin username on the primary server
+    pub username: String,
+    /// Admin password on the primary server
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PairResponse {
+    pub message: String,
+    pub user_id: String,
+    pub username: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub main_server_url: String,
+}
+
+/// POST /api/setup/pair
+///
+/// Pair this server as a backup of an existing primary Simple Photos instance.
+///
+/// # Security
+/// Only works during first-run setup (zero users in DB).
+///
+/// # Flow
+/// 1. Authenticates against the primary server with the given admin credentials
+/// 2. Creates a local admin account with the same credentials
+/// 3. Sets this server to "backup" mode
+/// 4. Returns local auth tokens so the frontend is logged in immediately
+pub async fn pair(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PairRequest>,
+) -> Result<(StatusCode, Json<PairResponse>), AppError> {
+    // ── Guard: only works when no users exist ────────────────────────────
+    let user_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&state.pool)
+            .await?;
+
+    if user_count > 0 {
+        return Err(AppError::Forbidden(
+            "Setup has already been completed.".into(),
+        ));
+    }
+
+    // ── Normalise the main server URL ────────────────────────────────────
+    let base = req.main_server_url.trim().trim_end_matches('/');
+    let base_url = if base.starts_with("http://") || base.starts_with("https://") {
+        base.to_string()
+    } else {
+        format!("http://{}", base)
+    };
+
+    // ── Authenticate against the primary server ──────────────────────────
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .danger_accept_invalid_certs(true)      // self-signed certs OK during setup
+        .build()
+        .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
+
+    let login_url = format!("{}/api/auth/login", base_url);
+    let login_body = serde_json::json!({
+        "username": req.username,
+        "password": req.password,
+    });
+
+    let resp = client
+        .post(&login_url)
+        .header("Content-Type", "application/json")
+        .json(&login_body)
+        .send()
+        .await
+        .map_err(|e| AppError::BadRequest(format!(
+            "Cannot reach the primary server at {}: {}",
+            base_url, e
+        )))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AppError::BadRequest(format!(
+            "Primary server rejected the credentials (HTTP {}): {}",
+            status, body
+        )));
+    }
+
+    // We don't need the remote tokens — we only confirmed the credentials are valid.
+    tracing::info!(
+        "Successfully authenticated against primary server at {}",
+        base_url
+    );
+
+    // ── Create local admin with the same credentials ─────────────────────
+    let user_id = Uuid::new_v4().to_string();
+    let password_hash =
+        bcrypt::hash(&req.password, state.config.auth.bcrypt_cost)
+            .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+    let now = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO users (id, username, password_hash, created_at, storage_quota_bytes, role) \
+         VALUES (?, ?, ?, ?, ?, 'admin')",
+    )
+    .bind(&user_id)
+    .bind(&req.username)
+    .bind(&password_hash)
+    .bind(&now)
+    .bind(state.config.storage.default_quota_bytes as i64)
+    .execute(&state.pool)
+    .await?;
+
+    // ── Set backup mode ──────────────────────────────────────────────────
+    sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('backup_mode', 'backup') \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .execute(&state.pool)
+    .await?;
+
+    // Store the primary server URL for future sync operations
+    sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('primary_server_url', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(&base_url)
+    .execute(&state.pool)
+    .await?;
+
+    // Auto-generate a backup API key
+    let api_key = Uuid::new_v4().to_string().replace('-', "");
+    sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('backup_api_key', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(&api_key)
+    .execute(&state.pool)
+    .await?;
+
+    // ── Generate local auth tokens ───────────────────────────────────────
+    let (access_token, refresh_token) = issue_tokens(&state, &user_id).await?;
+
+    audit::log(
+        &state.pool,
+        AuditEvent::Register,
+        Some(&user_id),
+        &headers,
+        Some(serde_json::json!({
+            "username": req.username,
+            "method": "backup_pairing",
+            "primary_server": base_url,
+        })),
+    )
+    .await;
+
+    tracing::info!(
+        "Backup pairing complete: local admin '{}' created, paired with {}",
+        req.username,
+        base_url
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(PairResponse {
+            message: "Paired successfully! This server is now a backup.".into(),
+            user_id,
+            username: req.username,
+            access_token,
+            refresh_token,
+            main_server_url: base_url,
         }),
     ))
 }

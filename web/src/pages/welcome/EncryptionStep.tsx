@@ -109,29 +109,24 @@ export default function EncryptionStep({
         <button
           onClick={() => {
             setError("");
-            setStep("storage");
+            setStep("ssl");
           }}
           className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
         >
           ← Back
         </button>
         <button
-          onClick={async () => {
-            setLoading(true);
+          onClick={() => {
             setError("");
-            try {
-              await api.encryption.setMode(encryptionMode);
-              setStep("users");
-            } catch (err: unknown) {
-              setError(err instanceof Error ? err.message : "Failed to set encryption mode");
-            } finally {
-              setLoading(false);
-            }
+            // Don't set encryption mode on server yet — defer to CompleteStep
+            // so we can scan for existing files in plain mode first,
+            // then switch to encrypted (triggering migration).
+            setStep("users");
           }}
           disabled={loading}
           className="flex-[2] bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
         >
-          {loading ? "Saving…" : "Continue →"}
+          Continue →
         </button>
       </div>
     </div>

@@ -41,7 +41,7 @@ export default function WelcomeStep({ setStep, status, error }: WelcomeStepProps
       )}
 
       <button
-        onClick={() => setStep("account")}
+        onClick={() => setStep("server-role")}
         disabled={!!error && !status}
         className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-lg font-medium transition-colors"
       >

@@ -11,6 +11,7 @@ import {
 } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useAuthStore } from "../store/auth";
+import { useProcessingStore } from "../store/processing";
 import AppHeader from "../components/AppHeader";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -132,9 +133,13 @@ function generateVideoThumbnail(file: File, size: number): Promise<ArrayBuffer> 
 
 function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
+  const CHUNK = 8192;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.byteLength; i += CHUNK) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.byteLength));
+    parts.push(String.fromCharCode(...slice));
+  }
+  return btoa(parts.join(""));
 }
 
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
@@ -195,6 +200,73 @@ async function fetchAllPages(blobType: string) {
   return allBlobs;
 }
 
+// ── Migration helpers ─────────────────────────────────────────────────────────
+
+/** Generate a JPEG thumbnail from raw image/video bytes for migration. */
+async function generateMigrationThumbnail(
+  fileData: Uint8Array,
+  mimeType: string,
+  size: number
+): Promise<ArrayBuffer | null> {
+  const blob = new Blob([fileData as BlobPart], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  try {
+    if (mimeType.startsWith("video/")) {
+      return await new Promise<ArrayBuffer | null>((resolve) => {
+        const video = document.createElement("video");
+        video.muted = true;
+        video.playsInline = true;
+        video.onloadedmetadata = () => {
+          video.currentTime = Math.min(Math.max(video.duration * 0.1, 1), video.duration);
+        };
+        video.onseeked = () => {
+          URL.revokeObjectURL(url);
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext("2d")!;
+          const scale = Math.max(size / video.videoWidth, size / video.videoHeight);
+          const w = video.videoWidth * scale;
+          const h = video.videoHeight * scale;
+          ctx.drawImage(video, (size - w) / 2, (size - h) / 2, w, h);
+          canvas.toBlob(
+            (b) => (b ? b.arrayBuffer().then((ab) => resolve(ab)) : resolve(null)),
+            "image/jpeg",
+            0.8
+          );
+        };
+        video.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+        setTimeout(() => { URL.revokeObjectURL(url); resolve(null); }, 10_000);
+        video.src = url;
+      });
+    }
+    return await new Promise<ArrayBuffer | null>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d")!;
+        const scale = Math.max(size / img.naturalWidth, size / img.naturalHeight);
+        const w = img.naturalWidth * scale;
+        const h = img.naturalHeight * scale;
+        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+        canvas.toBlob(
+          (b) => (b ? b.arrayBuffer().then((ab) => resolve(ab)) : resolve(null)),
+          "image/jpeg",
+          0.8
+        );
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  } catch {
+    URL.revokeObjectURL(url);
+    return null;
+  }
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Gallery() {
@@ -206,6 +278,16 @@ export default function Gallery() {
   const [plainPhotos, setPlainPhotos] = useState<PlainPhoto[]>([]);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
+  const { startTask, endTask } = useProcessingStore();
+
+  // ── Encryption migration state ──────────────────────────────────────────
+  const [migrationStatus, setMigrationStatus] = useState("idle");
+  const [migrationTotal, setMigrationTotal] = useState(0);
+  const [migrationCompleted, setMigrationCompleted] = useState(0);
+  const migrationRunningRef = useRef(false);
+
+  // ── Secure gallery (private) blob IDs to hide from main gallery ─────────
+  const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
 
   // Encrypted-mode: cached photos from IndexedDB (only used in encrypted mode)
   const photos = useLiveQuery(() =>
@@ -218,6 +300,19 @@ export default function Gallery() {
         const settings = await api.encryption.getSettings();
         const detected = settings.encryption_mode as EncryptionMode;
         setMode(detected);
+
+        // Track migration state so the gallery can run the migration worker
+        setMigrationStatus(settings.migration_status);
+        setMigrationTotal(settings.migration_total);
+        setMigrationCompleted(settings.migration_completed);
+
+        // Fetch blob IDs that are in secure galleries (to hide from main gallery)
+        try {
+          const secureRes = await api.secureGalleries.secureBlobIds();
+          setSecureBlobIds(new Set(secureRes.blob_ids));
+        } catch {
+          // Secure galleries may not be available — ignore
+        }
 
         // Trigger a background auto-scan whenever the gallery opens
         api.backup.triggerAutoScan().catch(() => {
@@ -245,6 +340,142 @@ export default function Gallery() {
     }
     init();
   }, []);
+
+  // ── Encryption migration worker ─────────────────────────────────────────
+  // When the server reports an active "encrypting" migration (e.g. after
+  // initial setup chose encrypted mode and photos were discovered in plain
+  // mode), this worker downloads each plain photo, encrypts it client-side,
+  // uploads the encrypted blob, and reports progress to the server.
+  useEffect(() => {
+    if (migrationStatus !== "encrypting") return;
+    if (migrationRunningRef.current) return;
+    if (!hasCryptoKey()) return;
+
+    migrationRunningRef.current = true;
+    startTask("encryption");
+
+    (async () => {
+      try {
+        console.log("[Gallery Migration] Starting encryption migration...");
+
+        // Fetch ALL plain photos that need encrypting
+        const allPhotos: PlainPhoto[] = [];
+        let cursor: string | undefined;
+        do {
+          const res = await api.photos.list({ after: cursor, limit: 200 });
+          allPhotos.push(...res.photos);
+          cursor = res.next_cursor ?? undefined;
+        } while (cursor);
+
+        console.log(`[Gallery Migration] Found ${allPhotos.length} photos to encrypt`);
+        const total = allPhotos.length;
+        let completed = 0;
+        let succeeded = 0;
+        let failedCount = 0;
+        let lastError = "";
+
+        for (const photo of allPhotos) {
+          let attempts = 0;
+          let itemSuccess = false;
+
+          while (attempts < 3 && !itemSuccess) {
+            attempts++;
+            try {
+              // Step 1: Download the raw file
+              const fileBuffer = await api.photos.downloadFile(photo.id);
+              const fileData = new Uint8Array(fileBuffer);
+
+              // Step 2: Generate thumbnail
+              let thumbBlobId: string | undefined;
+              try {
+                const thumbData = await generateMigrationThumbnail(fileData, photo.mime_type, 256);
+                if (thumbData) {
+                  const thumbPayload = JSON.stringify({
+                    v: 1, photo_blob_id: "", width: 256, height: 256,
+                    data: arrayBufferToBase64(thumbData),
+                  });
+                  const encThumb = await encrypt(new TextEncoder().encode(thumbPayload));
+                  const thumbHash = await sha256Hex(new Uint8Array(encThumb));
+                  const thumbBlobType = photo.media_type === "video" ? "video_thumbnail" : "thumbnail";
+                  const thumbUpload = await api.blobs.upload(encThumb, thumbBlobType, thumbHash);
+                  thumbBlobId = thumbUpload.blob_id;
+                }
+              } catch (thumbErr: any) {
+                console.warn(`[Gallery Migration] Thumbnail failed for "${photo.filename}" (continuing):`, thumbErr.message);
+              }
+
+              // Step 3: Build and encrypt photo payload
+              const serverBlobType = blobTypeFromMime(photo.mime_type);
+              const photoPayload = JSON.stringify({
+                v: 1,
+                filename: photo.filename,
+                taken_at: photo.taken_at || photo.created_at,
+                mime_type: photo.mime_type,
+                media_type: (photo.media_type || mediaTypeFromMime(photo.mime_type)) as "photo" | "gif" | "video",
+                width: photo.width,
+                height: photo.height,
+                duration: photo.duration_secs ?? undefined,
+                album_ids: [],
+                thumbnail_blob_id: thumbBlobId || "",
+                data: arrayBufferToBase64(fileData),
+              });
+
+              const encPhoto = await encrypt(new TextEncoder().encode(photoPayload));
+              const photoHash = await sha256Hex(new Uint8Array(encPhoto));
+
+              // Step 4: Upload encrypted blob
+              const uploadResult = await api.blobs.upload(encPhoto, serverBlobType, photoHash);
+
+              // Step 5: Link blob to the plain photo so it won't be re-migrated
+              await api.photos.markEncrypted(photo.id, uploadResult.blob_id);
+
+              itemSuccess = true;
+              succeeded++;
+            } catch (itemErr: any) {
+              console.error(`[Gallery Migration] FAILED "${photo.filename}" attempt ${attempts}/3:`, itemErr.message);
+              if (attempts >= 3) {
+                failedCount++;
+                lastError = `Failed on "${photo.filename}": ${itemErr.message}`;
+              } else {
+                await new Promise((r) => setTimeout(r, 500 * attempts));
+              }
+            }
+          }
+
+          completed++;
+          setMigrationCompleted(completed);
+          await api.encryption.reportProgress({
+            completed_count: completed,
+            ...(itemSuccess ? {} : { error: lastError }),
+          });
+        }
+
+        console.log(`[Gallery Migration] Complete: ${succeeded} succeeded, ${failedCount} failed out of ${total}`);
+
+        // Mark migration complete
+        await api.encryption.reportProgress({
+          completed_count: total,
+          done: true,
+          ...(failedCount > 0
+            ? { error: `Migration finished with ${failedCount}/${total} failures. Last error: ${lastError}` }
+            : {}),
+        });
+
+        // Reload encrypted photos so they appear in the gallery
+        setMigrationStatus("idle");
+        await loadEncryptedPhotos();
+      } catch (err: any) {
+        console.error("[Gallery Migration] Top-level error:", err.message);
+        await api.encryption.reportProgress({
+          completed_count: 0,
+          error: `Migration failed: ${err.message}`,
+        }).catch(() => {});
+      } finally {
+        migrationRunningRef.current = false;
+        endTask("encryption");
+      }
+    })();
+  }, [migrationStatus]);
 
   // ── Load plain-mode photos from server ─────────────────────────────────────
 
@@ -351,6 +582,7 @@ export default function Gallery() {
       // In plain mode, files must already be in the storage directory.
       // Trigger a server-side scan to register them.
       setUploading(true);
+      startTask("upload");
       setError("");
       try {
         const res = await api.admin.scanAndRegister();
@@ -363,12 +595,14 @@ export default function Gallery() {
         setError(err instanceof Error ? err.message : "Scan failed");
       } finally {
         setUploading(false);
+        endTask("upload");
       }
       return;
     }
 
     // Encrypted mode: encrypt and upload
     setUploading(true);
+    startTask("upload");
     setError("");
 
     const fileArray = Array.from(files).filter(
@@ -390,6 +624,7 @@ export default function Gallery() {
     } finally {
       setUploading(false);
       setUploadProgress(null);
+      endTask("upload");
     }
   }, []);
 
@@ -471,46 +706,29 @@ export default function Gallery() {
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
-  // Determine which items to display based on mode
+  // Filter out photos that are in secure galleries (private)
+  const filteredPlainPhotos = secureBlobIds.size > 0
+    ? plainPhotos.filter((p) => !secureBlobIds.has(p.id))
+    : plainPhotos;
+  const filteredPhotos = secureBlobIds.size > 0
+    ? photos?.filter((p) => !secureBlobIds.has(p.blobId))
+    : photos;
+
   const hasContent = mode === "plain"
-    ? plainPhotos.length > 0
-    : (photos && photos.length > 0);
+    ? filteredPlainPhotos.length > 0
+    : (filteredPhotos && filteredPhotos.length > 0);
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <AppHeader>
-        {mode === "plain" ? (
-          <button
-            onClick={() => {
-              // In plain mode, trigger server scan to pick up new files
-              setUploading(true);
-              setError("");
-              api.admin.scanAndRegister()
-                .then(async (res) => {
-                  if (res.registered > 0) await loadPlainPhotos();
-                  else setError("No new files found. Place files in the storage directory first.");
-                })
-                .catch((err: any) => setError(err.message))
-                .finally(() => setUploading(false));
-            }}
-            disabled={uploading}
-            className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors select-none shadow-sm shadow-blue-900/20 disabled:opacity-50"
+        {mode === "encrypted" && (
+          <label
+            className="flex items-center justify-center w-8 h-8 rounded-md text-gray-400 hover:text-white hover:bg-white/10 cursor-pointer transition-all duration-200 select-none"
+            title="Upload photos"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-            </svg>
-            {uploading ? "Scanning…" : "Scan for New Files"}
-          </button>
-        ) : (
-          <label className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 cursor-pointer text-sm font-medium transition-colors select-none shadow-sm shadow-blue-900/20">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
-            {uploading
-              ? uploadProgress
-                ? `${uploadProgress.done + 1}/${uploadProgress.total}`
-                : "Uploading…"
-              : "Upload"}
             <input
               ref={inputRef}
               type="file"
@@ -526,6 +744,27 @@ export default function Gallery() {
 
       <main className="p-4">
         {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
+
+        {/* Migration progress banner */}
+        {migrationStatus === "encrypting" && migrationTotal > 0 && (
+          <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-4">
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
+                Encrypting photos… {migrationCompleted} / {migrationTotal}
+              </p>
+            </div>
+            <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2">
+              <div
+                className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${migrationTotal > 0 ? (migrationCompleted / migrationTotal) * 100 : 0}%` }}
+              />
+            </div>
+            <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+              Your existing photos are being encrypted. This happens automatically in the background.
+            </p>
+          </div>
+        )}
 
         <div
           onDragOver={(e) => e.preventDefault()}
@@ -548,7 +787,7 @@ export default function Gallery() {
         )}
 
         {/* Plain mode tiles */}
-        {mode === "plain" && plainPhotos.map((photo) => (
+        {mode === "plain" && filteredPlainPhotos.map((photo) => (
           <PlainMediaTile
             key={photo.id}
             photo={photo}
@@ -557,7 +796,7 @@ export default function Gallery() {
         ))}
 
         {/* Encrypted mode tiles */}
-        {mode === "encrypted" && photos?.map((photo) => (
+        {mode === "encrypted" && filteredPhotos?.map((photo) => (
           <MediaTile
             key={photo.blobId}
             photo={photo}

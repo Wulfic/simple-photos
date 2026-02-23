@@ -19,6 +19,7 @@ mod trash;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
@@ -168,6 +169,8 @@ async fn main() -> anyhow::Result<()> {
         // First-run setup (public)
         .route("/setup/status", get(setup::handlers::status))
         .route("/setup/init", post(setup::handlers::init))
+        .route("/setup/pair", post(setup::handlers::pair))
+        .route("/setup/discover", get(setup::handlers::discover))
         // Auth
         .route("/auth/register", post(auth::handlers::register))
         .route("/auth/login", post(auth::handlers::login))
@@ -193,6 +196,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/users/{id}/role", put(setup::admin::update_user_role))
         .route("/admin/users/{id}/password", put(setup::admin::admin_reset_password))
         .route("/admin/users/{id}/2fa", delete(setup::admin::admin_reset_2fa))
+        .route("/admin/users/{id}/2fa/setup", post(setup::admin::admin_setup_2fa))
+        .route("/admin/users/{id}/2fa/confirm", post(setup::admin::admin_confirm_2fa))
         .route("/admin/storage", get(setup::storage::get_storage))
         .route("/admin/storage", put(setup::storage::update_storage))
         .route("/admin/browse", get(setup::storage::browse_directory))
@@ -220,13 +225,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/settings/encryption", get(photos::encryption::get_encryption_settings))
         .route("/admin/encryption", put(photos::encryption::set_encryption_mode))
         .route("/admin/encryption/progress", post(photos::encryption::report_migration_progress))
+        .route("/photos/{id}/mark-encrypted", post(photos::encryption::mark_photo_encrypted))
         // Secure galleries
         .route("/galleries/secure", get(photos::galleries::list_secure_galleries))
         .route("/galleries/secure", post(photos::galleries::create_secure_gallery))
         .route("/galleries/secure/unlock", post(photos::galleries::unlock_secure_galleries))
+        .route("/galleries/secure/blob-ids", get(photos::galleries::list_secure_blob_ids))
         .route("/galleries/secure/{id}", delete(photos::galleries::delete_secure_gallery))
         .route("/galleries/secure/{id}/items", get(photos::galleries::list_gallery_items))
         .route("/galleries/secure/{id}/items", post(photos::galleries::add_gallery_item))
+        // Storage stats
+        .route("/settings/storage-stats", get(photos::storage_stats::get_storage_stats))
         // Trash — soft-deleted photos with 30-day retention
         .route("/trash", get(trash::handlers::list_trash))
         .route("/trash", delete(trash::handlers::empty_trash))
@@ -269,6 +278,11 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api", api_routes)
         // Security headers on all responses
         .layer(axum::middleware::from_fn(security::security_headers))
+        // Disable Axum's default 2 MiB body limit — we rely on tower-http's
+        // RequestBodyLimitLayer (configured from max_blob_size_bytes) instead.
+        // Without this, the Bytes extractor rejects any upload > 2 MiB with a
+        // plain-text 413 that the frontend can't parse as JSON.
+        .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(
             config.storage.max_blob_size_bytes as usize,
         ))

@@ -66,8 +66,18 @@ async function request<T>(
         throw new Error("Too many requests. Please wait and try again.");
       }
       if (!retry.ok) {
-        const err = await retry.json().catch(() => ({ error: "Request failed" }));
-        throw new Error(err.error || `HTTP ${retry.status}`);
+        const rawText = await retry.text().catch(() => "");
+        let errorMessage: string;
+        try {
+          const parsed = JSON.parse(rawText);
+          errorMessage = parsed.error || `HTTP ${retry.status}`;
+        } catch {
+          errorMessage = rawText
+            ? `HTTP ${retry.status}: ${rawText.substring(0, 200)}`
+            : `HTTP ${retry.status}`;
+        }
+        console.error(`[API] ${options.method || "GET"} ${path} failed after token refresh: ${retry.status}`, rawText.substring(0, 500));
+        throw new Error(errorMessage);
       }
       if (retry.status === 204) return undefined as T;
       const retryText = await retry.text();
@@ -80,8 +90,18 @@ async function request<T>(
   }
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: "Request failed" }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+    const rawText = await res.text().catch(() => "");
+    let errorMessage: string;
+    try {
+      const parsed = JSON.parse(rawText);
+      errorMessage = parsed.error || `HTTP ${res.status}`;
+    } catch {
+      errorMessage = rawText
+        ? `HTTP ${res.status}: ${rawText.substring(0, 200)}`
+        : `HTTP ${res.status}`;
+    }
+    console.error(`[API] ${options.method || "GET"} ${path} failed: ${res.status}`, rawText.substring(0, 500));
+    throw new Error(errorMessage);
   }
 
   if (res.status === 204) return undefined as T;
@@ -135,6 +155,45 @@ async function tryRefresh(): Promise<boolean> {
   } finally {
     refreshPromise = null;
   }
+}
+
+/**
+ * Download raw binary data from a URL with automatic 401 token refresh.
+ * Used for non-JSON endpoints (photo files, thumbnails, blobs) where the
+ * standard `request()` helper can't be used because it parses JSON.
+ */
+async function downloadRaw(url: string): Promise<ArrayBuffer> {
+  const { accessToken } = useAuthStore.getState();
+  const headers: Record<string, string> = {
+    "X-Requested-With": "SimplePhotos",
+  };
+  if (accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
+  const res = await fetch(url, { headers });
+
+  if (res.status === 401) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      const newToken = useAuthStore.getState().accessToken;
+      headers["Authorization"] = `Bearer ${newToken}`;
+      const retry = await fetch(url, { headers });
+      if (!retry.ok) {
+        console.error(`[API] Download ${url} failed after refresh: ${retry.status}`);
+        throw new Error(`Download failed: HTTP ${retry.status}`);
+      }
+      return retry.arrayBuffer();
+    }
+    useAuthStore.getState().logout();
+    throw new Error("Session expired");
+  }
+
+  if (!res.ok) {
+    console.error(`[API] Download ${url} failed: ${res.status}`);
+    throw new Error(`Download failed: HTTP ${res.status}`);
+  }
+  return res.arrayBuffer();
 }
 
 // ── Type definitions ─────────────────────────────────────────────────────────
@@ -274,32 +333,7 @@ export const api = {
     },
 
     download: async (blobId: string): Promise<ArrayBuffer> => {
-      const { accessToken } = useAuthStore.getState();
-      const headers: Record<string, string> = {
-        "X-Requested-With": "SimplePhotos",
-      };
-      if (accessToken) {
-        headers["Authorization"] = `Bearer ${accessToken}`;
-      }
-
-      const res = await fetch(`${BASE}/blobs/${blobId}`, { headers });
-
-      if (res.status === 401) {
-        // Try one refresh then retry
-        const refreshed = await tryRefresh();
-        if (refreshed) {
-          const newToken = useAuthStore.getState().accessToken;
-          headers["Authorization"] = `Bearer ${newToken}`;
-          const retry = await fetch(`${BASE}/blobs/${blobId}`, { headers });
-          if (!retry.ok) throw new Error(`Download failed: ${retry.status}`);
-          return retry.arrayBuffer();
-        }
-        useAuthStore.getState().logout();
-        throw new Error("Session expired");
-      }
-
-      if (!res.ok) throw new Error(`Failed to download blob: ${res.status}`);
-      return res.arrayBuffer();
+      return downloadRaw(`${BASE}/blobs/${blobId}`);
     },
 
     delete: (blobId: string) =>
@@ -352,6 +386,17 @@ export const api = {
     resetUser2fa: (userId: string) =>
       request<{ message: string }>(`/admin/users/${userId}/2fa`, {
         method: "DELETE",
+      }),
+
+    setupUser2fa: (userId: string) =>
+      request<TotpSetupResponse>(`/admin/users/${userId}/2fa/setup`, {
+        method: "POST",
+      }),
+
+    confirmUser2fa: (userId: string, totpCode: string) =>
+      request<{ message: string }>(`/admin/users/${userId}/2fa/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ totp_code: totpCode }),
       }),
 
     getStorage: () =>
@@ -540,8 +585,23 @@ export const api = {
     /** Get the URL for serving a plain photo thumbnail */
     thumbUrl: (photoId: string) => `${BASE}/photos/${photoId}/thumb`,
 
+    /** Download a plain photo file as raw binary, with 401 refresh retry */
+    downloadFile: (photoId: string) =>
+      downloadRaw(`${BASE}/photos/${photoId}/file`),
+
+    /** Download a plain photo thumbnail as raw binary, with 401 refresh retry */
+    downloadThumb: (photoId: string) =>
+      downloadRaw(`${BASE}/photos/${photoId}/thumb`),
+
     delete: (photoId: string) =>
       request<void>(`/photos/${photoId}`, { method: "DELETE" }),
+
+    /** Mark a plain photo as encrypted by linking it to the uploaded blob */
+    markEncrypted: (photoId: string, blobId: string) =>
+      request<{ ok: boolean }>(`/photos/${photoId}/mark-encrypted`, {
+        method: "POST",
+        body: JSON.stringify({ blob_id: blobId }),
+      }),
   },
 
   // ── Encryption Settings ───────────────────────────────────────────────────
@@ -625,6 +685,29 @@ export const api = {
           body: JSON.stringify({ blob_id: blobId }),
         }
       ),
+
+    /** Get all blob IDs across all secure galleries (for filtering from main gallery) */
+    secureBlobIds: () =>
+      request<{ blob_ids: string[] }>("/galleries/secure/blob-ids"),
+  },
+
+  // ── Storage Stats ─────────────────────────────────────────────────────────
+
+  storageStats: {
+    get: () =>
+      request<{
+        photo_bytes: number;
+        photo_count: number;
+        video_bytes: number;
+        video_count: number;
+        other_blob_bytes: number;
+        other_blob_count: number;
+        plain_bytes: number;
+        plain_count: number;
+        user_total_bytes: number;
+        fs_total_bytes: number;
+        fs_free_bytes: number;
+      }>("/settings/storage-stats"),
   },
 
   // ── Trash ─────────────────────────────────────────────────────────────────

@@ -45,12 +45,15 @@ export default function Albums() {
     setLoading(true);
     try {
       const res = await api.blobs.list({ blob_type: "album_manifest" });
+      const serverAlbumIds = new Set<string>();
+
       for (const blob of res.blobs) {
         try {
           const encrypted = await api.blobs.download(blob.id);
           const decrypted = await decrypt(encrypted);
           const payload = JSON.parse(new TextDecoder().decode(decrypted));
 
+          serverAlbumIds.add(payload.album_id);
           await db.albums.put({
             albumId: payload.album_id,
             manifestBlobId: blob.id,
@@ -62,6 +65,15 @@ export default function Albums() {
         } catch {
           // Skip albums we can't decrypt
         }
+      }
+
+      // Remove stale albums from IndexedDB that no longer exist on the server
+      const localAlbums = await db.albums.toArray();
+      const staleIds = localAlbums
+        .map((a) => a.albumId)
+        .filter((id) => !serverAlbumIds.has(id));
+      if (staleIds.length > 0) {
+        await db.albums.bulkDelete(staleIds);
       }
     } catch (err: any) {
       setError(err.message);
@@ -232,15 +244,6 @@ export default function Albums() {
       <div className="mt-8">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Shared Albums</h2>
-          <button
-            onClick={() => setShowCreateShared(!showCreateShared)}
-            className="inline-flex items-center gap-1.5 bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-500 text-sm font-medium transition-colors shadow-sm"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-            </svg>
-            Share Album
-          </button>
         </div>
 
         {showCreateShared && (

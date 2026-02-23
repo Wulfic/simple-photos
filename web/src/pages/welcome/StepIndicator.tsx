@@ -1,22 +1,33 @@
-import type { WizardStep } from "./types";
+import type { WizardStep, ServerRole } from "./types";
 
 export interface StepIndicatorProps {
   step: WizardStep;
+  serverRole?: ServerRole;
 }
 
-export default function StepIndicator({ step }: StepIndicatorProps) {
-  const steps = [
-    { id: "welcome", label: "Welcome" },
-    { id: "account", label: "Account" },
-    { id: "admin-2fa", label: "2FA" },
-    { id: "storage", label: "Server" },
-    { id: "backup", label: "Backup" },
-    { id: "ssl", label: "SSL" },
-    { id: "encryption", label: "Privacy" },
-    { id: "users", label: "Users" },
-    { id: "android", label: "Android" },
-    { id: "complete", label: "Done" },
-  ];
+export default function StepIndicator({ step, serverRole }: StepIndicatorProps) {
+  // Different step lists depending on server role
+  const steps =
+    serverRole === "backup"
+      ? [
+          { id: "welcome", label: "Welcome" },
+          { id: "server-role", label: "Role" },
+          { id: "pair", label: "Pair" },
+          { id: "storage", label: "Server" },
+          { id: "complete", label: "Done" },
+        ]
+      : [
+          { id: "welcome", label: "Welcome" },
+          { id: "server-role", label: "Role" },
+          { id: "account", label: "Account" },
+          { id: "admin-2fa", label: "2FA" },
+          { id: "storage", label: "Server" },
+          { id: "ssl", label: "SSL" },
+          { id: "encryption", label: "Privacy" },
+          { id: "users", label: "Users" },
+          { id: "android", label: "Android" },
+          { id: "complete", label: "Done" },
+        ];
   // Map user-2fa to users for indicator purposes
   const displayStep = step === "user-2fa" ? "users" : step;
   const currentIdx = steps.findIndex((s) => s.id === displayStep);

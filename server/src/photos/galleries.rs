@@ -195,6 +195,28 @@ pub async fn add_gallery_item(
     ))
 }
 
+/// GET /api/galleries/secure/blob-ids
+/// Return all blob IDs that live in any of the user's secure galleries.
+/// This is used by the main gallery to filter out "private" items without
+/// requiring the gallery unlock token.
+pub async fn list_secure_blob_ids(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let blob_ids: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT gi.blob_id \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         WHERE g.user_id = ?",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let ids: Vec<&str> = blob_ids.iter().map(|(id,)| id.as_str()).collect();
+    Ok(Json(serde_json::json!({ "blob_ids": ids })))
+}
+
 /// GET /api/galleries/secure/:id/items
 /// List items in a secure gallery (requires unlock token in header).
 pub async fn list_gallery_items(

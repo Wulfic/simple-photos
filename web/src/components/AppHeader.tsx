@@ -34,15 +34,6 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
-    label: "Import",
-    path: "/import",
-    icon: (
-      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-      </svg>
-    ),
-  },
-  {
     label: "Trash",
     path: "/trash",
     icon: (
@@ -72,9 +63,8 @@ export default function AppHeader({
   const { pathname } = useLocation();
   const { username, refreshToken, logout: storeLogout } = useAuthStore();
   const { theme, toggle: toggleTheme } = useThemeStore();
-  const { viewMode, toggleViewMode, backupServers, loaded: backupLoaded, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
-  const { isProcessing } = useProcessingStore();
-  const hasBackup = backupServers.length > 0;
+  const { backupServers, loaded: backupLoaded, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
+  const { isProcessing, activeLabel } = useProcessingStore();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -158,53 +148,9 @@ export default function AppHeader({
           })}
         </nav>
 
-        {/* ── Backup / Main toggle ────────────────────────────────────── */}
-        <div
-          className={`flex items-center gap-2 ml-3 pl-3 border-l border-white/10 ${
-            !hasBackup ? "opacity-40 pointer-events-none" : ""
-          }`}
-          title={
-            !hasBackup
-              ? "No backup server configured"
-              : viewMode === "main"
-              ? "Switch to backup view"
-              : "Switch to main view"
-          }
-        >
-          <span
-            className={`text-xs font-medium transition-colors ${
-              viewMode === "main" ? "text-white" : "text-gray-500"
-            }`}
-          >
-            Main
-          </span>
-          <button
-            onClick={toggleViewMode}
-            disabled={!hasBackup}
-            className={`
-              relative w-9 h-5 rounded-full transition-colors duration-200
-              focus:outline-none focus:ring-2 focus:ring-blue-500/50
-              ${viewMode === "backup" ? "bg-blue-600" : "bg-gray-600"}
-              ${!hasBackup ? "cursor-not-allowed" : "cursor-pointer"}
-            `}
-            aria-label="Toggle between main and backup view"
-          >
-            <span
-              className={`
-                absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow
-                transition-transform duration-200
-                ${viewMode === "backup" ? "translate-x-4" : "translate-x-0"}
-              `}
-            />
-          </button>
-          <span
-            className={`text-xs font-medium transition-colors ${
-              viewMode === "backup" ? "text-white" : "text-gray-500"
-            }`}
-          >
-            Backup
-          </span>
-        </div>
+        {/* ── Page-specific actions (e.g. upload +) ─────────────────── */}
+        {children}
+
 
         {/* ── Spacer ──────────────────────────────────────────────────── */}
         <div className="flex-1" />
@@ -228,18 +174,20 @@ export default function AppHeader({
           )}
         </button>
 
-        {/* ── Action Buttons (page-specific) ──────────────────────────── */}
-        {children && (
-          <div className="flex items-center gap-2">{children}</div>
-        )}
-
-        {/* ── User dropdown ─────────────────────────────────────────── */}
+        {/* ── Activity indicator + User dropdown ──────────────────────── */}
         {username && (
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setDropdownOpen((v) => !v)}
-              className="flex items-center gap-2 text-gray-400 hover:text-white text-xs border-l border-white/10 pl-4 ml-2 transition-colors"
-            >
+          <div className="flex items-center gap-2 border-l border-white/10 pl-4 ml-2">
+            {/* Activity label when processing */}
+            {isProcessing && activeLabel && (
+              <span className="text-xs text-blue-300 font-medium animate-pulse whitespace-nowrap hidden sm:inline">
+                {activeLabel}…
+              </span>
+            )}
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setDropdownOpen((v) => !v)}
+                className="flex items-center gap-2 text-gray-400 hover:text-white text-xs transition-colors"
+              >
               <div className={`w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold uppercase${isProcessing ? " processing-ring" : ""}`}>
                 {username.charAt(0)}
               </div>
@@ -258,7 +206,7 @@ export default function AppHeader({
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
                   </svg>
-                  Secure Gallery
+                  Secure Albums
                 </button>
                 <button
                   onClick={() => { navigate("/settings"); setDropdownOpen(false); }}
@@ -282,6 +230,7 @@ export default function AppHeader({
                 </button>
               </div>
             )}
+          </div>
           </div>
         )}
       </div>

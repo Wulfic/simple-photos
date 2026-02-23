@@ -6,9 +6,11 @@ import { deriveKey } from "../crypto/crypto";
 import ThemeToggle from "../components/ThemeToggle";
 import { checkPasswordStrength, checkUsername } from "../utils/validation";
 
-import type { WizardStep, SetupStatus, CreatedUser } from "./welcome/types";
+import type { WizardStep, SetupStatus, CreatedUser, ServerRole } from "./welcome/types";
 import StepIndicator from "./welcome/StepIndicator";
 import WelcomeStep from "./welcome/WelcomeStep";
+import ServerRoleStep from "./welcome/ServerRoleStep";
+import PairStep from "./welcome/PairStep";
 import AccountStep from "./welcome/AccountStep";
 import TwoFactorStep from "./welcome/TwoFactorStep";
 import ServerConfigStep from "./welcome/ServerConfigStep";
@@ -17,13 +19,17 @@ import SslStep from "./welcome/SslStep";
 import UsersStep from "./welcome/UsersStep";
 import AndroidStep from "./welcome/AndroidStep";
 import CompleteStep from "./welcome/CompleteStep";
-import BackupStep from "./welcome/BackupStep";
+// BackupStep removed from primary flow — server role is now handled by ServerRoleStep
 
 export default function Welcome() {
   const [step, setStep] = useState<WizardStep>("loading");
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // ── Server role (primary vs backup) ─────────────────────────────────
+  const [serverRole, setServerRole] = useState<ServerRole>(null);
+  const [mainServerUrl, setMainServerUrl] = useState("");
   const navigate = useNavigate();
 
   // ── Admin account form ──────────────────────────────────────────────────
@@ -39,16 +45,8 @@ export default function Welcome() {
 
   // ── Storage ─────────────────────────────────────────────────────────────
   const [storagePath, setStoragePath] = useState("");
-  const [browsePath, setBrowsePath] = useState("");
-  const [browseParent, setBrowseParent] = useState<string | null>(null);
-  const [browseDirs, setBrowseDirs] = useState<
-    Array<{ name: string; path: string }>
-  >([]);
-  const [browseWritable, setBrowseWritable] = useState(false);
-  const [browseLoading, setBrowseLoading] = useState(false);
-  const [manualPathInput, setManualPathInput] = useState("");
-  const [showManualInput, setShowManualInput] = useState(false);
   const [storageConfirmed, setStorageConfirmed] = useState(false);
+  const [pendingStoragePath, setPendingStoragePath] = useState("");
 
   // ── Server port ─────────────────────────────────────────────────────────
   const [serverPort, setServerPort] = useState<number>(0);
@@ -216,11 +214,11 @@ export default function Welcome() {
         api.admin.getPort(),
       ]);
       setStoragePath(storageData.storage_path);
+      setPendingStoragePath(storageData.storage_path);
       setServerPort(portData.port);
       setOriginalPort(portData.port);
       setPortInput(String(portData.port));
       setPortSaved(false);
-      await browseDirectory(undefined);
       setStep("storage");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load storage info");
@@ -249,27 +247,12 @@ export default function Welcome() {
     }
   }
 
-  async function browseDirectory(path?: string) {
-    setBrowseLoading(true);
-    try {
-      const data = await api.admin.browseDirectory(path);
-      setBrowsePath(data.current_path);
-      setBrowseParent(data.parent_path);
-      setBrowseDirs(data.directories);
-      setBrowseWritable(data.writable);
-      setManualPathInput(data.current_path);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to browse directory");
-    } finally {
-      setBrowseLoading(false);
-    }
-  }
-
   async function handleSelectStoragePath() {
+    if (!pendingStoragePath.trim()) return;
     setError("");
     setLoading(true);
     try {
-      const res = await api.admin.updateStorage(browsePath);
+      const res = await api.admin.updateStorage(pendingStoragePath.trim());
       setStoragePath(res.storage_path);
       setStorageConfirmed(true);
     } catch (err: unknown) {
@@ -279,10 +262,25 @@ export default function Welcome() {
     }
   }
 
-  async function handleManualPathGo() {
-    if (!manualPathInput.trim()) return;
-    setError("");
-    await browseDirectory(manualPathInput.trim());
+  // ── Backup pairing ─────────────────────────────────────────────────────
+
+  async function handlePaired(data: {
+    access_token: string;
+    refresh_token: string;
+    username: string;
+    main_server_url: string;
+  }) {
+    // Store tokens — the pair endpoint already created a local admin
+    setTokens(data.access_token, data.refresh_token);
+    storeSetUsername(data.username);
+    setUsername(data.username);
+    setMainServerUrl(data.main_server_url);
+
+    // Derive the encryption key from the admin credentials
+    await deriveKey("", data.username);   // password already used server-side
+
+    // Go directly to storage config (skip account + 2FA for backup servers)
+    loadStoragePath();
   }
 
   // ── Additional user creation ────────────────────────────────────────────
@@ -346,11 +344,28 @@ export default function Welcome() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 dark:from-gray-900 to-indigo-100 dark:to-gray-800 p-4">
       <ThemeToggle />
       <div className="max-w-lg w-full">
-        <StepIndicator step={step} />
+        <StepIndicator step={step} serverRole={serverRole} />
 
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
           {step === "welcome" && (
             <WelcomeStep setStep={setStep} status={status} error={error} />
+          )}
+
+          {step === "server-role" && (
+            <ServerRoleStep
+              setStep={setStep}
+              setServerRole={setServerRole}
+              setError={setError}
+            />
+          )}
+
+          {step === "pair" && (
+            <PairStep
+              setStep={setStep}
+              setError={setError}
+              error={error}
+              onPaired={handlePaired}
+            />
           )}
 
           {step === "account" && (
@@ -400,30 +415,13 @@ export default function Welcome() {
               handleSavePort={handleSavePort}
               storagePath={storagePath}
               storageConfirmed={storageConfirmed}
-              browsePath={browsePath}
-              browseParent={browseParent}
-              browseDirs={browseDirs}
-              browseWritable={browseWritable}
-              browseLoading={browseLoading}
-              manualPathInput={manualPathInput}
-              setManualPathInput={setManualPathInput}
-              showManualInput={showManualInput}
-              setShowManualInput={setShowManualInput}
-              browseDirectory={browseDirectory}
               handleSelectStoragePath={handleSelectStoragePath}
-              handleManualPathGo={handleManualPathGo}
               loading={loading}
               error={error}
               setStep={setStep}
               setError={setError}
-            />
-          )}
-
-          {step === "backup" && (
-            <BackupStep
-              setStep={setStep}
-              setError={setError}
-              error={error}
+              setStoragePathDirect={setPendingStoragePath}
+              serverRole={serverRole}
             />
           )}
 
@@ -485,6 +483,8 @@ export default function Welcome() {
               createdUsers={createdUsers}
               serverPort={serverPort}
               originalPort={originalPort}
+              serverRole={serverRole}
+              mainServerUrl={mainServerUrl}
             />
           )}
         </div>

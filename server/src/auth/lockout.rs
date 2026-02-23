@@ -8,10 +8,10 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 /// Maximum failed login attempts before account lockout.
-pub const MAX_LOGIN_ATTEMPTS: i32 = 5;
+pub const MAX_LOGIN_ATTEMPTS: i32 = 10;
 
-/// Account lockout duration after exceeding max attempts.
-pub const LOCKOUT_DURATION_MINS: i64 = 15;
+/// Account lockout duration after exceeding max attempts (minutes).
+pub const LOCKOUT_DURATION_MINS: i64 = 10;
 
 pub async fn check_account_lockout(
     state: &AppState,

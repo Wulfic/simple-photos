@@ -37,6 +37,7 @@ pub async fn list_photos(
                 "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
                  duration_secs, taken_at, latitude, longitude, thumb_path, created_at \
                  FROM photos WHERE user_id = ? AND media_type = ? AND created_at > ? \
+                 AND encrypted_blob_id IS NULL \
                  ORDER BY created_at ASC LIMIT ?",
             )
             .bind(&auth.user_id)
@@ -50,6 +51,7 @@ pub async fn list_photos(
                 "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
                  duration_secs, taken_at, latitude, longitude, thumb_path, created_at \
                  FROM photos WHERE user_id = ? AND created_at > ? \
+                 AND encrypted_blob_id IS NULL \
                  ORDER BY created_at ASC LIMIT ?",
             )
             .bind(&auth.user_id)
@@ -63,6 +65,7 @@ pub async fn list_photos(
             "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, latitude, longitude, thumb_path, created_at \
              FROM photos WHERE user_id = ? AND media_type = ? \
+             AND encrypted_blob_id IS NULL \
              ORDER BY created_at ASC LIMIT ?",
         )
         .bind(&auth.user_id)
@@ -75,6 +78,7 @@ pub async fn list_photos(
             "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, latitude, longitude, thumb_path, created_at \
              FROM photos WHERE user_id = ? \
+             AND encrypted_blob_id IS NULL \
              ORDER BY created_at ASC LIMIT ?",
         )
         .bind(&auth.user_id)
@@ -185,14 +189,40 @@ pub async fn serve_photo(
     .bind(&auth.user_id)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AppError::NotFound)?;
+    .ok_or_else(|| {
+        tracing::warn!(
+            user_id = %auth.user_id,
+            photo_id = %photo_id,
+            "serve_photo: photo not found in database"
+        );
+        AppError::NotFound
+    })?;
 
     let storage_root = state.storage_root.read().await.clone();
     let full_path = storage_root.join(&file_path);
 
-    let file = tokio::fs::File::open(&full_path).await.map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => AppError::NotFound,
-        _ => AppError::Internal(format!("Failed to open photo: {}", e)),
+    tracing::debug!(
+        user_id = %auth.user_id,
+        photo_id = %photo_id,
+        file_path = %file_path,
+        full_path = %full_path.display(),
+        size_bytes = size_bytes,
+        "serve_photo: serving file"
+    );
+
+    let file = tokio::fs::File::open(&full_path).await.map_err(|e| {
+        tracing::error!(
+            user_id = %auth.user_id,
+            photo_id = %photo_id,
+            file_path = %file_path,
+            full_path = %full_path.display(),
+            error = %e,
+            "serve_photo: failed to open file on disk"
+        );
+        match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Internal(format!("Failed to open photo: {}", e)),
+        }
     })?;
 
     let stream = tokio_util::io::ReaderStream::new(file);

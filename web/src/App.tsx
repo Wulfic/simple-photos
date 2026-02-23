@@ -11,14 +11,82 @@ import AlbumDetail from "./pages/AlbumDetail";
 import Viewer from "./pages/Viewer";
 import Settings from "./pages/Settings";
 import Welcome from "./pages/Welcome";
-import Import from "./pages/Import";
 import Trash from "./pages/Trash";
 import SecureGallery from "./pages/SecureGallery";
 import SharedAlbumDetail from "./pages/SharedAlbumDetail";
 
+/**
+ * Protected route guard.
+ *
+ * Checks setup status first:
+ * - If no users exist yet, redirect to /welcome (first-time setup)
+ * - If not authenticated, redirect to /login
+ * - Otherwise, render children
+ */
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
+  const [setupChecked, setSetupChecked] = useState(false);
+  const [setupComplete, setSetupComplete] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/setup/status")
+      .then((r) => r.json())
+      .then((data) => {
+        setSetupComplete(data.setup_complete);
+        setSetupChecked(true);
+      })
+      .catch(() => {
+        // Can't reach server — assume setup is complete, let auth handle it
+        setSetupChecked(true);
+      });
+  }, []);
+
+  if (!setupChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // No users exist — must complete first-time setup before anything else
+  if (!setupComplete) return <Navigate to="/welcome" replace />;
+
+  // Not logged in — must authenticate
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+
+  return <>{children}</>;
+}
+
+/**
+ * Login page guard — if setup is not complete, redirect to /welcome instead.
+ */
+function LoginGuard({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated } = useAuthStore();
+  const [setupChecked, setSetupChecked] = useState(false);
+  const [setupComplete, setSetupComplete] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/setup/status")
+      .then((r) => r.json())
+      .then((data) => {
+        setSetupComplete(data.setup_complete);
+        setSetupChecked(true);
+      })
+      .catch(() => setSetupChecked(true));
+  }, []);
+
+  if (!setupChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!setupComplete) return <Navigate to="/welcome" replace />;
+  if (isAuthenticated) return <Navigate to="/gallery" replace />;
+
   return <>{children}</>;
 }
 
@@ -84,7 +152,14 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/welcome" element={<Welcome />} />
-        <Route path="/login" element={<Login />} />
+        <Route
+          path="/login"
+          element={
+            <LoginGuard>
+              <Login />
+            </LoginGuard>
+          }
+        />
         <Route
           path="/setup"
           element={
@@ -138,14 +213,6 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Settings />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/import"
-          element={
-            <ProtectedRoute>
-              <Import />
             </ProtectedRoute>
           }
         />

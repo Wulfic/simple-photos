@@ -6,11 +6,16 @@ import { db, type CachedPhoto, type CachedAlbum } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 
+type ShareUser = { id: string; username: string };
+
 export default function AlbumDetail() {
   const { albumId } = useParams<{ albumId: string }>();
   const navigate = useNavigate();
   const [error, setError] = useState("");
   const [showAddPhotos, setShowAddPhotos] = useState(false);
+  const [showSharePicker, setShowSharePicker] = useState(false);
+  const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
+  const [shareSuccess, setShareSuccess] = useState("");
 
   const album = useLiveQuery(
     () => (albumId ? db.albums.get(albumId) : undefined),
@@ -112,6 +117,30 @@ export default function AlbumDetail() {
     }
   }
 
+  async function openSharePicker() {
+    setShowSharePicker(true);
+    setShareSuccess("");
+    try {
+      const users = await api.sharing.listUsers();
+      setShareUsers(users);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  async function handleShareWithUser(userId: string) {
+    if (!album) return;
+    try {
+      // Create a shared album with the same name, then add the user as a member
+      const created = await api.sharing.createAlbum(album.name);
+      await api.sharing.addMember(created.id, userId);
+      setShareSuccess(`Album shared successfully!`);
+      setShowSharePicker(false);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
   if (!album) {
     return (
       <div className="p-4 text-center py-12">
@@ -123,6 +152,15 @@ export default function AlbumDetail() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <AppHeader>
+        <button
+          onClick={openSharePicker}
+          className="inline-flex items-center gap-1.5 bg-green-600 text-white px-3.5 py-1.5 rounded-md hover:bg-green-500 text-sm font-medium transition-colors shadow-sm shadow-green-900/20"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+          </svg>
+          Share Album
+        </button>
         <button
           onClick={() => setShowAddPhotos(!showAddPhotos)}
           className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors shadow-sm shadow-blue-900/20"
@@ -137,8 +175,45 @@ export default function AlbumDetail() {
         </button>
       </AppHeader>
 
+      {/* Share user picker modal */}
+      {showSharePicker && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold mb-4">Share "{album.name}" with</h3>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {shareUsers.map((u) => (
+                <button
+                  key={u.id}
+                  onClick={() => handleShareWithUser(u.id)}
+                  className="w-full text-left px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-sm flex items-center gap-2"
+                >
+                  <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+                  </svg>
+                  {u.username}
+                </button>
+              ))}
+              {shareUsers.length === 0 && (
+                <p className="text-gray-500 text-sm text-center py-4">No other users found</p>
+              )}
+            </div>
+            <button
+              onClick={() => setShowSharePicker(false)}
+              className="mt-4 w-full py-2 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="p-4">
         {/* Sub-header with album name */}
+        {shareSuccess && (
+          <p className="text-green-600 dark:text-green-400 text-sm mb-4 p-3 bg-green-50 dark:bg-green-900/30 rounded">
+            {shareSuccess}
+          </p>
+        )}
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}

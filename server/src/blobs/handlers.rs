@@ -48,8 +48,20 @@ pub async fn upload(
         .unwrap_or("photo")
         .to_string();
 
+    tracing::info!(
+        user_id = %auth.user_id,
+        blob_type = %blob_type,
+        body_size = body.len(),
+        "Blob upload started"
+    );
+
     // Validate blob type against allowlist
     if !VALID_BLOB_TYPES.contains(&blob_type.as_str()) {
+        tracing::warn!(
+            user_id = %auth.user_id,
+            blob_type = %blob_type,
+            "Blob upload rejected: invalid blob type"
+        );
         return Err(AppError::BadRequest(format!(
             "Invalid blob type '{}'. Valid types: {}",
             blob_type,
@@ -65,10 +77,17 @@ pub async fn upload(
     let size = body.len() as i64;
 
     if size == 0 {
+        tracing::warn!(user_id = %auth.user_id, "Blob upload rejected: empty body");
         return Err(AppError::BadRequest("Empty blob body".into()));
     }
 
     if size > state.config.storage.max_blob_size_bytes as i64 {
+        tracing::warn!(
+            user_id = %auth.user_id,
+            size = size,
+            max = state.config.storage.max_blob_size_bytes,
+            "Blob upload rejected: payload too large"
+        );
         return Err(AppError::PayloadTooLarge);
     }
 
@@ -140,6 +159,14 @@ pub async fn upload(
         })),
     )
     .await;
+
+    tracing::info!(
+        user_id = %auth.user_id,
+        blob_id = %blob_id,
+        blob_type = %blob_type,
+        size_bytes = size,
+        "Blob upload completed successfully"
+    );
 
     Ok((
         StatusCode::CREATED,

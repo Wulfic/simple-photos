@@ -1,6 +1,7 @@
-import { useState } from "react";
-import type { WizardStep } from "./types";
+import { useState, useCallback } from "react";
+import { api } from "../../api/client";
 import FolderBrowserModal from "../../components/FolderBrowserModal";
+import type { WizardStep, ServerRole } from "./types";
 
 export interface ServerConfigStepProps {
   // Port state
@@ -15,24 +16,17 @@ export interface ServerConfigStepProps {
   // Storage state
   storagePath: string;
   storageConfirmed: boolean;
-  browsePath: string;
-  browseParent: string | null;
-  browseDirs: Array<{ name: string; path: string }>;
-  browseWritable: boolean;
-  browseLoading: boolean;
-  manualPathInput: string;
-  setManualPathInput: (v: string) => void;
-  showManualInput: boolean;
-  setShowManualInput: (v: boolean | ((prev: boolean) => boolean)) => void;
-  browseDirectory: (path?: string) => void;
   handleSelectStoragePath: () => void;
-  handleManualPathGo: () => void;
 
   // Shared
   loading: boolean;
   error: string;
   setStep: (step: WizardStep) => void;
   setError: (msg: string) => void;
+  /** Directly set the storage path to save */
+  setStoragePathDirect: (path: string) => void;
+  /** Server role — determines next step */
+  serverRole?: ServerRole;
 }
 
 export default function ServerConfigStep({
@@ -45,23 +39,69 @@ export default function ServerConfigStep({
   handleSavePort,
   storagePath,
   storageConfirmed,
-  browsePath,
-  browseParent,
-  browseDirs,
-  browseWritable,
-  browseLoading,
-  browseDirectory,
   handleSelectStoragePath,
   loading,
   error,
   setStep,
   setError,
+  setStoragePathDirect,
+  serverRole,
 }: ServerConfigStepProps) {
-  const [showBrowser, setShowBrowser] = useState(false);
+  const [pathInput, setPathInput] = useState(storagePath || "");
+  const [saving, setSaving] = useState(false);
 
-  function handleFolderSelect(_path: string) {
-    handleSelectStoragePath();
-    setShowBrowser(false);
+  // ── Folder browser state ────────────────────────────────────────────────
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [browsePath, setBrowsePath] = useState("/");
+  const [browseParent, setBrowseParent] = useState<string | null>(null);
+  const [browseDirs, setBrowseDirs] = useState<Array<{ name: string; path: string }>>([]);
+  const [browseWritable, setBrowseWritable] = useState(false);
+  const [browseLoading, setBrowseLoading] = useState(false);
+
+  const browseDirectory = useCallback(async (path?: string) => {
+    setBrowseLoading(true);
+    try {
+      const res = await api.admin.browseDirectory(path);
+      setBrowsePath(res.current_path);
+      setBrowseParent(res.parent_path);
+      setBrowseDirs(res.directories);
+      setBrowseWritable(res.writable);
+    } catch {
+      // If browsing fails, just stay on current path
+    } finally {
+      setBrowseLoading(false);
+    }
+  }, []);
+
+  function handleOpenBrowser() {
+    // Start browsing from the current path input, or root
+    const startPath = pathInput.trim() || storagePath || "/";
+    browseDirectory(startPath);
+    setBrowserOpen(true);
+  }
+
+  function handleBrowserSelect(selectedPath: string) {
+    setPathInput(selectedPath);
+    setBrowserOpen(false);
+  }
+
+  async function handleSavePath() {
+    const trimmed = pathInput.trim();
+    if (!trimmed) {
+      setError("Please enter a storage path.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      setStoragePathDirect(trimmed);
+      await new Promise((r) => setTimeout(r, 50));
+      handleSelectStoragePath();
+    } catch (err: any) {
+      setError(err.message || "Failed to set storage path.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -70,7 +110,7 @@ export default function ServerConfigStep({
         Server Configuration
       </h2>
       <p className="text-gray-500 dark:text-gray-400 text-sm mb-5">
-        Configure the server port and choose where your encrypted photos
+        Configure the server port and choose where your photos
         will be stored.
       </p>
 
@@ -122,43 +162,57 @@ export default function ServerConfigStep({
         Photo Storage Location
       </h3>
       <p className="text-gray-500 dark:text-gray-400 text-xs mb-3">
-        Choose where your encrypted photos and videos will be stored.
-        Local folder, mounted network share, or external drive.
+        Enter the full path to where your photos and videos will be stored.
+        This can be a local folder, mounted network share, or external drive.
       </p>
 
       {/* Current / selected path display */}
-      <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 mb-4">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0 flex-1">
-            <span className="text-xs font-medium text-gray-500 dark:text-gray-400 block mb-0.5">
-              {storageConfirmed ? "Selected path" : "Current path"}
-            </span>
-            <span className="font-mono text-sm text-gray-800 dark:text-gray-200 break-all">
-              {storagePath || browsePath || "Loading\u2026"}
-            </span>
+      {storageConfirmed && (
+        <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-4 mb-4 flex items-center gap-2">
+          <svg className="w-4 h-4 text-green-600 dark:text-green-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          <div>
+            <span className="text-xs font-medium text-green-700 dark:text-green-300 block">Storage path saved</span>
+            <span className="font-mono text-sm text-green-800 dark:text-green-200 break-all">{storagePath}</span>
           </div>
-          {storageConfirmed && (
-            <span className="text-green-600 dark:text-green-400 text-sm font-medium flex items-center gap-1 shrink-0 ml-3">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-              Saved
-            </span>
-          )}
         </div>
+      )}
+
+      {/* Path input */}
+      <div className="flex gap-2 mb-3">
+        <input
+          type="text"
+          value={pathInput}
+          onChange={(e) => setPathInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleSavePath(); }}
+          placeholder="/path/to/photo/storage"
+          className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-gray-200"
+        />
+        <button
+          type="button"
+          onClick={handleOpenBrowser}
+          className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors flex items-center gap-1.5"
+          title="Browse server directories"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+          </svg>
+          Browse
+        </button>
+        <button
+          type="button"
+          onClick={handleSavePath}
+          disabled={saving || !pathInput.trim()}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+        >
+          {saving ? "Saving…" : "Set Path"}
+        </button>
       </div>
 
-      {/* Browse button — opens modal */}
-      <button
-        type="button"
-        onClick={() => setShowBrowser(true)}
-        className="w-full flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg py-3 px-4 text-sm font-medium text-gray-700 dark:text-gray-300 hover:border-blue-400 hover:text-blue-600 dark:hover:border-blue-500 dark:hover:text-blue-400 transition-colors mb-4"
-      >
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-        </svg>
-        Browse for Folder…
-      </button>
+      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+        The directory will be created if it doesn't exist. Must be writable by the server process.
+      </p>
 
       {error && (
         <div className="text-red-600 dark:text-red-400 text-sm p-3 bg-red-50 dark:bg-red-900/30 rounded-lg mb-4">
@@ -170,18 +224,17 @@ export default function ServerConfigStep({
       <button
         onClick={() => {
           setError("");
-          setStep("backup");
+          setStep(serverRole === "backup" ? "complete" : "ssl");
         }}
         className="w-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
       >
         {storageConfirmed ? "Continue →" : "Keep Default & Continue →"}
       </button>
 
-      {/* Folder browser modal */}
       <FolderBrowserModal
-        open={showBrowser}
-        onClose={() => setShowBrowser(false)}
-        onSelect={handleFolderSelect}
+        open={browserOpen}
+        onClose={() => setBrowserOpen(false)}
+        onSelect={handleBrowserSelect}
         browsePath={browsePath}
         browseParent={browseParent}
         browseDirs={browseDirs}

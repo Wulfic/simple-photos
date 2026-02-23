@@ -2054,6 +2054,7 @@ dependencies = [
  "hex",
  "instant-acme",
  "jsonwebtoken",
+ "libc",
  "rand 0.8.5",
  "rcgen",
  "reqwest",

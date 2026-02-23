@@ -1,6 +1,6 @@
 //! Encryption settings and migration progress endpoints.
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
@@ -176,17 +176,42 @@ pub async fn report_migration_progress(
     Json(req): Json<MigrationProgressRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if let Some(ref err) = req.error {
+        tracing::warn!(
+            completed = req.completed_count,
+            done = req.done.unwrap_or(false),
+            error = %err,
+            "Encryption migration progress: client reported error"
+        );
+    } else {
+        tracing::debug!(
+            completed = req.completed_count,
+            done = req.done.unwrap_or(false),
+            "Encryption migration progress update"
+        );
+    }
+
+    if req.done.unwrap_or(false) {
+        // Migration finished — preserve error message if one was sent with done flag
+        if let Some(ref err) = req.error {
+            sqlx::query(
+                "UPDATE encryption_migration SET status = 'idle', completed = total, error = ? WHERE id = 'singleton'",
+            )
+            .bind(err)
+            .execute(&state.pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE encryption_migration SET status = 'idle', completed = total, error = NULL WHERE id = 'singleton'",
+            )
+            .execute(&state.pool)
+            .await?;
+        }
+    } else if let Some(ref err) = req.error {
         sqlx::query(
             "UPDATE encryption_migration SET error = ?, completed = ? WHERE id = 'singleton'",
         )
         .bind(err)
         .bind(req.completed_count)
-        .execute(&state.pool)
-        .await?;
-    } else if req.done.unwrap_or(false) {
-        sqlx::query(
-            "UPDATE encryption_migration SET status = 'idle', completed = total, error = NULL WHERE id = 'singleton'",
-        )
         .execute(&state.pool)
         .await?;
     } else {
@@ -197,6 +222,64 @@ pub async fn report_migration_progress(
         .execute(&state.pool)
         .await?;
     }
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// POST /api/photos/{id}/mark-encrypted
+/// Link a plain photo to its encrypted blob so it won't be re-migrated.
+#[derive(Debug, Deserialize)]
+pub struct MarkEncryptedRequest {
+    pub blob_id: String,
+}
+
+pub async fn mark_photo_encrypted(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(photo_id): Path<String>,
+    Json(req): Json<MarkEncryptedRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Verify the photo belongs to this user
+    let exists: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM photos WHERE id = ? AND user_id = ?",
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+
+    // Verify the blob belongs to this user
+    let blob_exists: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM blobs WHERE id = ? AND user_id = ?",
+    )
+    .bind(&req.blob_id)
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    if !blob_exists {
+        return Err(AppError::NotFound);
+    }
+
+    sqlx::query(
+        "UPDATE photos SET encrypted_blob_id = ? WHERE id = ? AND user_id = ?",
+    )
+    .bind(&req.blob_id)
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .execute(&state.pool)
+    .await?;
+
+    tracing::info!(
+        photo_id = %photo_id,
+        blob_id = %req.blob_id,
+        user_id = %auth.user_id,
+        "Photo marked as encrypted"
+    );
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
