@@ -97,4 +97,7 @@ pub struct Claims {
     pub jti: String,
     #[serde(default)]
     pub totp_required: bool,
+    /// User role ("admin" or "user") — embedded so the frontend can gate UI
+    #[serde(default)]
+    pub role: String,
 }

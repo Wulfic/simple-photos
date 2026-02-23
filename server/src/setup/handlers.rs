@@ -64,7 +64,7 @@ pub async fn status(
     Ok(Json(SetupStatusResponse {
         setup_complete: user_count > 0,
         registration_open: state.config.auth.allow_registration,
-        version: "0.1.0".to_string(),
+        version: "0.6.9".to_string(),
     }))
 }
 

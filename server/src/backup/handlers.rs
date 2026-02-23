@@ -6,8 +6,11 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::media::is_media_file;
+use crate::media::mime_from_extension;
 use crate::state::AppState;
 
+use super::broadcast;
 use super::models::*;
 
 // ── Backup Server Management ─────────────────────────────────────────────────
@@ -236,44 +239,56 @@ pub async fn check_backup_server_status(
 }
 
 /// GET /api/admin/backup/discover
-/// Attempt to discover Simple Photos servers on the local network.
-/// Uses a simple HTTP probe on common ports across the local subnet.
+/// Discover Simple Photos servers on the local network via UDP broadcast.
+/// Backup-mode servers broadcast their presence and respond to discovery probes.
 pub async fn discover_servers(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<DiscoverResponse>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let mut discovered = Vec::new();
+    // Use UDP broadcast discovery — much faster than sequential HTTP probing.
+    // Backup-mode servers broadcast beacons every 5 seconds and respond to probes.
+    let broadcast_results = tokio::task::spawn_blocking(|| {
+        broadcast::discover_via_broadcast(std::time::Duration::from_secs(6))
+    })
+    .await
+    .unwrap_or_default();
 
-    // Get this server's port to try on other hosts
+    let mut discovered: Vec<DiscoveredServer> = broadcast_results
+        .into_iter()
+        .map(|b| DiscoveredServer {
+            address: b.address,
+            name: b.name,
+            version: b.version,
+        })
+        .collect();
+
+    // Also do a quick HTTP probe on common addresses as fallback
     let our_port = state.config.server.port;
-
-    // Try common local network addresses
-    // In a real implementation this would use mDNS/UDP broadcast,
-    // but for simplicity we probe common subnet ranges.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 
-    // Probe the local subnet (192.168.1.x and 192.168.0.x are most common)
     let subnets = ["192.168.1", "192.168.0", "10.0.0"];
     let ports = [our_port, 8080, 3000];
+    let existing_addrs: std::collections::HashSet<String> =
+        discovered.iter().map(|d| d.address.clone()).collect();
 
     for subnet in &subnets {
         for host_id in 1..=254u8 {
             let ip = format!("{}.{}", subnet, host_id);
-
             for &port in &ports {
                 let addr = format!("{}:{}", ip, port);
+                if existing_addrs.contains(&addr) {
+                    continue;
+                }
                 let url = format!("http://{}/health", addr);
                 let client = client.clone();
-
                 match client.get(&url).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         if let Ok(body) = resp.json::<serde_json::Value>().await {
-                            // Check if it's a Simple Photos server
                             if body.get("service").and_then(|s| s.as_str())
                                 == Some("simple-photos")
                             {
@@ -287,7 +302,6 @@ pub async fn discover_servers(
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("unknown")
                                     .to_string();
-
                                 discovered.push(DiscoveredServer {
                                     address: addr,
                                     name,
@@ -304,6 +318,96 @@ pub async fn discover_servers(
 
     Ok(Json(DiscoverResponse {
         servers: discovered,
+    }))
+}
+
+// ── Backup Mode Endpoints ────────────────────────────────────────────────────
+
+/// GET /api/admin/backup/mode
+/// Returns the current server mode ("primary" or "backup") and the server's local IP.
+pub async fn get_backup_mode(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<BackupModeResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let mode: String = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'backup_mode'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or_else(|| "primary".to_string());
+
+    let local_ip = broadcast::get_local_ip().unwrap_or_else(|| "unknown".to_string());
+    let port = state.config.server.port;
+
+    Ok(Json(BackupModeResponse {
+        mode,
+        server_ip: local_ip.clone(),
+        server_address: format!("{}:{}", local_ip, port),
+        port,
+    }))
+}
+
+/// POST /api/admin/backup/mode
+/// Set the server mode to "primary" or "backup".
+/// When set to "backup", the server broadcasts its presence on the LAN for discovery.
+pub async fn set_backup_mode(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<SetBackupModeRequest>,
+) -> Result<Json<BackupModeResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let mode = match req.mode.as_str() {
+        "primary" | "backup" => req.mode.clone(),
+        _ => return Err(AppError::BadRequest("Mode must be 'primary' or 'backup'".into())),
+    };
+
+    // Upsert the backup_mode setting
+    sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('backup_mode', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(&mode)
+    .execute(&state.pool)
+    .await?;
+
+    // If enabling backup mode, auto-generate an API key if none is configured
+    if mode == "backup" {
+        let has_key = state
+            .config
+            .backup
+            .api_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .is_some();
+
+        if !has_key {
+            let key = Uuid::new_v4().to_string().replace('-', "");
+            // Store in server_settings for persistence
+            sqlx::query(
+                "INSERT INTO server_settings (key, value) VALUES ('backup_api_key', ?) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            )
+            .bind(&key)
+            .execute(&state.pool)
+            .await?;
+
+            tracing::info!("Generated backup API key for backup mode");
+        }
+    }
+
+    let local_ip = broadcast::get_local_ip().unwrap_or_else(|| "unknown".to_string());
+    let port = state.config.server.port;
+
+    tracing::info!("Server mode set to '{}'", mode);
+
+    Ok(Json(BackupModeResponse {
+        mode,
+        server_ip: local_ip.clone(),
+        server_address: format!("{}:{}", local_ip, port),
+        port,
     }))
 }
 
@@ -632,6 +736,205 @@ pub async fn background_sync_task(
             run_sync(&pool, &storage_root, server, &api_key, &log_id).await;
         }
     }
+}
+
+// ── Auto-Scan Background Task ────────────────────────────────────────────────
+
+/// Background task: automatically scan the storage directory for new files
+/// every 24 hours (or when triggered by an API call).
+pub async fn background_auto_scan_task(
+    pool: sqlx::SqlitePool,
+    storage_root: std::path::PathBuf,
+) {
+    // Wait 30 seconds after startup before first check
+    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Check every hour
+
+    loop {
+        interval.tick().await;
+
+        // Check when we last scanned
+        let last_scan: String = sqlx::query_scalar(
+            "SELECT value FROM server_settings WHERE key = 'last_auto_scan'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+        let should_scan = if last_scan.is_empty() {
+            true
+        } else if let Ok(last_dt) = chrono::DateTime::parse_from_rfc3339(&last_scan) {
+            let elapsed = Utc::now() - last_dt.with_timezone(&Utc);
+            elapsed.num_hours() >= 24
+        } else {
+            true
+        };
+
+        if !should_scan {
+            continue;
+        }
+
+        tracing::info!("Starting automatic storage scan...");
+        let count = run_auto_scan(&pool, &storage_root).await;
+        if count > 0 {
+            tracing::info!("Auto-scan complete: registered {} new files", count);
+        } else {
+            tracing::info!("Auto-scan complete: no new files found");
+        }
+
+        // Update last scan time
+        let now = Utc::now().to_rfc3339();
+        let _ = sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES ('last_auto_scan', ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(&now)
+        .execute(&pool)
+        .await;
+    }
+}
+
+/// POST /api/admin/photos/auto-scan
+/// Trigger an immediate auto-scan (called when web UI or app opens).
+/// This is non-blocking — it kicks off a background scan and returns immediately.
+pub async fn trigger_auto_scan(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let pool = state.pool.clone();
+    let storage_root = state.storage_root.read().await.clone();
+
+    // Spawn as a background task so the UI doesn't block
+    tokio::spawn(async move {
+        let count = run_auto_scan(&pool, &storage_root).await;
+        if count > 0 {
+            tracing::info!("On-demand scan: registered {} new files", count);
+        }
+
+        // Update last scan time
+        let now = Utc::now().to_rfc3339();
+        let _ = sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES ('last_auto_scan', ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(&now)
+        .execute(&pool)
+        .await;
+    });
+
+    Ok(Json(serde_json::json!({
+        "message": "Scan started in background",
+    })))
+}
+
+/// Scan storage directory and register any unregistered media files for ALL users.
+async fn run_auto_scan(
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+) -> i64 {
+    // Get the first admin user to assign new photos to
+    let admin_id: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let admin_id = match admin_id {
+        Some(id) => id,
+        None => return 0, // No admin user yet
+    };
+
+    // Get already-registered file paths
+    let existing: Vec<String> = sqlx::query_scalar(
+        "SELECT file_path FROM photos",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
+
+    let mut new_count = 0i64;
+    let mut queue = vec![storage_root.to_path_buf()];
+
+    while let Some(dir) = queue.pop() {
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+
+            if let Ok(ft) = entry.file_type().await {
+                if ft.is_dir() {
+                    queue.push(entry.path());
+                } else if ft.is_file() && is_media_file(&name) {
+                    let abs_path = entry.path();
+                    let rel_path = abs_path
+                        .strip_prefix(storage_root)
+                        .unwrap_or(&abs_path)
+                        .to_string_lossy()
+                        .to_string();
+
+                    if existing_set.contains(&rel_path) {
+                        continue;
+                    }
+
+                    let file_meta = entry.metadata().await.ok();
+                    let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+                    let modified = file_meta.and_then(|m| {
+                        m.modified().ok().map(|t| {
+                            let dt: chrono::DateTime<chrono::Utc> = t.into();
+                            dt.to_rfc3339()
+                        })
+                    });
+
+                    let mime = mime_from_extension(&name).to_string();
+                    let media_type = if mime.starts_with("video/") {
+                        "video"
+                    } else if mime == "image/gif" {
+                        "gif"
+                    } else {
+                        "photo"
+                    };
+
+                    let photo_id = Uuid::new_v4().to_string();
+                    let now = Utc::now().to_rfc3339();
+                    let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
+
+                    let _ = sqlx::query(
+                        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                         size_bytes, width, height, taken_at, thumb_path, created_at) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)",
+                    )
+                    .bind(&photo_id)
+                    .bind(&admin_id)
+                    .bind(&name)
+                    .bind(&rel_path)
+                    .bind(&mime)
+                    .bind(media_type)
+                    .bind(size)
+                    .bind(&modified)
+                    .bind(&thumb_rel)
+                    .bind(&now)
+                    .execute(pool)
+                    .await;
+
+                    new_count += 1;
+                }
+            }
+        }
+    }
+
+    new_count
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ export default function StepIndicator({ step }: StepIndicatorProps) {
     { id: "admin-2fa", label: "2FA" },
     { id: "storage", label: "Server" },
     { id: "backup", label: "Backup" },
+    { id: "ssl", label: "SSL" },
     { id: "encryption", label: "Privacy" },
     { id: "users", label: "Users" },
     { id: "android", label: "Android" },

@@ -152,6 +152,7 @@ pub async fn login(
             true,
             300, // 5-minute TOTP window
             &state.config.auth.jwt_secret,
+            "", // role not needed for TOTP session tokens
         )?;
         return Ok(Json(serde_json::json!({
             "requires_totp": true,

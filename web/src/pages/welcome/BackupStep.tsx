@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api } from "../../api/client";
 import type { WizardStep } from "./types";
 
@@ -15,6 +15,13 @@ interface BackupServer {
   sync_frequency_hours: number;
 }
 
+interface BackupModeInfo {
+  mode: string;
+  server_ip: string;
+  server_address: string;
+  port: number;
+}
+
 export interface BackupStepProps {
   setStep: (step: WizardStep) => void;
   setError: (error: string) => void;
@@ -22,17 +29,34 @@ export interface BackupStepProps {
 }
 
 export default function BackupStep({ setStep, setError, error }: BackupStepProps) {
-  const [mode, setMode] = useState<"choice" | "discover" | "manual">("choice");
+  const [mode, setMode] = useState<"choice" | "discover" | "manual" | "be-backup">("choice");
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredServer[]>([]);
   const [addedServers, setAddedServers] = useState<BackupServer[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Backup mode state
+  const [backupModeInfo, setBackupModeInfo] = useState<BackupModeInfo | null>(null);
+  const [isBackupMode, setIsBackupMode] = useState(false);
+  const [enablingBackup, setEnablingBackup] = useState(false);
 
   // Manual form
   const [manualName, setManualName] = useState("");
   const [manualAddress, setManualAddress] = useState("");
   const [manualApiKey, setManualApiKey] = useState("");
   const [manualFrequency, setManualFrequency] = useState("24");
+
+  // Load current backup mode on mount
+  useEffect(() => {
+    api.backup.getMode()
+      .then((info) => {
+        setBackupModeInfo(info);
+        setIsBackupMode(info.mode === "backup");
+      })
+      .catch(() => {
+        // Not critical — just means we can't show the IP yet
+      });
+  }, []);
 
   async function handleDiscover() {
     setDiscovering(true);
@@ -120,6 +144,36 @@ export default function BackupStep({ setStep, setError, error }: BackupStepProps
     }
   }
 
+  async function handleEnableBackupMode() {
+    setEnablingBackup(true);
+    setError("");
+    try {
+      const info = await api.backup.setMode("backup");
+      setBackupModeInfo(info);
+      setIsBackupMode(true);
+      setMode("be-backup");
+    } catch (e: any) {
+      setError(e.message || "Failed to enable backup mode");
+    } finally {
+      setEnablingBackup(false);
+    }
+  }
+
+  async function handleDisableBackupMode() {
+    setEnablingBackup(true);
+    setError("");
+    try {
+      const info = await api.backup.setMode("primary");
+      setBackupModeInfo(info);
+      setIsBackupMode(false);
+      setMode("choice");
+    } catch (e: any) {
+      setError(e.message || "Failed to disable backup mode");
+    } finally {
+      setEnablingBackup(false);
+    }
+  }
+
   return (
     <>
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
@@ -168,7 +222,7 @@ export default function BackupStep({ setStep, setError, error }: BackupStepProps
         </div>
       )}
 
-      {/* Choice mode: discover or manual */}
+      {/* Choice mode: discover, manual, or be a backup */}
       {mode === "choice" && (
         <div className="space-y-3">
           <button
@@ -215,6 +269,91 @@ export default function BackupStep({ setStep, setError, error }: BackupStepProps
                 </p>
               </div>
             </div>
+          </button>
+
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-200 dark:border-gray-700" />
+            </div>
+            <div className="relative flex justify-center text-xs">
+              <span className="px-2 bg-white dark:bg-gray-800 text-gray-400">or</span>
+            </div>
+          </div>
+
+          <button
+            onClick={handleEnableBackupMode}
+            disabled={enablingBackup}
+            className="w-full p-4 text-left rounded-lg border-2 border-gray-200 dark:border-gray-600 hover:border-green-400 dark:hover:border-green-500 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                <svg className="w-5 h-5 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" />
+                </svg>
+              </div>
+              <div>
+                <p className="font-medium text-gray-900 dark:text-white">
+                  {enablingBackup ? "Enabling..." : "Be a Backup Server"}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Set this server as a backup that other instances can discover and sync to
+                </p>
+              </div>
+              {enablingBackup && (
+                <div className="ml-auto w-5 h-5 border-2 border-green-600 border-t-transparent rounded-full animate-spin" />
+              )}
+            </div>
+          </button>
+        </div>
+      )}
+
+      {/* Backup mode active */}
+      {mode === "be-backup" && backupModeInfo && (
+        <div>
+          <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800 mb-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse" />
+              <p className="font-medium text-green-800 dark:text-green-300 text-sm">
+                Backup Mode Active
+              </p>
+            </div>
+            <p className="text-sm text-green-700 dark:text-green-400 mb-3">
+              This server is broadcasting its presence on your local network.
+              Other Simple Photos instances can auto-discover it as a backup target.
+            </p>
+            <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-green-200 dark:border-green-700">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Server Address</p>
+              <div className="flex items-center gap-2">
+                <code className="text-lg font-mono font-semibold text-gray-900 dark:text-white">
+                  {backupModeInfo.server_address}
+                </code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(backupModeInfo.server_address);
+                  }}
+                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  title="Copy address"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
+                  </svg>
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                IP: {backupModeInfo.server_ip} · Port: {backupModeInfo.port}
+              </p>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+              If auto-discovery doesn't work on the primary server, enter this address manually.
+            </p>
+          </div>
+
+          <button
+            onClick={handleDisableBackupMode}
+            disabled={enablingBackup}
+            className="text-sm text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+          >
+            {enablingBackup ? "Disabling..." : "Disable backup mode"}
           </button>
         </div>
       )}
@@ -363,7 +502,7 @@ export default function BackupStep({ setStep, setError, error }: BackupStepProps
           &larr; Back
         </button>
         <button
-          onClick={() => { setStep("encryption"); setError(""); }}
+          onClick={() => { setStep("ssl"); setError(""); }}
           className="px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
         >
           {addedServers.length > 0 ? "Continue" : "Skip"}

@@ -5,6 +5,6 @@ pub async fn health() -> Json<Value> {
     Json(json!({
         "status": "ok",
         "service": "simple-photos",
-        "version": "0.1.0"
+        "version": "0.6.9"
     }))
 }

@@ -48,3 +48,15 @@ bcrypt_cost = 12
 [web]
 # Path to built React SPA (web/dist/). Set to "" to disable web frontend.
 static_root = "./web/dist"
+
+[backup]
+# API key that other servers must provide to pull photos from this instance.
+# Generate with: openssl rand -hex 32
+# api_key = ""
+
+[tls]
+# Enable HTTPS with a TLS certificate.
+# Set enabled = true and provide paths to your certificate and private key.
+enabled = false
+# cert_path = "/path/to/fullchain.pem"
+# key_path = "/path/to/privkey.pem"

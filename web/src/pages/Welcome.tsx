@@ -13,6 +13,7 @@ import AccountStep from "./welcome/AccountStep";
 import TwoFactorStep from "./welcome/TwoFactorStep";
 import ServerConfigStep from "./welcome/ServerConfigStep";
 import EncryptionStep from "./welcome/EncryptionStep";
+import SslStep from "./welcome/SslStep";
 import UsersStep from "./welcome/UsersStep";
 import AndroidStep from "./welcome/AndroidStep";
 import CompleteStep from "./welcome/CompleteStep";
@@ -426,6 +427,14 @@ export default function Welcome() {
             />
           )}
 
+          {step === "ssl" && (
+            <SslStep
+              setStep={setStep}
+              setError={setError}
+              error={error}
+            />
+          )}
+
           {step === "encryption" && (
             <EncryptionStep
               encryptionMode={encryptionMode}
@@ -481,7 +490,7 @@ export default function Welcome() {
         </div>
 
         <p className="text-center text-gray-400 text-xs mt-6">
-          Simple Photos v{status?.version ?? "0.1.0"} — End-to-end encrypted
+          Simple Photos v{status?.version ?? "0.6.9"} — End-to-end encrypted
         </p>
       </div>
     </div>

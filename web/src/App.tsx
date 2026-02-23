@@ -4,7 +4,6 @@ import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
 import { hasCryptoKey, loadKeyFromSession } from "./crypto/crypto";
 import Login from "./pages/Login";
-import Register from "./pages/Register";
 import Setup from "./pages/Setup";
 import Gallery from "./pages/Gallery";
 import Albums from "./pages/Albums";
@@ -15,6 +14,7 @@ import Welcome from "./pages/Welcome";
 import Import from "./pages/Import";
 import Trash from "./pages/Trash";
 import SecureGallery from "./pages/SecureGallery";
+import SharedAlbumDetail from "./pages/SharedAlbumDetail";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
@@ -85,7 +85,6 @@ export default function App() {
       <Routes>
         <Route path="/welcome" element={<Welcome />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
         <Route
           path="/setup"
           element={
@@ -155,6 +154,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Trash />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/shared/:albumId"
+          element={
+            <ProtectedRoute>
+              <SharedAlbumDetail />
             </ProtectedRoute>
           }
         />

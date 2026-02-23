@@ -57,8 +57,23 @@ export default function Import() {
     return null;
   }
 
-  // Plain mode: just scan and register files on disk
+  // Plain mode: auto-scan on mount and show results
   if (encryptionMode === "plain") {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useEffect(() => {
+      if (!scanning && !plainScanResult) {
+        setScanning(true);
+        startTask("import");
+        api.admin.scanAndRegister()
+          .then((res) => setPlainScanResult(res))
+          .catch((err: any) => setError(err.message))
+          .finally(() => {
+            setScanning(false);
+            endTask("import");
+          });
+      }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         <AppHeader />
@@ -66,7 +81,7 @@ export default function Import() {
           <div className="mb-6">
             <h2 className="text-xl font-semibold dark:text-white">Import Photos</h2>
             <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
-              Scan the storage directory to register new photos and videos.
+              The storage directory is automatically scanned for new photos and videos.
             </p>
           </div>
           {error && (
@@ -75,35 +90,25 @@ export default function Import() {
             </p>
           )}
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-              In standard storage mode, photos stay as regular files in your storage directory.
-              Click the button below to scan for any new files and add them to your library.
-            </p>
-            <div className="flex items-center gap-4">
-              <button
-                onClick={async () => {
-                  setError("");
-                  setScanning(true);
-                  startTask("import");
-                  setPlainScanResult(null);
-                  try {
-                    const res = await api.admin.scanAndRegister();
-                    setPlainScanResult(res);
-                  } catch (err: any) {
-                    setError(err.message);
-                  } finally {
-                    setScanning(false);
-                    endTask("import");
-                  }
-                }}
-                disabled={scanning}
-                className="bg-blue-600 text-white px-5 py-2.5 rounded-md hover:bg-blue-700 text-sm font-medium disabled:opacity-50 inline-flex items-center gap-2"
-              >
-                {scanning && (
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                )}
-                {scanning ? "Scanning…" : "Scan Storage Directory"}
-              </button>
+            {scanning ? (
+              <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
+                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                <p className="text-sm">Scanning storage directory for new files...</p>
+              </div>
+            ) : plainScanResult ? (
+              <div className="p-3 bg-green-50 dark:bg-green-900/30 rounded-lg">
+                <p className="text-sm text-green-700 dark:text-green-400">
+                  {plainScanResult.registered > 0
+                    ? `✓ ${plainScanResult.registered} new photo${plainScanResult.registered !== 1 ? "s" : ""} registered.`
+                    : "All photos in the storage directory are already registered. New files are automatically detected every 24 hours, or whenever you open the app."}
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Preparing to scan...
+              </p>
+            )}
+            <div className="mt-4">
               <button
                 onClick={() => navigate("/gallery")}
                 className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 text-sm"
@@ -111,15 +116,6 @@ export default function Import() {
                 Back to Gallery
               </button>
             </div>
-            {plainScanResult && (
-              <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/30 rounded-lg">
-                <p className="text-sm text-green-700 dark:text-green-400">
-                  {plainScanResult.registered > 0
-                    ? `✓ ${plainScanResult.registered} new photo${plainScanResult.registered !== 1 ? "s" : ""} registered.`
-                    : "No new files found. All photos in the storage directory are already registered."}
-                </p>
-              </div>
-            )}
           </div>
         </main>
       </div>

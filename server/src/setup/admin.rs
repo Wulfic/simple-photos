@@ -170,3 +170,236 @@ pub async fn list_users(
 
     Ok(Json(users))
 }
+
+// ── Delete user ────────────────────────────────────────────────────────────
+
+/// Admin-only: Delete a user by ID.
+///
+/// DELETE /api/admin/users/{id}
+pub async fn delete_user(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<StatusCode, AppError> {
+    require_admin(&state, &auth).await?;
+
+    // Prevent admin from deleting themselves
+    if user_id == auth.user_id {
+        return Err(AppError::BadRequest("Cannot delete your own account".into()));
+    }
+
+    // Verify user exists
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)")
+        .bind(&user_id)
+        .fetch_one(&state.pool)
+        .await?;
+
+    if !exists {
+        return Err(AppError::NotFound);
+    }
+
+    // Delete the user (cascades refresh_tokens, totp_backup_codes, blobs, etc.)
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
+
+    audit::log(
+        &state.pool,
+        AuditEvent::AdminAction,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "action": "delete_user",
+            "target_user_id": user_id
+        })),
+    )
+    .await;
+
+    tracing::info!("Admin '{}' deleted user '{}'", auth.user_id, user_id);
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Update user role ───────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserRoleRequest {
+    pub role: String,
+}
+
+/// Admin-only: Update a user's role.
+///
+/// PUT /api/admin/users/{id}/role
+pub async fn update_user_role(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(req): Json<UpdateUserRoleRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    if req.role != "admin" && req.role != "user" {
+        return Err(AppError::BadRequest("Role must be 'admin' or 'user'".into()));
+    }
+
+    // Prevent admin from demoting themselves
+    if user_id == auth.user_id && req.role != "admin" {
+        return Err(AppError::BadRequest("Cannot demote your own account".into()));
+    }
+
+    let result = sqlx::query("UPDATE users SET role = ? WHERE id = ?")
+        .bind(&req.role)
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    audit::log(
+        &state.pool,
+        AuditEvent::AdminAction,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "action": "update_user_role",
+            "target_user_id": user_id,
+            "new_role": req.role
+        })),
+    )
+    .await;
+
+    tracing::info!("Admin '{}' set user '{}' role to '{}'", auth.user_id, user_id, req.role);
+
+    Ok(Json(serde_json::json!({
+        "message": "Role updated",
+        "user_id": user_id,
+        "role": req.role
+    })))
+}
+
+// ── Admin reset password ───────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct AdminResetPasswordRequest {
+    pub new_password: String,
+}
+
+/// Admin-only: Reset a user's password.
+///
+/// PUT /api/admin/users/{id}/password
+pub async fn admin_reset_password(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+    Json(req): Json<AdminResetPasswordRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    // Validate password strength
+    if req.new_password.len() < 8 || req.new_password.len() > 128 {
+        return Err(AppError::BadRequest(
+            "Password must be between 8 and 128 characters".into(),
+        ));
+    }
+    let has_upper = req.new_password.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = req.new_password.chars().any(|c| c.is_ascii_lowercase());
+    let has_digit = req.new_password.chars().any(|c| c.is_ascii_digit());
+    if !has_upper || !has_lower || !has_digit {
+        return Err(AppError::BadRequest(
+            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".into(),
+        ));
+    }
+
+    let password_hash =
+        bcrypt::hash(&req.new_password, state.config.auth.bcrypt_cost)
+            .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+
+    let result = sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(&password_hash)
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    // Revoke all refresh tokens for the user so they're forced to re-login
+    sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?")
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
+
+    audit::log(
+        &state.pool,
+        AuditEvent::AdminAction,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "action": "admin_reset_password",
+            "target_user_id": user_id
+        })),
+    )
+    .await;
+
+    tracing::info!("Admin '{}' reset password for user '{}'", auth.user_id, user_id);
+
+    Ok(Json(serde_json::json!({
+        "message": "Password reset successfully"
+    })))
+}
+
+// ── Admin reset 2FA ────────────────────────────────────────────────────────
+
+/// Admin-only: Disable 2FA for a user.
+///
+/// DELETE /api/admin/users/{id}/2fa
+pub async fn admin_reset_2fa(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    axum::extract::Path(user_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let result = sqlx::query(
+        "UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?"
+    )
+    .bind(&user_id)
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    // Delete backup codes for this user
+    sqlx::query("DELETE FROM totp_backup_codes WHERE user_id = ?")
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
+
+    audit::log(
+        &state.pool,
+        AuditEvent::AdminAction,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "action": "admin_reset_2fa",
+            "target_user_id": user_id
+        })),
+    )
+    .await;
+
+    tracing::info!("Admin '{}' reset 2FA for user '{}'", auth.user_id, user_id);
+
+    Ok(Json(serde_json::json!({
+        "message": "Two-factor authentication disabled for user"
+    })))
+}

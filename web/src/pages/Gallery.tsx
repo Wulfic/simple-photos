@@ -219,6 +219,11 @@ export default function Gallery() {
         const detected = settings.encryption_mode as EncryptionMode;
         setMode(detected);
 
+        // Trigger a background auto-scan whenever the gallery opens
+        api.backup.triggerAutoScan().catch(() => {
+          // Non-critical — if the user isn't admin or endpoint fails, just ignore
+        });
+
         if (detected === "encrypted") {
           if (!hasCryptoKey()) {
             navigate("/setup");

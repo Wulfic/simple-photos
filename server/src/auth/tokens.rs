@@ -15,6 +15,7 @@ pub fn create_jwt(
     totp_required: bool,
     ttl_secs: u64,
     secret: &str,
+    role: &str,
 ) -> Result<String, AppError> {
     let exp = (Utc::now().timestamp() as u64 + ttl_secs) as usize;
     let jti = Uuid::new_v4().to_string();
@@ -23,6 +24,7 @@ pub fn create_jwt(
         exp,
         jti,
         totp_required,
+        role: role.to_string(),
     };
     // Explicitly HS256 — prevent algorithm confusion attacks
     let header = Header::new(Algorithm::HS256);
@@ -38,11 +40,19 @@ pub async fn issue_tokens(
     state: &AppState,
     user_id: &str,
 ) -> Result<(String, String), AppError> {
+    // Fetch the user's role so it can be embedded in the JWT
+    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or_else(|| "user".to_string());
+
     let access_token = create_jwt(
         user_id,
         false,
         state.config.auth.access_token_ttl_secs,
         &state.config.auth.jwt_secret,
+        &role,
     )?;
 
     let raw_refresh = Uuid::new_v4().to_string();

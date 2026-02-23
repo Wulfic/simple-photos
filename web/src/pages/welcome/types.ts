@@ -5,6 +5,7 @@ export type WizardStep =
   | "admin-2fa"
   | "storage"
   | "backup"
+  | "ssl"
   | "encryption"
   | "users"
   | "user-2fa"

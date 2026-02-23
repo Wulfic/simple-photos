@@ -95,3 +95,18 @@ pub struct RecoveryResponse {
     pub message: String,
     pub recovery_id: String,
 }
+
+/// Response for backup mode status.
+#[derive(Debug, Serialize)]
+pub struct BackupModeResponse {
+    pub mode: String,
+    pub server_ip: String,
+    pub server_address: String,
+    pub port: u16,
+}
+
+/// Request to change server backup mode.
+#[derive(Debug, Deserialize)]
+pub struct SetBackupModeRequest {
+    pub mode: String,
+}

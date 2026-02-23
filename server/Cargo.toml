@@ -1,6 +1,6 @@
 [package]
 name = "simple-photos-server"
-version = "0.1.0"
+version = "0.6.9"
 edition = "2021"
 
 [dependencies]
@@ -29,3 +29,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 dashmap = "6"
 subtle = "2"
 reqwest = { version = "0.12", features = ["json"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls-pemfile = "2"
+instant-acme = "0.7"
+rcgen = "0.13"

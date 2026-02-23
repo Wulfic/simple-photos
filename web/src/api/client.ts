@@ -328,6 +328,32 @@ export const api = {
         }>
       >("/admin/users"),
 
+    deleteUser: (userId: string) =>
+      request<void>(`/admin/users/${userId}`, { method: "DELETE" }),
+
+    updateUserRole: (userId: string, role: "admin" | "user") =>
+      request<{ message: string; user_id: string; role: string }>(
+        `/admin/users/${userId}/role`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ role }),
+        }
+      ),
+
+    resetUserPassword: (userId: string, newPassword: string) =>
+      request<{ message: string }>(
+        `/admin/users/${userId}/password`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ new_password: newPassword }),
+        }
+      ),
+
+    resetUser2fa: (userId: string) =>
+      request<{ message: string }>(`/admin/users/${userId}/2fa`, {
+        method: "DELETE",
+      }),
+
     getStorage: () =>
       request<{
         storage_path: string;
@@ -414,6 +440,49 @@ export const api = {
     scanAndRegister: () =>
       request<{ registered: number; message: string }>("/admin/photos/scan", {
         method: "POST",
+      }),
+
+    // ── SSL / TLS ──────────────────────────────────────────────────────────
+
+    /** Get current TLS configuration */
+    getSsl: () =>
+      request<{
+        enabled: boolean;
+        cert_path: string | null;
+        key_path: string | null;
+        message: string;
+      }>("/admin/ssl"),
+
+    /** Update TLS configuration (manual cert paths) */
+    updateSsl: (data: {
+      enabled: boolean;
+      cert_path?: string;
+      key_path?: string;
+    }) =>
+      request<{
+        enabled: boolean;
+        cert_path: string | null;
+        key_path: string | null;
+        message: string;
+      }>("/admin/ssl", {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+
+    /** Generate a Let's Encrypt certificate via ACME HTTP-01 */
+    generateLetsEncrypt: (data: {
+      domain: string;
+      email: string;
+      staging?: boolean;
+    }) =>
+      request<{
+        success: boolean;
+        cert_path: string;
+        key_path: string;
+        message: string;
+      }>("/admin/ssl/letsencrypt", {
+        method: "POST",
+        body: JSON.stringify(data),
       }),
   },
 
@@ -734,5 +803,122 @@ export const api = {
         `/admin/backup/servers/${serverId}/recover`,
         { method: "POST" }
       ),
+
+    /** Get the current backup mode and server IP */
+    getMode: () =>
+      request<{
+        mode: string;
+        server_ip: string;
+        server_address: string;
+        port: number;
+      }>("/admin/backup/mode"),
+
+    /** Set backup mode ("primary" or "backup") */
+    setMode: (mode: string) =>
+      request<{
+        mode: string;
+        server_ip: string;
+        server_address: string;
+        port: number;
+      }>("/admin/backup/mode", {
+        method: "POST",
+        body: JSON.stringify({ mode }),
+      }),
+
+    /** Trigger an auto-scan of the storage directory */
+    triggerAutoScan: () =>
+      request<{ message: string }>("/admin/photos/auto-scan", {
+        method: "POST",
+      }),
+  },
+
+  // ── Shared Albums ───────────────────────────────────────────────────────
+
+  sharing: {
+    /** List shared albums the user owns or is a member of */
+    listAlbums: () =>
+      request<
+        Array<{
+          id: string;
+          name: string;
+          owner_username: string;
+          is_owner: boolean;
+          photo_count: number;
+          member_count: number;
+          created_at: string;
+        }>
+      >("/sharing/albums"),
+
+    /** Create a new shared album */
+    createAlbum: (name: string) =>
+      request<{ id: string; name: string; created_at: string }>(
+        "/sharing/albums",
+        {
+          method: "POST",
+          body: JSON.stringify({ name }),
+        }
+      ),
+
+    /** Delete a shared album (owner only) */
+    deleteAlbum: (albumId: string) =>
+      request<void>(`/sharing/albums/${albumId}`, { method: "DELETE" }),
+
+    /** List members of a shared album */
+    listMembers: (albumId: string) =>
+      request<
+        Array<{
+          id: string;
+          user_id: string;
+          username: string;
+          added_at: string;
+        }>
+      >(`/sharing/albums/${albumId}/members`),
+
+    /** Add a member to a shared album */
+    addMember: (albumId: string, userId: string) =>
+      request<{ member_id: string; user_id: string }>(
+        `/sharing/albums/${albumId}/members`,
+        {
+          method: "POST",
+          body: JSON.stringify({ user_id: userId }),
+        }
+      ),
+
+    /** Remove a member from a shared album */
+    removeMember: (albumId: string, userId: string) =>
+      request<void>(`/sharing/albums/${albumId}/members/${userId}`, {
+        method: "DELETE",
+      }),
+
+    /** List photos in a shared album */
+    listPhotos: (albumId: string) =>
+      request<
+        Array<{
+          id: string;
+          photo_ref: string;
+          ref_type: string;
+          added_at: string;
+        }>
+      >(`/sharing/albums/${albumId}/photos`),
+
+    /** Add a photo to a shared album */
+    addPhoto: (albumId: string, photoRef: string, refType: "plain" | "blob" = "plain") =>
+      request<{ photo_id: string }>(
+        `/sharing/albums/${albumId}/photos`,
+        {
+          method: "POST",
+          body: JSON.stringify({ photo_ref: photoRef, ref_type: refType }),
+        }
+      ),
+
+    /** Remove a photo from a shared album */
+    removePhoto: (albumId: string, photoId: string) =>
+      request<void>(`/sharing/albums/${albumId}/photos/${photoId}`, {
+        method: "DELETE",
+      }),
+
+    /** List all users for the member picker */
+    listUsers: () =>
+      request<Array<{ id: string; username: string }>>("/sharing/users"),
   },
 };

@@ -12,6 +12,7 @@ mod photos;
 mod ratelimit;
 mod security;
 mod setup;
+mod sharing;
 mod state;
 mod trash;
 
@@ -37,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = config::AppConfig::load()?;
-    tracing::info!("Starting Simple Photos server v0.1.0");
+    tracing::info!("Starting Simple Photos server v0.6.9");
     tracing::info!(
         "Listening on {}:{}",
         config.server.host,
@@ -138,6 +139,24 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn background task for auto-scanning storage directory (every 24 hours)
+    {
+        let pool_clone = pool.clone();
+        let storage_root_clone = config.storage.root.clone();
+        tokio::spawn(async move {
+            backup::handlers::background_auto_scan_task(pool_clone, storage_root_clone).await;
+        });
+    }
+
+    // Spawn background task for backup-mode UDP broadcast
+    {
+        let pool_clone = pool.clone();
+        let server_port = config.server.port;
+        tokio::spawn(async move {
+            backup::broadcast::background_broadcast_task(pool_clone, server_port).await;
+        });
+    }
+
     let state = AppState {
         pool,
         config: Arc::new(config.clone()),
@@ -170,6 +189,10 @@ async fn main() -> anyhow::Result<()> {
         // Admin — user management, server config (requires admin role)
         .route("/admin/users", post(setup::admin::create_user))
         .route("/admin/users", get(setup::admin::list_users))
+        .route("/admin/users/{id}", delete(setup::admin::delete_user))
+        .route("/admin/users/{id}/role", put(setup::admin::update_user_role))
+        .route("/admin/users/{id}/password", put(setup::admin::admin_reset_password))
+        .route("/admin/users/{id}/2fa", delete(setup::admin::admin_reset_2fa))
         .route("/admin/storage", get(setup::storage::get_storage))
         .route("/admin/storage", put(setup::storage::update_storage))
         .route("/admin/browse", get(setup::storage::browse_directory))
@@ -177,6 +200,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/port", get(setup::port::get_port))
         .route("/admin/port", put(setup::port::update_port))
         .route("/admin/restart", post(setup::port::restart_server))
+        // SSL/TLS configuration (admin only)
+        .route("/admin/ssl", get(setup::ssl::get_ssl))
+        .route("/admin/ssl", put(setup::ssl::update_ssl))
+        .route("/admin/ssl/letsencrypt", post(setup::ssl::generate_letsencrypt))
         // Server-side import — scan directories and serve raw files for client-side encryption
         .route("/admin/import/scan", get(setup::import::import_scan))
         .route("/admin/import/file", get(setup::import::import_file))
@@ -217,10 +244,25 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/backup/servers/{id}/recover", post(backup::recovery::recover_from_backup))
         .route("/admin/backup/servers/{id}/photos", get(backup::recovery::proxy_backup_photos))
         .route("/admin/backup/discover", get(backup::handlers::discover_servers))
+        .route("/admin/backup/mode", get(backup::handlers::get_backup_mode))
+        .route("/admin/backup/mode", post(backup::handlers::set_backup_mode))
+        // Auto-scan trigger — called when web UI opens
+        .route("/admin/photos/auto-scan", post(backup::handlers::trigger_auto_scan))
         // Backup serve — API-key authenticated, for server-to-server recovery
         .route("/backup/list", get(backup::serve::backup_list_photos))
         .route("/backup/download/{photo_id}", get(backup::serve::backup_download_photo))
-        .route("/backup/download/{photo_id}/thumb", get(backup::serve::backup_download_thumb));
+        .route("/backup/download/{photo_id}/thumb", get(backup::serve::backup_download_thumb))
+        // Shared albums — create, manage members, add/remove photos
+        .route("/sharing/albums", get(sharing::handlers::list_shared_albums))
+        .route("/sharing/albums", post(sharing::handlers::create_shared_album))
+        .route("/sharing/albums/{id}", delete(sharing::handlers::delete_shared_album))
+        .route("/sharing/albums/{id}/members", get(sharing::handlers::list_members))
+        .route("/sharing/albums/{id}/members", post(sharing::handlers::add_member))
+        .route("/sharing/albums/{id}/members/{user_id}", delete(sharing::handlers::remove_member))
+        .route("/sharing/albums/{id}/photos", get(sharing::handlers::list_shared_photos))
+        .route("/sharing/albums/{id}/photos", post(sharing::handlers::add_photo))
+        .route("/sharing/albums/{album_id}/photos/{photo_id}", delete(sharing::handlers::remove_photo))
+        .route("/sharing/users", get(sharing::handlers::list_users_for_sharing));
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))
@@ -258,9 +300,31 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port).parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("Server ready");
-    axum::serve(listener, app).await?;
+
+    if config.tls.enabled {
+        let cert_path = config.tls.cert_path.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("TLS enabled but cert_path not set"))?;
+        let key_path = config.tls.key_path.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("TLS enabled but key_path not set"))?;
+
+        tracing::info!("TLS enabled — loading cert from {:?}, key from {:?}", cert_path, key_path);
+
+        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+            cert_path,
+            key_path,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to load TLS config: {}", e))?;
+
+        tracing::info!("Server ready (HTTPS)");
+        axum_server::bind_rustls(addr, rustls_config)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        tracing::info!("Server ready");
+        axum::serve(listener, app).await?;
+    }
 
     Ok(())
 }

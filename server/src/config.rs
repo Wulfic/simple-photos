@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub web: WebConfig,
     #[serde(default)]
     pub backup: BackupConfig,
+    #[serde(default)]
+    pub tls: TlsConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -72,6 +74,21 @@ pub struct BackupConfig {
     /// If empty/unset, backup serving endpoints are disabled.
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+/// TLS/SSL configuration.
+/// When enabled, the server will listen on HTTPS instead of plain HTTP.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct TlsConfig {
+    /// Whether TLS is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to the PEM-encoded TLS certificate file.
+    #[serde(default)]
+    pub cert_path: Option<String>,
+    /// Path to the PEM-encoded TLS private key file.
+    #[serde(default)]
+    pub key_path: Option<String>,
 }
 
 impl AppConfig {
@@ -160,6 +177,16 @@ impl AppConfig {
 
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_BACKUP_API_KEY") {
             config.backup.api_key = Some(v);
+        }
+
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_ENABLED") {
+            config.tls.enabled = v.to_lowercase() == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_CERT_PATH") {
+            config.tls.cert_path = Some(v);
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_KEY_PATH") {
+            config.tls.key_path = Some(v);
         }
 
         Ok(config)
