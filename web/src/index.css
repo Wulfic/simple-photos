@@ -2,6 +2,46 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── RGB spinning ring animation for profile icon ───────────── */
+@keyframes rgb-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes rgb-hue {
+  0%   { filter: hue-rotate(0deg); }
+  100% { filter: hue-rotate(360deg); }
+}
+
+.processing-ring {
+  position: relative;
+}
+
+.processing-ring::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  padding: 3px;
+  background: conic-gradient(
+    #ff0000,
+    #ff8800,
+    #ffff00,
+    #00ff00,
+    #0088ff,
+    #8800ff,
+    #ff0088,
+    #ff0000
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: rgb-spin 1.5s linear infinite, rgb-hue 3s linear infinite;
+  pointer-events: none;
+}
+
 @layer base {
   /* ── Dark-mode defaults ──────────────────────────────────────── */
   .dark {

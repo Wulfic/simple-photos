@@ -4,6 +4,7 @@ import { encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
 import { api } from "../api/client";
 import { db, blobTypeFromMime, mediaTypeFromMime } from "../db";
 import AppHeader from "../components/AppHeader";
+import { useProcessingStore } from "../store/processing";
 
 import type { EncryptionMode, ImportItem, ServerFile, GooglePhotosMetadata } from "../utils/importTypes";
 import {
@@ -24,6 +25,7 @@ export default function Import() {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef(false);
+  const { startTask, endTask } = useProcessingStore();
   const [mode, setMode] = useState<ImportMode>("server");
   const [items, setItems] = useState<ImportItem[]>([]);
   const [importing, setImporting] = useState(false);
@@ -82,6 +84,7 @@ export default function Import() {
                 onClick={async () => {
                   setError("");
                   setScanning(true);
+                  startTask("import");
                   setPlainScanResult(null);
                   try {
                     const res = await api.admin.scanAndRegister();
@@ -90,6 +93,7 @@ export default function Import() {
                     setError(err.message);
                   } finally {
                     setScanning(false);
+                    endTask("import");
                   }
                 }}
                 disabled={scanning}
@@ -244,6 +248,7 @@ export default function Import() {
     if (pending.length === 0) return;
 
     setImporting(true);
+    startTask("import");
     setError("");
     abortRef.current = false;
     setProgress({ done: 0, total: pending.length });
@@ -287,6 +292,7 @@ export default function Import() {
     }
 
     setImporting(false);
+    endTask("import");
   }
 
   async function importSingleItem(item: ImportItem) {

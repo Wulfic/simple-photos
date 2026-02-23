@@ -125,6 +125,19 @@ pub async fn set_encryption_mode(
         .await?
     };
 
+    // If there's nothing to migrate, stay idle — just flip the mode
+    if count == 0 {
+        tracing::info!(
+            "Encryption mode changed to '{}'. No items to migrate.",
+            req.mode
+        );
+        return Ok(Json(serde_json::json!({
+            "message": format!("Encryption mode set to '{}'. No migration needed.", req.mode),
+            "mode": req.mode,
+            "migration_items": 0,
+        })));
+    }
+
     let now = Utc::now().to_rfc3339();
     sqlx::query(
         "UPDATE encryption_migration SET status = ?, total = ?, completed = 0, started_at = ?, error = NULL WHERE id = 'singleton'",

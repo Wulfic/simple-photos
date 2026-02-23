@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/auth";
 import { useThemeStore } from "../store/theme";
 import { useBackupStore } from "../store/backup";
+import { useProcessingStore } from "../store/processing";
 import { clearKey } from "../crypto/crypto";
 import { api } from "../api/client";
 
@@ -72,6 +73,7 @@ export default function AppHeader({
   const { username, refreshToken, logout: storeLogout } = useAuthStore();
   const { theme, toggle: toggleTheme } = useThemeStore();
   const { viewMode, toggleViewMode, backupServers, loaded: backupLoaded, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
+  const { isProcessing } = useProcessingStore();
   const hasBackup = backupServers.length > 0;
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -238,7 +240,7 @@ export default function AppHeader({
               onClick={() => setDropdownOpen((v) => !v)}
               className="flex items-center gap-2 text-gray-400 hover:text-white text-xs border-l border-white/10 pl-4 ml-2 transition-colors"
             >
-              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold uppercase">
+              <div className={`w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold uppercase${isProcessing ? " processing-ring" : ""}`}>
                 {username.charAt(0)}
               </div>
               <span className="hidden sm:inline">{username}</span>

@@ -4,12 +4,14 @@ import { QRCodeSVG } from "qrcode.react";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
+import { useProcessingStore } from "../store/processing";
 import AppHeader from "../components/AppHeader";
 import { checkPasswordStrength } from "../utils/validation";
 import { Checkmark } from "../components/PasswordFields";
 
 export default function Settings() {
   const { username } = useAuthStore();
+  const { startTask, endTask } = useProcessingStore();
   const navigate = useNavigate();
 
   // ── 2FA state ────────────────────────────────────────────────────────────
@@ -172,9 +174,13 @@ export default function Settings() {
   // Poll migration progress when a migration is active
   useEffect(() => {
     if (migrationStatus !== "encrypting" && migrationStatus !== "decrypting") return;
+    startTask("encryption");
     const interval = setInterval(loadEncryptionSettings, 3000);
-    return () => clearInterval(interval);
-  }, [migrationStatus, loadEncryptionSettings]);
+    return () => {
+      clearInterval(interval);
+      endTask("encryption");
+    };
+  }, [migrationStatus, loadEncryptionSettings, startTask, endTask]);
 
   async function handleToggleEncryption() {
     setShowEncryptionWarning(false);
@@ -198,9 +204,9 @@ export default function Settings() {
     if (backupServers.length === 0) return;
     setShowRecoverWarning(false);
     setRecovering(true);
+    startTask("recovery");
     setError("");
     try {
-      // Recover from the first enabled backup server (or fallback to first one)
       const target = backupServers.find((s) => s.enabled) ?? backupServers[0];
       const res = await api.backup.recover(target.id);
       setSuccess(res.message);
@@ -208,6 +214,7 @@ export default function Settings() {
       setError(err.message);
     } finally {
       setRecovering(false);
+      endTask("recovery");
     }
   }
 
