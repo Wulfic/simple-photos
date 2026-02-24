@@ -14,6 +14,7 @@ import com.simplephotos.ui.screens.album.AlbumListScreen
 import com.simplephotos.ui.screens.auth.LoginScreen
 import com.simplephotos.ui.screens.auth.RegisterScreen
 import com.simplephotos.ui.screens.gallery.GalleryScreen
+import com.simplephotos.ui.screens.settings.FolderSelectionScreen
 import com.simplephotos.ui.screens.settings.SettingsScreen
 import com.simplephotos.ui.screens.setup.ServerSetupScreen
 import com.simplephotos.ui.screens.twofactor.TwoFactorSetupScreen
@@ -81,11 +82,17 @@ fun NavGraph() {
             SettingsScreen(
                 onBack = { navController.popBackStack() },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
-                onSetup2fa = { navController.navigate(Screen.TwoFactorSetup.route) }
+                onSetup2fa = { navController.navigate(Screen.TwoFactorSetup.route) },
+                onBackupFolders = { navController.navigate(Screen.FolderSelection.route) }
             )
         }
         composable(Screen.TwoFactorSetup.route) {
             TwoFactorSetupScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.FolderSelection.route) {
+            FolderSelectionScreen(
                 onBack = { navController.popBackStack() }
             )
         }

@@ -533,6 +533,38 @@ if [[ "$MODE" == "native" ]]; then
     mkdir -p "$SCRIPT_DIR/downloads"
     success "Data directories ready"
 
+    # ── Systemd service for auto-start on boot ────────────────────────────
+    if command -v systemctl &>/dev/null; then
+        info "Setting up systemd service for auto-start on boot..."
+        SERVICE_FILE="/etc/systemd/system/simple-photos.service"
+        sudo tee "$SERVICE_FILE" > /dev/null << UNIT
+[Unit]
+Description=Simple Photos Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$(whoami)
+WorkingDirectory=${SCRIPT_DIR}/server
+ExecStart=${SCRIPT_DIR}/server/target/release/simple-photos-server
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+        sudo systemctl daemon-reload
+        sudo systemctl enable simple-photos.service
+        success "Systemd service installed and enabled (simple-photos.service)"
+        info "The server will now start automatically on boot."
+    else
+        warn "systemd not found — skipping auto-start setup."
+        warn "You can start the server manually: cd server && ./target/release/simple-photos-server"
+    fi
+
 elif [[ "$MODE" == "docker" ]]; then
     # ── Build web frontend if needed ──────────────────────────────────────
     if [ ! -d "$SCRIPT_DIR/web/dist" ]; then
@@ -656,7 +688,15 @@ if [ -n "$BACKUP_API_KEY" ]; then
 fi
 
 if [[ "$MODE" == "native" ]]; then
-    echo -e "  ${BOLD}Start:${NC}  cd server && ./target/release/simple-photos-server"
+    if command -v systemctl &>/dev/null; then
+        echo -e "  ${BOLD}Start:${NC}    sudo systemctl start simple-photos"
+        echo -e "  ${BOLD}Stop:${NC}     sudo systemctl stop simple-photos"
+        echo -e "  ${BOLD}Restart:${NC}  sudo systemctl restart simple-photos"
+        echo -e "  ${BOLD}Logs:${NC}     sudo journalctl -u simple-photos -f"
+        echo -e "  ${BOLD}Boot:${NC}     ${GREEN}Enabled (auto-starts on boot)${NC}"
+    else
+        echo -e "  ${BOLD}Start:${NC}  cd server && ./target/release/simple-photos-server"
+    fi
     echo -e "  ${BOLD}Open:${NC}   ${CYAN}http://localhost:${PORT}${NC}"
 else
     echo -e "  ${BOLD}Start:${NC}  cd docker-instances/${INSTANCE_NAME} && docker compose up -d"
@@ -670,11 +710,22 @@ if ! $NO_START; then
     if prompt_yn "Start the server now?"; then
         echo ""
         if [[ "$MODE" == "native" ]]; then
-            info "Starting on port $PORT..."
-            echo -e "  ${CYAN}→ http://localhost:${PORT}${NC}"
-            echo -e "  Press ${BOLD}Ctrl+C${NC} to stop.\n"
-            cd "$SCRIPT_DIR/server"
-            exec ./target/release/simple-photos-server
+            if command -v systemctl &>/dev/null; then
+                info "Starting via systemd..."
+                sudo systemctl start simple-photos.service
+                echo -e "  ${CYAN}→ http://localhost:${PORT}${NC}"
+                echo ""
+                success "Server is running as a systemd service."
+                info "View logs:  sudo journalctl -u simple-photos -f"
+                info "Stop:       sudo systemctl stop simple-photos"
+                info "Restart:    sudo systemctl restart simple-photos"
+            else
+                info "Starting on port $PORT..."
+                echo -e "  ${CYAN}→ http://localhost:${PORT}${NC}"
+                echo -e "  Press ${BOLD}Ctrl+C${NC} to stop.\n"
+                cd "$SCRIPT_DIR/server"
+                exec ./target/release/simple-photos-server
+            fi
         else
             info "Starting container: $INSTANCE_NAME"
             cd "$INSTANCE_DIR"

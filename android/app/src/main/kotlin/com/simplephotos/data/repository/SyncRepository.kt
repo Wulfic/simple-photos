@@ -2,7 +2,6 @@ package com.simplephotos.data.repository
 
 import android.content.ContentUris
 import android.content.Context
-import android.media.MediaMetadataRetriever
 import android.provider.MediaStore
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -20,35 +19,63 @@ import javax.inject.Singleton
 
 /**
  * Coordinates sync between device MediaStore and the server.
- * Scans for new photos/videos, inserts them into Room, and enqueues
- * them for upload via the BlobQueue.
+ * Scans for new photos/videos **only from user-selected folders**,
+ * inserts them into Room, and enqueues them for upload via the BlobQueue.
+ *
+ * The default folder is DCIM/Camera (the standard camera roll).
+ * Users can configure additional folders from Settings → Backup Folders.
  */
 @Singleton
 class SyncRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val db: AppDatabase,
-    private val dataStore: DataStore<Preferences>
+    private val dataStore: DataStore<Preferences>,
+    private val backupFolderRepository: BackupFolderRepository
 ) {
     companion object {
         val KEY_LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
     }
 
     /**
-     * Scan device MediaStore for photos and videos added since the last sync.
+     * Scan device MediaStore for photos and videos added since the last sync,
+     * filtered to only include media from folders the user has selected for backup.
      * Inserts new items as PENDING in Room and enqueues BlobQueueEntity entries.
      */
     suspend fun scanForNewMedia() {
+        // Ensure defaults are set on first run
+        backupFolderRepository.initializeDefaultsIfNeeded()
+
         val prefs = dataStore.data.first()
         val lastSync = prefs[KEY_LAST_SYNC_TIMESTAMP] ?: 0L
 
-        scanImages(lastSync)
-        scanVideos(lastSync)
+        // Get the list of enabled bucket IDs for filtering
+        val enabledBucketIds = backupFolderRepository.getEnabledBucketIds()
+        if (enabledBucketIds.isEmpty()) return // No folders selected
+
+        scanImages(lastSync, enabledBucketIds)
+        scanVideos(lastSync, enabledBucketIds)
 
         // Update last sync timestamp
         dataStore.edit { it[KEY_LAST_SYNC_TIMESTAMP] = System.currentTimeMillis() / 1000 }
     }
 
-    private suspend fun scanImages(lastSyncSecs: Long) {
+    /**
+     * Build a SQL selection clause that filters by BUCKET_ID.
+     * Example: "date_added > ? AND bucket_id IN (123, 456, 789)"
+     */
+    private fun buildBucketFilter(
+        dateColumn: String,
+        bucketIdColumn: String,
+        bucketIds: List<Long>
+    ): Pair<String, Array<String>> {
+        val placeholders = bucketIds.joinToString(",") { "?" }
+        val selection = "$dateColumn > ? AND $bucketIdColumn IN ($placeholders)"
+        val args = mutableListOf<String>()
+        // The lastSync arg is added by the caller; bucket IDs follow
+        return selection to bucketIds.map { it.toString() }.toTypedArray()
+    }
+
+    private suspend fun scanImages(lastSyncSecs: Long, enabledBucketIds: List<Long>) {
         val projection = arrayOf(
             MediaStore.Images.Media._ID,
             MediaStore.Images.Media.DISPLAY_NAME,
@@ -58,10 +85,12 @@ class SyncRepository @Inject constructor(
             MediaStore.Images.Media.DATE_TAKEN,
             MediaStore.Images.Media.LATITUDE,
             MediaStore.Images.Media.LONGITUDE,
+            MediaStore.Images.Media.BUCKET_ID,
         )
 
-        val selection = "${MediaStore.Images.Media.DATE_ADDED} > ?"
-        val selectionArgs = arrayOf(lastSyncSecs.toString())
+        val bucketPlaceholders = enabledBucketIds.joinToString(",") { "?" }
+        val selection = "${MediaStore.Images.Media.DATE_ADDED} > ? AND ${MediaStore.Images.Media.BUCKET_ID} IN ($bucketPlaceholders)"
+        val selectionArgs = arrayOf(lastSyncSecs.toString()) + enabledBucketIds.map { it.toString() }.toTypedArray()
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} ASC"
 
         context.contentResolver.query(
@@ -117,7 +146,7 @@ class SyncRepository @Inject constructor(
         }
     }
 
-    private suspend fun scanVideos(lastSyncSecs: Long) {
+    private suspend fun scanVideos(lastSyncSecs: Long, enabledBucketIds: List<Long>) {
         val projection = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
@@ -126,10 +155,12 @@ class SyncRepository @Inject constructor(
             MediaStore.Video.Media.HEIGHT,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.DATE_TAKEN,
+            MediaStore.Video.Media.BUCKET_ID,
         )
 
-        val selection = "${MediaStore.Video.Media.DATE_ADDED} > ?"
-        val selectionArgs = arrayOf(lastSyncSecs.toString())
+        val bucketPlaceholders = enabledBucketIds.joinToString(",") { "?" }
+        val selection = "${MediaStore.Video.Media.DATE_ADDED} > ? AND ${MediaStore.Video.Media.BUCKET_ID} IN ($bucketPlaceholders)"
+        val selectionArgs = arrayOf(lastSyncSecs.toString()) + enabledBucketIds.map { it.toString() }.toTypedArray()
         val sortOrder = "${MediaStore.Video.Media.DATE_ADDED} ASC"
 
         context.contentResolver.query(

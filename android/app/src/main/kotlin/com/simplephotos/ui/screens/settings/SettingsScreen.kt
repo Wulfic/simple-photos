@@ -84,6 +84,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onSetup2fa: () -> Unit,
+    onBackupFolders: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -134,6 +135,14 @@ fun SettingsScreen(
                             checked = viewModel.wifiOnly,
                             onCheckedChange = { viewModel.setWifiOnlyPref(it, context) }
                         )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = onBackupFolders,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Backup Folders")
                     }
 
                     Spacer(Modifier.height(8.dp))

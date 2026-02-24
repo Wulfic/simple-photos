@@ -14,4 +14,5 @@ sealed class Screen(val route: String) {
     }
     data object Settings : Screen("settings")
     data object TwoFactorSetup : Screen("two_factor_setup")
+    data object FolderSelection : Screen("folder_selection")
 }
