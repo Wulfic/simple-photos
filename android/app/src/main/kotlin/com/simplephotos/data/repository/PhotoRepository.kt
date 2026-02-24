@@ -248,7 +248,7 @@ class PhotoRepository @Inject constructor(
         for (blobType in blobTypes) {
             after = null
             do {
-                val listResult = api.listBlobs(blobType = blobType, after = after, limit = 50)
+                val listResult = api.listBlobs(blobType = blobType, after = after, limit = 200)
 
                 for (blob in listResult.blobs) {
                     if (db.photoDao().getByServerBlobId(blob.id) != null) continue
@@ -315,7 +315,7 @@ class PhotoRepository @Inject constructor(
                 }
 
                 after = if (listResult.blobs.isNotEmpty()) listResult.blobs.last().id else null
-            } while (listResult.blobs.size == 50)
+            } while (listResult.blobs.size == 200)
         }
 
         return imported

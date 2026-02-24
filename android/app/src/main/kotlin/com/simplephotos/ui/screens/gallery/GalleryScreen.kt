@@ -10,12 +10,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -263,19 +265,7 @@ fun GalleryScreen(
                 ),
                 isSyncing = viewModel.isSyncing,
                 syncLabel = if (viewModel.isSyncing) "Syncing" else null
-            ) {
-                // Sync button
-                IconButton(
-                    onClick = { viewModel.syncFromServer() },
-                    enabled = !viewModel.isSyncing
-                ) {
-                    Icon(
-                        Icons.Default.Refresh,
-                        contentDescription = "Sync",
-                        tint = Color(0xFF9CA3AF)
-                    )
-                }
-            }
+            )
         },
         floatingActionButton = {
             FloatingActionButton(
@@ -298,7 +288,20 @@ fun GalleryScreen(
             }
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding)) {
+        val pullToRefreshState = rememberPullToRefreshState()
+        if (pullToRefreshState.isRefreshing) {
+            LaunchedEffect(true) {
+                viewModel.syncFromServer()
+                pullToRefreshState.endRefresh()
+            }
+        }
+        Box(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .nestedScroll(pullToRefreshState.nestedScrollConnection)
+        ) {
+        Column(modifier = Modifier.fillMaxSize()) {
             viewModel.lastSyncResult?.let { msg ->
                 Text(
                     msg,
@@ -350,6 +353,11 @@ fun GalleryScreen(
                 }
             }
         }
+        PullToRefreshContainer(
+            state = pullToRefreshState,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
+        } // end pull-to-refresh Box
     }
 }
 
