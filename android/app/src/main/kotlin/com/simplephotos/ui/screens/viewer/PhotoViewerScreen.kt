@@ -2,6 +2,7 @@ package com.simplephotos.ui.screens.viewer
 
 import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -125,7 +126,7 @@ class PhotoViewerViewModel @Inject constructor(
 // Screen — HorizontalPager for swipe navigation between photos
 // ---------------------------------------------------------------------------
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PhotoViewerScreen(
     onBack: () -> Unit,
