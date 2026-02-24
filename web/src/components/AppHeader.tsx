@@ -198,7 +198,7 @@ export default function AppHeader({
               </button>
 
               {dropdownOpen && (
-                <div className="absolute right-0 mt-2 w-44 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 py-1 z-[100]">
+                <div className="fixed right-4 mt-2 w-44 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 py-1" style={{ top: '3.5rem', zIndex: 9999 }}>
                   <button
                     onClick={() => { navigate("/secure-gallery"); setDropdownOpen(false); }}
                     className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
