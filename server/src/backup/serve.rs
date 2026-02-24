@@ -1,8 +1,10 @@
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
+use chrono::Utc;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -138,4 +140,150 @@ pub async fn backup_download_thumb(
         .header("Content-Type", "image/jpeg")
         .body(body)
         .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?)
+}
+
+// ── Backup Receive Endpoint ──────────────────────────────────────────────────
+
+/// POST /api/backup/receive
+/// Receives a file from a primary server during sync.
+/// Headers: X-API-Key, X-Photo-Id, X-File-Path, X-Source ("photos" or "trash")
+/// Body: raw file bytes
+pub async fn backup_receive(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, AppError> {
+    validate_api_key(&state, &headers)?;
+
+    // Extract required headers
+    let photo_id = headers
+        .get("X-Photo-Id")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::BadRequest("Missing X-Photo-Id header".into()))?
+        .to_string();
+
+    let file_path = headers
+        .get("X-File-Path")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::BadRequest("Missing X-File-Path header".into()))?
+        .to_string();
+
+    let source = headers
+        .get("X-Source")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("photos")
+        .to_string();
+
+    let storage_root = state.storage_root.read().await.clone();
+    let full_path = storage_root.join(&file_path);
+
+    // Create parent directories if they don't exist
+    if let Some(parent) = full_path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            AppError::Internal(format!("Failed to create directories: {}", e))
+        })?;
+    }
+
+    // Write the file to disk
+    let size_bytes = body.len() as i64;
+    tokio::fs::write(&full_path, &body).await.map_err(|e| {
+        AppError::Internal(format!("Failed to write file: {}", e))
+    })?;
+
+    // Get (or create) a user to own the synced photo — use first admin user
+    let admin_id: String = sqlx::query_scalar(
+        "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))?;
+
+    // Derive filename and mime_type from file_path
+    let filename = std::path::Path::new(&file_path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_path.clone());
+
+    let mime_type = match std::path::Path::new(&file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("heic") | Some("heif") => "image/heic",
+        Some("bmp") => "image/bmp",
+        Some("tiff") | Some("tif") => "image/tiff",
+        Some("svg") => "image/svg+xml",
+        Some("mp4") => "video/mp4",
+        Some("mov") => "video/quicktime",
+        Some("avi") => "video/x-msvideo",
+        Some("mkv") => "video/x-matroska",
+        Some("webm") => "video/webm",
+        _ => "application/octet-stream",
+    }
+    .to_string();
+
+    let media_type = if mime_type.starts_with("video/") {
+        "video"
+    } else if mime_type == "image/gif" {
+        "gif"
+    } else {
+        "photo"
+    };
+
+    let now = Utc::now().to_rfc3339();
+
+    if source == "trash" {
+        // Upsert into trash_items
+        sqlx::query(
+            "INSERT INTO trash_items (id, user_id, photo_id, filename, file_path, mime_type, \
+             media_type, size_bytes, deleted_at, expires_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(id) DO UPDATE SET file_path = excluded.file_path, \
+             size_bytes = excluded.size_bytes",
+        )
+        .bind(&photo_id)
+        .bind(&admin_id)
+        .bind(&photo_id) // photo_id == original photo ID for trash
+        .bind(&filename)
+        .bind(&file_path)
+        .bind(&mime_type)
+        .bind(media_type)
+        .bind(size_bytes)
+        .bind(&now)
+        .bind(&now) // expires_at — not important for backups, just needs a value
+        .execute(&state.pool)
+        .await?;
+    } else {
+        // Upsert into photos
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             size_bytes, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(id) DO UPDATE SET file_path = excluded.file_path, \
+             size_bytes = excluded.size_bytes",
+        )
+        .bind(&photo_id)
+        .bind(&admin_id)
+        .bind(&filename)
+        .bind(&file_path)
+        .bind(&mime_type)
+        .bind(media_type)
+        .bind(size_bytes)
+        .bind(&now)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    tracing::debug!("Received backup {} ({} bytes): {}", source, size_bytes, file_path);
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "photo_id": photo_id,
+        "size_bytes": size_bytes,
+    })))
 }

@@ -259,6 +259,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/photos/auto-scan", post(backup::handlers::trigger_auto_scan))
         // Backup serve — API-key authenticated, for server-to-server recovery
         .route("/backup/list", get(backup::serve::backup_list_photos))
+        .route("/backup/receive", post(backup::serve::backup_receive))
         .route("/backup/download/{photo_id}", get(backup::serve::backup_download_photo))
         .route("/backup/download/{photo_id}/thumb", get(backup::serve::backup_download_thumb))
         // Shared albums — create, manage members, add/remove photos

@@ -18,11 +18,13 @@
 server/target/
 # Use config.example.toml as the committed template; config.toml holds local secrets
 server/config.toml
-server/data/                 # runtime DB + blob storage (can be huge)
-server/data/                # runtime DB + blob storage (can be huge)
+# Runtime DB, blob storage, and TLS certs (can be huge)
+server/data/
+server/certs/
 **/*.rs.bk
-Cargo.lock                  # keep in libraries; optional for binaries — remove
-                            # this line if you want to pin exact dependencies
+install.sh.bak
+# Keep in libraries; optional for binaries
+Cargo.lock
 
 # ── Web (Node / Vite) ────────────────────────────────────────────────────────
 web/node_modules/
@@ -95,6 +97,8 @@ desktop.ini
 # ── Docker ───────────────────────────────────────────────────────────────────
 # Docker volumes are managed outside git; don't accidentally commit runtime data
 docker-compose.override.yml
+docker-instances/*/data/
+docker-instances/*/config.toml
 
 # ── Logs & Runtime ───────────────────────────────────────────────────────────
 *.log
