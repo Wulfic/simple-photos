@@ -10,7 +10,7 @@ import com.simplephotos.data.local.entities.*
 
 @Database(
     entities = [PhotoEntity::class, AlbumEntity::class, PhotoAlbumXRef::class, BlobQueueEntity::class, BackupFolderEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

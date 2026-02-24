@@ -1,6 +1,6 @@
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
@@ -423,4 +423,127 @@ pub async fn scan_and_register(
         "registered": new_count,
         "message": format!("{} new photos registered", new_count),
     })))
+}
+
+/// POST /api/photos/upload
+/// Upload a plain photo/video/GIF file from a mobile client.
+/// The file body is sent as raw bytes with metadata in headers:
+///   X-Filename: original filename
+///   X-Mime-Type: MIME type (e.g., image/jpeg)
+///   Content-Length: file size in bytes
+///
+/// The server stores the file in the storage root and registers it as a plain photo.
+pub async fn upload_photo(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let filename = headers
+        .get("X-Filename")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{}.jpg", Uuid::new_v4()));
+
+    let mime_type = headers
+        .get("X-Mime-Type")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| mime_from_extension(&filename).to_string());
+
+    let media_type = if mime_type.starts_with("video/") {
+        "video"
+    } else if mime_type == "image/gif" {
+        "gif"
+    } else {
+        "photo"
+    };
+
+    let size_bytes = body.len() as i64;
+
+    // Sanitize filename — strip path separators and traversal
+    let safe_filename = filename
+        .replace(['/', '\\'], "")
+        .replace("..", "")
+        .trim()
+        .to_string();
+    let safe_filename = if safe_filename.is_empty() {
+        format!("{}.jpg", Uuid::new_v4())
+    } else {
+        safe_filename
+    };
+
+    // Ensure unique filename if it already exists
+    let storage_root = state.storage_root.read().await.clone();
+    let uploads_dir = storage_root.join("uploads");
+    tokio::fs::create_dir_all(&uploads_dir).await.map_err(|e| {
+        AppError::Internal(format!("Failed to create uploads directory: {}", e))
+    })?;
+
+    let mut final_filename = safe_filename.clone();
+    let mut counter = 1u32;
+    while tokio::fs::try_exists(uploads_dir.join(&final_filename))
+        .await
+        .unwrap_or(false)
+    {
+        let stem = std::path::Path::new(&safe_filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file");
+        let ext = std::path::Path::new(&safe_filename)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("jpg");
+        final_filename = format!("{}_{}.{}", stem, counter, ext);
+        counter += 1;
+    }
+
+    // Write file to disk
+    let file_path = uploads_dir.join(&final_filename);
+    tokio::fs::write(&file_path, &body).await.map_err(|e| {
+        AppError::Internal(format!("Failed to write photo file: {}", e))
+    })?;
+
+    // Relative path for DB storage
+    let rel_path = format!("uploads/{}", final_filename);
+
+    // Register in database
+    let photo_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
+
+    sqlx::query(
+        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+         size_bytes, width, height, taken_at, thumb_path, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)",
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .bind(&final_filename)
+    .bind(&rel_path)
+    .bind(&mime_type)
+    .bind(media_type)
+    .bind(size_bytes)
+    .bind(&now) // taken_at = now
+    .bind(&thumb_rel)
+    .bind(&now)
+    .execute(&state.pool)
+    .await?;
+
+    tracing::info!(
+        user_id = %auth.user_id,
+        filename = %final_filename,
+        size = size_bytes,
+        "Uploaded photo via mobile client"
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "photo_id": photo_id,
+            "filename": final_filename,
+            "file_path": rel_path,
+            "size_bytes": size_bytes,
+        })),
+    ))
 }

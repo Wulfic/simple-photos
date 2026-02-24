@@ -24,6 +24,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.repository.PhotoRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -45,6 +47,17 @@ class PhotoViewerViewModel @Inject constructor(
     var decryptedData by mutableStateOf<ByteArray?>(null)
     var error by mutableStateOf<String?>(null)
 
+    /** For plain mode: the authenticated URL to the full-size image. */
+    var plainImageUrl by mutableStateOf<String?>(null)
+        private set
+
+    /** For plain mode video: the authenticated URL. */
+    var plainVideoUrl by mutableStateOf<String?>(null)
+        private set
+
+    var encryptionMode by mutableStateOf("plain")
+        private set
+
     init {
         loadPhoto()
     }
@@ -52,12 +65,24 @@ class PhotoViewerViewModel @Inject constructor(
     private fun loadPhoto() {
         viewModelScope.launch {
             try {
-                photo = photoRepository.getPhoto(photoId)
+                photo = withContext(Dispatchers.IO) { photoRepository.getPhoto(photoId) }
+                encryptionMode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
 
-                // If we have a server blob, decrypt it to get the media bytes
-                photo?.serverBlobId?.let { blobId ->
+                val p = photo ?: return@launch
+
+                if (encryptionMode == "plain" && p.serverPhotoId != null) {
+                    // Plain mode — build URL for Coil or ExoPlayer
+                    val baseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
+                    val url = "$baseUrl/api/photos/${p.serverPhotoId}/file"
+                    if (p.mediaType == "video") {
+                        plainVideoUrl = url
+                    } else {
+                        plainImageUrl = url
+                    }
+                } else if (p.serverBlobId != null) {
+                    // Encrypted mode — download and decrypt
                     withContext(Dispatchers.IO) {
-                        val decrypted = photoRepository.downloadAndDecryptBlob(blobId)
+                        val decrypted = photoRepository.downloadAndDecryptBlob(p.serverBlobId)
                         val payload = JSONObject(String(decrypted, Charsets.UTF_8))
                         val dataBase64 = payload.getString("data")
                         decryptedData = android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
@@ -75,7 +100,7 @@ class PhotoViewerViewModel @Inject constructor(
         val p = photo ?: return
         viewModelScope.launch {
             try {
-                photoRepository.deletePhoto(p)
+                withContext(Dispatchers.IO) { photoRepository.deletePhoto(p) }
                 onDeleted()
             } catch (e: Exception) {
                 error = e.message
@@ -129,65 +154,67 @@ fun PhotoViewerScreen(
                 }
 
                 viewModel.error != null -> {
-                    Text(
-                        viewModel.error ?: "Error",
-                        color = Color.White,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                    Text(viewModel.error ?: "Error", color = Color.White, modifier = Modifier.padding(16.dp))
                 }
 
                 viewModel.photo?.mediaType == "video" -> {
-                    // Video playback — use local path if available, or decrypted data
-                    val localPath = viewModel.photo?.localPath
-                    if (localPath != null) {
-                        VideoPlayer(uri = Uri.parse(localPath))
-                    } else if (viewModel.decryptedData != null) {
-                        // Write decrypted video to a temp file for ExoPlayer
-                        val tempUri = remember(viewModel.decryptedData) {
-                            val tempFile = java.io.File.createTempFile("video_", ".mp4", context.cacheDir)
-                            tempFile.writeBytes(viewModel.decryptedData!!)
-                            tempFile.deleteOnExit()
+                    // Video playback
+                    val videoUri = when {
+                        viewModel.plainVideoUrl != null -> Uri.parse(viewModel.plainVideoUrl)
+                        viewModel.photo?.localPath != null -> Uri.parse(viewModel.photo?.localPath)
+                        viewModel.decryptedData != null -> {
+                            val tempFile = remember(viewModel.decryptedData) {
+                                java.io.File.createTempFile("video_", ".mp4", context.cacheDir).apply {
+                                    writeBytes(viewModel.decryptedData!!)
+                                    deleteOnExit()
+                                }
+                            }
                             Uri.fromFile(tempFile)
                         }
-                        VideoPlayer(uri = tempUri)
+                        else -> null
+                    }
+                    if (videoUri != null) {
+                        VideoPlayer(uri = videoUri)
                     } else {
                         Text("Video not available", color = Color.White)
                     }
                 }
 
                 else -> {
-                    // Photo or GIF — show from local path or decrypted data
-                    val localPath = viewModel.photo?.localPath
-                    if (localPath != null) {
-                        val bitmap = remember(localPath) {
-                            try {
-                                val inputStream = context.contentResolver.openInputStream(Uri.parse(localPath))
-                                android.graphics.BitmapFactory.decodeStream(inputStream)
-                            } catch (e: Exception) {
-                                null
+                    // Photo/GIF display
+                    when {
+                        // Plain mode: load via authenticated URL
+                        viewModel.plainImageUrl != null -> {
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(viewModel.plainImageUrl)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = viewModel.photo?.filename,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                        // Local file
+                        viewModel.photo?.localPath != null -> {
+                            val bitmap = remember(viewModel.photo?.localPath) {
+                                try {
+                                    val inputStream = context.contentResolver.openInputStream(Uri.parse(viewModel.photo?.localPath))
+                                    android.graphics.BitmapFactory.decodeStream(inputStream)
+                                } catch (_: Exception) { null }
+                            }
+                            bitmap?.let {
+                                Image(bitmap = it.asImageBitmap(), contentDescription = viewModel.photo?.filename, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                             }
                         }
-                        bitmap?.let {
-                            Image(
-                                bitmap = it.asImageBitmap(),
-                                contentDescription = viewModel.photo?.filename,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
-                        }
-                    } else if (viewModel.decryptedData != null) {
-                        val bitmap = remember(viewModel.decryptedData) {
-                            android.graphics.BitmapFactory.decodeByteArray(
-                                viewModel.decryptedData, 0, viewModel.decryptedData!!.size
-                            )
-                        }
-                        bitmap?.let {
-                            Image(
-                                bitmap = it.asImageBitmap(),
-                                contentDescription = viewModel.photo?.filename,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
-                            )
+                        // Decrypted blob data
+                        viewModel.decryptedData != null -> {
+                            val bitmap = remember(viewModel.decryptedData) {
+                                android.graphics.BitmapFactory.decodeByteArray(viewModel.decryptedData, 0, viewModel.decryptedData!!.size)
+                            }
+                            bitmap?.let {
+                                Image(bitmap = it.asImageBitmap(), contentDescription = viewModel.photo?.filename, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                            }
                         }
                     }
                 }

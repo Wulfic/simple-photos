@@ -1,13 +1,18 @@
 package com.simplephotos.data.repository
 
 import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import com.simplephotos.crypto.CryptoManager
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
+import com.simplephotos.data.remote.dto.PlainPhotoRecord
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -21,10 +26,14 @@ class PhotoRepository @Inject constructor(
     private val api: ApiService,
     private val db: AppDatabase,
     private val crypto: CryptoManager,
+    private val dataStore: DataStore<Preferences>,
     @ApplicationContext private val context: Context
 ) {
     private val thumbnailDir: File
         get() = File(context.filesDir, "thumbnails").also { it.mkdirs() }
+
+    /** Cached encryption mode — refreshed on each sync. */
+    private var cachedEncryptionMode: String? = null
 
     fun getAllPhotos(): Flow<List<PhotoEntity>> = db.photoDao().getAllPhotos()
 
@@ -32,21 +41,70 @@ class PhotoRepository @Inject constructor(
 
     suspend fun insertPhoto(photo: PhotoEntity) = db.photoDao().insert(photo)
 
-    suspend fun deletePhoto(photo: PhotoEntity) {
-        // Delete from server if synced
-        photo.serverBlobId?.let { blobId ->
-            try { api.deleteBlob(blobId) } catch (_: Exception) {}
+    /**
+     * Get the encryption mode from server (cached per session).
+     */
+    suspend fun getEncryptionMode(): String {
+        cachedEncryptionMode?.let { return it }
+        return try {
+            val settings = api.getEncryptionSettings()
+            cachedEncryptionMode = settings.encryptionMode
+            settings.encryptionMode
+        } catch (_: Exception) {
+            "plain" // default to plain if we can't reach the server
         }
-        photo.thumbnailBlobId?.let { blobId ->
-            try { api.deleteBlob(blobId) } catch (_: Exception) {}
+    }
+
+    /**
+     * Get the base URL for building image URLs (for Coil).
+     */
+    suspend fun getServerBaseUrl(): String {
+        val prefs = dataStore.data.first()
+        return (prefs[KEY_SERVER_URL] ?: "http://localhost:8080").trimEnd('/')
+    }
+
+    suspend fun deletePhoto(photo: PhotoEntity) {
+        // Delete from server based on mode
+        val mode = getEncryptionMode()
+        if (mode == "plain") {
+            photo.serverPhotoId?.let { photoId ->
+                try { api.deletePhoto(photoId) } catch (_: Exception) {}
+            }
+        } else {
+            photo.serverBlobId?.let { blobId ->
+                try { api.deleteBlob(blobId) } catch (_: Exception) {}
+            }
+            photo.thumbnailBlobId?.let { blobId ->
+                try { api.deleteBlob(blobId) } catch (_: Exception) {}
+            }
         }
         // Delete cached thumbnail
         photo.thumbnailPath?.let { File(it).delete() }
         db.photoDao().delete(photo)
     }
 
+    // ── Plain-mode upload ────────────────────────────────────────────────
+
     /**
-     * Upload a photo/GIF/video with its thumbnail.
+     * Upload a photo in plain mode — send raw file bytes to the server.
+     */
+    suspend fun uploadPhotoPlain(photo: PhotoEntity, photoData: ByteArray) {
+        db.photoDao().updateSyncStatus(photo.localId, SyncStatus.UPLOADING)
+        try {
+            val body = photoData.toRequestBody("application/octet-stream".toMediaType())
+            val result = api.uploadPhoto(body, photo.filename, photo.mimeType)
+
+            db.photoDao().markSyncedPlain(photo.localId, result.photoId)
+        } catch (e: Exception) {
+            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
+            throw e
+        }
+    }
+
+    // ── Encrypted-mode upload ────────────────────────────────────────────
+
+    /**
+     * Upload a photo/GIF/video with its thumbnail (encrypted mode).
      */
     suspend fun uploadPhoto(photo: PhotoEntity, photoData: ByteArray, thumbnailData: ByteArray) {
         db.photoDao().updateSyncStatus(photo.localId, SyncStatus.UPLOADING)
@@ -114,16 +172,77 @@ class PhotoRepository @Inject constructor(
         return crypto.decrypt(encrypted)
     }
 
+    // ── Sync from server ─────────────────────────────────────────────────
+
     /**
-     * Pull photos from the server that don't exist locally yet.
-     * Fetches blob metadata, downloads & decrypts photo/thumbnail payloads,
-     * and inserts into the local DB.
+     * Pull photos from the server.
+     * Checks encryption mode and uses the appropriate API.
      */
     suspend fun syncFromServer(): Int {
+        val mode = getEncryptionMode()
+        return if (mode == "encrypted") {
+            syncFromServerEncrypted()
+        } else {
+            syncFromServerPlain()
+        }
+    }
+
+    /**
+     * Sync plain-mode photos from the server.
+     * Fetches photo metadata and stores references in local DB.
+     * Actual image data is loaded on-demand via authenticated URLs.
+     */
+    private suspend fun syncFromServerPlain(): Int {
         var imported = 0
         var after: String? = null
 
-        // Fetch all photo-type blobs from server with pagination
+        do {
+            val listResult = api.listPhotos(after = after, limit = 100)
+
+            for (photo in listResult.photos) {
+                // Skip if we already have this server photo
+                if (db.photoDao().getByServerPhotoId(photo.id) != null) continue
+
+                val localId = java.util.UUID.randomUUID().toString()
+                val takenAtMs = try {
+                    photo.takenAt?.let { java.time.Instant.parse(it).toEpochMilli() }
+                        ?: System.currentTimeMillis()
+                } catch (_: Exception) {
+                    System.currentTimeMillis()
+                }
+
+                val entity = PhotoEntity(
+                    localId = localId,
+                    serverPhotoId = photo.id,
+                    filename = photo.filename,
+                    takenAt = takenAtMs,
+                    mimeType = photo.mimeType,
+                    mediaType = photo.mediaType,
+                    width = photo.width.toInt(),
+                    height = photo.height.toInt(),
+                    durationSecs = photo.durationSecs?.toFloat(),
+                    latitude = photo.latitude,
+                    longitude = photo.longitude,
+                    sizeBytes = photo.sizeBytes,
+                    syncStatus = SyncStatus.SYNCED
+                )
+                db.photoDao().insert(entity)
+                imported++
+            }
+
+            after = listResult.nextCursor
+        } while (after != null)
+
+        return imported
+    }
+
+    /**
+     * Pull encrypted-mode photos from the server.
+     */
+    private suspend fun syncFromServerEncrypted(): Int {
+        var imported = 0
+        var after: String? = null
+
         val blobTypes = listOf("photo", "gif", "video")
 
         for (blobType in blobTypes) {
@@ -132,11 +251,9 @@ class PhotoRepository @Inject constructor(
                 val listResult = api.listBlobs(blobType = blobType, after = after, limit = 50)
 
                 for (blob in listResult.blobs) {
-                    // Skip if we already have this blob locally
                     if (db.photoDao().getByServerBlobId(blob.id) != null) continue
 
                     try {
-                        // Download and decrypt the media payload
                         val decrypted = downloadAndDecryptBlob(blob.id)
                         val payload = JSONObject(String(decrypted, Charsets.UTF_8))
 
@@ -159,7 +276,6 @@ class PhotoRepository @Inject constructor(
 
                         val localId = java.util.UUID.randomUUID().toString()
 
-                        // Download & cache thumbnail
                         var thumbPath: String? = null
                         if (thumbnailBlobId.isNotEmpty()) {
                             try {
@@ -170,9 +286,7 @@ class PhotoRepository @Inject constructor(
                                     val thumbBytes = android.util.Base64.decode(thumbBase64, android.util.Base64.NO_WRAP)
                                     thumbPath = saveThumbnailToDisk(localId, thumbBytes)
                                 }
-                            } catch (_: Exception) {
-                                // Thumbnail download failed — photo still importable without it
-                            }
+                            } catch (_: Exception) {}
                         }
 
                         val photo = PhotoEntity(
@@ -188,7 +302,7 @@ class PhotoRepository @Inject constructor(
                             durationSecs = duration,
                             latitude = lat,
                             longitude = lng,
-                            localPath = null, // server-only photo
+                            localPath = null,
                             thumbnailPath = thumbPath,
                             syncStatus = SyncStatus.SYNCED,
                             encryptedBlobSize = null
@@ -196,13 +310,12 @@ class PhotoRepository @Inject constructor(
                         db.photoDao().insert(photo)
                         imported++
                     } catch (e: Exception) {
-                        // Skip individual failures — continue with next blob
                         continue
                     }
                 }
 
                 after = if (listResult.blobs.isNotEmpty()) listResult.blobs.last().id else null
-            } while (listResult.blobs.size == 50) // Continue if we got a full page
+            } while (listResult.blobs.size == 50)
         }
 
         return imported

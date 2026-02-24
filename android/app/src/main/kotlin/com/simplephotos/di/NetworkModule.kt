@@ -15,6 +15,7 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import okhttp3.Authenticator
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -30,6 +31,30 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(dataStore: DataStore<Preferences>): OkHttpClient {
+        // Dynamic base URL interceptor — reads server URL from DataStore on each request
+        // so it works immediately after the user configures a server, without restart.
+        val dynamicBaseUrlInterceptor = Interceptor { chain ->
+            val prefs = runBlocking { dataStore.data.first() }
+            val serverUrl = (prefs[KEY_SERVER_URL] ?: "http://localhost:8080").trimEnd('/')
+            val originalRequest = chain.request()
+            val originalUrl = originalRequest.url
+
+            // Parse the configured server URL
+            val newBaseUrl = "$serverUrl/".toHttpUrlOrNull()
+            if (newBaseUrl != null) {
+                // Rebuild URL: replace scheme + host + port, keep the path
+                val newUrl = originalUrl.newBuilder()
+                    .scheme(newBaseUrl.scheme)
+                    .host(newBaseUrl.host)
+                    .port(newBaseUrl.port)
+                    .build()
+                val newRequest = originalRequest.newBuilder().url(newUrl).build()
+                chain.proceed(newRequest)
+            } else {
+                chain.proceed(originalRequest)
+            }
+        }
+
         // Interceptor: inject Bearer token + X-Requested-With on every request
         val authInterceptor = Interceptor { chain ->
             val prefs = runBlocking { dataStore.data.first() }
@@ -84,6 +109,7 @@ object NetworkModule {
         }
 
         return OkHttpClient.Builder()
+            .addInterceptor(dynamicBaseUrlInterceptor)
             .addInterceptor(authInterceptor)
             .authenticator(tokenAuthenticator)
             .addInterceptor(HttpLoggingInterceptor().apply {
@@ -97,14 +123,10 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideRetrofit(client: OkHttpClient, dataStore: DataStore<Preferences>): Retrofit {
-        val baseUrl = runBlocking {
-            val prefs = dataStore.data.first()
-            prefs[KEY_SERVER_URL] ?: "http://localhost:8080"
-        }
-
+    fun provideRetrofit(client: OkHttpClient): Retrofit {
+        // Use a placeholder base URL — the dynamic interceptor replaces it per-request.
         return Retrofit.Builder()
-            .baseUrl(baseUrl.trimEnd('/') + "/")
+            .baseUrl("http://localhost/")
             .client(client)
             .addConverterFactory(GsonConverterFactory.create())
             .build()

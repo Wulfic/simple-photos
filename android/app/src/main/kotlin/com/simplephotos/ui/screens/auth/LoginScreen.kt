@@ -1,5 +1,6 @@
 package com.simplephotos.ui.screens.auth
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
@@ -8,20 +9,26 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.R
 import com.simplephotos.data.repository.AuthRepository
+import com.simplephotos.ui.theme.ThemeToggleButton
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class LoginViewModel @Inject constructor(
-    private val authRepo: AuthRepository
+    private val authRepo: AuthRepository,
+    val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     var username by mutableStateOf("")
     var password by mutableStateOf("")
@@ -36,7 +43,6 @@ class LoginViewModel @Inject constructor(
             error = null
             try {
                 if (totpSessionToken != null) {
-                    // Pass username + password so key derivation happens after TOTP
                     authRepo.loginTotp(
                         totpSessionToken!!, totpCode.ifBlank { null }, null,
                         password, username
@@ -59,6 +65,7 @@ class LoginViewModel @Inject constructor(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
@@ -67,83 +74,120 @@ fun LoginScreen(
 ) {
     var showPassword by remember { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Simple Photos", style = MaterialTheme.typography.headlineMedium)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "End-to-end encrypted photo library",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(32.dp))
-
-        if (viewModel.totpSessionToken == null) {
-            OutlinedTextField(
-                value = viewModel.username,
-                onValueChange = { viewModel.username = it },
-                label = { Text("Username") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {},
+                actions = {
+                    ThemeToggleButton(dataStore = viewModel.dataStore)
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Logo + branding (matches web)
+            Image(
+                painter = painterResource(id = R.drawable.logo),
+                contentDescription = "Simple Photos",
+                modifier = Modifier.size(64.dp)
             )
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = viewModel.password,
-                onValueChange = { viewModel.password = it },
-                label = { Text("Password") },
-                visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = {
-                    IconButton(onClick = { showPassword = !showPassword }) {
-                        Icon(
-                            if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (showPassword) "Hide password" else "Show password"
+            Text("Simple Photos", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.height(24.dp))
+
+            // Card wrapping the form (like web's white card)
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    if (viewModel.totpSessionToken == null) {
+                        OutlinedTextField(
+                            value = viewModel.username,
+                            onValueChange = { viewModel.username = it },
+                            label = { Text("Username") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = viewModel.password,
+                            onValueChange = { viewModel.password = it },
+                            label = { Text("Password") },
+                            visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { showPassword = !showPassword }) {
+                                    Icon(
+                                        if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (showPassword) "Hide password" else "Show password"
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    } else {
+                        Text(
+                            "Two-Factor Code",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = viewModel.totpCode,
+                            onValueChange = { viewModel.totpCode = it },
+                            label = { Text("6-digit code or backup code") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Enter code from your authenticator app or a backup code",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-        } else {
-            Text("Enter your two-factor code", style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = viewModel.totpCode,
-                onValueChange = { viewModel.totpCode = it },
-                label = { Text("6-digit code or backup code") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-        }
 
-        viewModel.error?.let { err ->
-            Spacer(Modifier.height(8.dp))
-            Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
+                    viewModel.error?.let { err ->
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            err,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
 
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = { viewModel.login(onLoginSuccess) },
-            enabled = !viewModel.loading,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (viewModel.loading) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                Text("Signing in...")
-            } else {
-                Text(if (viewModel.totpSessionToken != null) "Verify" else "Sign In")
+                    Spacer(Modifier.height(16.dp))
+                    Button(
+                        onClick = { viewModel.login(onLoginSuccess) },
+                        enabled = !viewModel.loading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (viewModel.loading) {
+                            CircularProgressIndicator(
+                                Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("Signing in...")
+                        } else {
+                            Text(if (viewModel.totpSessionToken != null) "Verify" else "Sign In")
+                        }
+                    }
+                }
             }
-        }
 
-        if (viewModel.totpSessionToken == null) {
-            Spacer(Modifier.height(8.dp))
-            TextButton(onClick = onNavigateToRegister) {
-                Text("Don't have an account? Register")
+            if (viewModel.totpSessionToken == null) {
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onNavigateToRegister) {
+                    Text("Don't have an account? Register")
+                }
             }
         }
     }
