@@ -90,29 +90,15 @@ fun AppHeader(
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ── Logo + Brand ─────────────────────────────────────
-                Row(
+                // ── Logo (icon only on mobile, matching web's hidden sm:inline) ──
+                Image(
+                    painter = painterResource(R.drawable.logo),
+                    contentDescription = "Simple Photos",
                     modifier = Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(6.dp))
                         .clickable(onClick = navigation.onGalleryClick)
-                        .padding(end = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Image(
-                        painter = painterResource(R.drawable.logo),
-                        contentDescription = "Simple Photos",
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "Simple Photos",
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 16.sp,
-                        maxLines = 1
-                    )
-                }
+                )
 
                 Spacer(Modifier.width(8.dp))
 
@@ -148,18 +134,8 @@ fun AppHeader(
                 // ── Spacer ───────────────────────────────────────────
                 Spacer(Modifier.weight(1f))
 
-                // ── Sync indicator ───────────────────────────────────
-                if (isSyncing && syncLabel != null) {
-                    Text(
-                        "$syncLabel…",
-                        color = Color(0xFF93C5FD), // blue-300
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                }
+                // ── Sync indicator (hidden on mobile, matching web's hidden sm:inline) ──
+                // On mobile the web hides the text label; we just skip it.
 
                 // ── Theme toggle ─────────────────────────────────────
                 val isDark = ThemeState.mode == "dark" ||
@@ -180,7 +156,7 @@ fun AppHeader(
                 // ── Divider ──────────────────────────────────────────
                 Box(
                     Modifier
-                        .padding(horizontal = 8.dp)
+                        .padding(horizontal = 4.dp)
                         .width(1.dp)
                         .height(24.dp)
                         .background(borderColor)
@@ -222,31 +198,24 @@ private fun NavTab(
     val bgColor = if (isActive) activeTabBg else Color.Transparent
     val contentColor = if (isActive) Color.White else inactiveTextColor
 
+    // Icon-only on mobile (matching web's "hidden md:inline" on label text)
     Surface(
         modifier = Modifier
-            .padding(horizontal = 2.dp)
+            .padding(horizontal = 1.dp)
             .clip(RoundedCornerShape(6.dp))
             .clickable(onClick = onClick),
         color = bgColor,
         shape = RoundedCornerShape(6.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
                 icon,
                 contentDescription = label,
                 tint = contentColor,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                label,
-                color = contentColor,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1
+                modifier = Modifier.size(18.dp)
             )
         }
     }
@@ -274,42 +243,20 @@ private fun UserMenu(
     )
 
     Box {
-        Row(
+        // Avatar only on mobile (web hides username + chevron via "hidden sm:inline")
+        Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .clickable { expanded = !expanded }
-                .padding(4.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(avatarGradient)
+                .clickable { expanded = !expanded },
+            contentAlignment = Alignment.Center
         ) {
-            // Avatar circle
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(avatarGradient),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = username.take(1).uppercase(),
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            Spacer(Modifier.width(6.dp))
             Text(
-                username,
-                color = inactiveTextColor,
+                text = username.take(1).uppercase(),
+                color = Color.White,
                 fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                Icons.Default.KeyboardArrowDown,
-                contentDescription = null,
-                tint = inactiveTextColor,
-                modifier = Modifier.size(14.dp)
+                fontWeight = FontWeight.Bold
             )
         }
 
