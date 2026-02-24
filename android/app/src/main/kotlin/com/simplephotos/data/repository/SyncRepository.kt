@@ -60,6 +60,17 @@ class SyncRepository @Inject constructor(
     }
 
     /**
+     * Full scan for specific bucket IDs with NO timestamp filter.
+     * Used when a user enables a new folder — picks up ALL existing photos.
+     * Deduplicates by localPath to avoid re-importing already-known media.
+     */
+    suspend fun fullScanForBuckets(bucketIds: List<Long>) {
+        if (bucketIds.isEmpty()) return
+        scanImages(0L, bucketIds)
+        scanVideos(0L, bucketIds)
+    }
+
+    /**
      * Build a SQL selection clause that filters by BUCKET_ID.
      * Example: "date_added > ? AND bucket_id IN (123, 456, 789)"
      */
@@ -107,6 +118,10 @@ class SyncRepository @Inject constructor(
             while (cursor.moveToNext()) {
                 val mediaId = cursor.getLong(idCol)
                 val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId)
+
+                // Skip if we already have this file in the database
+                if (db.photoDao().getByLocalPath(uri.toString()) != null) continue
+
                 val filename = cursor.getString(nameCol) ?: "unknown.jpg"
                 val mimeType = cursor.getString(mimeCol) ?: "image/jpeg"
                 val width = cursor.getInt(widthCol)
@@ -178,6 +193,10 @@ class SyncRepository @Inject constructor(
             while (cursor.moveToNext()) {
                 val mediaId = cursor.getLong(idCol)
                 val uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, mediaId)
+
+                // Skip if we already have this file in the database
+                if (db.photoDao().getByLocalPath(uri.toString()) != null) continue
+
                 val filename = cursor.getString(nameCol) ?: "unknown.mp4"
                 val mimeType = cursor.getString(mimeCol) ?: "video/mp4"
                 val width = cursor.getInt(widthCol)

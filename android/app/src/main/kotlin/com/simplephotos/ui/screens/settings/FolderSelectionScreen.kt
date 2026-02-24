@@ -32,6 +32,8 @@ import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.simplephotos.data.local.entities.BackupFolderEntity
 import com.simplephotos.data.repository.BackupFolderRepository
 import com.simplephotos.data.repository.DeviceFolder
+import com.simplephotos.data.repository.SyncRepository
+import com.simplephotos.sync.SyncScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -43,7 +45,9 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class FolderSelectionViewModel @Inject constructor(
-    private val backupFolderRepository: BackupFolderRepository
+    private val backupFolderRepository: BackupFolderRepository,
+    private val syncRepository: SyncRepository,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
     var deviceFolders by mutableStateOf<List<DeviceFolder>>(emptyList())
@@ -100,6 +104,13 @@ class FolderSelectionViewModel @Inject constructor(
                     enabledBucketIds + folder.bucketId
                 } else {
                     enabledBucketIds - folder.bucketId
+                }
+
+                // When a folder is newly enabled, scan ALL its existing photos
+                // and immediately trigger a backup so they get uploaded.
+                if (newEnabled) {
+                    syncRepository.fullScanForBuckets(listOf(folder.bucketId))
+                    SyncScheduler.triggerNow(appContext)
                 }
             } catch (e: Exception) {
                 error = "Failed to update folder: ${e.message}"

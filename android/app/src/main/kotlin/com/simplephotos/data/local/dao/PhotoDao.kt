@@ -43,6 +43,9 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE serverPhotoId = :photoId LIMIT 1")
     suspend fun getByServerPhotoId(photoId: String): PhotoEntity?
 
+    @Query("SELECT * FROM photos WHERE localPath = :path LIMIT 1")
+    suspend fun getByLocalPath(path: String): PhotoEntity?
+
     @Delete
     suspend fun delete(photo: PhotoEntity)
 

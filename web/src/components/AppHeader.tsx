@@ -176,7 +176,7 @@ export default function AppHeader({
 
         {/* ── Activity indicator + User dropdown ──────────────────────── */}
         {username && (
-          <div className="flex items-center gap-2 border-l border-white/10 pl-4 ml-2 shrink-0">
+          <div className="flex items-center gap-2 border-l border-white/10 pl-2 sm:pl-4 ml-1 sm:ml-2 mr-1 shrink-0">
             {/* Activity label when processing */}
             {isProcessing && activeLabel && (
               <span className="text-xs text-blue-300 font-medium animate-pulse whitespace-nowrap hidden sm:inline">

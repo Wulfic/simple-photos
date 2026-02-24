@@ -4,6 +4,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -81,11 +84,18 @@ fun AppHeader(
         shadowElevation = 4.dp,
         color = Color.Transparent
     ) {
-        Column {
+        Column(
+            modifier = Modifier.background(headerGradient)
+        ) {
+            // Status bar spacer — pushes content below system icons / camera notch
+            Spacer(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.statusBars)
+            )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(headerGradient)
                     .height(56.dp)
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
