@@ -78,7 +78,14 @@ class BackupWorker @AssistedInject constructor(
                     if (thumbnailData != null) {
                         // Cache thumbnail locally before uploading
                         photoRepository.saveThumbnailToDisk(photo.localId, thumbnailData)
-                        photoRepository.uploadPhoto(photo, photoData, thumbnailData)
+
+                        // Choose upload path based on encryption mode
+                        val mode = photoRepository.getEncryptionMode()
+                        if (mode == "plain") {
+                            photoRepository.uploadPhotoPlain(photo, photoData)
+                        } else {
+                            photoRepository.uploadPhoto(photo, photoData, thumbnailData)
+                        }
                     } else {
                         Log.w(TAG, "Failed to generate thumbnail for ${photo.localId}, skipping")
                     }

@@ -8,6 +8,9 @@ enum class SyncStatus { PENDING, UPLOADING, SYNCED, FAILED }
 @Entity(tableName = "photos")
 data class PhotoEntity(
     @PrimaryKey val localId: String,
+    /** Server photo ID for plain-mode photos */
+    val serverPhotoId: String? = null,
+    /** Server blob ID for encrypted-mode photos */
     val serverBlobId: String? = null,
     val thumbnailBlobId: String? = null,
     val filename: String,
@@ -27,5 +30,7 @@ data class PhotoEntity(
     val thumbnailPath: String? = null,
     val syncStatus: SyncStatus = SyncStatus.PENDING,
     val encryptedBlobSize: Long? = null,
+    /** File size in bytes (from server, for plain-mode photos) */
+    val sizeBytes: Long? = null,
     val createdAt: Long = System.currentTimeMillis()
 )

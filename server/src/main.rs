@@ -215,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
         // Plain-mode photos — list, serve, register, thumbnail
         .route("/photos", get(photos::handlers::list_photos))
         .route("/photos/register", post(photos::handlers::register_photo))
+        .route("/photos/upload", post(photos::handlers::upload_photo))
         .route("/photos/{id}/file", get(photos::handlers::serve_photo))
         .route("/photos/{id}/thumb", get(photos::handlers::serve_thumbnail))
         // Delete now soft-deletes to trash (30-day retention)

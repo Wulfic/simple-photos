@@ -7,7 +7,7 @@ import retrofit2.Response
 import retrofit2.http.*
 
 interface ApiService {
-    // Auth
+    // ── Auth ──────────────────────────────────────────────────────────────
     @POST("api/auth/register")
     suspend fun register(@Body request: RegisterRequest): RegisterResponse
 
@@ -23,7 +23,10 @@ interface ApiService {
     @POST("api/auth/logout")
     suspend fun logout(@Body request: LogoutRequest): Response<Unit>
 
-    // 2FA
+    @PUT("api/auth/password")
+    suspend fun changePassword(@Body request: ChangePasswordRequest): Response<Unit>
+
+    // ── 2FA ──────────────────────────────────────────────────────────────
     @POST("api/auth/2fa/setup")
     suspend fun setup2fa(): TotpSetupResponse
 
@@ -33,7 +36,33 @@ interface ApiService {
     @POST("api/auth/2fa/disable")
     suspend fun disable2fa(@Body request: TotpDisableRequest): Response<Unit>
 
-    // Blobs
+    // ── Plain-mode Photos ────────────────────────────────────────────────
+    @GET("api/photos")
+    suspend fun listPhotos(
+        @Query("after") after: String? = null,
+        @Query("limit") limit: Int? = null,
+        @Query("media_type") mediaType: String? = null
+    ): PlainPhotoListResponse
+
+    @GET("api/photos/{id}/thumb")
+    @Streaming
+    suspend fun photoThumbnail(@Path("id") photoId: String): ResponseBody
+
+    @GET("api/photos/{id}/file")
+    @Streaming
+    suspend fun photoFile(@Path("id") photoId: String): ResponseBody
+
+    @POST("api/photos/upload")
+    suspend fun uploadPhoto(
+        @Body body: RequestBody,
+        @Header("X-Filename") filename: String,
+        @Header("X-Mime-Type") mimeType: String
+    ): PhotoUploadResponse
+
+    @DELETE("api/photos/{id}")
+    suspend fun deletePhoto(@Path("id") photoId: String): Response<Unit>
+
+    // ── Encrypted Blobs ──────────────────────────────────────────────────
     @POST("api/blobs")
     suspend fun uploadBlob(
         @Body body: RequestBody,
@@ -56,7 +85,42 @@ interface ApiService {
     @DELETE("api/blobs/{id}")
     suspend fun deleteBlob(@Path("id") blobId: String): Response<Unit>
 
-    // Health
+    // ── Settings ─────────────────────────────────────────────────────────
+    @GET("api/settings/encryption")
+    suspend fun getEncryptionSettings(): EncryptionSettingsResponse
+
+    @GET("api/settings/storage-stats")
+    suspend fun getStorageStats(): StorageStatsResponse
+
+    // ── Admin ────────────────────────────────────────────────────────────
+    @POST("api/admin/photos/scan")
+    suspend fun scanAndRegister(): ScanResponse
+
+    @GET("api/admin/users")
+    suspend fun listUsers(): List<AdminUser>
+
+    @POST("api/admin/users")
+    suspend fun createUser(@Body request: CreateUserRequest): CreateUserResponse
+
+    @DELETE("api/admin/users/{id}")
+    suspend fun deleteUser(@Path("id") userId: String): Response<Unit>
+
+    @PUT("api/admin/users/{id}/role")
+    suspend fun updateUserRole(
+        @Path("id") userId: String,
+        @Body request: UpdateRoleRequest
+    ): UpdateRoleResponse
+
+    @PUT("api/admin/users/{id}/password")
+    suspend fun resetUserPassword(
+        @Path("id") userId: String,
+        @Body request: ResetPasswordRequest
+    ): MessageResponse
+
+    @DELETE("api/admin/users/{id}/2fa")
+    suspend fun resetUser2fa(@Path("id") userId: String): MessageResponse
+
+    // ── Health ────────────────────────────────────────────────────────────
     @GET("health")
     suspend fun health(): Map<String, String>
 }

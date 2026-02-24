@@ -31,15 +31,24 @@ interface PhotoDao {
     @Query("UPDATE photos SET serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, syncStatus = 'SYNCED' WHERE localId = :localId")
     suspend fun markSynced(localId: String, blobId: String, thumbBlobId: String?)
 
+    @Query("UPDATE photos SET serverPhotoId = :photoId, syncStatus = 'SYNCED' WHERE localId = :localId")
+    suspend fun markSyncedPlain(localId: String, photoId: String)
+
     @Query("UPDATE photos SET thumbnailPath = :path WHERE localId = :id")
     suspend fun updateThumbnailPath(id: String, path: String)
 
     @Query("SELECT * FROM photos WHERE serverBlobId = :blobId LIMIT 1")
     suspend fun getByServerBlobId(blobId: String): PhotoEntity?
 
+    @Query("SELECT * FROM photos WHERE serverPhotoId = :photoId LIMIT 1")
+    suspend fun getByServerPhotoId(photoId: String): PhotoEntity?
+
     @Delete
     suspend fun delete(photo: PhotoEntity)
 
     @Query("DELETE FROM photos WHERE localId = :id")
     suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM photos")
+    suspend fun deleteAll()
 }
