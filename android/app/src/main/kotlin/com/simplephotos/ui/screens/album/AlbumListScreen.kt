@@ -7,31 +7,62 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.repository.AlbumRepository
+import com.simplephotos.data.repository.AuthRepository
+import com.simplephotos.ui.components.ActiveTab
+import com.simplephotos.ui.components.AppHeader
+import com.simplephotos.ui.components.HeaderNavigation
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
+import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
 class AlbumViewModel @Inject constructor(
-    private val albumRepository: AlbumRepository
+    private val albumRepository: AlbumRepository,
+    private val authRepository: AuthRepository,
+    val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val albums = albumRepository.getAllAlbums()
     var error by mutableStateOf<String?>(null)
     var showCreateDialog by mutableStateOf(false)
     var newAlbumName by mutableStateOf("")
+    var username by mutableStateOf("")
+        private set
+
+    init {
+        viewModelScope.launch {
+            try {
+                val prefs = dataStore.data.first()
+                username = prefs[KEY_USERNAME] ?: ""
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun logout(onLoggedOut: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { authRepository.logout() }
+            } catch (_: Exception) {}
+            onLoggedOut()
+        }
+    }
 
     fun createAlbum() {
         val name = newAlbumName.trim()
@@ -61,7 +92,10 @@ class AlbumViewModel @Inject constructor(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumListScreen(
-    onBack: () -> Unit,
+    onGalleryClick: () -> Unit,
+    onTrashClick: () -> Unit,
+    onSettingsClick: () -> Unit,
+    onLogout: () -> Unit,
     onAlbumClick: (String) -> Unit = {},
     viewModel: AlbumViewModel = hiltViewModel()
 ) {
@@ -69,19 +103,26 @@ fun AlbumListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Albums") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.showCreateDialog = true }) {
-                        Icon(Icons.Default.Add, contentDescription = "New Album")
-                    }
-                }
+            AppHeader(
+                activeTab = ActiveTab.ALBUMS,
+                username = viewModel.username,
+                navigation = HeaderNavigation(
+                    onGalleryClick = onGalleryClick,
+                    onAlbumsClick = { /* already on albums */ },
+                    onTrashClick = onTrashClick,
+                    onSettingsClick = onSettingsClick,
+                    onLogout = { viewModel.logout(onLogout) },
+                    onThemeToggle = { ThemeState.toggle(viewModel.dataStore) }
+                )
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { viewModel.showCreateDialog = true },
+                containerColor = MaterialTheme.colorScheme.primary
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "New Album")
+            }
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {

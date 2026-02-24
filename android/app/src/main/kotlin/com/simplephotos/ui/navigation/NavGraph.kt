@@ -17,6 +17,7 @@ import com.simplephotos.ui.screens.gallery.GalleryScreen
 import com.simplephotos.ui.screens.settings.FolderSelectionScreen
 import com.simplephotos.ui.screens.settings.SettingsScreen
 import com.simplephotos.ui.screens.setup.ServerSetupScreen
+import com.simplephotos.ui.screens.trash.TrashScreen
 import com.simplephotos.ui.screens.twofactor.TwoFactorSetupScreen
 import com.simplephotos.ui.screens.viewer.PhotoViewerScreen
 
@@ -53,13 +54,26 @@ fun NavGraph() {
             GalleryScreen(
                 onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
                 onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
-                onSettingsClick = { navController.navigate(Screen.Settings.route) }
+                onTrashClick = { navController.navigate(Screen.Trash.route) },
+                onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
             )
         }
         composable(Screen.AlbumList.route) {
             AlbumListScreen(
-                onBack = { navController.popBackStack() },
+                onGalleryClick = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
+                onTrashClick = { navController.navigate(Screen.Trash.route) },
+                onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 onAlbumClick = { albumId -> navController.navigate(Screen.AlbumDetail.createRoute(albumId)) }
+            )
+        }
+        composable(Screen.Trash.route) {
+            TrashScreen(
+                onGalleryClick = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
+                onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
+                onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
             )
         }
         composable(
