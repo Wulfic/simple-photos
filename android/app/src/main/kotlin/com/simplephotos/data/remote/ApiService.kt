@@ -120,6 +120,22 @@ interface ApiService {
     @DELETE("api/admin/users/{id}/2fa")
     suspend fun resetUser2fa(@Path("id") userId: String): MessageResponse
 
+    // ── Trash ─────────────────────────────────────────────────────────────
+    @GET("api/trash")
+    suspend fun listTrash(
+        @Query("after") after: String? = null,
+        @Query("limit") limit: Int? = null
+    ): TrashListResponse
+
+    @HTTP(method = "DELETE", path = "api/trash", hasBody = false)
+    suspend fun emptyTrash(): Response<Unit>
+
+    @HTTP(method = "DELETE", path = "api/trash/{id}", hasBody = false)
+    suspend fun permanentDeleteTrash(@Path("id") id: String): Response<Unit>
+
+    @POST("api/trash/{id}/restore")
+    suspend fun restoreFromTrash(@Path("id") id: String): Response<Unit>
+
     // ── Health ────────────────────────────────────────────────────────────
     @GET("health")
     suspend fun health(): Map<String, String>

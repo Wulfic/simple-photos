@@ -10,9 +10,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.PhotoAlbum
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,13 +29,19 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
+import com.simplephotos.data.repository.AuthRepository
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.sync.SyncScheduler
-import com.simplephotos.ui.theme.ThemeToggleButton
+import com.simplephotos.ui.components.ActiveTab
+import com.simplephotos.ui.components.AppHeader
+import com.simplephotos.ui.components.HeaderNavigation
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
+import com.simplephotos.ui.theme.ThemeState
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -46,6 +50,7 @@ import javax.inject.Inject
 @HiltViewModel
 class GalleryViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
+    private val authRepository: AuthRepository,
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val photos = photoRepository.getAllPhotos()
@@ -65,15 +70,32 @@ class GalleryViewModel @Inject constructor(
     var encryptionMode by mutableStateOf("plain")
         private set
 
+    /** Logged-in username for the header avatar. */
+    var username by mutableStateOf("")
+        private set
+
     init {
         viewModelScope.launch {
             try {
                 val url = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
                 val mode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
+                val prefs = dataStore.data.first()
                 serverBaseUrl = url
                 encryptionMode = mode
+                username = prefs[KEY_USERNAME] ?: ""
             } catch (e: Exception) {
                 error = "Init failed: ${e.message}"
+            }
+        }
+    }
+
+    fun logout(onLoggedOut: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { authRepository.logout() }
+                onLoggedOut()
+            } catch (_: Exception) {
+                onLoggedOut()
             }
         }
     }
@@ -200,7 +222,9 @@ class GalleryViewModel @Inject constructor(
 fun GalleryScreen(
     onPhotoClick: (String) -> Unit,
     onAlbumsClick: () -> Unit,
+    onTrashClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onLogout: () -> Unit,
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
     val photos by viewModel.photos.collectAsState(initial = emptyList())
@@ -226,24 +250,32 @@ fun GalleryScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Gallery") },
-                actions = {
-                    ThemeToggleButton(dataStore = viewModel.dataStore)
-                    IconButton(
-                        onClick = { viewModel.syncFromServer() },
-                        enabled = !viewModel.isSyncing
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Sync from server")
-                    }
-                    IconButton(onClick = onAlbumsClick) {
-                        Icon(Icons.Default.PhotoAlbum, contentDescription = "Albums")
-                    }
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                    }
+            AppHeader(
+                activeTab = ActiveTab.GALLERY,
+                username = viewModel.username,
+                navigation = HeaderNavigation(
+                    onGalleryClick = { /* already on gallery */ },
+                    onAlbumsClick = onAlbumsClick,
+                    onTrashClick = onTrashClick,
+                    onSettingsClick = onSettingsClick,
+                    onLogout = { viewModel.logout(onLogout) },
+                    onThemeToggle = { ThemeState.toggle(viewModel.dataStore) }
+                ),
+                isSyncing = viewModel.isSyncing,
+                syncLabel = if (viewModel.isSyncing) "Syncing" else null
+            ) {
+                // Sync button
+                IconButton(
+                    onClick = { viewModel.syncFromServer() },
+                    enabled = !viewModel.isSyncing
+                ) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        contentDescription = "Sync",
+                        tint = Color(0xFF9CA3AF)
+                    )
                 }
-            )
+            }
         },
         floatingActionButton = {
             FloatingActionButton(
