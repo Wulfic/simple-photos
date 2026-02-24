@@ -304,6 +304,24 @@ fun SettingsScreen(
                 }
             }
 
+            // ── Backup Folders ───────────────────────────────────────────
+            SettingsCard(title = "Backup Folders", icon = Icons.Default.PhotoLibrary) {
+                Text(
+                    "Choose which folders on your device to back up. Camera is backed up by default.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onBackupFolders,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Select Backup Folders")
+                }
+            }
+
             // ── Appearance ───────────────────────────────────────────────
             SettingsCard(title = "Appearance", icon = Icons.Default.Palette) {
                 Row(

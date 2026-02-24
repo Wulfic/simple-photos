@@ -35,9 +35,11 @@ class SimplePhotosApplication : Application(), Configuration.Provider, ImageLoad
     }
 
     override fun newImageLoader(): ImageLoader {
-        return ImageLoader.Builder(this)
-            .okHttpClient(okHttpClient)
+        val builder = ImageLoader.Builder(this)
             .crossfade(true)
-            .build()
+        if (::okHttpClient.isInitialized) {
+            builder.okHttpClient(okHttpClient)
+        }
+        return builder.build()
     }
 }

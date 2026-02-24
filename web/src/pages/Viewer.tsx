@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { decrypt } from "../crypto/crypto";
@@ -18,6 +18,14 @@ interface MediaPayload {
   album_ids: string[];
   thumbnail_blob_id: string;
   data: string; // base64-encoded raw file bytes
+}
+
+// ── Navigation context passed via location.state ─────────────────────────────
+interface ViewerLocationState {
+  /** Array of photo IDs in display order (for prev/next navigation) */
+  photoIds?: string[];
+  /** Current index within the photoIds array */
+  currentIndex?: number;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -40,8 +48,70 @@ export default function Viewer() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // ── Navigation state ──────────────────────────────────────────────────────
+  const state = location.state as ViewerLocationState | null;
+  const photoIds = state?.photoIds;
+  const currentIndex = state?.currentIndex ?? -1;
+  const hasPrev = photoIds != null && currentIndex > 0;
+  const hasNext = photoIds != null && currentIndex >= 0 && currentIndex < photoIds.length - 1;
+
+  const navigateToPhoto = useCallback(
+    (index: number) => {
+      if (!photoIds || index < 0 || index >= photoIds.length) return;
+      const nextId = photoIds[index];
+      const prefix = isPlainMode ? "/photo/plain/" : "/photo/";
+      navigate(`${prefix}${nextId}`, {
+        replace: true,
+        state: { photoIds, currentIndex: index } satisfies ViewerLocationState,
+      });
+    },
+    [photoIds, isPlainMode, navigate]
+  );
+
+  const goPrev = useCallback(() => {
+    if (hasPrev) navigateToPhoto(currentIndex - 1);
+  }, [hasPrev, currentIndex, navigateToPhoto]);
+
+  const goNext = useCallback(() => {
+    if (hasNext) navigateToPhoto(currentIndex + 1);
+  }, [hasNext, currentIndex, navigateToPhoto]);
+
+  // ── Swipe handling ──────────────────────────────────────────────────────
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
+  const swiped = useRef(false);
+
+  function handleTouchStart(e: React.TouchEvent) {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+    swiped.current = false;
+  }
+
+  function handleTouchEnd(e: React.TouchEvent) {
+    if (touchStartX.current === null || touchStartY.current === null || swiped.current) return;
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    const dy = e.changedTouches[0].clientY - touchStartY.current;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+    // Require a minimum 50px horizontal swipe that's more horizontal than vertical
+    if (absDx > 50 && absDx > absDy * 1.5) {
+      swiped.current = true;
+      if (dx > 0) goPrev();
+      else goNext();
+    }
+    touchStartX.current = null;
+    touchStartY.current = null;
+  }
+
+  // ── Load media on id change ───────────────────────────────────────────────
   useEffect(() => {
     if (!id) return;
+
+    // Reset state for new photo
+    setMediaUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setLoading(true);
+    setError("");
 
     if (isPlainMode) {
       loadPlainMedia(id);
@@ -55,21 +125,18 @@ export default function Viewer() {
       });
       loadEncryptedMedia(id);
     }
+  }, [id]);
 
+  // ── Keyboard navigation ────────────────────────────────────────────────
+  useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === "Escape") navigate("/gallery");
+      if (e.key === "ArrowLeft") goPrev();
+      if (e.key === "ArrowRight") goNext();
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [id]);
-
-  // Revoke object URLs on unmount to avoid memory leaks
-  useEffect(() => {
-    return () => {
-      if (mediaUrl) URL.revokeObjectURL(mediaUrl);
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [mediaUrl, previewUrl]);
+  }, [goPrev, goNext, navigate]);
 
   /** Load a plain-mode photo — fetch with auth and create object URL */
   async function loadPlainMedia(photoId: string) {
@@ -146,9 +213,13 @@ export default function Viewer() {
   }
 
   async function handleDelete() {
-    if (!id || !confirm("Permanently delete this item?")) return;
+    const msg = isPlainMode
+      ? "Move this item to trash? You can restore it within 30 days."
+      : "Permanently delete this item? This cannot be undone.";
+    if (!id || !confirm(msg)) return;
     try {
       if (isPlainMode) {
+        // Server soft-deletes to trash for plain mode
         await api.photos.delete(id);
       } else {
         await api.blobs.delete(id);
@@ -174,7 +245,11 @@ export default function Viewer() {
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 bg-black flex flex-col select-none">
+    <div
+      className="fixed inset-0 bg-black flex flex-col select-none"
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+    >
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-3 bg-black/80 z-10">
         <button
@@ -224,6 +299,32 @@ export default function Viewer() {
           <p className="text-red-400 text-sm z-10">{error}</p>
         )}
 
+        {/* ── Previous arrow (left side) ─────────────────────────────── */}
+        {hasPrev && (
+          <button
+            onClick={goPrev}
+            className="absolute left-2 top-1/2 -translate-y-1/2 z-20 w-10 h-10 md:w-12 md:h-12 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/80 text-white transition-colors"
+            aria-label="Previous photo"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          </button>
+        )}
+
+        {/* ── Next arrow (right side) ────────────────────────────────── */}
+        {hasNext && (
+          <button
+            onClick={goNext}
+            className="absolute right-2 top-1/2 -translate-y-1/2 z-20 w-10 h-10 md:w-12 md:h-12 flex items-center justify-center rounded-full bg-black/50 hover:bg-black/80 text-white transition-colors"
+            aria-label="Next photo"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          </button>
+        )}
+
         {/* ── Photo / GIF viewer ─────────────────────────────────────────── */}
         {mediaUrl && (mediaType === "photo" || mediaType === "gif") && (
           <img
@@ -259,6 +360,9 @@ export default function Viewer() {
             {mediaType === "video" ? "VIDEO" : mediaType === "gif" ? "GIF" : "PHOTO"}
           </span>
           <span className="truncate">{mimeType}</span>
+          {photoIds && currentIndex >= 0 && (
+            <span className="ml-auto">{currentIndex + 1} / {photoIds.length}</span>
+          )}
         </div>
       )}
     </div>

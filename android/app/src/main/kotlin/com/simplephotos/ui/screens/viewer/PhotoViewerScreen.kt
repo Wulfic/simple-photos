@@ -1,9 +1,12 @@
 package com.simplephotos.ui.screens.viewer
 
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -15,7 +18,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
@@ -30,77 +35,84 @@ import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.repository.PhotoRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import javax.inject.Inject
+
+// ---------------------------------------------------------------------------
+// ViewModel — loads photo list for paging + handles deletion
+// ---------------------------------------------------------------------------
 
 @HiltViewModel
 class PhotoViewerViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-    val photoId: String = savedStateHandle["photoId"] ?: ""
-    var photo by mutableStateOf<PhotoEntity?>(null)
-        private set
-    var loading by mutableStateOf(true)
-    var decryptedData by mutableStateOf<ByteArray?>(null)
-    var error by mutableStateOf<String?>(null)
 
-    /** For plain mode: the authenticated URL to the full-size image. */
-    var plainImageUrl by mutableStateOf<String?>(null)
+    private val initialPhotoId: String = savedStateHandle["photoId"] ?: ""
+
+    /** Full photo list for paging (matches gallery order). */
+    var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
         private set
 
-    /** For plain mode video: the authenticated URL. */
-    var plainVideoUrl by mutableStateOf<String?>(null)
+    /** Index of the photo that was tapped in the gallery. */
+    var initialPage by mutableStateOf(0)
+        private set
+
+    /** True while the photo list is still loading. */
+    var listLoading by mutableStateOf(true)
         private set
 
     var encryptionMode by mutableStateOf("plain")
         private set
 
+    var serverBaseUrl by mutableStateOf("")
+        private set
+
+    var error by mutableStateOf<String?>(null)
+        private set
+
     init {
-        loadPhoto()
+        loadPhotos()
     }
 
-    private fun loadPhoto() {
+    private fun loadPhotos() {
         viewModelScope.launch {
             try {
-                photo = withContext(Dispatchers.IO) { photoRepository.getPhoto(photoId) }
+                serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
                 encryptionMode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
 
-                val p = photo ?: return@launch
-
-                if (encryptionMode == "plain" && p.serverPhotoId != null) {
-                    // Plain mode — build URL for Coil or ExoPlayer
-                    val baseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
-                    val url = "$baseUrl/api/photos/${p.serverPhotoId}/file"
-                    if (p.mediaType == "video") {
-                        plainVideoUrl = url
-                    } else {
-                        plainImageUrl = url
-                    }
-                } else if (p.serverBlobId != null) {
-                    // Encrypted mode — download and decrypt
-                    withContext(Dispatchers.IO) {
-                        val decrypted = photoRepository.downloadAndDecryptBlob(p.serverBlobId)
-                        val payload = JSONObject(String(decrypted, Charsets.UTF_8))
-                        val dataBase64 = payload.getString("data")
-                        decryptedData = android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
-                    }
+                val photos = withContext(Dispatchers.IO) {
+                    photoRepository.getAllPhotos().first()
                 }
+                allPhotos = photos
+                initialPage = photos.indexOfFirst { it.localId == initialPhotoId }
+                    .coerceAtLeast(0)
             } catch (e: Exception) {
                 error = e.message
             } finally {
-                loading = false
+                listLoading = false
             }
         }
     }
 
-    fun deletePhoto(onDeleted: () -> Unit) {
-        val p = photo ?: return
+    /**
+     * Download and decrypt an encrypted blob, returning the raw media bytes.
+     * Called from per-page composables for encrypted-mode photos.
+     */
+    suspend fun downloadAndDecrypt(blobId: String): ByteArray = withContext(Dispatchers.IO) {
+        val decrypted = photoRepository.downloadAndDecryptBlob(blobId)
+        val payload = JSONObject(String(decrypted, Charsets.UTF_8))
+        val dataBase64 = payload.getString("data")
+        android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
+    }
+
+    fun deletePhoto(photo: PhotoEntity, onDeleted: () -> Unit) {
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { photoRepository.deletePhoto(p) }
+                withContext(Dispatchers.IO) { photoRepository.deletePhoto(photo) }
                 onDeleted()
             } catch (e: Exception) {
                 error = e.message
@@ -109,26 +121,71 @@ class PhotoViewerViewModel @Inject constructor(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Screen — HorizontalPager for swipe navigation between photos
+// ---------------------------------------------------------------------------
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PhotoViewerScreen(
     onBack: () -> Unit,
     viewModel: PhotoViewerViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
+    // Wait for the photo list before creating pager state
+    if (viewModel.listLoading) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = Color.White)
+        }
+        return
+    }
+
+    if (viewModel.allPhotos.isEmpty()) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Photo not found", color = Color.White)
+        }
+        return
+    }
+
+    val pagerState = rememberPagerState(
+        initialPage = viewModel.initialPage,
+        pageCount = { viewModel.allPhotos.size }
+    )
+
+    val currentPhoto = viewModel.allPhotos.getOrNull(pagerState.currentPage)
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(viewModel.photo?.filename ?: "Viewer") },
+                title = {
+                    Column {
+                        Text(
+                            text = currentPhoto?.filename ?: "Viewer",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${pagerState.currentPage + 1} / ${viewModel.allPhotos.size}",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                            color = Color.White.copy(alpha = 0.7f)
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.deletePhoto(onBack) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete")
+                    if (currentPhoto != null) {
+                        IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -141,80 +198,143 @@ fun PhotoViewerScreen(
         },
         containerColor = Color.Black
     ) { padding ->
-        Box(
+        HorizontalPager(
+            state = pagerState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .background(Color.Black),
-            contentAlignment = Alignment.Center
-        ) {
-            when {
-                viewModel.loading -> {
-                    CircularProgressIndicator(color = Color.White)
-                }
+                .padding(padding),
+            key = { viewModel.allPhotos[it].localId }
+        ) { page ->
+            val photo = viewModel.allPhotos[page]
+            PhotoPageContent(
+                photo = photo,
+                encryptionMode = viewModel.encryptionMode,
+                serverBaseUrl = viewModel.serverBaseUrl,
+                viewModel = viewModel
+            )
+        }
+    }
+}
 
-                viewModel.error != null -> {
-                    Text(viewModel.error ?: "Error", color = Color.White, modifier = Modifier.padding(16.dp))
-                }
+// ---------------------------------------------------------------------------
+// Per-page content — each page independently loads and renders its photo
+// ---------------------------------------------------------------------------
 
-                viewModel.photo?.mediaType == "video" -> {
-                    // Video playback
-                    val videoUri = when {
-                        viewModel.plainVideoUrl != null -> Uri.parse(viewModel.plainVideoUrl)
-                        viewModel.photo?.localPath != null -> Uri.parse(viewModel.photo?.localPath)
-                        viewModel.decryptedData != null -> {
-                            val tempFile = remember(viewModel.decryptedData) {
-                                java.io.File.createTempFile("video_", ".mp4", context.cacheDir).apply {
-                                    writeBytes(viewModel.decryptedData!!)
-                                    deleteOnExit()
-                                }
+@Composable
+private fun PhotoPageContent(
+    photo: PhotoEntity,
+    encryptionMode: String,
+    serverBaseUrl: String,
+    viewModel: PhotoViewerViewModel
+) {
+    val context = LocalContext.current
+
+    // Determine the content source for this photo
+    val isPlainMode = encryptionMode == "plain" && photo.serverPhotoId != null
+    val hasLocalPath = photo.localPath != null
+    val hasEncryptedBlob = photo.serverBlobId != null
+
+    // For encrypted mode, lazily download & decrypt
+    var decryptedData by remember(photo.localId) { mutableStateOf<ByteArray?>(null) }
+    var decryptLoading by remember(photo.localId) { mutableStateOf(hasEncryptedBlob && !isPlainMode && !hasLocalPath) }
+    var decryptError by remember(photo.localId) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(photo.localId) {
+        if (!isPlainMode && !hasLocalPath && hasEncryptedBlob) {
+            decryptLoading = true
+            try {
+                decryptedData = viewModel.downloadAndDecrypt(photo.serverBlobId!!)
+            } catch (e: Exception) {
+                decryptError = e.message
+            } finally {
+                decryptLoading = false
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        when {
+            // Loading encrypted content
+            decryptLoading -> {
+                CircularProgressIndicator(color = Color.White)
+            }
+
+            decryptError != null -> {
+                Text(decryptError ?: "Error", color = Color.White, modifier = Modifier.padding(16.dp))
+            }
+
+            // ── Video ──────────────────────────────────────────────────
+            photo.mediaType == "video" -> {
+                val videoUri = when {
+                    isPlainMode -> Uri.parse("$serverBaseUrl/api/photos/${photo.serverPhotoId}/file")
+                    hasLocalPath -> Uri.parse(photo.localPath)
+                    decryptedData != null -> {
+                        val tempFile = remember(photo.localId, decryptedData) {
+                            java.io.File.createTempFile("video_", ".mp4", context.cacheDir).apply {
+                                writeBytes(decryptedData!!)
+                                deleteOnExit()
                             }
-                            Uri.fromFile(tempFile)
                         }
-                        else -> null
+                        Uri.fromFile(tempFile)
                     }
-                    if (videoUri != null) {
-                        VideoPlayer(uri = videoUri)
-                    } else {
-                        Text("Video not available", color = Color.White)
-                    }
+                    else -> null
                 }
+                if (videoUri != null) {
+                    VideoPlayer(uri = videoUri)
+                } else {
+                    Text("Video not available", color = Color.White)
+                }
+            }
 
-                else -> {
-                    // Photo/GIF display
-                    when {
-                        // Plain mode: load via authenticated URL
-                        viewModel.plainImageUrl != null -> {
-                            AsyncImage(
-                                model = ImageRequest.Builder(context)
-                                    .data(viewModel.plainImageUrl)
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = viewModel.photo?.filename,
+            // ── Photo / GIF ────────────────────────────────────────────
+            else -> {
+                when {
+                    // Plain mode: Coil loads via authenticated URL
+                    isPlainMode -> {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data("$serverBaseUrl/api/photos/${photo.serverPhotoId}/file")
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = photo.filename,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                    // Local file
+                    hasLocalPath -> {
+                        val bitmap = remember(photo.localPath) {
+                            try {
+                                val stream = context.contentResolver.openInputStream(Uri.parse(photo.localPath))
+                                BitmapFactory.decodeStream(stream)
+                            } catch (_: Exception) { null }
+                        }
+                        bitmap?.let {
+                            Image(
+                                bitmap = it.asImageBitmap(),
+                                contentDescription = photo.filename,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Fit
                             )
                         }
-                        // Local file
-                        viewModel.photo?.localPath != null -> {
-                            val bitmap = remember(viewModel.photo?.localPath) {
-                                try {
-                                    val inputStream = context.contentResolver.openInputStream(Uri.parse(viewModel.photo?.localPath))
-                                    android.graphics.BitmapFactory.decodeStream(inputStream)
-                                } catch (_: Exception) { null }
-                            }
-                            bitmap?.let {
-                                Image(bitmap = it.asImageBitmap(), contentDescription = viewModel.photo?.filename, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                            }
+                    }
+                    // Decrypted blob
+                    decryptedData != null -> {
+                        val bitmap = remember(decryptedData) {
+                            BitmapFactory.decodeByteArray(decryptedData, 0, decryptedData!!.size)
                         }
-                        // Decrypted blob data
-                        viewModel.decryptedData != null -> {
-                            val bitmap = remember(viewModel.decryptedData) {
-                                android.graphics.BitmapFactory.decodeByteArray(viewModel.decryptedData, 0, viewModel.decryptedData!!.size)
-                            }
-                            bitmap?.let {
-                                Image(bitmap = it.asImageBitmap(), contentDescription = viewModel.photo?.filename, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                            }
+                        bitmap?.let {
+                            Image(
+                                bitmap = it.asImageBitmap(),
+                                contentDescription = photo.filename,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
                         }
                     }
                 }
@@ -222,6 +342,10 @@ fun PhotoViewerScreen(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Video player composable (ExoPlayer)
+// ---------------------------------------------------------------------------
 
 @Composable
 private fun VideoPlayer(uri: Uri) {
