@@ -29,9 +29,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.isGranted
-import com.google.accompanist.permissions.rememberPermissionState
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.repository.PhotoRepository
@@ -70,9 +67,13 @@ class GalleryViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                serverBaseUrl = photoRepository.getServerBaseUrl()
-                encryptionMode = photoRepository.getEncryptionMode()
+            try {
+                val url = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
+                val mode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
+                serverBaseUrl = url
+                encryptionMode = mode
+            } catch (e: Exception) {
+                error = "Init failed: ${e.message}"
             }
         }
     }
@@ -95,10 +96,10 @@ class GalleryViewModel @Inject constructor(
             error = null
             lastSyncResult = null
             try {
-                withContext(Dispatchers.IO) {
-                    serverBaseUrl = photoRepository.getServerBaseUrl()
-                    encryptionMode = photoRepository.getEncryptionMode()
-                }
+                val url = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
+                val mode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
+                serverBaseUrl = url
+                encryptionMode = mode
                 val imported = withContext(Dispatchers.IO) { photoRepository.syncFromServer() }
                 lastSyncResult = if (imported > 0) "Synced $imported new items" else "Up to date"
             } catch (e: Exception) {
@@ -194,7 +195,7 @@ class GalleryViewModel @Inject constructor(
     }
 }
 
-@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GalleryScreen(
     onPhotoClick: (String) -> Unit,
@@ -205,10 +206,6 @@ fun GalleryScreen(
     val photos by viewModel.photos.collectAsState(initial = emptyList())
     val context = LocalContext.current
 
-    // Request media permissions for background sync
-    val imagePermission = rememberPermissionState(android.Manifest.permission.READ_MEDIA_IMAGES)
-    val videoPermission = rememberPermissionState(android.Manifest.permission.READ_MEDIA_VIDEO)
-
     // Photo/video picker launcher
     val pickMediaLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -216,10 +213,10 @@ fun GalleryScreen(
         viewModel.importFromUris(uris, context)
     }
 
-    LaunchedEffect(imagePermission.status.isGranted, videoPermission.status.isGranted) {
-        if (imagePermission.status.isGranted && videoPermission.status.isGranted) {
-            SyncScheduler.schedule(context)
-        }
+    // Schedule background sync — do not require granular media permissions
+    // (we use the document picker for imports, not MediaStore scanning)
+    LaunchedEffect(Unit) {
+        try { SyncScheduler.schedule(context) } catch (_: Exception) {}
     }
 
     // Auto-sync on first load
@@ -285,22 +282,6 @@ fun GalleryScreen(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.bodySmall
                 )
-            }
-
-            if (!imagePermission.status.isGranted || !videoPermission.status.isGranted) {
-                Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("Grant access to photos and videos to enable automatic backup", textAlign = TextAlign.Center)
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = {
-                            imagePermission.launchPermissionRequest()
-                            videoPermission.launchPermissionRequest()
-                        }) { Text("Grant Permission") }
-                    }
-                }
             }
 
             if (photos.isEmpty() && !viewModel.isSyncing) {

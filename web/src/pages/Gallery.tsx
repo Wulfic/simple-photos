@@ -787,20 +787,24 @@ export default function Gallery() {
         )}
 
         {/* Plain mode tiles */}
-        {mode === "plain" && filteredPlainPhotos.map((photo) => (
+        {mode === "plain" && filteredPlainPhotos.map((photo, idx) => (
           <PlainMediaTile
             key={photo.id}
             photo={photo}
-            onClick={() => navigate(`/photo/plain/${photo.id}`)}
+            onClick={() => navigate(`/photo/plain/${photo.id}`, {
+              state: { photoIds: filteredPlainPhotos.map(p => p.id), currentIndex: idx },
+            })}
           />
         ))}
 
         {/* Encrypted mode tiles */}
-        {mode === "encrypted" && filteredPhotos?.map((photo) => (
+        {mode === "encrypted" && filteredPhotos?.map((photo, idx) => (
           <MediaTile
             key={photo.blobId}
             photo={photo}
-            onClick={() => navigate(`/photo/${photo.blobId}`)}
+            onClick={() => navigate(`/photo/${photo.blobId}`, {
+              state: { photoIds: filteredPhotos!.map(p => p.blobId), currentIndex: idx },
+            })}
           />
         ))}
       </div>
@@ -882,6 +886,54 @@ function formatDuration(secs: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// ── Thumbnail Cache ───────────────────────────────────────────────────────────
+// Uses the browser's Cache API to persistently cache thumbnails across loads.
+// Falls back to in-memory Map if Cache API is unavailable.
+
+const THUMB_CACHE_NAME = "sp-thumbnails-v1";
+const thumbMemoryCache = new Map<string, string>(); // photoId → objectURL
+
+async function getCachedThumbnail(photoId: string): Promise<string | null> {
+  // Check memory cache first (fastest)
+  const memUrl = thumbMemoryCache.get(photoId);
+  if (memUrl) return memUrl;
+
+  // Check persistent Cache API
+  try {
+    const cache = await caches.open(THUMB_CACHE_NAME);
+    const cacheKey = `/thumb-cache/${photoId}`;
+    const cached = await cache.match(cacheKey);
+    if (cached) {
+      const blob = await cached.blob();
+      const url = URL.createObjectURL(blob);
+      thumbMemoryCache.set(photoId, url);
+      return url;
+    }
+  } catch {
+    // Cache API unavailable — continue to fetch
+  }
+  return null;
+}
+
+async function cacheThumbnail(photoId: string, blob: Blob): Promise<string> {
+  const url = URL.createObjectURL(blob);
+  thumbMemoryCache.set(photoId, url);
+
+  // Persist to Cache API
+  try {
+    const cache = await caches.open(THUMB_CACHE_NAME);
+    const cacheKey = `/thumb-cache/${photoId}`;
+    const response = new Response(blob, {
+      headers: { "Content-Type": blob.type || "image/jpeg" },
+    });
+    await cache.put(cacheKey, response);
+  } catch {
+    // Cache API unavailable — memory-only cache is fine
+  }
+
+  return url;
+}
+
 // ── PlainMediaTile ────────────────────────────────────────────────────────────
 
 interface PlainMediaTileProps {
@@ -910,26 +962,36 @@ function PlainMediaTile({ photo, onClick }: PlainMediaTileProps) {
     return () => observer.disconnect();
   }, []);
 
-  // Fetch thumbnail with auth header when visible
+  // Fetch thumbnail with cache-first strategy
   useEffect(() => {
     if (!visible) return;
-    let revoked = false;
+    let cancelled = false;
     (async () => {
       try {
+        // Try cache first
+        const cached = await getCachedThumbnail(photo.id);
+        if (cached && !cancelled) {
+          setThumbSrc(cached);
+          return;
+        }
+
+        // Fetch from server
         const { accessToken } = useAuthStore.getState();
         const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
         if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
         const res = await fetch(api.photos.thumbUrl(photo.id), { headers });
-        if (!res.ok) return;
+        if (!res.ok || cancelled) return;
         const blob = await res.blob();
-        if (revoked) return;
-        const url = URL.createObjectURL(blob);
-        setThumbSrc(url);
+        if (cancelled) return;
+
+        // Cache and display
+        const url = await cacheThumbnail(photo.id, blob);
+        if (!cancelled) setThumbSrc(url);
       } catch {
         // Thumbnail load failed — show filename instead
       }
     })();
-    return () => { revoked = true; };
+    return () => { cancelled = true; };
   }, [visible, photo.id]);
 
   return (
