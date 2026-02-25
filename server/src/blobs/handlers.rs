@@ -280,7 +280,7 @@ pub async fn download(
     .ok_or(AppError::NotFound)?;
 
     // Prevent path traversal: storage_path must not contain ".." or absolute paths
-    if storage_path.contains("..") || storage_path.starts_with('/') {
+    if storage_path.contains("..") || std::path::Path::new(&storage_path).is_absolute() {
         tracing::error!(
             blob_id = blob_id,
             storage_path = storage_path,

@@ -878,11 +878,12 @@ async fn run_auto_scan(
                     queue.push(entry.path());
                 } else if ft.is_file() && is_media_file(&name) {
                     let abs_path = entry.path();
+                    // Normalize to forward slashes so DB paths are consistent across OS
                     let rel_path = abs_path
                         .strip_prefix(storage_root)
                         .unwrap_or(&abs_path)
                         .to_string_lossy()
-                        .to_string();
+                        .replace('\\', "/");
 
                     if existing_set.contains(&rel_path) {
                         continue;
