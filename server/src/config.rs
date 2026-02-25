@@ -32,6 +32,8 @@ pub struct StorageConfig {
     /// Root directory for all blob storage.
     ///
     /// Supports any path accessible from the server process:
+    ///
+    /// **Linux / macOS:**
     ///   - Local:         "./data/storage"  or  "/var/simple-photos/storage"
     ///   - Network (SMB): "/mnt/vault/Files/Simple-Photos"
     ///     Mount first:  sudo mount -t cifs //vault.local/vault/Files/Simple-Photos \
@@ -39,8 +41,12 @@ pub struct StorageConfig {
     ///     Then set:     root = "/mnt/simple-photos"
     ///   - NFS:           "/mnt/nfs/simple-photos"
     ///
-    /// The server uses only standard POSIX file operations (create/read/delete),
-    /// so any POSIX-compatible mount (SMB/CIFS, NFS, SSHFS, etc.) works out of the box.
+    /// **Windows:**
+    ///   - Local:         ".\\data\\storage"  or  "C:\\SimplePhotos\\storage"
+    ///   - Network:       "\\\\\\\\server\\share\\SimplePhotos"  or mapped drive  "Z:\\SimplePhotos"
+    ///
+    /// The server uses only standard cross-platform file operations (create/read/delete),
+    /// so any accessible path (local, SMB/CIFS, NFS, SSHFS, mapped drive) works.
     pub root: PathBuf,
 
     /// Per-user storage quota in bytes (0 = unlimited).

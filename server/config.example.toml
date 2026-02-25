@@ -11,6 +11,7 @@ max_connections = 5
 # ── Storage root ─────────────────────────────────────────────────────────────
 # Can be any path reachable by the server process:
 #
+# Linux / macOS:
 #   Local directory:
 #     root = "/data/storage"
 #
@@ -26,8 +27,17 @@ max_connections = 5
 #   NFS:
 #     root = "/mnt/nfs/simple-photos"
 #
-# The server uses only standard POSIX file I/O, so any POSIX-compatible
-# mount (SMB/CIFS, NFS, SSHFS, etc.) works transparently.
+# Windows:
+#   Local directory:
+#     root = "C:\\SimplePhotos\\storage"
+#
+#   Mapped network drive:
+#     root = "Z:\\SimplePhotos"
+#
+#   UNC path:
+#     root = "\\\\server\\share\\SimplePhotos"
+#
+# The server uses cross-platform file I/O, so any accessible path works.
 root = "/data/storage"
 
 # Per-user quota in bytes. 0 = unlimited.
@@ -38,7 +48,9 @@ max_blob_size_bytes = 5368709120    # 5 GB
 
 [auth]
 # IMPORTANT: Change this to a random 64-char hex string in production!
-# Generate with: openssl rand -hex 32
+# Generate with:
+#   Linux/macOS: openssl rand -hex 32
+#   PowerShell:  -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
 jwt_secret = "CHANGE_ME_RANDOM_64_CHAR_HEX"
 access_token_ttl_secs = 3600
 refresh_token_ttl_days = 30

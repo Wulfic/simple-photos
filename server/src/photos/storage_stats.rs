@@ -135,7 +135,45 @@ fn get_fs_stats(path: &std::path::Path) -> (i64, i64) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn get_fs_stats(path: &std::path::Path) -> (i64, i64) {
+    use std::os::windows::ffi::OsStrExt;
+
+    // Encode path as null-terminated wide string for Win32 API
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+
+    let mut free_available: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut _total_free: u64 = 0;
+
+    // SAFETY: calling GetDiskFreeSpaceExW with valid pointers.
+    // On failure the function returns 0 and we fall through to (0, 0).
+    unsafe {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetDiskFreeSpaceExW(
+                lpDirectoryName: *const u16,
+                lpFreeBytesAvailableToCaller: *mut u64,
+                lpTotalNumberOfBytes: *mut u64,
+                lpTotalNumberOfFreeBytes: *mut u64,
+            ) -> i32;
+        }
+
+        if GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_available,
+            &mut total_bytes,
+            &mut _total_free,
+        ) != 0
+        {
+            return (total_bytes as i64, free_available as i64);
+        }
+    }
+
+    (0, 0)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn get_fs_stats(_path: &std::path::Path) -> (i64, i64) {
     (0, 0)
 }
