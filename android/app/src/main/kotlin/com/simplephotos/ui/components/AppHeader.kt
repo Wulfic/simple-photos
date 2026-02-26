@@ -1,5 +1,7 @@
 package com.simplephotos.ui.components
 
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,6 +21,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.SweepGradient
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -122,7 +128,7 @@ fun AppHeader(
                     onClick = navigation.onGalleryClick
                 )
                 NavTab(
-                    icon = Icons.Default.PhotoAlbum,
+                    icon = Icons.Default.Folder,
                     label = "Albums",
                     isActive = activeTab == ActiveTab.ALBUMS,
                     activeTabBg = activeTabBg,
@@ -235,6 +241,20 @@ private fun NavTab(
 // User avatar + dropdown menu
 // ─────────────────────────────────────────────────────────────────────
 
+/**
+ * RGB colours matching the web's conic-gradient processing ring.
+ */
+private val rgbRingColors = listOf(
+    Color(0xFFFF0000),
+    Color(0xFFFF8800),
+    Color(0xFFFFFF00),
+    Color(0xFF00FF00),
+    Color(0xFF0088FF),
+    Color(0xFF8800FF),
+    Color(0xFFFF0088),
+    Color(0xFFFF0000), // wrap back to start for smooth loop
+)
+
 @Composable
 private fun UserMenu(
     username: String,
@@ -252,22 +272,56 @@ private fun UserMenu(
         end = Offset(100f, 100f)
     )
 
+    // Infinite rotation for the processing ring (mirrors the web's rgb-spin animation)
+    val infiniteTransition = rememberInfiniteTransition(label = "syncRing")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1500, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ringRotation"
+    )
+
     Box {
-        // Avatar only on mobile (web hides username + chevron via "hidden sm:inline")
+        // Avatar with optional spinning ring
         Box(
             modifier = Modifier
-                .size(28.dp)
-                .clip(CircleShape)
-                .background(avatarGradient)
+                .size(34.dp) // slightly larger to accommodate ring padding
                 .clickable { expanded = !expanded },
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = username.take(1).uppercase(),
-                color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
+            // Draw the spinning RGB ring when syncing
+            if (isSyncing) {
+                Canvas(modifier = Modifier.matchParentSize()) {
+                    val ringWidth = 3.dp.toPx()
+                    val radius = (size.minDimension - ringWidth) / 2f
+                    rotate(rotation) {
+                        drawCircle(
+                            brush = Brush.sweepGradient(rgbRingColors),
+                            radius = radius,
+                            style = Stroke(width = ringWidth, cap = StrokeCap.Round)
+                        )
+                    }
+                }
+            }
+
+            // Avatar circle
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(avatarGradient),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = username.take(1).uppercase(),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
         DropdownMenu(

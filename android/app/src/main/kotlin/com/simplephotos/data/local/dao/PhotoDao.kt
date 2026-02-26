@@ -28,6 +28,10 @@ interface PhotoDao {
     @Query("UPDATE photos SET syncStatus = :status WHERE localId = :id")
     suspend fun updateSyncStatus(id: String, status: SyncStatus)
 
+    /** Reset photos stuck at UPLOADING (from a crash) back to PENDING so they get retried. */
+    @Query("UPDATE photos SET syncStatus = 'PENDING' WHERE syncStatus = 'UPLOADING'")
+    suspend fun resetStuckUploading()
+
     @Query("UPDATE photos SET serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, syncStatus = 'SYNCED' WHERE localId = :localId")
     suspend fun markSynced(localId: String, blobId: String, thumbBlobId: String?)
 

@@ -245,9 +245,10 @@ fun GalleryScreen(
         try { SyncScheduler.schedule(context) } catch (_: Exception) {}
     }
 
-    // Auto-sync on first load
+    // Auto-sync on first load: pull from server, then push any pending local photos
     LaunchedEffect(Unit) {
         viewModel.syncFromServer()
+        try { SyncScheduler.triggerNow(context) } catch (_: Exception) {}
     }
 
     Scaffold(
