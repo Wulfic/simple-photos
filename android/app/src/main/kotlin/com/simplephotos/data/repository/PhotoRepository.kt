@@ -172,6 +172,23 @@ class PhotoRepository @Inject constructor(
         return crypto.decrypt(encrypted)
     }
 
+    /**
+     * Collect all filenames currently known on the server (plain mode).
+     * Used by BackupWorker to skip uploading photos that already exist remotely.
+     */
+    suspend fun getServerFilenames(): Set<String> {
+        val filenames = mutableSetOf<String>()
+        var after: String? = null
+        try {
+            do {
+                val result = api.listPhotos(after = after, limit = 500)
+                for (p in result.photos) filenames.add(p.filename)
+                after = result.nextCursor
+            } while (after != null)
+        } catch (_: Exception) { /* network error — return what we have */ }
+        return filenames
+    }
+
     // ── Sync from server ─────────────────────────────────────────────────
 
     /**
@@ -191,6 +208,10 @@ class PhotoRepository @Inject constructor(
      * Sync plain-mode photos from the server.
      * Fetches photo metadata and stores references in local DB.
      * Actual image data is loaded on-demand via authenticated URLs.
+     *
+     * Cross-matches by filename: if a local PENDING photo already exists
+     * on the server, we link it (set serverPhotoId, mark SYNCED) instead
+     * of creating a duplicate entry.
      */
     private suspend fun syncFromServerPlain(): Int {
         var imported = 0
@@ -200,8 +221,26 @@ class PhotoRepository @Inject constructor(
             val listResult = api.listPhotos(after = after, limit = 100)
 
             for (photo in listResult.photos) {
-                // Skip if we already have this server photo
+                // Skip if we already have this server photo ID tracked
                 if (db.photoDao().getByServerPhotoId(photo.id) != null) continue
+
+                // Cross-match: check if we have a local photo with the same
+                // filename that hasn't been uploaded yet. If so, link it to
+                // this server record instead of inserting a new row.
+                val existingLocal = db.photoDao().getSyncedByFilename(photo.filename)
+                    ?: run {
+                        // Also check PENDING/FAILED local photos by filename
+                        val pending = db.photoDao().getByStatus(SyncStatus.PENDING) +
+                                      db.photoDao().getByStatus(SyncStatus.FAILED)
+                        pending.firstOrNull { it.filename == photo.filename }
+                    }
+
+                if (existingLocal != null && existingLocal.serverPhotoId == null) {
+                    // Link existing local entry to the server record
+                    db.photoDao().markSyncedPlain(existingLocal.localId, photo.id)
+                    imported++
+                    continue
+                }
 
                 val localId = java.util.UUID.randomUUID().toString()
                 val takenAtMs = try {
