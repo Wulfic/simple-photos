@@ -39,21 +39,30 @@ class BackupWorker @AssistedInject constructor(
             // Step 1: Scan MediaStore for new photos and videos
             syncRepository.scanForNewMedia()
 
-            // Step 2: Mark exhausted queue entries as failed
+            // Step 2: Recover stuck uploads — photos left at UPLOADING from a crash
+            // are reset to PENDING so they get retried.
+            db.photoDao().resetStuckUploading()
+
+            // Step 3: Mark exhausted queue entries as failed
             db.blobQueueDao().markExhaustedAsFailed()
 
-            // Step 3: Process pending photos by priority (thumbnail=0, media=1, album=2)
-            val pending = db.photoDao().getByStatus(SyncStatus.PENDING)
+            // Step 4: Process photos that need uploading:
+            //   - PENDING (newly scanned or manually imported)
+            //   - FAILED  (previous attempt hit an error — retry)
+            val pending = db.photoDao().getByStatus(SyncStatus.PENDING) +
+                          db.photoDao().getByStatus(SyncStatus.FAILED)
 
             for (photo in pending) {
                 val localPath = photo.localPath ?: continue
 
                 try {
                     val uri = android.net.Uri.parse(localPath)
-                    val inputStream: InputStream = applicationContext.contentResolver.openInputStream(uri)
-                        ?: continue
-                    val photoData = inputStream.readBytes()
-                    inputStream.close()
+                    val inputStream = applicationContext.contentResolver.openInputStream(uri)
+                    if (inputStream == null) {
+                        Log.w(TAG, "Cannot open ${photo.localId} — content URI inaccessible, skipping")
+                        continue
+                    }
+                    val photoData = inputStream.use { it.readBytes() }
 
                     // Generate thumbnail based on media type
                     val thumbnailData = when (photo.mediaType) {
@@ -76,8 +85,9 @@ class BackupWorker @AssistedInject constructor(
                     }
 
                     if (thumbnailData != null) {
-                        // Cache thumbnail locally before uploading
-                        photoRepository.saveThumbnailToDisk(photo.localId, thumbnailData)
+                        // Cache thumbnail locally and update DB path so the gallery can show it
+                        val thumbPath = photoRepository.saveThumbnailToDisk(photo.localId, thumbnailData)
+                        db.photoDao().updateThumbnailPath(photo.localId, thumbPath)
 
                         // Choose upload path based on encryption mode
                         val mode = photoRepository.getEncryptionMode()
@@ -86,11 +96,13 @@ class BackupWorker @AssistedInject constructor(
                         } else {
                             photoRepository.uploadPhoto(photo, photoData, thumbnailData)
                         }
+                        Log.i(TAG, "Uploaded ${photo.localId} (${photo.filename}) successfully")
                     } else {
                         Log.w(TAG, "Failed to generate thumbnail for ${photo.localId}, skipping")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to upload ${photo.localId}: ${e.message}", e)
+                    // uploadPhotoPlain / uploadPhoto already set FAILED status internally
                 }
             }
 

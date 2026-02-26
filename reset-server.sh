@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
+# Resolve project root relative to this script's location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_DIR="$SCRIPT_DIR/server"
+
 echo "=== Simple Photos Server Reset ==="
 
 # Kill any running server
@@ -9,14 +13,14 @@ pkill -f simple-photos-server 2>/dev/null && sleep 1 || true
 
 # Wipe database and storage
 echo "Wiping database and storage..."
-rm -f ~/repos/simple-photos/server/data/db/*
-rm -rf ~/repos/simple-photos/server/data/storage/*/*
+rm -f "$SERVER_DIR/data/db/"*
+rm -rf "$SERVER_DIR/data/storage/"*/*
 
 echo "Data cleared."
 
 # Restart server
 echo "Starting server..."
-cd ~/repos/simple-photos/server && ./target/release/simple-photos-server &
+cd "$SERVER_DIR" && ./target/release/simple-photos-server &
 sleep 2
 
 # Verify setup state
