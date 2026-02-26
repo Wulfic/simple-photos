@@ -262,45 +262,7 @@ fun TrashScreen(
                     onLogout = { viewModel.logout(onLogout) },
                     onThemeToggle = { ThemeState.toggle(viewModel.dataStore) }
                 )
-            ) {
-                // Bulk action buttons shown when items are selected
-                if (viewModel.selectedIds.isNotEmpty()) {
-                    Spacer(Modifier.width(8.dp))
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF065F46).copy(alpha = 0.3f),
-                        modifier = Modifier.clickable(
-                            enabled = viewModel.actionLoading == null,
-                            onClick = { viewModel.restoreSelected() }
-                        )
-                    ) {
-                        Text(
-                            "Restore (${viewModel.selectedIds.size})",
-                            color = Color(0xFF34D399),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF991B1B).copy(alpha = 0.3f),
-                        modifier = Modifier.clickable(
-                            enabled = viewModel.actionLoading == null,
-                            onClick = { viewModel.deleteSelected() }
-                        )
-                    ) {
-                        Text(
-                            "Delete (${viewModel.selectedIds.size})",
-                            color = Color(0xFFF87171),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
-                }
-            }
+            )
         }
     ) { padding ->
         Column(
@@ -316,7 +278,7 @@ fun TrashScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             Icons.Default.Delete,
@@ -358,6 +320,50 @@ fun TrashScreen(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text("Empty Trash", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+
+            // ── Bulk action bar (shown when items are selected) ─────
+            if (viewModel.selectedIds.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF065F46).copy(alpha = 0.3f),
+                        modifier = Modifier.clickable(
+                            enabled = viewModel.actionLoading == null,
+                            onClick = { viewModel.restoreSelected() }
+                        )
+                    ) {
+                        Text(
+                            "Restore (${viewModel.selectedIds.size})",
+                            color = Color(0xFF34D399),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF991B1B).copy(alpha = 0.3f),
+                        modifier = Modifier.clickable(
+                            enabled = viewModel.actionLoading == null,
+                            onClick = { viewModel.deleteSelected() }
+                        )
+                    ) {
+                        Text(
+                            "Delete (${viewModel.selectedIds.size})",
+                            color = Color(0xFFF87171),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
                     }
                 }
             }

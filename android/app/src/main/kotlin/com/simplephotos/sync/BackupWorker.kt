@@ -46,13 +46,31 @@ class BackupWorker @AssistedInject constructor(
             // Step 3: Mark exhausted queue entries as failed
             db.blobQueueDao().markExhaustedAsFailed()
 
-            // Step 4: Process photos that need uploading:
+            // Step 4: Fetch the set of filenames already on the server so we
+            // can skip re-uploading photos that are already backed up.
+            val mode = photoRepository.getEncryptionMode()
+            val serverFilenames: Set<String> = if (mode == "plain") {
+                photoRepository.getServerFilenames()
+            } else {
+                emptySet() // encrypted mode uses blob IDs, not filenames
+            }
+
+            // Step 5: Process photos that need uploading:
             //   - PENDING (newly scanned or manually imported)
             //   - FAILED  (previous attempt hit an error — retry)
             val pending = db.photoDao().getByStatus(SyncStatus.PENDING) +
                           db.photoDao().getByStatus(SyncStatus.FAILED)
 
             for (photo in pending) {
+                // ── Server-side dedup ──────────────────────────────────
+                // If the server already has a photo with this exact filename,
+                // mark it SYNCED locally and skip the upload entirely.
+                if (mode == "plain" && photo.filename in serverFilenames) {
+                    Log.i(TAG, "Skipping ${photo.filename} — already exists on server")
+                    db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                    continue
+                }
+
                 val localPath = photo.localPath ?: continue
 
                 try {
@@ -89,8 +107,7 @@ class BackupWorker @AssistedInject constructor(
                         val thumbPath = photoRepository.saveThumbnailToDisk(photo.localId, thumbnailData)
                         db.photoDao().updateThumbnailPath(photo.localId, thumbPath)
 
-                        // Choose upload path based on encryption mode
-                        val mode = photoRepository.getEncryptionMode()
+                        // Upload based on encryption mode
                         if (mode == "plain") {
                             photoRepository.uploadPhotoPlain(photo, photoData)
                         } else {

@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.datastore.core.DataStore
@@ -115,22 +116,41 @@ fun AlbumListScreen(
                     onThemeToggle = { ThemeState.toggle(viewModel.dataStore) }
                 )
             )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { viewModel.showCreateDialog = true },
-                containerColor = MaterialTheme.colorScheme.primary
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "New Album")
-            }
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
+            // ── Page header with inline "New Album" button ───────────
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Albums",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Button(
+                    onClick = { viewModel.showCreateDialog = true },
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("New Album")
+                }
+            }
+
             viewModel.error?.let { err ->
                 Text(
                     err,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -141,7 +161,7 @@ fun AlbumListScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        "No albums yet.\nTap + to create one.",
+                        "No albums yet.\nTap New Album to create one.",
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

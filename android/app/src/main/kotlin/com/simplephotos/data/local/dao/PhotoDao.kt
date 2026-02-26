@@ -50,6 +50,10 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE localPath = :path LIMIT 1")
     suspend fun getByLocalPath(path: String): PhotoEntity?
 
+    /** Find a SYNCED photo with the same filename (for server dedup). */
+    @Query("SELECT * FROM photos WHERE filename = :filename AND syncStatus = 'SYNCED' LIMIT 1")
+    suspend fun getSyncedByFilename(filename: String): PhotoEntity?
+
     @Delete
     suspend fun delete(photo: PhotoEntity)
 
