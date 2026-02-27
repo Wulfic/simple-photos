@@ -261,15 +261,66 @@ fun PhotoViewerScreen(
     var showTagInput by remember { mutableStateOf(false) }
     var tagInputText by remember { mutableStateOf("") }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
+    // Controls overlay visibility — tap photo to toggle
+    var showOverlay by remember { mutableStateOf(true) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        // ── Full-screen pager (behind overlays) ────────────────────────
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize(),
+            key = { viewModel.allPhotos[it].localId }
+        ) { page ->
+            val photo = viewModel.allPhotos[page]
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    ) { showOverlay = !showOverlay }
+            ) {
+                PhotoPageContent(
+                    photo = photo,
+                    encryptionMode = viewModel.encryptionMode,
+                    serverBaseUrl = viewModel.serverBaseUrl,
+                    viewModel = viewModel
+                )
+            }
+        }
+
+        // ── Top bar overlay ────────────────────────────────────────────
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showOverlay,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter)
+        ) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.7f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", tint = Color.White)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = currentPhoto?.filename ?: "Viewer",
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleSmall
                         )
                         Text(
                             text = "${pagerState.currentPage + 1} / ${viewModel.allPhotos.size}",
@@ -277,15 +328,7 @@ fun PhotoViewerScreen(
                             color = Color.White.copy(alpha = 0.7f)
                         )
                     }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
-                    }
-                },
-                actions = {
                     if (currentPhoto != null) {
-                        // Favorite button — plain mode only
                         if (isPlainMode && currentPhoto.serverPhotoId != null) {
                             IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }) {
                                 Icon(
@@ -296,49 +339,29 @@ fun PhotoViewerScreen(
                             }
                         }
                         IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }) {
-                            Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = "Delete")
+                            Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = "Delete", tint = Color.White, modifier = Modifier.size(12.dp))
                         }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Black.copy(alpha = 0.7f),
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White
-                )
-            )
-        },
-        containerColor = Color.Black
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                key = { viewModel.allPhotos[it].localId }
-            ) { page ->
-                val photo = viewModel.allPhotos[page]
-                PhotoPageContent(
-                    photo = photo,
-                    encryptionMode = viewModel.encryptionMode,
-                    serverBaseUrl = viewModel.serverBaseUrl,
-                    viewModel = viewModel
-                )
+                }
             }
+        }
 
-            // Tag bar — plain mode only
-            if (isPlainMode && currentPhoto?.serverPhotoId != null) {
+        // ── Tag bar overlay (bottom) ───────────────────────────────────
+        if (isPlainMode && currentPhoto?.serverPhotoId != null) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showOverlay,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
                 Surface(
-                    color = Color.Black.copy(alpha = 0.6f)
+                    color = Color.Black.copy(alpha = 0.6f),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .navigationBarsPadding()
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Row(
@@ -346,7 +369,6 @@ fun PhotoViewerScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // Existing tags
                             viewModel.currentTags.forEach { tag ->
                                 Surface(
                                     shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
@@ -369,8 +391,6 @@ fun PhotoViewerScreen(
                                     }
                                 }
                             }
-
-                            // Add tag button or inline input
                             if (showTagInput) {
                                 OutlinedTextField(
                                     value = tagInputText,

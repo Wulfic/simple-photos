@@ -745,56 +745,46 @@ pub async fn background_sync_task(
 pub async fn background_auto_scan_task(
     pool: sqlx::SqlitePool,
     storage_root: std::path::PathBuf,
+    interval_secs: u64,
 ) {
-    // Wait 30 seconds after startup before first check
-    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    if interval_secs == 0 {
+        tracing::info!("Background auto-scan disabled (interval = 0)");
+        return;
+    }
 
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Check every hour
+    // Run an initial scan shortly after startup
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    tracing::info!("Running startup auto-scan...");
+    let count = run_auto_scan(&pool, &storage_root).await;
+    if count > 0 {
+        tracing::info!("Startup auto-scan: registered {} new files", count);
+    }
+    update_last_scan_time(&pool).await;
+
+    // Then scan on a configurable interval
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    tracing::info!("Auto-scan interval: every {} seconds", interval_secs);
 
     loop {
         interval.tick().await;
 
-        // Check when we last scanned
-        let last_scan: String = sqlx::query_scalar(
-            "SELECT value FROM server_settings WHERE key = 'last_auto_scan'",
-        )
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-
-        let should_scan = if last_scan.is_empty() {
-            true
-        } else if let Ok(last_dt) = chrono::DateTime::parse_from_rfc3339(&last_scan) {
-            let elapsed = Utc::now() - last_dt.with_timezone(&Utc);
-            elapsed.num_hours() >= 24
-        } else {
-            true
-        };
-
-        if !should_scan {
-            continue;
-        }
-
-        tracing::info!("Starting automatic storage scan...");
         let count = run_auto_scan(&pool, &storage_root).await;
         if count > 0 {
-            tracing::info!("Auto-scan complete: registered {} new files", count);
-        } else {
-            tracing::info!("Auto-scan complete: no new files found");
+            tracing::info!("Auto-scan: registered {} new files", count);
         }
-
-        // Update last scan time
-        let now = Utc::now().to_rfc3339();
-        let _ = sqlx::query(
-            "INSERT INTO server_settings (key, value) VALUES ('last_auto_scan', ?) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(&now)
-        .execute(&pool)
-        .await;
+        update_last_scan_time(&pool).await;
     }
+}
+
+async fn update_last_scan_time(pool: &sqlx::SqlitePool) {
+    let now = Utc::now().to_rfc3339();
+    let _ = sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('last_auto_scan', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(&now)
+    .execute(pool)
+    .await;
 }
 
 /// POST /api/admin/photos/auto-scan

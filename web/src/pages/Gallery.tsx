@@ -745,28 +745,32 @@ export default function Gallery() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <AppHeader>
-        {mode === "encrypted" && (
-          <label
-            className="flex items-center justify-center w-8 h-8 rounded-md text-gray-400 hover:text-white hover:bg-white/10 cursor-pointer transition-all duration-200 select-none"
-            title="Upload photos"
-          >
-            <AppIcon name="upload" size="w-5 h-5" />
-            <input
-              ref={inputRef}
-              type="file"
-              multiple
-              accept={ACCEPTED_MIME_TYPES}
-              className="hidden"
-              onChange={handleFileInput}
-              disabled={uploading}
-            />
-          </label>
-        )}
-      </AppHeader>
+      <AppHeader />
 
       <main className="p-4">
         {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
+
+        {/* Upload button — encrypted mode only */}
+        {mode === "encrypted" && (
+          <div className="flex justify-end mb-4">
+            <label
+              className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors shadow-sm cursor-pointer select-none"
+              title="Upload photos"
+            >
+              <AppIcon name="upload" size="w-4 h-4" themed={false} />
+              Upload
+              <input
+                ref={inputRef}
+                type="file"
+                multiple
+                accept={ACCEPTED_MIME_TYPES}
+                className="hidden"
+                onChange={handleFileInput}
+                disabled={uploading}
+              />
+            </label>
+          </div>
+        )}
 
         {/* Default album filter tabs — plain mode only */}
         {mode === "plain" && (

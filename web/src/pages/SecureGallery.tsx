@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { db, type CachedPhoto } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -25,6 +26,8 @@ interface GalleryItem {
  * Uses the user's account password (not a per-album password).
  */
 export default function SecureGallery() {
+  const navigate = useNavigate();
+
   // Auth gate state
   const [authenticated, setAuthenticated] = useState(false);
   const [galleryToken, setGalleryToken] = useState("");
@@ -256,9 +259,11 @@ export default function SecureGallery() {
   if (selectedGallery) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-        <AppHeader>
-          {showAddPhotos ? (
-            <>
+        <AppHeader />
+        <main className="max-w-6xl mx-auto p-4">
+          {/* Add photos action bar */}
+          {showAddPhotos && (
+            <div className="flex justify-end gap-2 mb-4">
               <button
                 onClick={handleAddSelectedPhotos}
                 disabled={selectedPhotos.size === 0 || addingPhotos}
@@ -275,10 +280,8 @@ export default function SecureGallery() {
               >
                 Cancel
               </button>
-            </>
-          ) : null}
-        </AppHeader>
-        <main className="max-w-6xl mx-auto p-4">
+            </div>
+          )}
           {/* Back + title + actions */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
@@ -401,8 +404,19 @@ export default function SecureGallery() {
             </div>
           ) : !showAddPhotos ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-              {items.map((item) => (
-                <ItemTile key={item.id} item={item} />
+              {items.map((item, idx) => (
+                <ItemTile
+                  key={item.id}
+                  item={item}
+                  onClick={() =>
+                    navigate(`/photo/${item.blob_id}`, {
+                      state: {
+                        photoIds: items.map((i) => i.blob_id),
+                        currentIndex: idx,
+                      },
+                    })
+                  }
+                />
               ))}
             </div>
           ) : null}
@@ -565,7 +579,7 @@ export default function SecureGallery() {
 
 // ── Item Tile (shows decrypted thumbnail if available) ────────────────────────
 
-function ItemTile({ item }: { item: GalleryItem }) {
+function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => void }) {
   const cachedPhoto = useLiveQuery(
     () => db.photos.get(item.blob_id),
     [item.blob_id]
@@ -573,14 +587,20 @@ function ItemTile({ item }: { item: GalleryItem }) {
 
   if (cachedPhoto?.thumbnailData) {
     return (
-      <div className="aspect-square bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden">
+      <div
+        className="aspect-square bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+        onClick={onClick}
+      >
         <PhotoThumbnail photo={cachedPhoto} />
       </div>
     );
   }
 
   return (
-    <div className="aspect-square bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center overflow-hidden">
+    <div
+      className="aspect-square bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+      onClick={onClick}
+    >
       <div className="text-center text-gray-400">
         <span className="text-2xl block mb-1">🔐</span>
         <span className="text-xs">Encrypted</span>

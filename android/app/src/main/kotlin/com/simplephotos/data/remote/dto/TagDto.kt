@@ -30,6 +30,11 @@ data class SearchResult(
     @SerializedName("mime_type") val mimeType: String,
     @SerializedName("thumb_path") val thumbPath: String?,
     @SerializedName("created_at") val createdAt: String,
+    @SerializedName("taken_at") val takenAt: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val width: Int? = null,
+    val height: Int? = null,
     val tags: List<String>
 )
 

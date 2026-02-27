@@ -35,6 +35,11 @@ pub struct SearchResult {
     pub mime_type: String,
     pub thumb_path: Option<String>,
     pub created_at: String,
+    pub taken_at: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
     pub tags: Vec<String>,
 }
 

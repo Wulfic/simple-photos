@@ -92,7 +92,7 @@ pub async fn remove_tag(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// GET /api/search — search photos by tag (and optionally filename)
+/// GET /api/search — search photos by tag, filename, date, location, or media type
 pub async fn search_photos(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -105,22 +105,38 @@ pub async fn search_photos(
         return Ok(Json(SearchResponse { results: vec![] }));
     }
 
-    // Search both plain photos and blobs by matching tags OR filename
     let like_pattern = format!("%{}%", query);
 
-    // Search plain-mode photos that match by tag or filename
+    // Build a comprehensive search across tags, filename, file_path, media_type,
+    // taken_at, created_at, and text representations of lat/lon
     let rows: Vec<SearchRow> = sqlx::query_as(
-        "SELECT DISTINCT p.id, p.filename, p.media_type, p.mime_type, p.thumb_path, p.created_at
+        "SELECT DISTINCT p.id, p.filename, p.media_type, p.mime_type, p.thumb_path,
+                p.created_at, p.taken_at, p.latitude, p.longitude, p.width, p.height
          FROM photos p
          LEFT JOIN photo_tags pt ON pt.photo_id = p.id AND pt.user_id = p.user_id
          WHERE p.user_id = ? AND p.encrypted_blob_id IS NULL
-           AND (pt.tag LIKE ? OR p.filename LIKE ?)
+           AND (
+             pt.tag LIKE ?
+             OR p.filename LIKE ?
+             OR p.file_path LIKE ?
+             OR p.media_type LIKE ?
+             OR p.taken_at LIKE ?
+             OR p.created_at LIKE ?
+             OR CAST(p.latitude AS TEXT) LIKE ?
+             OR CAST(p.longitude AS TEXT) LIKE ?
+           )
          ORDER BY p.created_at DESC
          LIMIT ?",
     )
     .bind(&auth.user_id)
-    .bind(&like_pattern)
-    .bind(&like_pattern)
+    .bind(&like_pattern)       // tag
+    .bind(&like_pattern)       // filename
+    .bind(&like_pattern)       // file_path (folder names)
+    .bind(&like_pattern)       // media_type (photo/video/gif)
+    .bind(&like_pattern)       // taken_at
+    .bind(&like_pattern)       // created_at
+    .bind(&like_pattern)       // latitude
+    .bind(&like_pattern)       // longitude
     .bind(limit)
     .fetch_all(&state.pool)
     .await?;
@@ -143,6 +159,11 @@ pub async fn search_photos(
             mime_type: row.mime_type,
             thumb_path: row.thumb_path,
             created_at: row.created_at,
+            taken_at: row.taken_at,
+            latitude: row.latitude,
+            longitude: row.longitude,
+            width: row.width,
+            height: row.height,
             tags: tags.into_iter().map(|(t,)| t).collect(),
         });
     }
@@ -158,4 +179,9 @@ struct SearchRow {
     mime_type: String,
     thumb_path: Option<String>,
     created_at: String,
+    taken_at: Option<String>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    width: Option<i32>,
+    height: Option<i32>,
 }

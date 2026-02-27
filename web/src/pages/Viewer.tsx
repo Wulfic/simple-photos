@@ -385,16 +385,21 @@ export default function Viewer() {
         </button>
         <span className="text-white text-sm truncate mx-4 max-w-xs">{filename}</span>
         <div className="flex gap-3 items-center">
-          {/* Crop/Edit button — plain mode photos only (not videos/gifs) */}
+          {/* Edit/Crop button — plain mode photos only (not videos/gifs) */}
           {isPlainMode && mediaType === "photo" && (
             <button
               onClick={() => { setShowCropEditor(!showCropEditor); setCropRect(null); }}
-              className="text-white hover:text-gray-300 text-sm"
+              className={`flex items-center gap-1 px-2 py-1 rounded text-sm font-medium transition-colors ${
+                showCropEditor
+                  ? "bg-blue-600 text-white"
+                  : "text-white hover:bg-white/20"
+              }`}
               title="Edit / Crop"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h10v10M7 17V3m14 4H7m10 10v4" />
               </svg>
+              <span className="hidden sm:inline">Edit</span>
             </button>
           )}
           {/* Favorite button — plain mode only */}

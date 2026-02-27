@@ -57,7 +57,7 @@ export default function AppIcon({
     <img
       src={`/icons/${name}.png`}
       alt={alt}
-      className={`${size} ${themed ? "dark:invert" : ""} ${className}`.trim()}
+      className={`${size} shrink-0 object-contain ${themed ? "dark:invert" : ""} ${className}`.trim()}
       draggable={false}
     />
   );

@@ -14,6 +14,11 @@ interface SearchResult {
   mime_type: string;
   thumb_path: string | null;
   created_at: string;
+  taken_at: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  width: number | null;
+  height: number | null;
   tags: string[];
 }
 
@@ -82,7 +87,7 @@ export default function Search() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by tag or filename…"
+            placeholder="Search tags, filenames, dates, media types…"
             className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
           />
           {query && (
@@ -125,7 +130,7 @@ export default function Search() {
           <div className="text-center py-12">
             <p className="text-gray-500 dark:text-gray-400">No results found for "{query}"</p>
             <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
-              Try a different tag name or filename
+              Try a tag, filename, date (e.g. "2024"), or type (e.g. "video")
             </p>
           </div>
         )}
@@ -254,6 +259,20 @@ function SearchResultTile({
           GIF
         </div>
       )}
+
+      {/* Metadata overlay on hover (date + location) */}
+      <div className="absolute inset-x-0 bottom-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-t from-black/60 to-transparent">
+        {result.taken_at && (
+          <p className="text-white text-[10px] truncate">
+            {new Date(result.taken_at).toLocaleDateString()}
+          </p>
+        )}
+        {result.latitude != null && result.longitude != null && (
+          <p className="text-white/80 text-[10px] truncate">
+            📍 {result.latitude.toFixed(4)}, {result.longitude.toFixed(4)}
+          </p>
+        )}
+      </div>
 
       {/* Tag chips overlay on hover */}
       {result.tags.length > 0 && (

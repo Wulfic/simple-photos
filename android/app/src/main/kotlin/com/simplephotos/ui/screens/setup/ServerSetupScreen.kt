@@ -188,11 +188,13 @@ fun ServerSetupScreen(
                         }
                         IconButton(
                             onClick = { viewModel.scanNetwork() },
-                            enabled = !viewModel.scanning
+                            enabled = !viewModel.scanning,
+                            modifier = Modifier.size(24.dp)
                         ) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_reload),
-                                contentDescription = "Rescan"
+                                contentDescription = "Rescan",
+                                modifier = Modifier.size(12.dp)
                             )
                         }
                     }
