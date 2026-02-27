@@ -35,6 +35,9 @@ class BackupFolderRepository @Inject constructor(
         /** Default folder: the standard camera roll path. */
         private const val DEFAULT_CAMERA_PATH = "DCIM/Camera"
         private const val DEFAULT_CAMERA_NAME = "Camera"
+
+        /** Sentinel bucket ID used when no camera photos exist yet. */
+        val PLACEHOLDER_BUCKET_ID = DEFAULT_CAMERA_PATH.hashCode().toLong()
     }
 
     fun getSelectedFolders(): Flow<List<BackupFolderEntity>> =
@@ -51,7 +54,12 @@ class BackupFolderRepository @Inject constructor(
      * Sets DCIM/Camera as the default backup folder.
      */
     suspend fun initializeDefaultsIfNeeded() {
-        if (db.backupFolderDao().count() > 0) return
+        if (db.backupFolderDao().count() > 0) {
+            // Already initialized — but check if we have a placeholder bucket ID
+            // that needs to be resolved to a real MediaStore bucket ID.
+            resolvePlaceholderBucket()
+            return
+        }
 
         // Find the Camera bucket from MediaStore
         val cameraFolder = scanDeviceFolders().find { folder ->
@@ -73,13 +81,42 @@ class BackupFolderRepository @Inject constructor(
             // that will match once photos are taken
             db.backupFolderDao().insert(
                 BackupFolderEntity(
-                    bucketId = DEFAULT_CAMERA_PATH.hashCode().toLong(),
+                    bucketId = PLACEHOLDER_BUCKET_ID,
                     bucketName = DEFAULT_CAMERA_NAME,
                     relativePath = DEFAULT_CAMERA_PATH,
                     enabled = true
                 )
             )
         }
+    }
+
+    /**
+     * If we inserted a placeholder bucket ID at first launch (because the
+     * Camera folder didn't exist yet), check whether photos now exist in
+     * DCIM/Camera and replace the placeholder with the real MediaStore
+     * bucket ID so the scan filter actually matches.
+     */
+    private suspend fun resolvePlaceholderBucket() {
+        val enabledFolders = db.backupFolderDao().getEnabledFolders()
+        val placeholder = enabledFolders.find { it.bucketId == PLACEHOLDER_BUCKET_ID }
+            ?: return // no placeholder — nothing to fix
+
+        // Re-scan device to find the real Camera bucket
+        val cameraFolder = scanDeviceFolders().find { folder ->
+            folder.relativePath.contains("DCIM/Camera", ignoreCase = true) ||
+            folder.bucketName.equals("Camera", ignoreCase = true)
+        } ?: return // still no camera folder on device
+
+        // Replace the placeholder with the real bucket ID
+        db.backupFolderDao().delete(placeholder)
+        db.backupFolderDao().insert(
+            BackupFolderEntity(
+                bucketId = cameraFolder.bucketId,
+                bucketName = cameraFolder.bucketName,
+                relativePath = cameraFolder.relativePath,
+                enabled = true
+            )
+        )
     }
 
     /**

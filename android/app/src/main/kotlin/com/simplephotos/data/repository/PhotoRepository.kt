@@ -92,10 +92,18 @@ class PhotoRepository @Inject constructor(
         db.photoDao().updateSyncStatus(photo.localId, SyncStatus.UPLOADING)
         try {
             val body = photoData.toRequestBody("application/octet-stream".toMediaType())
+            android.util.Log.d("PhotoRepository", "uploadPhotoPlain: sending ${photoData.size} bytes, filename=${photo.filename}, mime=${photo.mimeType}")
             val result = api.uploadPhoto(body, photo.filename, photo.mimeType)
+            android.util.Log.d("PhotoRepository", "uploadPhotoPlain: server returned photoId=${result.photoId}, sizeBytes=${result.sizeBytes}")
 
             db.photoDao().markSyncedPlain(photo.localId, result.photoId)
+        } catch (e: retrofit2.HttpException) {
+            val errorBody = e.response()?.errorBody()?.string()
+            android.util.Log.e("PhotoRepository", "uploadPhotoPlain HTTP ${e.code()}: $errorBody", e)
+            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
+            throw e
         } catch (e: Exception) {
+            android.util.Log.e("PhotoRepository", "uploadPhotoPlain failed: ${e.message}", e)
             db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
             throw e
         }
@@ -117,6 +125,8 @@ class PhotoRepository @Inject constructor(
                 else -> "photo"
             }
 
+            android.util.Log.d("PhotoRepository", "uploadPhoto: encrypting thumbnail for ${photo.filename}")
+
             // Build & encrypt thumbnail payload
             val thumbPayload = JSONObject().apply {
                 put("v", 1)
@@ -129,7 +139,10 @@ class PhotoRepository @Inject constructor(
             val encryptedThumb = crypto.encrypt(thumbPayload.toByteArray())
             val thumbHash = crypto.sha256Hex(encryptedThumb)
             val thumbBody = encryptedThumb.toRequestBody("application/octet-stream".toMediaType())
+
+            android.util.Log.d("PhotoRepository", "uploadPhoto: uploading thumbnail blob (${encryptedThumb.size} bytes, type=$thumbBlobType)")
             val thumbRes = api.uploadBlob(thumbBody, thumbBlobType, encryptedThumb.size.toString(), thumbHash)
+            android.util.Log.d("PhotoRepository", "uploadPhoto: thumbnail uploaded, blobId=${thumbRes.blobId}")
 
             // Build & encrypt media payload
             val mediaPayload = JSONObject().apply {
@@ -151,13 +164,22 @@ class PhotoRepository @Inject constructor(
             val encryptedPhoto = crypto.encrypt(mediaPayload.toByteArray())
             val photoHash = crypto.sha256Hex(encryptedPhoto)
             val photoBody = encryptedPhoto.toRequestBody("application/octet-stream".toMediaType())
+
+            android.util.Log.d("PhotoRepository", "uploadPhoto: uploading media blob (${encryptedPhoto.size} bytes, type=$mediaBlobType)")
             val photoRes = api.uploadBlob(photoBody, mediaBlobType, encryptedPhoto.size.toString(), photoHash)
+            android.util.Log.d("PhotoRepository", "uploadPhoto: media uploaded, blobId=${photoRes.blobId}")
 
             db.photoDao().markSynced(photo.localId, photoRes.blobId, thumbRes.blobId)
 
             // Cache uploaded thumbnail locally
             saveThumbnailToDisk(photo.localId, thumbnailData)
+        } catch (e: retrofit2.HttpException) {
+            val errorBody = e.response()?.errorBody()?.string()
+            android.util.Log.e("PhotoRepository", "uploadPhoto HTTP ${e.code()}: $errorBody", e)
+            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
+            throw e
         } catch (e: Exception) {
+            android.util.Log.e("PhotoRepository", "uploadPhoto failed: ${e.message}", e)
             db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
             throw e
         }
@@ -223,6 +245,15 @@ class PhotoRepository @Inject constructor(
             for (photo in listResult.photos) {
                 // Skip if we already have this server photo ID tracked
                 if (db.photoDao().getByServerPhotoId(photo.id) != null) continue
+
+                // Skip server-side duplicates: if the filename looks like a
+                // rename suffix (e.g. "IMG_001_1.jpg") and we already have
+                // the base file tracked, don't create a second Room entry.
+                val baseFilename = stripRenameSuffix(photo.filename)
+                if (baseFilename != photo.filename) {
+                    // This is a renamed duplicate — skip it entirely
+                    continue
+                }
 
                 // Cross-match: check if we have a local photo with the same
                 // filename that hasn't been uploaded yet. If so, link it to
@@ -368,5 +399,20 @@ class PhotoRepository @Inject constructor(
         val file = File(thumbnailDir, "$photoLocalId.jpg")
         file.writeBytes(thumbnailBytes)
         return file.absolutePath
+    }
+
+    /**
+     * Strip server-side rename suffixes (e.g. "IMG_001_1.jpg" → "IMG_001.jpg").
+     * The server appends `_N` before the extension when a filename collision
+     * occurs on disk. We detect this pattern so the client can skip importing
+     * these server-created duplicates.
+     */
+    private fun stripRenameSuffix(filename: String): String {
+        val dot = filename.lastIndexOf('.')
+        if (dot <= 0) return filename
+        val stem = filename.substring(0, dot)
+        val ext = filename.substring(dot)
+        val match = Regex("^(.+)_\\d+$").find(stem) ?: return filename
+        return match.groupValues[1] + ext
     }
 }

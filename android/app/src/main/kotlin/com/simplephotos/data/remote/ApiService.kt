@@ -139,4 +139,8 @@ interface ApiService {
     // ── Health ────────────────────────────────────────────────────────────
     @GET("health")
     suspend fun health(): Map<String, String>
+
+    // ── Client Diagnostic Logs ───────────────────────────────────────────
+    @POST("api/client-logs")
+    suspend fun submitClientLogs(@Body batch: ClientLogBatch): Map<String, Any>
 }

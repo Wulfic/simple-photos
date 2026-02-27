@@ -6,16 +6,21 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.media.ThumbnailUtils
 import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.SyncStatus
+import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.SyncRepository
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -26,7 +31,9 @@ class BackupWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val photoRepository: PhotoRepository,
     private val syncRepository: SyncRepository,
-    private val db: AppDatabase
+    private val db: AppDatabase,
+    private val api: ApiService,
+    private val dataStore: DataStore<Preferences>
 ) : CoroutineWorker(context, params) {
 
     companion object {
@@ -35,22 +42,49 @@ class BackupWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val prefs = dataStore.data.first()
+        val loggingEnabled = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
+        val diag = DiagnosticLogger(api, loggingEnabled)
         try {
+            diag.info(TAG, "Backup worker started", mapOf(
+                "runAttemptCount" to runAttemptCount.toString()
+            ))
+
             // Step 1: Scan MediaStore for new photos and videos
+            diag.info(TAG, "Scanning MediaStore for new media")
             syncRepository.scanForNewMedia()
 
             // Step 2: Recover stuck uploads — photos left at UPLOADING from a crash
             // are reset to PENDING so they get retried.
             db.photoDao().resetStuckUploading()
+            diag.debug(TAG, "Reset any stuck UPLOADING photos back to PENDING")
 
             // Step 3: Mark exhausted queue entries as failed
             db.blobQueueDao().markExhaustedAsFailed()
 
             // Step 4: Fetch the set of filenames already on the server so we
             // can skip re-uploading photos that are already backed up.
-            val mode = photoRepository.getEncryptionMode()
+            val mode = try {
+                photoRepository.getEncryptionMode()
+            } catch (e: Exception) {
+                diag.error(TAG, "Failed to get encryption mode from server: ${e.message}", mapOf(
+                    "exception" to (e::class.simpleName ?: "Unknown")
+                ))
+                throw e
+            }
+            diag.info(TAG, "Encryption mode: $mode")
+
             val serverFilenames: Set<String> = if (mode == "plain") {
-                photoRepository.getServerFilenames()
+                try {
+                    val names = photoRepository.getServerFilenames()
+                    diag.info(TAG, "Fetched ${names.size} existing filenames from server")
+                    names
+                } catch (e: Exception) {
+                    diag.error(TAG, "Failed to fetch server filenames: ${e.message}", mapOf(
+                        "exception" to (e::class.simpleName ?: "Unknown")
+                    ))
+                    emptySet()
+                }
             } else {
                 emptySet() // encrypted mode uses blob IDs, not filenames
             }
@@ -61,26 +95,59 @@ class BackupWorker @AssistedInject constructor(
             val pending = db.photoDao().getByStatus(SyncStatus.PENDING) +
                           db.photoDao().getByStatus(SyncStatus.FAILED)
 
+            diag.info(TAG, "Found ${pending.size} photos to process", mapOf(
+                "pendingCount" to db.photoDao().getByStatus(SyncStatus.PENDING).size.toString(),
+                "failedCount" to db.photoDao().getByStatus(SyncStatus.FAILED).size.toString()
+            ))
+
+            var uploaded = 0
+            var skipped = 0
+            var failed = 0
+
             for (photo in pending) {
                 // ── Server-side dedup ──────────────────────────────────
                 // If the server already has a photo with this exact filename,
                 // mark it SYNCED locally and skip the upload entirely.
                 if (mode == "plain" && photo.filename in serverFilenames) {
-                    Log.i(TAG, "Skipping ${photo.filename} — already exists on server")
+                    diag.debug(TAG, "Skipping ${photo.filename} — already exists on server", mapOf(
+                        "localId" to photo.localId,
+                        "filename" to photo.filename
+                    ))
                     db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                    skipped++
                     continue
                 }
 
-                val localPath = photo.localPath ?: continue
+                val localPath = photo.localPath
+                if (localPath == null) {
+                    diag.warn(TAG, "Photo has no localPath, skipping", mapOf(
+                        "localId" to photo.localId,
+                        "filename" to photo.filename
+                    ))
+                    failed++
+                    continue
+                }
 
                 try {
                     val uri = android.net.Uri.parse(localPath)
                     val inputStream = applicationContext.contentResolver.openInputStream(uri)
                     if (inputStream == null) {
-                        Log.w(TAG, "Cannot open ${photo.localId} — content URI inaccessible, skipping")
+                        diag.warn(TAG, "Cannot open content URI — inaccessible", mapOf(
+                            "localId" to photo.localId,
+                            "filename" to photo.filename,
+                            "uri" to localPath
+                        ))
+                        failed++
                         continue
                     }
                     val photoData = inputStream.use { it.readBytes() }
+                    diag.debug(TAG, "Read ${photoData.size} bytes from content URI", mapOf(
+                        "localId" to photo.localId,
+                        "filename" to photo.filename,
+                        "sizeBytes" to photoData.size.toString(),
+                        "mediaType" to (photo.mediaType ?: "unknown"),
+                        "mimeType" to photo.mimeType
+                    ))
 
                     // Generate thumbnail based on media type
                     val thumbnailData = when (photo.mediaType) {
@@ -103,28 +170,90 @@ class BackupWorker @AssistedInject constructor(
                     }
 
                     if (thumbnailData != null) {
-                        // Cache thumbnail locally and update DB path so the gallery can show it
+                        diag.debug(TAG, "Generated thumbnail (${thumbnailData.size} bytes)", mapOf(
+                            "localId" to photo.localId
+                        ))
+                    } else {
+                        diag.warn(TAG, "Thumbnail generation returned null", mapOf(
+                            "localId" to photo.localId,
+                            "mediaType" to (photo.mediaType ?: "unknown")
+                        ))
+                    }
+
+                    // Cache thumbnail locally if we were able to generate one
+                    if (thumbnailData != null) {
                         val thumbPath = photoRepository.saveThumbnailToDisk(photo.localId, thumbnailData)
                         db.photoDao().updateThumbnailPath(photo.localId, thumbPath)
+                    }
 
-                        // Upload based on encryption mode
-                        if (mode == "plain") {
-                            photoRepository.uploadPhotoPlain(photo, photoData)
-                        } else {
-                            photoRepository.uploadPhoto(photo, photoData, thumbnailData)
-                        }
-                        Log.i(TAG, "Uploaded ${photo.localId} (${photo.filename}) successfully")
+                    // Upload based on encryption mode
+                    if (mode == "plain") {
+                        // Plain mode sends raw bytes — thumbnail is NOT required
+                        diag.info(TAG, "Uploading photo (plain mode)", mapOf(
+                            "localId" to photo.localId,
+                            "filename" to photo.filename,
+                            "sizeBytes" to photoData.size.toString()
+                        ))
+                        photoRepository.uploadPhotoPlain(photo, photoData)
+                        diag.info(TAG, "Upload succeeded (plain mode)", mapOf(
+                            "localId" to photo.localId,
+                            "filename" to photo.filename
+                        ))
+                        uploaded++
                     } else {
-                        Log.w(TAG, "Failed to generate thumbnail for ${photo.localId}, skipping")
+                        // Encrypted mode bundles thumbnail inside the encrypted payload,
+                        // so we must have a thumbnail to proceed.
+                        if (thumbnailData != null) {
+                            diag.info(TAG, "Uploading photo (encrypted mode)", mapOf(
+                                "localId" to photo.localId,
+                                "filename" to photo.filename,
+                                "sizeBytes" to photoData.size.toString()
+                            ))
+                            photoRepository.uploadPhoto(photo, photoData, thumbnailData)
+                            diag.info(TAG, "Upload succeeded (encrypted mode)", mapOf(
+                                "localId" to photo.localId,
+                                "filename" to photo.filename
+                            ))
+                            uploaded++
+                        } else {
+                            diag.warn(TAG, "Skipping upload — encrypted mode requires thumbnail", mapOf(
+                                "localId" to photo.localId,
+                                "filename" to photo.filename
+                            ))
+                            failed++
+                        }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to upload ${photo.localId}: ${e.message}", e)
+                    diag.error(TAG, "Upload failed: ${e.message}", mapOf(
+                        "localId" to photo.localId,
+                        "filename" to photo.filename,
+                        "exception" to (e::class.simpleName ?: "Unknown"),
+                        "errorDetail" to (e.message ?: "no message")
+                    ))
+                    failed++
                     // uploadPhotoPlain / uploadPhoto already set FAILED status internally
                 }
             }
 
+            diag.info(TAG, "Backup worker finished", mapOf(
+                "uploaded" to uploaded.toString(),
+                "skipped" to skipped.toString(),
+                "failed" to failed.toString(),
+                "totalProcessed" to pending.size.toString()
+            ))
+
+            // Re-register the reactive content-URI observer so the next
+            // new photo/video also triggers a backup automatically.
+            SyncScheduler.rescheduleReactive(applicationContext)
+
+            diag.flush()
             Result.success()
         } catch (e: Exception) {
+            diag.error(TAG, "Backup worker crashed: ${e.message}", mapOf(
+                "exception" to (e::class.simpleName ?: "Unknown"),
+                "errorDetail" to (e.stackTraceToString().take(1000))
+            ))
+            diag.flush()
             Log.e(TAG, "Backup worker failed", e)
             Result.retry()
         }
