@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
+import { db, type CachedTrashItem } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 
@@ -21,6 +22,10 @@ interface TrashItem {
   thumb_path: string | null;
   deleted_at: string;
   expires_at: string;
+  encrypted_blob_id: string | null;
+  thumbnail_blob_id: string | null;
+  /** Local thumbnail object URL for encrypted items */
+  _localThumbUrl?: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -78,7 +83,23 @@ export default function Trash() {
       setLoading(true);
       setError(null);
       const resp = await api.trash.list({ limit: 500 });
-      setItems(resp.items);
+
+      // For encrypted items, load cached thumbnails from local Dexie trash table
+      const enriched: TrashItem[] = [];
+      for (const item of resp.items) {
+        if (item.encrypted_blob_id) {
+          const localItem = await db.trash.get(item.id);
+          if (localItem?.thumbnailData) {
+            const blob = new Blob([localItem.thumbnailData], {
+              type: "image/jpeg",
+            });
+            (item as TrashItem)._localThumbUrl = URL.createObjectURL(blob);
+          }
+        }
+        enriched.push(item as TrashItem);
+      }
+
+      setItems(enriched);
     } catch (e: any) {
       setError(e.message || "Failed to load trash");
     } finally {
@@ -95,7 +116,32 @@ export default function Trash() {
   async function handleRestore(id: string) {
     setActionLoading(id);
     try {
+      const item = items.find((i) => i.id === id);
       await api.trash.restore(id);
+
+      // For encrypted items, restore the local Dexie photo record
+      if (item?.encrypted_blob_id) {
+        const localTrash = await db.trash.get(id);
+        if (localTrash) {
+          await db.photos.put({
+            blobId: localTrash.blobId,
+            thumbnailBlobId: localTrash.thumbnailBlobId,
+            filename: localTrash.filename,
+            mimeType: localTrash.mimeType,
+            mediaType: localTrash.mediaType,
+            width: localTrash.width,
+            height: localTrash.height,
+            takenAt: localTrash.takenAt,
+            thumbnailData: localTrash.thumbnailData,
+            duration: localTrash.duration,
+            albumIds: localTrash.albumIds ?? [],
+          });
+          await db.trash.delete(id);
+        }
+        // Revoke the local thumbnail URL
+        if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
+      }
+
       setItems((prev) => prev.filter((i) => i.id !== id));
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -112,7 +158,15 @@ export default function Trash() {
   async function handlePermanentDelete(id: string) {
     setActionLoading(id);
     try {
+      const item = items.find((i) => i.id === id);
       await api.trash.permanentDelete(id);
+
+      // Clean up local Dexie trash entry for encrypted items
+      if (item?.encrypted_blob_id) {
+        await db.trash.delete(id).catch(() => {});
+        if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
+      }
+
       setItems((prev) => prev.filter((i) => i.id !== id));
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -130,6 +184,11 @@ export default function Trash() {
     setActionLoading("empty");
     try {
       await api.trash.emptyTrash();
+      // Clean up all local Dexie trash entries and revoke URLs
+      for (const item of items) {
+        if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
+      }
+      await db.trash.clear();
       setItems([]);
       setSelectedIds(new Set());
       setConfirmEmpty(false);
@@ -144,7 +203,30 @@ export default function Trash() {
     setActionLoading("bulk-restore");
     try {
       for (const id of selectedIds) {
+        const item = items.find((i) => i.id === id);
         await api.trash.restore(id);
+
+        // For encrypted items, restore local Dexie photo record
+        if (item?.encrypted_blob_id) {
+          const localTrash = await db.trash.get(id);
+          if (localTrash) {
+            await db.photos.put({
+              blobId: localTrash.blobId,
+              thumbnailBlobId: localTrash.thumbnailBlobId,
+              filename: localTrash.filename,
+              mimeType: localTrash.mimeType,
+              mediaType: localTrash.mediaType,
+              width: localTrash.width,
+              height: localTrash.height,
+              takenAt: localTrash.takenAt,
+              thumbnailData: localTrash.thumbnailData,
+              duration: localTrash.duration,
+              albumIds: localTrash.albumIds ?? [],
+            });
+            await db.trash.delete(id);
+          }
+          if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
+        }
       }
       setItems((prev) => prev.filter((i) => !selectedIds.has(i.id)));
       setSelectedIds(new Set());
@@ -160,7 +242,12 @@ export default function Trash() {
     setActionLoading("bulk-delete");
     try {
       for (const id of selectedIds) {
+        const item = items.find((i) => i.id === id);
         await api.trash.permanentDelete(id);
+        if (item?.encrypted_blob_id) {
+          await db.trash.delete(id).catch(() => {});
+          if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
+        }
       }
       setItems((prev) => prev.filter((i) => !selectedIds.has(i.id)));
       setSelectedIds(new Set());
@@ -197,26 +284,7 @@ export default function Trash() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <AppHeader>
-        {selectedIds.size > 0 && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleRestoreSelected}
-              disabled={actionLoading !== null}
-              className="px-3 py-1.5 text-sm font-medium text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30 rounded-lg hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors disabled:opacity-50"
-            >
-              Restore ({selectedIds.size})
-            </button>
-            <button
-              onClick={handleDeleteSelected}
-              disabled={actionLoading !== null}
-              className="px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors disabled:opacity-50"
-            >
-              Delete ({selectedIds.size})
-            </button>
-          </div>
-        )}
-      </AppHeader>
+      <AppHeader />
 
       <main className="max-w-screen-2xl mx-auto px-4 py-6">
         {/* ── Stats Bar ─────────────────────────────────────────────── */}
@@ -232,16 +300,36 @@ export default function Trash() {
                 : `${items.length} item${items.length !== 1 ? "s" : ""} · ${formatBytes(totalSize)} · Items are permanently deleted after 30 days`}
             </p>
           </div>
-          {items.length > 0 && (
-            <button
-              onClick={() => setConfirmEmpty(true)}
-              disabled={actionLoading !== null}
-              className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2 shrink-0"
-            >
-              <AppIcon name="trashcan" />
-              Empty Trash
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {selectedIds.size > 0 && (
+              <>
+                <button
+                  onClick={handleRestoreSelected}
+                  disabled={actionLoading !== null}
+                  className="px-3 py-1.5 text-sm font-medium text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30 rounded-lg hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors disabled:opacity-50"
+                >
+                  Restore ({selectedIds.size})
+                </button>
+                <button
+                  onClick={handleDeleteSelected}
+                  disabled={actionLoading !== null}
+                  className="px-3 py-1.5 text-sm font-medium text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors disabled:opacity-50"
+                >
+                  Delete ({selectedIds.size})
+                </button>
+              </>
+            )}
+            {items.length > 0 && (
+              <button
+                onClick={() => setConfirmEmpty(true)}
+                disabled={actionLoading !== null}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2 shrink-0"
+              >
+                <AppIcon name="trashcan" />
+                Empty Trash
+              </button>
+            )}
+          </div>
         </div>
 
         {/* ── Error ─────────────────────────────────────────────────── */}
@@ -294,9 +382,11 @@ export default function Trash() {
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
             {items.map((item) => {
               const isSelected = selectedIds.has(item.id);
-              const thumbUrl = accessToken
-                ? `${api.trash.thumbUrl(item.id)}?t=${accessToken}`
-                : api.trash.thumbUrl(item.id);
+              const thumbUrl = item._localThumbUrl
+                ? item._localThumbUrl
+                : accessToken
+                  ? `${api.trash.thumbUrl(item.id)}?t=${accessToken}`
+                  : api.trash.thumbUrl(item.id);
 
               return (
                 <div

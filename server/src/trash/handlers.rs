@@ -27,7 +27,7 @@ pub async fn list_trash(
         sqlx::query_as::<_, TrashItem>(
             "SELECT id, photo_id, filename, file_path, mime_type, media_type, size_bytes, \
              width, height, duration_secs, taken_at, latitude, longitude, thumb_path, \
-             deleted_at, expires_at \
+             deleted_at, expires_at, encrypted_blob_id, thumbnail_blob_id \
              FROM trash_items WHERE user_id = ? AND deleted_at < ? \
              ORDER BY deleted_at DESC LIMIT ?",
         )
@@ -40,7 +40,7 @@ pub async fn list_trash(
         sqlx::query_as::<_, TrashItem>(
             "SELECT id, photo_id, filename, file_path, mime_type, media_type, size_bytes, \
              width, height, duration_secs, taken_at, latitude, longitude, thumb_path, \
-             deleted_at, expires_at \
+             deleted_at, expires_at, encrypted_blob_id, thumbnail_blob_id \
              FROM trash_items WHERE user_id = ? \
              ORDER BY deleted_at DESC LIMIT ?",
         )
@@ -136,17 +136,124 @@ pub async fn soft_delete_photo(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// POST /api/blobs/:id/trash
+/// Soft-delete an encrypted blob to the trash. The client provides the metadata
+/// since the server stores blobs opaquely.
+pub async fn soft_delete_blob(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(blob_id): Path<String>,
+    Json(req): Json<SoftDeleteBlobRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validate blob_id format
+    if Uuid::parse_str(&blob_id).is_err() {
+        return Err(AppError::BadRequest("Invalid blob ID format".into()));
+    }
+
+    // Fetch the blob record (need storage_path)
+    let storage_path = sqlx::query_scalar::<_, String>(
+        "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+    )
+    .bind(&blob_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    // Optionally fetch thumbnail blob storage_path
+    let thumb_storage_path = if let Some(ref thumb_id) = req.thumbnail_blob_id {
+        sqlx::query_scalar::<_, String>(
+            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(thumb_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?
+    } else {
+        None
+    };
+
+    // Read retention days from server_settings (default 30)
+    let retention_days: i64 = sqlx::query_scalar(
+        "SELECT CAST(value AS INTEGER) FROM server_settings WHERE key = 'trash_retention_days'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or(30);
+
+    let now = Utc::now();
+    let expires_at = now + Duration::days(retention_days);
+    let trash_id = Uuid::new_v4().to_string();
+
+    let media_type = req.media_type.as_deref().unwrap_or("photo");
+    let size_bytes = req.size_bytes.unwrap_or(0);
+
+    // Insert into trash_items with blob references
+    sqlx::query(
+        "INSERT INTO trash_items (id, user_id, photo_id, filename, file_path, mime_type, \
+         media_type, size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
+         thumb_path, deleted_at, expires_at, encrypted_blob_id, thumbnail_blob_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)",
+    )
+    .bind(&trash_id)
+    .bind(&auth.user_id)
+    .bind(&blob_id) // photo_id = blob_id for encrypted items
+    .bind(&req.filename)
+    .bind(&storage_path) // file_path = blob storage_path
+    .bind(&req.mime_type)
+    .bind(media_type)
+    .bind(size_bytes)
+    .bind(req.width.unwrap_or(0))
+    .bind(req.height.unwrap_or(0))
+    .bind(req.duration_secs)
+    .bind(&req.taken_at)
+    .bind(&thumb_storage_path) // thumb_path = thumbnail blob storage_path
+    .bind(now.to_rfc3339())
+    .bind(expires_at.to_rfc3339())
+    .bind(&blob_id)
+    .bind(&req.thumbnail_blob_id)
+    .execute(&state.pool)
+    .await?;
+
+    // Remove blob from blobs table (but keep files on disk!)
+    sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
+        .bind(&blob_id)
+        .bind(&auth.user_id)
+        .execute(&state.pool)
+        .await?;
+
+    // Also remove thumbnail blob record if present
+    if let Some(ref thumb_id) = req.thumbnail_blob_id {
+        sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
+            .bind(thumb_id)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    tracing::info!(
+        "Encrypted blob {} moved to trash (expires {})",
+        blob_id,
+        expires_at.to_rfc3339()
+    );
+
+    Ok(Json(serde_json::json!({
+        "trash_id": trash_id,
+        "expires_at": expires_at.to_rfc3339(),
+    })))
+}
+
 /// POST /api/trash/:id/restore
-/// Restore a photo from the trash back to the photos table.
+/// Restore a photo from the trash back to the photos table (plain)
+/// or the blobs table (encrypted).
 pub async fn restore_from_trash(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(trash_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let item = sqlx::query_as::<_, TrashPhotoRow>(
-        "SELECT photo_id AS id, filename, file_path, mime_type, media_type, size_bytes, \
-         width, height, duration_secs, taken_at, latitude, longitude, thumb_path \
-         FROM trash_items WHERE id = ? AND user_id = ?",
+    // Fetch the trash item to determine if it's a plain photo or encrypted blob
+    let encrypted_blob_id: Option<String> = sqlx::query_scalar(
+        "SELECT encrypted_blob_id FROM trash_items WHERE id = ? AND user_id = ?",
     )
     .bind(&trash_id)
     .bind(&auth.user_id)
@@ -154,41 +261,116 @@ pub async fn restore_from_trash(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let now = Utc::now().to_rfc3339();
-
-    // Re-insert into photos
-    sqlx::query(
-        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-         size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
-         thumb_path, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&item.id)
-    .bind(&auth.user_id)
-    .bind(&item.filename)
-    .bind(&item.file_path)
-    .bind(&item.mime_type)
-    .bind(&item.media_type)
-    .bind(item.size_bytes)
-    .bind(item.width)
-    .bind(item.height)
-    .bind(item.duration_secs)
-    .bind(&item.taken_at)
-    .bind(item.latitude)
-    .bind(item.longitude)
-    .bind(&item.thumb_path)
-    .bind(&now)
-    .execute(&state.pool)
-    .await?;
-
-    // Remove from trash
-    sqlx::query("DELETE FROM trash_items WHERE id = ? AND user_id = ?")
+    if let Some(blob_id) = encrypted_blob_id {
+        // ── Encrypted blob restore ──────────────────────────────────────────
+        // Re-create the blob record from trash metadata
+        let row = sqlx::query_as::<_, TrashBlobRow>(
+            "SELECT file_path, mime_type, media_type, size_bytes, thumb_path, \
+             thumbnail_blob_id \
+             FROM trash_items WHERE id = ? AND user_id = ?",
+        )
         .bind(&trash_id)
         .bind(&auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
+
+        // Determine blob_type from media_type
+        let blob_type = match row.media_type.as_str() {
+            "gif" => "gif",
+            "video" => "video",
+            _ => "photo",
+        };
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Re-insert the main blob
+        sqlx::query(
+            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&blob_id)
+        .bind(&auth.user_id)
+        .bind(blob_type)
+        .bind(row.size_bytes)
+        .bind(&now)
+        .bind(&row.file_path)
         .execute(&state.pool)
         .await?;
 
-    tracing::info!("Photo {} restored from trash", item.id);
+        // Re-insert the thumbnail blob if present
+        if let (Some(ref thumb_blob_id), Some(ref thumb_path)) =
+            (&row.thumbnail_blob_id, &row.thumb_path)
+        {
+            // Thumbnail blobs are small — use 0 as size (client doesn't need it)
+            sqlx::query(
+                "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+                 VALUES (?, ?, 'thumbnail', 0, ?, ?)",
+            )
+            .bind(thumb_blob_id)
+            .bind(&auth.user_id)
+            .bind(&now)
+            .bind(thumb_path)
+            .execute(&state.pool)
+            .await?;
+        }
+
+        // Remove from trash
+        sqlx::query("DELETE FROM trash_items WHERE id = ? AND user_id = ?")
+            .bind(&trash_id)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
+
+        tracing::info!("Encrypted blob {} restored from trash", blob_id);
+    } else {
+        // ── Plain photo restore (original logic) ────────────────────────────
+        let item = sqlx::query_as::<_, TrashPhotoRow>(
+            "SELECT photo_id AS id, filename, file_path, mime_type, media_type, size_bytes, \
+             width, height, duration_secs, taken_at, latitude, longitude, thumb_path \
+             FROM trash_items WHERE id = ? AND user_id = ?",
+        )
+        .bind(&trash_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+        let now = Utc::now().to_rfc3339();
+
+        // Re-insert into photos
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
+             thumb_path, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&item.id)
+        .bind(&auth.user_id)
+        .bind(&item.filename)
+        .bind(&item.file_path)
+        .bind(&item.mime_type)
+        .bind(&item.media_type)
+        .bind(item.size_bytes)
+        .bind(item.width)
+        .bind(item.height)
+        .bind(item.duration_secs)
+        .bind(&item.taken_at)
+        .bind(item.latitude)
+        .bind(item.longitude)
+        .bind(&item.thumb_path)
+        .bind(&now)
+        .execute(&state.pool)
+        .await?;
+
+        // Remove from trash
+        sqlx::query("DELETE FROM trash_items WHERE id = ? AND user_id = ?")
+            .bind(&trash_id)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
+
+        tracing::info!("Photo {} restored from trash", item.id);
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -411,4 +593,15 @@ struct TrashPhotoRow {
     latitude: Option<f64>,
     longitude: Option<f64>,
     thumb_path: Option<String>,
+}
+
+/// Row type for restoring encrypted blob items from trash.
+#[derive(Debug, sqlx::FromRow)]
+struct TrashBlobRow {
+    file_path: String,
+    mime_type: String,
+    media_type: String,
+    size_bytes: i64,
+    thumb_path: Option<String>,
+    thumbnail_blob_id: Option<String>,
 }

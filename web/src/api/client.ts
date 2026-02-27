@@ -338,6 +338,23 @@ export const api = {
 
     delete: (blobId: string) =>
       request<void>(`/blobs/${blobId}`, { method: "DELETE" }),
+
+    /** Soft-delete a blob to trash (encrypted mode) */
+    softDelete: (blobId: string, meta: {
+      thumbnail_blob_id?: string;
+      filename: string;
+      mime_type: string;
+      media_type?: string;
+      size_bytes?: number;
+      width?: number;
+      height?: number;
+      duration_secs?: number;
+      taken_at?: string;
+    }) =>
+      request<{ trash_id: string; expires_at: string }>(
+        `/blobs/${blobId}/trash`,
+        { method: "POST", body: JSON.stringify(meta) }
+      ),
   },
 
   admin: {
@@ -753,6 +770,8 @@ export const api = {
           thumb_path: string | null;
           deleted_at: string;
           expires_at: string;
+          encrypted_blob_id: string | null;
+          thumbnail_blob_id: string | null;
         }>;
         next_cursor: string | null;
       }>(`/trash${qs ? `?${qs}` : ""}`);

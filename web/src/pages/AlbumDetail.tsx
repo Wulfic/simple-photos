@@ -152,27 +152,7 @@ export default function AlbumDetail() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <AppHeader>
-        <button
-          onClick={openSharePicker}
-          className="inline-flex items-center gap-1.5 bg-green-600 text-white px-3.5 py-1.5 rounded-md hover:bg-green-500 text-sm font-medium transition-colors shadow-sm shadow-green-900/20"
-        >
-          <AppIcon name="shared" />
-          Share Album
-        </button>
-        <button
-          onClick={() => setShowAddPhotos(!showAddPhotos)}
-          className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors shadow-sm shadow-blue-900/20"
-        >
-          {showAddPhotos ? "Done" : "Add Photos"}
-        </button>
-        <button
-          onClick={deleteAlbum}
-          className="inline-flex items-center gap-1.5 bg-red-600 text-white px-3.5 py-1.5 rounded-md hover:bg-red-500 text-sm font-medium transition-colors shadow-sm shadow-red-900/20"
-        >
-          Delete
-        </button>
-      </AppHeader>
+      <AppHeader />
 
       {/* Share user picker modal */}
       {showSharePicker && (
@@ -213,16 +193,45 @@ export default function AlbumDetail() {
             {shareSuccess}
           </p>
         )}
-        <div className="flex items-center gap-3 mb-4">
-          <button
-            onClick={() => navigate("/albums")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 dark:text-gray-300 transition-colors"
-            title="Back to Albums"
-          >
-            <AppIcon name="back-arrow" size="w-5 h-5" />
-          </button>
-          <h2 className="text-xl font-semibold">{album.name}</h2>
-          <span className="text-gray-400 text-sm">{album.photoBlobIds.length} items</span>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={() => navigate("/albums")}
+              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+              title="Back to Albums"
+            >
+              <AppIcon name="back-arrow" size="w-5 h-5" />
+            </button>
+            <h2 className="text-xl font-semibold truncate">{album.name}</h2>
+            <span className="text-gray-400 text-sm shrink-0">{album.photoBlobIds.length} items</span>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={openSharePicker}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20 shadow-sm"
+            >
+              <AppIcon name="shared" />
+              <span className="hidden sm:inline">Share</span>
+            </button>
+            <button
+              onClick={() => setShowAddPhotos(!showAddPhotos)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 shadow-sm ${
+                showAddPhotos
+                  ? "bg-blue-600 text-white border border-blue-500 hover:bg-blue-700"
+                  : "text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20"
+              }`}
+            >
+              {showAddPhotos ? "Done" : "Add Photos"}
+            </button>
+            <button
+              onClick={deleteAlbum}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-red-600 dark:text-red-400 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-red-50 dark:hover:bg-red-900/30 shadow-sm"
+            >
+              Delete
+            </button>
+          </div>
         </div>
 
       {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
@@ -247,11 +256,16 @@ export default function AlbumDetail() {
           </div>
         )}
 
-        {albumPhotos.map((photo) => (
+        {albumPhotos.map((photo, idx) => (
           <AlbumTile
             key={photo.blobId}
             photo={photo}
-            onClick={() => navigate(`/photo/${photo.blobId}`)}
+            onClick={() => navigate(`/photo/${photo.blobId}`, {
+              state: {
+                photoIds: albumPhotos.map((p) => p.blobId),
+                currentIndex: idx,
+              },
+            })}
             onRemove={() => removePhoto(photo.blobId)}
           />
         ))}

@@ -20,6 +20,8 @@ export interface CachedPhoto {
   thumbnailData?: ArrayBuffer;
   /** Duration in seconds for video blobs (undefined for photos/GIFs) */
   duration?: number;
+  /** Crop/edit metadata (JSON string) — used for encrypted-mode crops stored locally */
+  cropData?: string;
 }
 
 export interface CachedAlbum {
@@ -31,9 +33,32 @@ export interface CachedAlbum {
   photoBlobIds: string[];
 }
 
+/** A locally cached trash item (encrypted mode only).
+ *  Plain-mode trash is managed entirely server-side. */
+export interface CachedTrashItem {
+  /** Server-assigned trash item ID */
+  trashId: string;
+  /** Original blob ID */
+  blobId: string;
+  thumbnailBlobId?: string;
+  filename: string;
+  mimeType: string;
+  mediaType: MediaType;
+  width: number;
+  height: number;
+  takenAt: number;
+  deletedAt: number;
+  expiresAt: string;
+  /** Decrypted thumbnail data for display in the trash view */
+  thumbnailData?: ArrayBuffer;
+  duration?: number;
+  albumIds: string[];
+}
+
 class SimplePhotosDB extends Dexie {
   photos!: Table<CachedPhoto, string>;
   albums!: Table<CachedAlbum, string>;
+  trash!: Table<CachedTrashItem, string>;
 
   constructor() {
     super("simple-photos");
@@ -67,6 +92,20 @@ class SimplePhotosDB extends Dexie {
             }
           })
       );
+
+    // v3 — added local trash table for encrypted-mode soft-deletes
+    this.version(3).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+    });
+
+    // v4 — added cropData field to photos (no index change needed, just bump version)
+    this.version(4).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+    });
   }
 }
 

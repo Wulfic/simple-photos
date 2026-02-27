@@ -1,5 +1,6 @@
 package com.simplephotos.ui.screens.viewer
 
+import android.app.Activity
 import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.foundation.BorderStroke
@@ -15,15 +16,24 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -46,6 +56,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import javax.inject.Inject
+
+// Parsed crop metadata for zoom/brightness transforms
+private data class CropInfo(
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+    val brightness: Float
+)
 
 // ---------------------------------------------------------------------------
 // ViewModel — loads photo list for paging + handles deletion
@@ -264,6 +283,20 @@ fun PhotoViewerScreen(
     // Controls overlay visibility — tap photo to toggle
     var showOverlay by remember { mutableStateOf(true) }
 
+    // Immersive full-screen: hide system bars when viewer is open
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        val activity = view.context as? Activity ?: return@DisposableEffect onDispose {}
+        val window = activity.window
+        val controller = WindowCompat.getInsetsController(window, view)
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        onDispose {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -477,12 +510,75 @@ private fun PhotoPageContent(
         }
     }
 
-    Box(
+    // Parse crop metadata for zoom/brightness display
+    val cropInfo = remember(photo.cropMetadata) {
+        photo.cropMetadata?.let {
+            try {
+                val json = JSONObject(it)
+                CropInfo(
+                    x = json.optDouble("x", 0.0).toFloat(),
+                    y = json.optDouble("y", 0.0).toFloat(),
+                    width = json.optDouble("width", 1.0).toFloat(),
+                    height = json.optDouble("height", 1.0).toFloat(),
+                    brightness = json.optDouble("brightness", 0.0).toFloat()
+                )
+            } catch (_: Exception) { null }
+        }
+    }
+
+    // Brightness color filter from crop metadata
+    val brightnessFilter = remember(cropInfo?.brightness) {
+        if (cropInfo != null && cropInfo.brightness != 0f) {
+            val b = 1f + cropInfo.brightness / 100f
+            ColorFilter.colorMatrix(ColorMatrix().apply {
+                setToScale(b, b, b, 1f)
+            })
+        } else null
+    }
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .clipToBounds(),
         contentAlignment = Alignment.Center
     ) {
+        // Compute crop zoom modifier based on container + image dimensions
+        val containerW = constraints.maxWidth.toFloat()
+        val containerH = constraints.maxHeight.toFloat()
+        val cropModifier = if (
+            cropInfo != null && photo.width > 0 && photo.height > 0 &&
+            containerW > 0 && containerH > 0
+        ) {
+            val imgAspect = photo.width.toFloat() / photo.height.toFloat()
+            val containerAspect = containerW / containerH
+            val rendW: Float
+            val rendH: Float
+            if (imgAspect > containerAspect) {
+                rendW = containerW; rendH = containerW / imgAspect
+            } else {
+                rendH = containerH; rendW = containerH * imgAspect
+            }
+            val letterboxX = (containerW - rendW) / 2f
+            val letterboxY = (containerH - rendH) / 2f
+            val cx = cropInfo.x + cropInfo.width / 2f
+            val cy = cropInfo.y + cropInfo.height / 2f
+            val containerCX = (letterboxX + cx * rendW) / containerW
+            val containerCY = (letterboxY + cy * rendH) / containerH
+            val cropPixW = cropInfo.width * rendW
+            val cropPixH = cropInfo.height * rendH
+            val scale = minOf(containerW / cropPixW, containerH / cropPixH)
+            val tx = containerW * (0.5f - containerCX)
+            val ty = containerH * (0.5f - containerCY)
+            Modifier.graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                transformOrigin = TransformOrigin(containerCX, containerCY)
+                translationX = tx
+                translationY = ty
+            }
+        } else Modifier
+
         when {
             // Loading encrypted content
             decryptLoading -> {
@@ -527,8 +623,9 @@ private fun PhotoPageContent(
                                 .crossfade(true)
                                 .build(),
                             contentDescription = photo.filename,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit
+                            modifier = Modifier.fillMaxSize().then(cropModifier),
+                            contentScale = ContentScale.Fit,
+                            colorFilter = brightnessFilter
                         )
                     }
                     // Local file
@@ -543,8 +640,9 @@ private fun PhotoPageContent(
                             Image(
                                 bitmap = it.asImageBitmap(),
                                 contentDescription = photo.filename,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
+                                modifier = Modifier.fillMaxSize().then(cropModifier),
+                                contentScale = ContentScale.Fit,
+                                colorFilter = brightnessFilter
                             )
                         }
                     }
@@ -557,8 +655,9 @@ private fun PhotoPageContent(
                             Image(
                                 bitmap = it.asImageBitmap(),
                                 contentDescription = photo.filename,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
+                                modifier = Modifier.fillMaxSize().then(cropModifier),
+                                contentScale = ContentScale.Fit,
+                                colorFilter = brightnessFilter
                             )
                         }
                     }
@@ -567,6 +666,10 @@ private fun PhotoPageContent(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Crop zoom helper: computes Modifier for graphicsLayer transform
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Video player composable (ExoPlayer)
