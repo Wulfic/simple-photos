@@ -29,14 +29,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
+import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.repository.AuthRepository
 import com.simplephotos.data.repository.PhotoRepository
+import com.simplephotos.sync.DiagnosticLogger
 import com.simplephotos.sync.SyncScheduler
 import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.HeaderNavigation
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import com.simplephotos.ui.theme.ThemeState
 import androidx.datastore.core.DataStore
@@ -53,6 +57,8 @@ import javax.inject.Inject
 class GalleryViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
     private val authRepository: AuthRepository,
+    private val api: ApiService,
+    private val db: AppDatabase,
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val photos = photoRepository.getAllPhotos()
@@ -87,6 +93,97 @@ class GalleryViewModel @Inject constructor(
                 username = prefs[KEY_USERNAME] ?: ""
             } catch (e: Exception) {
                 error = "Init failed: ${e.message}"
+            }
+        }
+    }
+
+    /**
+     * Fire a diagnostic report from the UI layer (outside WorkManager).
+     * This captures WorkManager state, pending photo counts, and basic
+     * connectivity info so we can debug why backups aren't running.
+     */
+    fun sendDiagnosticReport(context: android.content.Context) {
+        viewModelScope.launch {
+            try {
+                val prefs = dataStore.data.first()
+                val loggingEnabled = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
+                val diag = DiagnosticLogger(api, loggingEnabled)
+                diag.info("AppDiagnostic", "Gallery opened — sending diagnostic report")
+
+                // DB stats
+                val pendingCount = withContext(Dispatchers.IO) {
+                    db.photoDao().getByStatus(SyncStatus.PENDING).size
+                }
+                val failedCount = withContext(Dispatchers.IO) {
+                    db.photoDao().getByStatus(SyncStatus.FAILED).size
+                }
+                val uploadingCount = withContext(Dispatchers.IO) {
+                    db.photoDao().getByStatus(SyncStatus.UPLOADING).size
+                }
+                val syncedCount = withContext(Dispatchers.IO) {
+                    db.photoDao().getByStatus(SyncStatus.SYNCED).size
+                }
+                diag.info("AppDiagnostic", "Local DB photo status", mapOf(
+                    "pending" to pendingCount.toString(),
+                    "failed" to failedCount.toString(),
+                    "uploading" to uploadingCount.toString(),
+                    "synced" to syncedCount.toString()
+                ))
+
+                // Encryption mode
+                val mode = try {
+                    withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
+                } catch (e: Exception) {
+                    "error: ${e.message}"
+                }
+                diag.info("AppDiagnostic", "Encryption mode: $mode")
+
+                // Enabled backup folders
+                val enabledFolders = withContext(Dispatchers.IO) {
+                    db.backupFolderDao().getEnabledFolders()
+                }
+                diag.info("AppDiagnostic", "Backup folders", mapOf(
+                    "enabledCount" to enabledFolders.size.toString(),
+                    "folders" to enabledFolders.joinToString(", ") {
+                        "${it.bucketName}(${it.relativePath}, enabled=${it.enabled})"
+                    }
+                ))
+
+                // WorkManager work info for backup tasks
+                try {
+                    val wm = androidx.work.WorkManager.getInstance(context)
+                    val periodicInfos = wm.getWorkInfosForUniqueWork("photo_backup").get()
+                    val reactiveInfos = wm.getWorkInfosForUniqueWork("photo_backup_reactive").get()
+
+                    diag.info("AppDiagnostic", "WorkManager periodic tasks", mapOf(
+                        "count" to periodicInfos.size.toString(),
+                        "states" to periodicInfos.joinToString(", ") {
+                            "${it.state}(attempt=${it.runAttemptCount})"
+                        }
+                    ))
+                    diag.info("AppDiagnostic", "WorkManager reactive tasks", mapOf(
+                        "count" to reactiveInfos.size.toString(),
+                        "states" to reactiveInfos.joinToString(", ") {
+                            "${it.state}(attempt=${it.runAttemptCount})"
+                        }
+                    ))
+                } catch (e: Exception) {
+                    diag.error("AppDiagnostic", "Failed to query WorkManager: ${e.message}")
+                }
+
+                // Server health check
+                try {
+                    val health = withContext(Dispatchers.IO) { api.health() }
+                    diag.info("AppDiagnostic", "Server health OK", health.mapValues { it.value })
+                } catch (e: Exception) {
+                    diag.error("AppDiagnostic", "Server health check failed: ${e.message}", mapOf(
+                        "exception" to (e::class.simpleName ?: "Unknown")
+                    ))
+                }
+
+                withContext(Dispatchers.IO) { diag.flush() }
+            } catch (e: Exception) {
+                android.util.Log.e("AppDiagnostic", "Failed to send diagnostic report", e)
             }
         }
     }
@@ -249,6 +346,11 @@ fun GalleryScreen(
     LaunchedEffect(Unit) {
         viewModel.syncFromServer()
         try { SyncScheduler.triggerNow(context) } catch (_: Exception) {}
+    }
+
+    // Send a diagnostic report every time the gallery screen opens
+    LaunchedEffect(Unit) {
+        viewModel.sendDiagnosticReport(context)
     }
 
     Scaffold(

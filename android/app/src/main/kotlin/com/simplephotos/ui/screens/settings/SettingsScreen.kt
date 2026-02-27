@@ -30,6 +30,7 @@ import androidx.lifecycle.viewModelScope
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.*
 import com.simplephotos.data.repository.AuthRepository
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import com.simplephotos.ui.theme.ThemeState
@@ -64,6 +65,10 @@ class SettingsViewModel @Inject constructor(
     var usersLoading by mutableStateOf(false)
     var isAdmin by mutableStateOf(false)
 
+    // Diagnostic logging toggle
+    var diagnosticLogging by mutableStateOf(false)
+        private set
+
     // Scan
     var scanning by mutableStateOf(false)
     var scanResult by mutableStateOf<String?>(null)
@@ -73,6 +78,7 @@ class SettingsViewModel @Inject constructor(
             val prefs = dataStore.data.first()
             serverUrl = prefs[KEY_SERVER_URL] ?: ""
             username = prefs[KEY_USERNAME] ?: ""
+            diagnosticLogging = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
         }
         loadStorageStats()
         loadEncryptionSettings()
@@ -194,6 +200,13 @@ class SettingsViewModel @Inject constructor(
             } catch (e: Exception) {
                 error = "Failed: ${e.message}"
             }
+        }
+    }
+
+    fun toggleDiagnosticLogging() {
+        viewModelScope.launch {
+            diagnosticLogging = !diagnosticLogging
+            dataStore.edit { it[KEY_DIAGNOSTIC_LOGGING] = diagnosticLogging }
         }
     }
 
@@ -333,6 +346,27 @@ fun SettingsScreen(
                     Switch(
                         checked = ThemeState.mode == "dark",
                         onCheckedChange = { ThemeState.toggle(viewModel.dataStore) }
+                    )
+                }
+            }
+
+            // ── Diagnostic Logging ───────────────────────────────────────
+            SettingsCard(title = "Troubleshooting", icon = Icons.Default.BugReport) {
+                Text(
+                    "When enabled, the app sends detailed backup logs to the server to help diagnose upload issues.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Diagnostic Logging")
+                    Switch(
+                        checked = viewModel.diagnosticLogging,
+                        onCheckedChange = { viewModel.toggleDiagnosticLogging() }
                     )
                 }
             }

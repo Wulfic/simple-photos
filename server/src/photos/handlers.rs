@@ -474,7 +474,37 @@ pub async fn upload_photo(
         safe_filename
     };
 
-    // Ensure unique filename if it already exists
+    // ── Content-aware dedup ─────────────────────────────────────────────
+    // If a file with the same filename AND identical size already exists
+    // for this user, return the existing record instead of storing a duplicate.
+    let existing: Option<(String, String, String, i64)> = sqlx::query_as(
+        "SELECT id, filename, file_path, size_bytes FROM photos \
+         WHERE user_id = ? AND filename = ? AND size_bytes = ? LIMIT 1",
+    )
+    .bind(&auth.user_id)
+    .bind(&safe_filename)
+    .bind(size_bytes)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    if let Some((eid, efn, efp, esz)) = existing {
+        tracing::info!(
+            user_id = %auth.user_id,
+            filename = %efn,
+            "Duplicate upload detected — returning existing record"
+        );
+        return Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "photo_id": eid,
+                "filename": efn,
+                "file_path": efp,
+                "size_bytes": esz,
+            })),
+        ));
+    }
+
+    // Ensure unique filename if it already exists on disk (different content)
     let storage_root = state.storage_root.read().await.clone();
     let uploads_dir = storage_root.join("uploads");
     tokio::fs::create_dir_all(&uploads_dir).await.map_err(|e| {

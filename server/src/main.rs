@@ -2,6 +2,7 @@ mod audit;
 mod auth;
 mod backup;
 mod blobs;
+mod client_logs;
 mod config;
 mod db;
 mod downloads;
@@ -113,6 +114,24 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     Err(e) => tracing::error!("Failed to clean up audit log: {}", e),
+                }
+
+                // Clean up old client diagnostic logs (keep 14 days)
+                let client_log_cutoff = (chrono::Utc::now() - chrono::Duration::days(14)).to_rfc3339();
+                match sqlx::query("DELETE FROM client_logs WHERE created_at < ?")
+                    .bind(&client_log_cutoff)
+                    .execute(&pool_clone)
+                    .await
+                {
+                    Ok(result) => {
+                        if result.rows_affected() > 0 {
+                            tracing::info!(
+                                "Cleaned up {} old client log entries (> 14 days)",
+                                result.rows_affected()
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!("Failed to clean up client logs: {}", e),
                 }
             }
         });
@@ -273,7 +292,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/sharing/albums/{id}/photos", get(sharing::handlers::list_shared_photos))
         .route("/sharing/albums/{id}/photos", post(sharing::handlers::add_photo))
         .route("/sharing/albums/{album_id}/photos/{photo_id}", delete(sharing::handlers::remove_photo))
-        .route("/sharing/users", get(sharing::handlers::list_users_for_sharing));
+        .route("/sharing/users", get(sharing::handlers::list_users_for_sharing))
+        // Client diagnostic logs — mobile clients submit backup debug logs
+        .route("/client-logs", post(client_logs::handlers::submit_logs))
+        .route("/admin/client-logs", get(client_logs::handlers::list_logs));
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))
