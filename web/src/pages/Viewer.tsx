@@ -46,7 +46,132 @@ export default function Viewer() {
   // For live preview: show the cached thumbnail while the full media is loading
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  // ── Tag state ─────────────────────────────────────────────────────────────
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
+  const [showTagInput, setShowTagInput] = useState(false);
+  const [allTags, setAllTags] = useState<string[]>([]);
+  const tagInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Favorite state ────────────────────────────────────────────────────────
+  const [isFavorite, setIsFavorite] = useState(false);
+
+  // ── Crop/edit state ───────────────────────────────────────────────────────
+  const [showCropEditor, setShowCropEditor] = useState(false);
+  const [cropData, setCropData] = useState<{ x: number; y: number; width: number; height: number; rotate: number } | null>(null);
+  const [cropDragging, setCropDragging] = useState(false);
+  const [cropStart, setCropStart] = useState<{ x: number; y: number } | null>(null);
+  const [cropRect, setCropRect] = useState<{ startX: number; startY: number; endX: number; endY: number } | null>(null);
+  const cropImageRef = useRef<HTMLImageElement>(null);
+  const cropContainerRef = useRef<HTMLDivElement>(null);
+
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // ── Load tags + favorite state for current photo ─────────────────────────
+  useEffect(() => {
+    if (!id || !isPlainMode) return;
+    setTags([]);
+    setIsFavorite(false);
+    api.tags.getPhotoTags(id).then((res) => setTags(res.tags)).catch(() => {});
+    api.tags.list().then((res) => setAllTags(res.tags)).catch(() => {});
+    // Load favorite and crop from photo metadata
+    api.photos.list({ limit: 500 }).then((res) => {
+      const photo = res.photos.find((p) => p.id === id);
+      if (photo) {
+        setIsFavorite(!!photo.is_favorite);
+        if (photo.crop_metadata) {
+          try { setCropData(JSON.parse(photo.crop_metadata)); } catch { setCropData(null); }
+        } else {
+          setCropData(null);
+        }
+      }
+    }).catch(() => {});
+  }, [id, isPlainMode]);
+
+  // Auto-focus tag input when shown
+  useEffect(() => {
+    if (showTagInput) tagInputRef.current?.focus();
+  }, [showTagInput]);
+
+  async function handleAddTag() {
+    const tag = tagInput.trim().toLowerCase();
+    if (!tag || !id) return;
+    try {
+      await api.tags.add(id, tag);
+      setTags((prev) => (prev.includes(tag) ? prev : [...prev, tag].sort()));
+      if (!allTags.includes(tag)) setAllTags((prev) => [...prev, tag].sort());
+      setTagInput("");
+    } catch {
+      // ignore
+    }
+  }
+
+  async function handleRemoveTag(tag: string) {
+    if (!id) return;
+    try {
+      await api.tags.remove(id, tag);
+      setTags((prev) => prev.filter((t) => t !== tag));
+    } catch {
+      // ignore
+    }
+  }
+
+  async function handleToggleFavorite() {
+    if (!id || !isPlainMode) return;
+    try {
+      const res = await api.photos.toggleFavorite(id);
+      setIsFavorite(res.is_favorite);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function handleSaveCrop() {
+    if (!id || !isPlainMode) return;
+    if (!cropRect || !cropImageRef.current || !cropContainerRef.current) return;
+    const img = cropImageRef.current;
+    const container = cropContainerRef.current;
+    const containerRect = container.getBoundingClientRect();
+    // Convert pixel coordinates to percentage of displayed image
+    const imgRect = img.getBoundingClientRect();
+    const x = (Math.min(cropRect.startX, cropRect.endX) - imgRect.left) / imgRect.width;
+    const y = (Math.min(cropRect.startY, cropRect.endY) - imgRect.top) / imgRect.height;
+    const w = Math.abs(cropRect.endX - cropRect.startX) / imgRect.width;
+    const h = Math.abs(cropRect.endY - cropRect.startY) / imgRect.height;
+    // Clamp values
+    const crop = {
+      x: Math.max(0, Math.min(1, x)),
+      y: Math.max(0, Math.min(1, y)),
+      width: Math.max(0.05, Math.min(1, w)),
+      height: Math.max(0.05, Math.min(1, h)),
+      rotate: 0,
+    };
+    try {
+      await api.photos.setCrop(id, JSON.stringify(crop));
+      setCropData(crop);
+      setShowCropEditor(false);
+      setCropRect(null);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function handleClearCrop() {
+    if (!id || !isPlainMode) return;
+    try {
+      await api.photos.setCrop(id, null);
+      setCropData(null);
+      setShowCropEditor(false);
+      setCropRect(null);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Filter suggestions: tags the user has used before that aren't on this photo
+  const tagSuggestions = allTags.filter(
+    (t) => !tags.includes(t) && t.includes(tagInput.toLowerCase())
+  ).slice(0, 5);
 
   // ── Navigation state ──────────────────────────────────────────────────────
   const state = location.state as ViewerLocationState | null;
@@ -259,7 +384,37 @@ export default function Viewer() {
           ← Back
         </button>
         <span className="text-white text-sm truncate mx-4 max-w-xs">{filename}</span>
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
+          {/* Crop/Edit button — plain mode photos only (not videos/gifs) */}
+          {isPlainMode && mediaType === "photo" && (
+            <button
+              onClick={() => { setShowCropEditor(!showCropEditor); setCropRect(null); }}
+              className="text-white hover:text-gray-300 text-sm"
+              title="Edit / Crop"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h10v10M7 17V3m14 4H7m10 10v4" />
+              </svg>
+            </button>
+          )}
+          {/* Favorite button — plain mode only */}
+          {isPlainMode && (
+            <button
+              onClick={handleToggleFavorite}
+              className={`hover:scale-110 transition-transform ${isFavorite ? "text-yellow-400" : "text-white hover:text-yellow-300"}`}
+              title={isFavorite ? "Unfavorite" : "Favorite"}
+            >
+              {isFavorite ? (
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                </svg>
+              )}
+            </button>
+          )}
           <button
             onClick={handleDownload}
             className="text-white hover:text-gray-300 text-sm"
@@ -326,13 +481,86 @@ export default function Viewer() {
         )}
 
         {/* ── Photo / GIF viewer ─────────────────────────────────────────── */}
-        {mediaUrl && (mediaType === "photo" || mediaType === "gif") && (
+        {mediaUrl && (mediaType === "photo" || mediaType === "gif") && !showCropEditor && (
           <img
             src={mediaUrl}
             alt={filename}
             className="max-w-full max-h-full object-contain"
-            style={{ imageRendering: mediaType === "gif" ? "auto" : undefined }}
+            style={{
+              imageRendering: mediaType === "gif" ? "auto" : undefined,
+              ...(cropData ? {
+                clipPath: `inset(${cropData.y * 100}% ${(1 - cropData.x - cropData.width) * 100}% ${(1 - cropData.y - cropData.height) * 100}% ${cropData.x * 100}%)`,
+              } : {}),
+            }}
           />
+        )}
+
+        {/* ── Crop editor overlay ────────────────────────────────────────── */}
+        {showCropEditor && mediaUrl && mediaType === "photo" && (
+          <div
+            ref={cropContainerRef}
+            className="relative w-full h-full flex items-center justify-center"
+            onMouseDown={(e) => {
+              setCropDragging(true);
+              setCropStart({ x: e.clientX, y: e.clientY });
+              setCropRect({ startX: e.clientX, startY: e.clientY, endX: e.clientX, endY: e.clientY });
+            }}
+            onMouseMove={(e) => {
+              if (cropDragging && cropStart) {
+                setCropRect((prev) => prev ? { ...prev, endX: e.clientX, endY: e.clientY } : null);
+              }
+            }}
+            onMouseUp={() => setCropDragging(false)}
+            onMouseLeave={() => setCropDragging(false)}
+          >
+            <img
+              ref={cropImageRef}
+              src={mediaUrl}
+              alt={filename}
+              className="max-w-full max-h-full object-contain pointer-events-none"
+              draggable={false}
+            />
+            {/* Darken area outside crop rect */}
+            {cropRect && (
+              <div
+                className="absolute border-2 border-white border-dashed pointer-events-none z-30"
+                style={{
+                  left: Math.min(cropRect.startX, cropRect.endX),
+                  top: Math.min(cropRect.startY, cropRect.endY),
+                  width: Math.abs(cropRect.endX - cropRect.startX),
+                  height: Math.abs(cropRect.endY - cropRect.startY),
+                  boxShadow: "0 0 0 9999px rgba(0,0,0,0.5)",
+                }}
+              />
+            )}
+            {/* Crop action buttons */}
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 flex gap-2">
+              <button
+                onClick={handleSaveCrop}
+                disabled={!cropRect || Math.abs((cropRect?.endX ?? 0) - (cropRect?.startX ?? 0)) < 10}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-40 hover:bg-blue-700 transition-colors"
+              >
+                Apply Crop
+              </button>
+              {cropData && (
+                <button
+                  onClick={handleClearCrop}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm font-medium hover:bg-gray-500 transition-colors"
+                >
+                  Reset
+                </button>
+              )}
+              <button
+                onClick={() => { setShowCropEditor(false); setCropRect(null); }}
+                className="px-4 py-2 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="absolute top-4 left-1/2 -translate-x-1/2 z-40 text-white text-sm bg-black/60 px-3 py-1 rounded-full">
+              Click and drag to select crop area
+            </p>
+          </div>
         )}
 
         {/* ── Video player ───────────────────────────────────────────────── */}
@@ -355,13 +583,87 @@ export default function Viewer() {
 
       {/* Bottom meta bar (shown when media is loaded) */}
       {mediaUrl && (
-        <div className="px-4 py-2 bg-black/60 text-gray-400 text-xs flex items-center gap-4">
-          <span className="uppercase tracking-wide font-mono">
-            {mediaType === "video" ? "VIDEO" : mediaType === "gif" ? "GIF" : "PHOTO"}
-          </span>
-          <span className="truncate">{mimeType}</span>
-          {photoIds && currentIndex >= 0 && (
-            <span className="ml-auto">{currentIndex + 1} / {photoIds.length}</span>
+        <div className="px-4 py-2 bg-black/60 text-gray-400 text-xs space-y-2">
+          <div className="flex items-center gap-4">
+            <span className="uppercase tracking-wide font-mono">
+              {mediaType === "video" ? "VIDEO" : mediaType === "gif" ? "GIF" : "PHOTO"}
+            </span>
+            <span className="truncate">{mimeType}</span>
+            {photoIds && currentIndex >= 0 && (
+              <span className="ml-auto">{currentIndex + 1} / {photoIds.length}</span>
+            )}
+          </div>
+
+          {/* Tags section — plain mode only */}
+          {isPlainMode && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-600/30 text-blue-300 text-xs"
+                >
+                  {tag}
+                  <button
+                    onClick={() => handleRemoveTag(tag)}
+                    className="hover:text-white ml-0.5"
+                    title={`Remove tag "${tag}"`}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+
+              {/* Add tag button / inline input */}
+              {showTagInput ? (
+                <div className="relative inline-flex items-center">
+                  <input
+                    ref={tagInputRef}
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleAddTag();
+                      if (e.key === "Escape") { setShowTagInput(false); setTagInput(""); }
+                    }}
+                    placeholder="tag name"
+                    className="w-28 px-2 py-0.5 rounded bg-gray-700 text-white text-xs border border-gray-600 focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    onClick={handleAddTag}
+                    className="ml-1 text-blue-400 hover:text-blue-300 text-xs font-medium"
+                  >
+                    Add
+                  </button>
+                  <button
+                    onClick={() => { setShowTagInput(false); setTagInput(""); }}
+                    className="ml-1 text-gray-500 hover:text-gray-300 text-xs"
+                  >
+                    ✕
+                  </button>
+                  {/* Suggestions dropdown */}
+                  {tagInput && tagSuggestions.length > 0 && (
+                    <div className="absolute bottom-full left-0 mb-1 bg-gray-800 border border-gray-600 rounded shadow-lg z-50 min-w-[8rem]">
+                      {tagSuggestions.map((s) => (
+                        <button
+                          key={s}
+                          className="block w-full text-left px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+                          onClick={() => { setTagInput(s); }}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowTagInput(true)}
+                  className="px-2 py-0.5 rounded-full border border-dashed border-gray-500 text-gray-400 hover:text-white hover:border-gray-300 text-xs transition-colors"
+                >
+                  + Tag
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

@@ -5,6 +5,7 @@ import { decrypt, encrypt, sha256Hex } from "../crypto/crypto";
 import { db, type CachedPhoto, type CachedAlbum } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
+import AppIcon from "../components/AppIcon";
 
 type ShareUser = { id: string; username: string };
 
@@ -156,9 +157,7 @@ export default function AlbumDetail() {
           onClick={openSharePicker}
           className="inline-flex items-center gap-1.5 bg-green-600 text-white px-3.5 py-1.5 rounded-md hover:bg-green-500 text-sm font-medium transition-colors shadow-sm shadow-green-900/20"
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-          </svg>
+          <AppIcon name="shared" />
           Share Album
         </button>
         <button
@@ -220,9 +219,7 @@ export default function AlbumDetail() {
             className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 dark:text-gray-300 transition-colors"
             title="Back to Albums"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
+            <AppIcon name="back-arrow" size="w-5 h-5" />
           </button>
           <h2 className="text-xl font-semibold">{album.name}</h2>
           <span className="text-gray-400 text-sm">{album.photoBlobIds.length} items</span>

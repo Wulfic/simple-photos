@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,6 +28,8 @@ import com.simplephotos.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import com.simplephotos.R
+import androidx.compose.ui.res.painterResource
 
 /**
  * ViewModel managing the two-factor authentication setup flow.
@@ -124,7 +125,7 @@ fun TwoFactorSetupScreen(
                 title = { Text("Two-Factor Authentication") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
                     }
                 }
             )

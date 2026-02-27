@@ -534,11 +534,12 @@ export const api = {
   // ── Plain-mode Photos ─────────────────────────────────────────────────────
 
   photos: {
-    list: (params?: { after?: string; limit?: number; media_type?: string }) => {
+    list: (params?: { after?: string; limit?: number; media_type?: string; favorites_only?: boolean }) => {
       const query = new URLSearchParams();
       if (params?.after) query.set("after", params.after);
       if (params?.limit) query.set("limit", params.limit.toString());
       if (params?.media_type) query.set("media_type", params.media_type);
+      if (params?.favorites_only) query.set("favorites_only", "true");
       const qs = query.toString();
       return request<{
         photos: Array<{
@@ -556,6 +557,8 @@ export const api = {
           longitude: number | null;
           thumb_path: string | null;
           created_at: string;
+          is_favorite: boolean;
+          crop_metadata: string | null;
         }>;
         next_cursor: string | null;
       }>(`/photos${qs ? `?${qs}` : ""}`);
@@ -601,6 +604,19 @@ export const api = {
       request<{ ok: boolean }>(`/photos/${photoId}/mark-encrypted`, {
         method: "POST",
         body: JSON.stringify({ blob_id: blobId }),
+      }),
+
+    /** Toggle the is_favorite flag on a photo */
+    toggleFavorite: (photoId: string) =>
+      request<{ id: string; is_favorite: boolean }>(`/photos/${photoId}/favorite`, {
+        method: "PUT",
+      }),
+
+    /** Set or clear crop metadata for a photo */
+    setCrop: (photoId: string, cropMetadata: string | null) =>
+      request<{ id: string; crop_metadata: string | null }>(`/photos/${photoId}/crop`, {
+        method: "PUT",
+        body: JSON.stringify({ crop_metadata: cropMetadata }),
       }),
   },
 
@@ -1003,5 +1019,52 @@ export const api = {
     /** List all users for the member picker */
     listUsers: () =>
       request<Array<{ id: string; username: string }>>("/sharing/users"),
+  },
+
+  // ── Tags ────────────────────────────────────────────────────────────────
+
+  tags: {
+    /** List all unique tags for the current user */
+    list: () =>
+      request<{ tags: string[] }>("/tags"),
+
+    /** Get tags on a specific photo */
+    getPhotoTags: (photoId: string) =>
+      request<{ photo_id: string; tags: string[] }>(`/photos/${photoId}/tags`),
+
+    /** Add a tag to a photo */
+    add: (photoId: string, tag: string) =>
+      request<void>(`/photos/${photoId}/tags`, {
+        method: "POST",
+        body: JSON.stringify({ tag }),
+      }),
+
+    /** Remove a tag from a photo */
+    remove: (photoId: string, tag: string) =>
+      request<void>(`/photos/${photoId}/tags`, {
+        method: "DELETE",
+        body: JSON.stringify({ tag }),
+      }),
+  },
+
+  // ── Search ──────────────────────────────────────────────────────────────
+
+  search: {
+    /** Search photos by tag or filename */
+    query: (q: string, limit?: number) => {
+      const params = new URLSearchParams({ q });
+      if (limit) params.set("limit", limit.toString());
+      return request<{
+        results: Array<{
+          id: string;
+          filename: string;
+          media_type: string;
+          mime_type: string;
+          thumb_path: string | null;
+          created_at: string;
+          tags: string[];
+        }>;
+      }>(`/search?${params.toString()}`);
+    },
   },
 };

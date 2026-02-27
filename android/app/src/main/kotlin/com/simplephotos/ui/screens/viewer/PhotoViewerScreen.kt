@@ -2,15 +2,15 @@ package com.simplephotos.ui.screens.viewer
 
 import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,7 +34,11 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
+import com.simplephotos.data.remote.ApiService
+import com.simplephotos.data.remote.dto.AddTagRequest
+import com.simplephotos.data.remote.dto.RemoveTagRequest
 import com.simplephotos.data.repository.PhotoRepository
+import com.simplephotos.R
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -49,6 +54,7 @@ import javax.inject.Inject
 @HiltViewModel
 class PhotoViewerViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
+    private val api: ApiService,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -73,6 +79,18 @@ class PhotoViewerViewModel @Inject constructor(
         private set
 
     var error by mutableStateOf<String?>(null)
+        private set
+
+    /** Tags for the currently viewed photo (plain mode only). */
+    var currentTags by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** All user tags for suggestions. */
+    var allTags by mutableStateOf<List<String>>(emptyList())
+        private set
+
+    /** Favorite state for the currently viewed photo. */
+    var isFavorite by mutableStateOf(false)
         private set
 
     init {
@@ -120,6 +138,75 @@ class PhotoViewerViewModel @Inject constructor(
             }
         }
     }
+
+    /** Load tags for a specific photo (called when page changes). */
+    fun loadTagsForPhoto(photoId: String?) {
+        if (photoId == null || encryptionMode != "plain") return
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) { api.getPhotoTags(photoId) }
+                currentTags = response.tags
+                // Also refresh all-tags list
+                val tagsResponse = withContext(Dispatchers.IO) { api.listTags() }
+                allTags = tagsResponse.tags
+            } catch (_: Exception) {
+                currentTags = emptyList()
+            }
+        }
+    }
+
+    /** Add a tag to the current photo. */
+    fun addTag(photoId: String, tag: String) {
+        val cleaned = tag.trim().lowercase()
+        if (cleaned.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { api.addTag(photoId, AddTagRequest(cleaned)) }
+                if (!currentTags.contains(cleaned)) {
+                    currentTags = (currentTags + cleaned).sorted()
+                }
+                if (!allTags.contains(cleaned)) {
+                    allTags = (allTags + cleaned).sorted()
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** Remove a tag from the current photo. */
+    fun removeTag(photoId: String, tag: String) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { api.removeTag(photoId, RemoveTagRequest(tag)) }
+                currentTags = currentTags.filter { it != tag }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** Load favorite state for a specific photo (called when page changes). */
+    fun loadFavoriteForPhoto(photoId: String?) {
+        if (photoId == null || encryptionMode != "plain") return
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    api.listPhotos(limit = 500)
+                }
+                val photo = response.photos.find { it.id == photoId }
+                isFavorite = photo?.isFavorite ?: false
+            } catch (_: Exception) {
+                isFavorite = false
+            }
+        }
+    }
+
+    /** Toggle the favorite state of the current photo. */
+    fun toggleFavorite(photoId: String) {
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) { api.toggleFavorite(photoId) }
+                isFavorite = response.isFavorite
+            } catch (_: Exception) {}
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +247,20 @@ fun PhotoViewerScreen(
 
     val currentPhoto = viewModel.allPhotos.getOrNull(pagerState.currentPage)
 
+    // Load tags and favorite when page changes (plain mode only)
+    val isPlainMode = viewModel.encryptionMode == "plain"
+    LaunchedEffect(pagerState.currentPage) {
+        val photo = viewModel.allPhotos.getOrNull(pagerState.currentPage)
+        if (isPlainMode && photo?.serverPhotoId != null) {
+            viewModel.loadTagsForPhoto(photo.serverPhotoId)
+            viewModel.loadFavoriteForPhoto(photo.serverPhotoId)
+        }
+    }
+
+    // Tag input state
+    var showTagInput by remember { mutableStateOf(false) }
+    var tagInputText by remember { mutableStateOf("") }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -179,13 +280,23 @@ fun PhotoViewerScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
                     }
                 },
                 actions = {
                     if (currentPhoto != null) {
+                        // Favorite button — plain mode only
+                        if (isPlainMode && currentPhoto.serverPhotoId != null) {
+                            IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_star),
+                                    contentDescription = if (viewModel.isFavorite) "Unfavorite" else "Favorite",
+                                    tint = if (viewModel.isFavorite) Color(0xFFFBBF24) else Color.White
+                                )
+                            }
+                        }
                         IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete")
+                            Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = "Delete")
                         }
                     }
                 },
@@ -199,20 +310,113 @@ fun PhotoViewerScreen(
         },
         containerColor = Color.Black
     ) { padding ->
-        HorizontalPager(
-            state = pagerState,
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
-            key = { viewModel.allPhotos[it].localId }
-        ) { page ->
-            val photo = viewModel.allPhotos[page]
-            PhotoPageContent(
-                photo = photo,
-                encryptionMode = viewModel.encryptionMode,
-                serverBaseUrl = viewModel.serverBaseUrl,
-                viewModel = viewModel
-            )
+                .padding(padding)
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                key = { viewModel.allPhotos[it].localId }
+            ) { page ->
+                val photo = viewModel.allPhotos[page]
+                PhotoPageContent(
+                    photo = photo,
+                    encryptionMode = viewModel.encryptionMode,
+                    serverBaseUrl = viewModel.serverBaseUrl,
+                    viewModel = viewModel
+                )
+            }
+
+            // Tag bar — plain mode only
+            if (isPlainMode && currentPhoto?.serverPhotoId != null) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.6f)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            // Existing tags
+                            viewModel.currentTags.forEach { tag ->
+                                Surface(
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                    color = Color(0xFF1E40AF).copy(alpha = 0.4f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(tag, color = Color(0xFF93C5FD), fontSize = 12.sp)
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            "✕",
+                                            color = Color(0xFF93C5FD),
+                                            fontSize = 10.sp,
+                                            modifier = Modifier.clickable {
+                                                viewModel.removeTag(currentPhoto.serverPhotoId!!, tag)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Add tag button or inline input
+                            if (showTagInput) {
+                                OutlinedTextField(
+                                    value = tagInputText,
+                                    onValueChange = { tagInputText = it },
+                                    modifier = Modifier
+                                        .width(120.dp)
+                                        .height(36.dp),
+                                    placeholder = { Text("tag", fontSize = 12.sp, color = Color.Gray) },
+                                    singleLine = true,
+                                    textStyle = LocalTextStyle.current.copy(fontSize = 12.sp, color = Color.White),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFF3B82F6),
+                                        unfocusedBorderColor = Color.Gray,
+                                        cursorColor = Color.White
+                                    )
+                                )
+                                TextButton(onClick = {
+                                    if (tagInputText.isNotBlank()) {
+                                        viewModel.addTag(currentPhoto.serverPhotoId!!, tagInputText)
+                                        tagInputText = ""
+                                    }
+                                }) {
+                                    Text("Add", color = Color(0xFF60A5FA), fontSize = 12.sp)
+                                }
+                                TextButton(onClick = { showTagInput = false; tagInputText = "" }) {
+                                    Text("✕", color = Color.Gray, fontSize = 12.sp)
+                                }
+                            } else {
+                                Surface(
+                                    modifier = Modifier.clickable { showTagInput = true },
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                    color = Color.Transparent,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f))
+                                ) {
+                                    Text(
+                                        "+ Tag",
+                                        color = Color.Gray,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

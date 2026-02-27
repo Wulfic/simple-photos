@@ -13,6 +13,7 @@ sealed class Screen(val route: String) {
         fun createRoute(photoId: String) = "photo_viewer/$photoId"
     }
     data object Settings : Screen("settings")
+    data object Search : Screen("search")
     data object Trash : Screen("trash")
     data object TwoFactorSetup : Screen("two_factor_setup")
     data object FolderSelection : Screen("folder_selection")

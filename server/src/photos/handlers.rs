@@ -20,6 +20,7 @@ pub struct PhotoListQuery {
     pub after: Option<String>,
     pub limit: Option<i64>,
     pub media_type: Option<String>,
+    pub favorites_only: Option<bool>,
 }
 
 /// GET /api/photos
@@ -30,62 +31,44 @@ pub async fn list_photos(
     Query(params): Query<PhotoListQuery>,
 ) -> Result<Json<PhotoListResponse>, AppError> {
     let limit = params.limit.unwrap_or(100).min(500);
+    let fav_only = params.favorites_only.unwrap_or(false);
 
-    let photos = if let Some(ref after) = params.after {
-        if let Some(ref mt) = params.media_type {
-            sqlx::query_as::<_, PhotoRecord>(
-                "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
-                 duration_secs, taken_at, latitude, longitude, thumb_path, created_at \
-                 FROM photos WHERE user_id = ? AND media_type = ? AND created_at > ? \
-                 AND encrypted_blob_id IS NULL \
-                 ORDER BY created_at ASC LIMIT ?",
-            )
-            .bind(&auth.user_id)
-            .bind(mt)
-            .bind(after)
-            .bind(limit + 1)
-            .fetch_all(&state.pool)
-            .await?
+    // Build dynamic query
+    let mut sql = String::from(
+        "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
+         duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, crop_metadata \
+         FROM photos WHERE user_id = ? AND encrypted_blob_id IS NULL"
+    );
+    let mut binds: Vec<String> = vec![auth.user_id.clone()];
+
+    if let Some(ref mt) = params.media_type {
+        sql.push_str(" AND media_type = ?");
+        binds.push(mt.clone());
+    }
+
+    if fav_only {
+        sql.push_str(" AND is_favorite = 1");
+    }
+
+    if let Some(ref after) = params.after {
+        sql.push_str(" AND created_at > ?");
+        binds.push(after.clone());
+    }
+
+    sql.push_str(" ORDER BY created_at ASC LIMIT ?");
+    binds.push((limit + 1).to_string());
+
+    let mut query = sqlx::query_as::<_, PhotoRecord>(&sql);
+    for (i, val) in binds.iter().enumerate() {
+        if i == binds.len() - 1 {
+            // Last bind is the limit (integer)
+            query = query.bind(val.parse::<i64>().unwrap_or(limit + 1));
         } else {
-            sqlx::query_as::<_, PhotoRecord>(
-                "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
-                 duration_secs, taken_at, latitude, longitude, thumb_path, created_at \
-                 FROM photos WHERE user_id = ? AND created_at > ? \
-                 AND encrypted_blob_id IS NULL \
-                 ORDER BY created_at ASC LIMIT ?",
-            )
-            .bind(&auth.user_id)
-            .bind(after)
-            .bind(limit + 1)
-            .fetch_all(&state.pool)
-            .await?
+            query = query.bind(val);
         }
-    } else if let Some(ref mt) = params.media_type {
-        sqlx::query_as::<_, PhotoRecord>(
-            "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
-             duration_secs, taken_at, latitude, longitude, thumb_path, created_at \
-             FROM photos WHERE user_id = ? AND media_type = ? \
-             AND encrypted_blob_id IS NULL \
-             ORDER BY created_at ASC LIMIT ?",
-        )
-        .bind(&auth.user_id)
-        .bind(mt)
-        .bind(limit + 1)
-        .fetch_all(&state.pool)
-        .await?
-    } else {
-        sqlx::query_as::<_, PhotoRecord>(
-            "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
-             duration_secs, taken_at, latitude, longitude, thumb_path, created_at \
-             FROM photos WHERE user_id = ? \
-             AND encrypted_blob_id IS NULL \
-             ORDER BY created_at ASC LIMIT ?",
-        )
-        .bind(&auth.user_id)
-        .bind(limit + 1)
-        .fetch_all(&state.pool)
-        .await?
-    };
+    }
+
+    let photos = query.fetch_all(&state.pool).await?;
 
     let next_cursor = if photos.len() as i64 > limit {
         photos.last().map(|p| p.created_at.clone())
@@ -577,4 +560,80 @@ pub async fn upload_photo(
             "size_bytes": size_bytes,
         })),
     ))
+}
+
+// ── Favorite Toggle ─────────────────────────────────────────────────────────
+
+/// PUT /api/photos/:id/favorite
+/// Toggle the is_favorite flag on a photo.
+pub async fn toggle_favorite(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(photo_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Toggle: set is_favorite = 1 - is_favorite (0→1, 1→0)
+    let rows = sqlx::query(
+        "UPDATE photos SET is_favorite = 1 - is_favorite WHERE id = ? AND user_id = ?",
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+
+    if rows == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    let is_favorite: bool = sqlx::query_scalar(
+        "SELECT is_favorite FROM photos WHERE id = ? AND user_id = ?",
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "id": photo_id,
+        "is_favorite": is_favorite,
+    })))
+}
+
+// ── Crop Metadata ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SetCropRequest {
+    pub crop_metadata: Option<String>,
+}
+
+/// PUT /api/photos/:id/crop
+/// Set (or clear) crop metadata for a photo.
+/// crop_metadata is a JSON string describing the crop rectangle:
+/// {"x": 0.1, "y": 0.2, "width": 0.6, "height": 0.5, "rotate": 0}
+/// Values are percentages (0.0-1.0) of original dimensions.
+/// Send null to clear the crop.
+pub async fn set_crop(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(photo_id): Path<String>,
+    Json(req): Json<SetCropRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let rows = sqlx::query(
+        "UPDATE photos SET crop_metadata = ? WHERE id = ? AND user_id = ?",
+    )
+    .bind(&req.crop_metadata)
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+
+    if rows == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(Json(serde_json::json!({
+        "id": photo_id,
+        "crop_metadata": req.crop_metadata,
+    })))
 }

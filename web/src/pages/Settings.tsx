@@ -6,6 +6,7 @@ import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
 import { useProcessingStore } from "../store/processing";
 import AppHeader from "../components/AppHeader";
+import AppIcon from "../components/AppIcon";
 import { checkPasswordStrength } from "../utils/validation";
 import { Checkmark } from "../components/PasswordFields";
 import { encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
@@ -889,9 +890,7 @@ export default function Settings() {
               disabled={scanning}
               className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
             >
-              <svg className={`w-4 h-4 ${scanning ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-              </svg>
+              <AppIcon name="reload" size="w-4 h-4" className={scanning ? "animate-spin" : ""} />
               {scanning ? "Scanning…" : "Scan Now"}
             </button>
             {scanResult && (
@@ -1782,9 +1781,7 @@ export default function Settings() {
                           className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500"
                           title="Delete user"
                         >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                          </svg>
+                          <AppIcon name="trashcan" />
                         </button>
                       </div>
                       {/* Reset Password inline form */}
@@ -1917,6 +1914,56 @@ export default function Settings() {
             &copy; {new Date().getFullYear()} WulfNet Designs. All rights
             reserved.
           </p>
+        </div>
+      </section>
+
+      {/* ── Credits & Links ─────────────────────────────────────────────────── */}
+      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <h2 className="text-lg font-semibold mb-4">Credits &amp; Links</h2>
+        <div className="space-y-3 text-sm">
+          <div className="flex items-center gap-3">
+            <AppIcon name="star" size="w-5 h-5" />
+            <div>
+              <p className="text-gray-900 dark:text-gray-100 font-medium">Icons</p>
+              <p className="text-gray-500 dark:text-gray-400">
+                Custom icons by{" "}
+                <a
+                  href="https://www.flaticon.com/authors/angus-87"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  Angus_87
+                </a>{" "}
+                on{" "}
+                <a
+                  href="https://www.flaticon.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  Flaticon
+                </a>
+              </p>
+            </div>
+          </div>
+          <hr className="border-gray-100 dark:border-gray-700" />
+          <div className="flex items-center gap-3">
+            <AppIcon name="shared" size="w-5 h-5" />
+            <div>
+              <p className="text-gray-900 dark:text-gray-100 font-medium">Source Code</p>
+              <p className="text-gray-500 dark:text-gray-400">
+                <a
+                  href="https://github.com/wulfic/simple-photos"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  github.com/wulfic/simple-photos
+                </a>
+              </p>
+            </div>
+          </div>
         </div>
       </section>
       </main>

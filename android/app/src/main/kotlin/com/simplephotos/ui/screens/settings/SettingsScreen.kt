@@ -1,6 +1,7 @@
 package com.simplephotos.ui.screens.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,24 +28,28 @@ import androidx.datastore.preferences.core.edit
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.local.AppDatabase
+import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.*
 import com.simplephotos.data.repository.AuthRepository
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
-import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import com.simplephotos.R
+import androidx.compose.ui.res.painterResource
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val authRepo: AuthRepository,
     private val api: ApiService,
+    private val db: AppDatabase,
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     var serverUrl by mutableStateOf("")
@@ -60,18 +65,19 @@ class SettingsViewModel @Inject constructor(
     // Encryption mode
     var encryptionMode by mutableStateOf("plain")
 
-    // Admin: user list
-    var users by mutableStateOf<List<AdminUser>>(emptyList())
-    var usersLoading by mutableStateOf(false)
+    // Admin status
     var isAdmin by mutableStateOf(false)
 
     // Diagnostic logging toggle
     var diagnosticLogging by mutableStateOf(false)
         private set
 
-    // Scan
-    var scanning by mutableStateOf(false)
-    var scanResult by mutableStateOf<String?>(null)
+    // Free up space
+    var freeableBytes by mutableStateOf(0L)
+    var freeableCount by mutableStateOf(0)
+    var freeUpLoading by mutableStateOf(false)
+
+
 
     init {
         viewModelScope.launch {
@@ -82,6 +88,7 @@ class SettingsViewModel @Inject constructor(
         }
         loadStorageStats()
         loadEncryptionSettings()
+        calculateFreeableSpace()
     }
 
     fun loadStorageStats() {
@@ -103,30 +110,14 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun loadUsers() {
+    fun checkAdmin() {
         viewModelScope.launch {
-            usersLoading = true
             try {
-                users = withContext(Dispatchers.IO) { api.listUsers() }
+                withContext(Dispatchers.IO) { api.listUsers() }
                 isAdmin = true
             } catch (_: Exception) {
                 isAdmin = false
             }
-            usersLoading = false
-        }
-    }
-
-    fun scanFiles() {
-        viewModelScope.launch {
-            scanning = true
-            scanResult = null
-            try {
-                val result = withContext(Dispatchers.IO) { api.scanAndRegister() }
-                scanResult = "Found and registered ${result.registered} files"
-            } catch (e: Exception) {
-                scanResult = "Scan failed: ${e.message}"
-            }
-            scanning = false
         }
     }
 
@@ -151,62 +142,65 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun createUser(username: String, password: String, role: String, onSuccess: () -> Unit) {
-        viewModelScope.launch {
-            loading = true
-            error = null
-            try {
-                withContext(Dispatchers.IO) {
-                    api.createUser(CreateUserRequest(username, password, role))
-                }
-                message = "User '$username' created"
-                loadUsers()
-                onSuccess()
-            } catch (e: Exception) {
-                error = "Failed to create user: ${e.message}"
-            }
-            loading = false
-        }
-    }
 
-    fun deleteUser(userId: String) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { api.deleteUser(userId) }
-                message = "User deleted"
-                loadUsers()
-            } catch (e: Exception) {
-                error = "Failed: ${e.message}"
-            }
-        }
-    }
-
-    fun updateUserRole(userId: String, role: String) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { api.updateUserRole(userId, UpdateRoleRequest(role)) }
-                loadUsers()
-            } catch (e: Exception) {
-                error = "Failed: ${e.message}"
-            }
-        }
-    }
-
-    fun resetUserPassword(userId: String, newPassword: String) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { api.resetUserPassword(userId, ResetPasswordRequest(newPassword)) }
-                message = "Password reset"
-            } catch (e: Exception) {
-                error = "Failed: ${e.message}"
-            }
-        }
-    }
 
     fun toggleDiagnosticLogging() {
         viewModelScope.launch {
             diagnosticLogging = !diagnosticLogging
             dataStore.edit { it[KEY_DIAGNOSTIC_LOGGING] = diagnosticLogging }
+        }
+    }
+
+    fun calculateFreeableSpace() {
+        viewModelScope.launch {
+            try {
+                val synced = withContext(Dispatchers.IO) {
+                    db.photoDao().getByStatus(SyncStatus.SYNCED)
+                }
+                val withLocal = synced.filter { it.localPath != null }
+                freeableCount = withLocal.size
+                freeableBytes = withLocal.sumOf { it.sizeBytes ?: 0L }
+            } catch (_: Exception) {
+                freeableCount = 0
+                freeableBytes = 0L
+            }
+        }
+    }
+
+    fun freeUpSpace(context: android.content.Context, onComplete: (Int) -> Unit) {
+        viewModelScope.launch {
+            freeUpLoading = true
+            var deleted = 0
+            try {
+                val synced = withContext(Dispatchers.IO) {
+                    db.photoDao().getByStatus(SyncStatus.SYNCED)
+                }
+                val withLocal = synced.filter { it.localPath != null }
+
+                for (photo in withLocal) {
+                    try {
+                        val uri = android.net.Uri.parse(photo.localPath)
+                        val rows = withContext(Dispatchers.IO) {
+                            context.contentResolver.delete(uri, null, null)
+                        }
+                        if (rows > 0) {
+                            // Clear localPath so we don't try again
+                            withContext(Dispatchers.IO) {
+                                db.photoDao().update(photo.copy(localPath = null))
+                            }
+                            deleted++
+                        }
+                    } catch (_: Exception) {
+                        // Some URIs may not be deletable (permission denied)
+                    }
+                }
+                message = "Freed up space from $deleted photos"
+                calculateFreeableSpace()
+            } catch (e: Exception) {
+                error = "Failed to free up space: ${e.message}"
+            }
+            freeUpLoading = false
+            onComplete(deleted)
         }
     }
 
@@ -236,9 +230,9 @@ fun SettingsScreen(
 ) {
     val scrollState = rememberScrollState()
 
-    // Load admin users on first compose
+    // Check admin status on first compose
     LaunchedEffect(Unit) {
-        viewModel.loadUsers()
+        viewModel.checkAdmin()
     }
 
     Scaffold(
@@ -247,7 +241,7 @@ fun SettingsScreen(
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
                     }
                 }
             )
@@ -269,7 +263,7 @@ fun SettingsScreen(
             }
 
             // ── Storage Stats ────────────────────────────────────────────
-            SettingsCard(title = "Storage", icon = Icons.Default.Storage) {
+            SettingsCard(title = "Storage", iconPainter = painterResource(R.drawable.ic_floppy_disk)) {
                 val stats = viewModel.storageStats
                 if (viewModel.storageLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
@@ -290,35 +284,8 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Scan Files (admin only) ─────────────────────────────────
-            if (viewModel.isAdmin) {
-                SettingsCard(title = "Scan Files", icon = Icons.Default.FolderOpen) {
-                    Text(
-                        "Scan the server storage directory for new files and register them.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.scanFiles() },
-                        enabled = !viewModel.scanning,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (viewModel.scanning) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
-                        }
-                        Text("Scan & Register")
-                    }
-                    viewModel.scanResult?.let {
-                        Spacer(Modifier.height(4.dp))
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            }
-
             // ── Backup Folders ───────────────────────────────────────────
-            SettingsCard(title = "Backup Folders", icon = Icons.Default.PhotoLibrary) {
+            SettingsCard(title = "Backup Folders", iconPainter = painterResource(R.drawable.ic_image)) {
                 Text(
                     "Choose which folders on your device to back up. Camera is backed up by default.",
                     style = MaterialTheme.typography.bodySmall,
@@ -329,26 +296,78 @@ fun SettingsScreen(
                     onClick = onBackupFolders,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(painter = painterResource(R.drawable.ic_folder), contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Select Backup Folders")
                 }
             }
 
-            // ── Appearance ───────────────────────────────────────────────
-            SettingsCard(title = "Appearance", icon = Icons.Default.Palette) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Dark Mode")
-                    Switch(
-                        checked = ThemeState.mode == "dark",
-                        onCheckedChange = { ThemeState.toggle(viewModel.dataStore) }
+            // ── Free Up Space ────────────────────────────────────────────
+            val context = LocalContext.current
+            var showFreeUpDialog by remember { mutableStateOf(false) }
+
+            SettingsCard(title = "Free Up Space", icon = Icons.Default.CleaningServices) {
+                if (viewModel.freeableCount > 0) {
+                    Text(
+                        "${viewModel.freeableCount} photos already backed up to the server can be removed from this device, freeing up ${formatBytes(viewModel.freeableBytes)}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { showFreeUpDialog = true },
+                        enabled = !viewModel.freeUpLoading,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        if (viewModel.freeUpLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Icon(Icons.Default.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Free Up ${formatBytes(viewModel.freeableBytes)}")
+                    }
+                } else {
+                    Text(
+                        "No backed-up photos to remove from this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
+
+            if (showFreeUpDialog) {
+                AlertDialog(
+                    onDismissRequest = { showFreeUpDialog = false },
+                    icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                    title = { Text("Free Up Space?") },
+                    text = {
+                        Text(
+                            "This will permanently delete ${viewModel.freeableCount} photos and videos from your device that have already been backed up to the server.\n\nYou'll free up approximately ${formatBytes(viewModel.freeableBytes)}.\n\nThis cannot be undone. The files will still be available on your server."
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showFreeUpDialog = false
+                                viewModel.freeUpSpace(context) { _ -> }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Delete from Device")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showFreeUpDialog = false }) {
+                            Text("Cancel")
+                        }
+                    }
+                )
+            }
+
 
             // ── Diagnostic Logging ───────────────────────────────────────
             SettingsCard(title = "Troubleshooting", icon = Icons.Default.BugReport) {
@@ -375,16 +394,12 @@ fun SettingsScreen(
             ChangePasswordSection(viewModel)
 
             // ── Security / 2FA ───────────────────────────────────────────
-            SettingsCard(title = "Security", icon = Icons.Default.Security) {
+            SettingsCard(title = "Security", iconPainter = painterResource(R.drawable.ic_shield)) {
                 OutlinedButton(onClick = onSetup2fa, modifier = Modifier.fillMaxWidth()) {
                     Text("Two-Factor Authentication")
                 }
             }
 
-            // ── Manage Users (admin only) ────────────────────────────────
-            if (viewModel.isAdmin) {
-                ManageUsersSection(viewModel)
-            }
 
             // ── About ────────────────────────────────────────────────────
             SettingsCard(title = "About", icon = Icons.Default.Info) {
@@ -396,6 +411,40 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            // ── Credits & Links ──────────────────────────────────────────
+            SettingsCard(title = "Credits & Links", iconPainter = painterResource(R.drawable.ic_star)) {
+                val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painter = painterResource(R.drawable.ic_star), contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("Icons", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        Text(
+                            "Custom icons by Angus_87 on Flaticon",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { uriHandler.openUri("https://www.flaticon.com/authors/angus-87") }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painter = painterResource(R.drawable.ic_shared), contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("Source Code", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        Text(
+                            "github.com/wulfic/simple-photos",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { uriHandler.openUri("https://github.com/wulfic/simple-photos") }
+                        )
+                    }
+                }
             }
 
             // ── Messages ─────────────────────────────────────────────────
@@ -437,6 +486,25 @@ private fun SettingsCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(12.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsCard(
+    title: String,
+    iconPainter: androidx.compose.ui.graphics.painter.Painter,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(painter = iconPainter, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
@@ -520,7 +588,7 @@ private fun ChangePasswordSection(viewModel: SettingsViewModel) {
     var confirmPassword by remember { mutableStateOf("") }
     var showPasswords by remember { mutableStateOf(false) }
 
-    SettingsCard(title = "Change Password", icon = Icons.Default.Lock) {
+    SettingsCard(title = "Change Password", iconPainter = painterResource(R.drawable.ic_lock)) {
         if (!expanded) {
             OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
                 Text("Change Password")
@@ -616,151 +684,6 @@ private fun passwordStrength(password: String): Triple<Float, Color, String> {
         score <= 4 -> Triple(0.7f, Color(0xFF3B82F6), "Good")
         else -> Triple(1f, Color(0xFF22C55E), "Strong")
     }
-}
-
-// ── Manage Users (Admin) ────────────────────────────────────────────────────
-
-@Composable
-private fun ManageUsersSection(viewModel: SettingsViewModel) {
-    var showCreateDialog by remember { mutableStateOf(false) }
-
-    SettingsCard(title = "Manage Users", icon = Icons.Default.People) {
-        if (viewModel.usersLoading) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-        } else {
-            viewModel.users.forEach { user ->
-                UserRow(user, viewModel)
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(onClick = { showCreateDialog = true }, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Add User")
-        }
-    }
-
-    if (showCreateDialog) {
-        CreateUserDialog(
-            onDismiss = { showCreateDialog = false },
-            onCreateUser = { username, password, role ->
-                viewModel.createUser(username, password, role) {
-                    showCreateDialog = false
-                }
-            },
-            isLoading = viewModel.loading
-        )
-    }
-}
-
-@Composable
-private fun UserRow(user: AdminUser, viewModel: SettingsViewModel) {
-    var showResetPassword by remember { mutableStateOf(false) }
-    var resetPassword by remember { mutableStateOf("") }
-
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(user.username, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                    Text(
-                        buildString {
-                            append(user.role)
-                            if (user.totpEnabled) append(" · 2FA enabled")
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row {
-                    // Toggle role
-                    IconButton(onClick = {
-                        val newRole = if (user.role == "admin") "user" else "admin"
-                        viewModel.updateUserRole(user.id, newRole)
-                    }, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            if (user.role == "admin") Icons.Default.AdminPanelSettings else Icons.Default.Person,
-                            contentDescription = "Toggle role",
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    // Delete
-                    IconButton(onClick = { viewModel.deleteUser(user.id) }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-
-            if (showResetPassword) {
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = resetPassword,
-                        onValueChange = { resetPassword = it },
-                        label = { Text("New password") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.resetUserPassword(user.id, resetPassword)
-                            showResetPassword = false
-                            resetPassword = ""
-                        },
-                        enabled = resetPassword.isNotEmpty()
-                    ) { Text("Set") }
-                }
-            }
-
-            TextButton(onClick = { showResetPassword = !showResetPassword }) {
-                Text(if (showResetPassword) "Cancel" else "Reset Password", fontSize = 12.sp)
-            }
-        }
-    }
-}
-
-@Composable
-private fun CreateUserDialog(
-    onDismiss: () -> Unit,
-    onCreateUser: (String, String, String) -> Unit,
-    isLoading: Boolean
-) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var role by remember { mutableStateOf("user") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Create User") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(value = username, onValueChange = { username = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = password, onValueChange = { password = it }, label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Admin", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.width(8.dp))
-                    Switch(checked = role == "admin", onCheckedChange = { role = if (it) "admin" else "user" })
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onCreateUser(username, password, role) },
-                enabled = username.isNotEmpty() && password.isNotEmpty() && !isLoading
-            ) { Text("Create") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────────

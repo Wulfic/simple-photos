@@ -294,7 +294,9 @@ class PhotoRepository @Inject constructor(
                     latitude = photo.latitude,
                     longitude = photo.longitude,
                     sizeBytes = photo.sizeBytes,
-                    syncStatus = SyncStatus.SYNCED
+                    syncStatus = SyncStatus.SYNCED,
+                    isFavorite = photo.isFavorite,
+                    cropMetadata = photo.cropMetadata
                 )
                 db.photoDao().insert(entity)
                 imported++

@@ -1,4 +1,5 @@
 import type { WizardStep } from "./types";
+import AppIcon from "../../components/AppIcon";
 
 export interface AndroidStepProps {
   setStep: (step: WizardStep) => void;
@@ -22,13 +23,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
           href="/api/downloads/android"
           className="flex items-center justify-center gap-3 w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 text-sm font-medium transition-colors"
         >
-          <svg
-            className="w-6 h-6"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-          >
-            <path d="M17.523 2.23a.75.75 0 00-1.06 0l-1.8 1.8A8.96 8.96 0 0012 3.5a8.96 8.96 0 00-2.663.53l-1.8-1.8a.75.75 0 10-1.06 1.06l1.56 1.56A8.981 8.981 0 003 12.5v.5h18v-.5a8.981 8.981 0 00-5.037-7.21l1.56-1.56a.75.75 0 000-1.06zM10 10.5a1 1 0 11-2 0 1 1 0 012 0zm6 0a1 1 0 11-2 0 1 1 0 012 0zM3 14.5h18v1a7 7 0 01-7 7h-4a7 7 0 01-7-7v-1z" />
-          </svg>
+          <AppIcon name="download" size="w-6 h-6" />
           Download APK
         </a>
 

@@ -140,6 +140,34 @@ interface ApiService {
     @GET("health")
     suspend fun health(): Map<String, String>
 
+    // ── Tags ──────────────────────────────────────────────────────────────
+    @GET("api/tags")
+    suspend fun listTags(): TagListResponse
+
+    @GET("api/photos/{id}/tags")
+    suspend fun getPhotoTags(@Path("id") photoId: String): PhotoTagsResponse
+
+    @POST("api/photos/{id}/tags")
+    suspend fun addTag(@Path("id") photoId: String, @Body request: AddTagRequest): Response<Unit>
+
+    @HTTP(method = "DELETE", path = "api/photos/{id}/tags", hasBody = true)
+    suspend fun removeTag(@Path("id") photoId: String, @Body request: RemoveTagRequest): Response<Unit>
+
+    // ── Search ────────────────────────────────────────────────────────────
+    @GET("api/search")
+    suspend fun searchPhotos(
+        @Query("q") query: String,
+        @Query("limit") limit: Int? = null
+    ): SearchResponse
+
+    // ── Favorites ─────────────────────────────────────────────────────────
+    @PUT("api/photos/{id}/favorite")
+    suspend fun toggleFavorite(@Path("id") photoId: String): FavoriteToggleResponse
+
+    // ── Crop Metadata ─────────────────────────────────────────────────────
+    @PUT("api/photos/{id}/crop")
+    suspend fun setCrop(@Path("id") photoId: String, @Body request: SetCropRequest): CropResponse
+
     // ── Client Diagnostic Logs ───────────────────────────────────────────
     @POST("api/client-logs")
     suspend fun submitClientLogs(@Body batch: ClientLogBatch): Map<String, Any>

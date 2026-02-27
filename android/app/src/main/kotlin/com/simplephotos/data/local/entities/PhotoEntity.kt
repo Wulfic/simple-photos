@@ -32,5 +32,9 @@ data class PhotoEntity(
     val encryptedBlobSize: Long? = null,
     /** File size in bytes (from server, for plain-mode photos) */
     val sizeBytes: Long? = null,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    /** Whether this photo is favorited */
+    val isFavorite: Boolean = false,
+    /** JSON crop metadata for crop/edit feature */
+    val cropMetadata: String? = null
 )

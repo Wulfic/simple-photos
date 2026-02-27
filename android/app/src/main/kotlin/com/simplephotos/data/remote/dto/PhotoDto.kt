@@ -18,7 +18,9 @@ data class PlainPhotoRecord(
     val latitude: Double? = null,
     val longitude: Double? = null,
     @SerializedName("thumb_path") val thumbPath: String? = null,
-    @SerializedName("created_at") val createdAt: String
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("is_favorite") val isFavorite: Boolean = false,
+    @SerializedName("crop_metadata") val cropMetadata: String? = null
 )
 
 data class PlainPhotoListResponse(
@@ -105,4 +107,22 @@ data class MessageResponse(val message: String)
 data class ScanResponse(
     val registered: Int,
     val message: String
+)
+
+// ── Favorites ────────────────────────────────────────────────────────────────
+
+data class FavoriteToggleResponse(
+    val id: String,
+    @SerializedName("is_favorite") val isFavorite: Boolean
+)
+
+// ── Crop Metadata ────────────────────────────────────────────────────────────
+
+data class SetCropRequest(
+    @SerializedName("crop_metadata") val cropMetadata: String?
+)
+
+data class CropResponse(
+    val id: String,
+    @SerializedName("crop_metadata") val cropMetadata: String?
 )
