@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub backup: BackupConfig,
     #[serde(default)]
     pub tls: TlsConfig,
+    #[serde(default)]
+    pub scan: ScanConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -80,6 +82,29 @@ pub struct BackupConfig {
     /// If empty/unset, backup serving endpoints are disabled.
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+/// Storage auto-scan configuration.
+#[derive(Debug, Deserialize, Clone)]
+pub struct ScanConfig {
+    /// How often (in seconds) to scan the storage directory for new files.
+    /// Default: 300 (5 minutes). Set to 0 to disable background scanning.
+    #[serde(default = "ScanConfig::default_interval")]
+    pub auto_scan_interval_secs: u64,
+}
+
+impl ScanConfig {
+    fn default_interval() -> u64 {
+        300
+    }
+}
+
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            auto_scan_interval_secs: 300,
+        }
+    }
 }
 
 /// TLS/SSL configuration.
@@ -183,6 +208,12 @@ impl AppConfig {
 
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_BACKUP_API_KEY") {
             config.backup.api_key = Some(v);
+        }
+
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_SCAN_AUTO_SCAN_INTERVAL_SECS") {
+            config.scan.auto_scan_interval_secs = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_SCAN_AUTO_SCAN_INTERVAL_SECS"))?;
         }
 
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_ENABLED") {

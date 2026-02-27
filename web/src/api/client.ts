@@ -1050,7 +1050,7 @@ export const api = {
   // ── Search ──────────────────────────────────────────────────────────────
 
   search: {
-    /** Search photos by tag or filename */
+    /** Search photos by tag, filename, date, location, or media type */
     query: (q: string, limit?: number) => {
       const params = new URLSearchParams({ q });
       if (limit) params.set("limit", limit.toString());
@@ -1062,6 +1062,11 @@ export const api = {
           mime_type: string;
           thumb_path: string | null;
           created_at: string;
+          taken_at: string | null;
+          latitude: number | null;
+          longitude: number | null;
+          width: number | null;
+          height: number | null;
           tags: string[];
         }>;
       }>(`/search?${params.toString()}`);

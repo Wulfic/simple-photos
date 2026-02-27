@@ -66,6 +66,11 @@ static_root = "./web/dist"
 # Generate with: openssl rand -hex 32
 # api_key = ""
 
+[scan]
+# How often (seconds) to scan the storage directory for new files.
+# Default: 300 (5 minutes). Set to 0 to disable background scanning.
+auto_scan_interval_secs = 300
+
 [tls]
 # Enable HTTPS with a TLS certificate.
 # Set enabled = true and provide paths to your certificate and private key.

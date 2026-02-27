@@ -180,7 +180,7 @@ fun SearchScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .focusRequester(focusRequester),
-                placeholder = { Text("Search by tag or filename…") },
+                placeholder = { Text("Search tags, filenames, dates, types…") },
                 leadingIcon = {
                     Icon(
                         painter = painterResource(R.drawable.ic_magnify_glass),

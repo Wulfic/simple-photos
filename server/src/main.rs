@@ -160,12 +160,13 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn background task for auto-scanning storage directory (every 24 hours)
+    // Spawn background task for auto-scanning storage directory
     {
         let pool_clone = pool.clone();
         let storage_root_clone = config.storage.root.clone();
+        let scan_interval = config.scan.auto_scan_interval_secs;
         tokio::spawn(async move {
-            backup::handlers::background_auto_scan_task(pool_clone, storage_root_clone).await;
+            backup::handlers::background_auto_scan_task(pool_clone, storage_root_clone, scan_interval).await;
         });
     }
 

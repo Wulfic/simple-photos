@@ -331,13 +331,13 @@ private fun UserMenu(
             offset = DpOffset(0.dp, 4.dp)
         ) {
             DropdownMenuItem(
-                text = { Text("Albums") },
+                text = { Text("Secure Albums") },
                 onClick = {
                     expanded = false
                     onAlbumsClick()
                 },
                 leadingIcon = {
-                    Icon(painter = painterResource(R.drawable.ic_folder), contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(painter = painterResource(R.drawable.ic_lock), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
             DropdownMenuItem(
