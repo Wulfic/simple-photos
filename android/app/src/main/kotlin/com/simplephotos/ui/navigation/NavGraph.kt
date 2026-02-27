@@ -20,6 +20,7 @@ import com.simplephotos.ui.screens.setup.ServerSetupScreen
 import com.simplephotos.ui.screens.trash.TrashScreen
 import com.simplephotos.ui.screens.twofactor.TwoFactorSetupScreen
 import com.simplephotos.ui.screens.viewer.PhotoViewerScreen
+import com.simplephotos.ui.screens.search.SearchScreen
 
 @Composable
 fun NavGraph() {
@@ -54,6 +55,7 @@ fun NavGraph() {
             GalleryScreen(
                 onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
                 onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
+                onSearchClick = { navController.navigate(Screen.Search.route) },
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
@@ -62,6 +64,7 @@ fun NavGraph() {
         composable(Screen.AlbumList.route) {
             AlbumListScreen(
                 onGalleryClick = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
+                onSearchClick = { navController.navigate(Screen.Search.route) },
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
@@ -72,6 +75,17 @@ fun NavGraph() {
             TrashScreen(
                 onGalleryClick = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
                 onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
+                onSearchClick = { navController.navigate(Screen.Search.route) },
+                onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
+            )
+        }
+        composable(Screen.Search.route) {
+            SearchScreen(
+                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+                onGalleryClick = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
+                onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
+                onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
             )

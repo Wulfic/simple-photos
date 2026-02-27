@@ -50,14 +50,17 @@ export default function EncryptionStep({
             <h3 className="font-semibold text-gray-900 dark:text-gray-100">
               Standard Storage
             </h3>
-            <span className="text-xs bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 px-2 py-0.5 rounded-full">
-              Recommended
-            </span>
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400 ml-8">
             Photos are stored as regular files on disk. They can be browsed via the file system
-            and are automatically imported when placed in the storage folder. Best for most users.
+            and are automatically imported when placed in the storage folder.
           </p>
+          {encryptionMode === "plain" && (
+            <div className="mt-2 ml-8 flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-2">
+              <span className="text-base leading-none">⚠️</span>
+              <span>Photos will <strong>not</strong> be encrypted. Anyone with access to the server's file system can view them. Only choose this if you trust your hosting environment.</span>
+            </div>
+          )}
         </button>
 
         {/* Encrypted mode */}
@@ -80,8 +83,8 @@ export default function EncryptionStep({
             <h3 className="font-semibold text-gray-900 dark:text-gray-100">
               Encrypt All Photos
             </h3>
-            <span className="text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded-full">
-              Advanced
+            <span className="text-xs bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 px-2 py-0.5 rounded-full">
+              Recommended
             </span>
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400 ml-8">

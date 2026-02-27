@@ -6,7 +6,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -192,7 +191,7 @@ fun ServerSetupScreen(
                             enabled = !viewModel.scanning
                         ) {
                             Icon(
-                                Icons.Default.Refresh,
+                                painter = painterResource(R.drawable.ic_reload),
                                 contentDescription = "Rescan"
                             )
                         }

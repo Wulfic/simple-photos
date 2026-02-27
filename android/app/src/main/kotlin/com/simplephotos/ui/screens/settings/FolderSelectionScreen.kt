@@ -9,10 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.*
@@ -37,6 +34,8 @@ import com.simplephotos.sync.SyncScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import com.simplephotos.R
+import androidx.compose.ui.res.painterResource
 
 /**
  * ViewModel for the folder selection screen.
@@ -149,7 +148,7 @@ fun FolderSelectionScreen(
                 title = { Text("Backup Folders") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
                     }
                 }
             )
@@ -199,7 +198,7 @@ private fun PermissionRequest(permissionsState: MultiplePermissionsState) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    Icons.Default.Image,
+                    painter = painterResource(R.drawable.ic_image),
                     contentDescription = null,
                     modifier = Modifier.size(48.dp),
                     tint = MaterialTheme.colorScheme.primary
@@ -350,20 +349,11 @@ private fun FolderItem(
     isEnabled: Boolean,
     onToggle: () -> Unit
 ) {
-    val icon = when {
-        folder.relativePath.contains("DCIM/Camera", ignoreCase = true) ||
-        folder.bucketName.equals("Camera", ignoreCase = true) -> Icons.Default.CameraAlt
-        folder.relativePath.contains("Screenshots", ignoreCase = true) ||
-        folder.bucketName.equals("Screenshots", ignoreCase = true) -> Icons.Default.Screenshot
-        folder.relativePath.contains("Video", ignoreCase = true) ||
-        folder.bucketName.contains("Video", ignoreCase = true) -> Icons.Default.Videocam
-        folder.relativePath.contains("Pictures", ignoreCase = true) ||
-        folder.relativePath.contains("Images", ignoreCase = true) -> Icons.Default.Image
-        else -> Icons.Default.Folder
-    }
-
     val isCamera = folder.relativePath.contains("DCIM/Camera", ignoreCase = true) ||
         folder.bucketName.equals("Camera", ignoreCase = true)
+
+    val iconTint = if (isEnabled) MaterialTheme.colorScheme.primary
+                   else MaterialTheme.colorScheme.onSurfaceVariant
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -376,13 +366,22 @@ private fun FolderItem(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = if (isEnabled) MaterialTheme.colorScheme.primary
-                       else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            when {
+                folder.relativePath.contains("DCIM/Camera", ignoreCase = true) ||
+                folder.bucketName.equals("Camera", ignoreCase = true) ->
+                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(24.dp), tint = iconTint)
+                folder.relativePath.contains("Screenshots", ignoreCase = true) ||
+                folder.bucketName.equals("Screenshots", ignoreCase = true) ->
+                    Icon(Icons.Default.Screenshot, contentDescription = null, modifier = Modifier.size(24.dp), tint = iconTint)
+                folder.relativePath.contains("Video", ignoreCase = true) ||
+                folder.bucketName.contains("Video", ignoreCase = true) ->
+                    Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(24.dp), tint = iconTint)
+                folder.relativePath.contains("Pictures", ignoreCase = true) ||
+                folder.relativePath.contains("Images", ignoreCase = true) ->
+                    Icon(painter = painterResource(R.drawable.ic_image), contentDescription = null, modifier = Modifier.size(24.dp), tint = iconTint)
+                else ->
+                    Icon(painter = painterResource(R.drawable.ic_folder), contentDescription = null, modifier = Modifier.size(24.dp), tint = iconTint)
+            }
             Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {

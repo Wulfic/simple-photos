@@ -15,6 +15,7 @@ mod security;
 mod setup;
 mod sharing;
 mod state;
+mod tags;
 mod trash;
 
 use std::net::SocketAddr;
@@ -237,6 +238,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/upload", post(photos::handlers::upload_photo))
         .route("/photos/{id}/file", get(photos::handlers::serve_photo))
         .route("/photos/{id}/thumb", get(photos::handlers::serve_thumbnail))
+        // Favorite toggle
+        .route("/photos/{id}/favorite", put(photos::handlers::toggle_favorite))
+        // Crop metadata
+        .route("/photos/{id}/crop", put(photos::handlers::set_crop))
         // Delete now soft-deletes to trash (30-day retention)
         .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Plain-mode scan & register all files on disk
@@ -293,6 +298,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/sharing/albums/{id}/photos", post(sharing::handlers::add_photo))
         .route("/sharing/albums/{album_id}/photos/{photo_id}", delete(sharing::handlers::remove_photo))
         .route("/sharing/users", get(sharing::handlers::list_users_for_sharing))
+        // Tags — add, remove, list tags on photos; search by tag/filename
+        .route("/tags", get(tags::handlers::list_tags))
+        .route("/photos/{id}/tags", get(tags::handlers::get_photo_tags))
+        .route("/photos/{id}/tags", post(tags::handlers::add_tag))
+        .route("/photos/{id}/tags", delete(tags::handlers::remove_tag))
+        .route("/search", get(tags::handlers::search_photos))
         // Client diagnostic logs — mobile clients submit backup debug logs
         .route("/client-logs", post(client_logs::handlers::submit_logs))
         .route("/admin/client-logs", get(client_logs::handlers::list_logs));

@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { db, type CachedPhoto } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
+import AppIcon from "../components/AppIcon";
 
 interface Gallery {
   id: string;
@@ -290,9 +291,7 @@ export default function SecureGallery() {
                 }}
                 className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-1"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
+                <AppIcon name="back-arrow" />
                 Back
               </button>
               <h2 className="text-xl font-semibold dark:text-white flex items-center gap-2">

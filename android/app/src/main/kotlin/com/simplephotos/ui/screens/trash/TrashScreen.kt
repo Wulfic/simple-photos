@@ -1,8 +1,10 @@
 package com.simplephotos.ui.screens.trash
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -10,9 +12,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,7 +25,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -41,13 +40,14 @@ import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.HeaderNavigation
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
-import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import com.simplephotos.R
+import androidx.compose.ui.res.painterResource
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -57,33 +57,6 @@ private fun formatBytes(bytes: Long): String {
     val sizes = arrayOf("B", "KB", "MB", "GB")
     val i = (Math.log(bytes.toDouble()) / Math.log(k)).toInt().coerceAtMost(sizes.lastIndex)
     return "%.1f %s".format(bytes / Math.pow(k, i.toDouble()), sizes[i])
-}
-
-private fun timeUntil(isoDate: String): String {
-    return try {
-        val expires = java.time.Instant.parse(isoDate)
-        val now = java.time.Instant.now()
-        val diff = java.time.Duration.between(now, expires)
-        if (diff.isNegative) return "Expiring soon"
-        val days = diff.toDays()
-        val hours = diff.toHours() % 24
-        if (days > 0) "${days}d ${hours}h remaining" else "${hours}h remaining"
-    } catch (_: Exception) {
-        ""
-    }
-}
-
-private fun timeSince(isoDate: String): String {
-    return try {
-        val deleted = java.time.Instant.parse(isoDate)
-        val now = java.time.Instant.now()
-        val diff = java.time.Duration.between(deleted, now)
-        val days = diff.toDays()
-        val hours = diff.toHours() % 24
-        if (days > 0) "${days}d ago" else if (hours > 0) "${hours}h ago" else "Just now"
-    } catch (_: Exception) {
-        ""
-    }
 }
 
 // ── ViewModel ───────────────────────────────────────────────────────────────
@@ -103,6 +76,8 @@ class TrashViewModel @Inject constructor(
     var actionLoading by mutableStateOf<String?>(null)
         private set
     var selectedIds by mutableStateOf(emptySet<String>())
+        private set
+    var isSelectionMode by mutableStateOf(false)
         private set
     var serverBaseUrl by mutableStateOf("")
         private set
@@ -135,43 +110,20 @@ class TrashViewModel @Inject constructor(
         }
     }
 
+    fun enterSelectionMode(id: String) {
+        isSelectionMode = true
+        selectedIds = setOf(id)
+    }
+
     fun toggleSelect(id: String) {
+        if (!isSelectionMode) return
         selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+        if (selectedIds.isEmpty()) isSelectionMode = false
     }
 
-    fun selectAll() {
-        selectedIds = if (selectedIds.size == items.size) emptySet()
-        else items.map { it.id }.toSet()
-    }
-
-    fun restore(id: String) {
-        viewModelScope.launch {
-            actionLoading = id
-            try {
-                withContext(Dispatchers.IO) { api.restoreFromTrash(id) }
-                items = items.filter { it.id != id }
-                selectedIds = selectedIds - id
-            } catch (e: Exception) {
-                error = e.message ?: "Failed to restore"
-            } finally {
-                actionLoading = null
-            }
-        }
-    }
-
-    fun permanentDelete(id: String) {
-        viewModelScope.launch {
-            actionLoading = id
-            try {
-                withContext(Dispatchers.IO) { api.permanentDeleteTrash(id) }
-                items = items.filter { it.id != id }
-                selectedIds = selectedIds - id
-            } catch (e: Exception) {
-                error = e.message ?: "Failed to delete"
-            } finally {
-                actionLoading = null
-            }
-        }
+    fun clearSelection() {
+        selectedIds = emptySet()
+        isSelectionMode = false
     }
 
     fun emptyTrash() {
@@ -180,7 +132,7 @@ class TrashViewModel @Inject constructor(
             try {
                 withContext(Dispatchers.IO) { api.emptyTrash() }
                 items = emptyList()
-                selectedIds = emptySet()
+                clearSelection()
             } catch (e: Exception) {
                 error = e.message ?: "Failed to empty trash"
             } finally {
@@ -197,9 +149,9 @@ class TrashViewModel @Inject constructor(
                     withContext(Dispatchers.IO) { api.restoreFromTrash(id) }
                 }
                 items = items.filter { it.id !in selectedIds }
-                selectedIds = emptySet()
+                clearSelection()
             } catch (e: Exception) {
-                error = e.message ?: "Failed to restore selected"
+                error = e.message ?: "Failed to restore"
                 loadTrash()
             } finally {
                 actionLoading = null
@@ -215,9 +167,9 @@ class TrashViewModel @Inject constructor(
                     withContext(Dispatchers.IO) { api.permanentDeleteTrash(id) }
                 }
                 items = items.filter { it.id !in selectedIds }
-                selectedIds = emptySet()
+                clearSelection()
             } catch (e: Exception) {
-                error = e.message ?: "Failed to delete selected"
+                error = e.message ?: "Failed to delete"
                 loadTrash()
             } finally {
                 actionLoading = null
@@ -242,6 +194,7 @@ class TrashViewModel @Inject constructor(
 fun TrashScreen(
     onGalleryClick: () -> Unit,
     onAlbumsClick: () -> Unit,
+    onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onLogout: () -> Unit,
     viewModel: TrashViewModel = hiltViewModel()
@@ -257,10 +210,10 @@ fun TrashScreen(
                 navigation = HeaderNavigation(
                     onGalleryClick = onGalleryClick,
                     onAlbumsClick = onAlbumsClick,
+                    onSearchClick = onSearchClick,
                     onTrashClick = { /* already on trash */ },
                     onSettingsClick = onSettingsClick,
-                    onLogout = { viewModel.logout(onLogout) },
-                    onThemeToggle = { ThemeState.toggle(viewModel.dataStore) }
+                    onLogout = { viewModel.logout(onLogout) }
                 )
             )
         }
@@ -270,100 +223,84 @@ fun TrashScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            // ── Stats Bar ───────────────────────────────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Spacer(Modifier.width(12.dp))
+            // ── Header / Selection bar ──────────────────────────────
+            if (viewModel.isSelectionMode) {
+                // Selection action bar
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shadowElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { viewModel.clearSelection() }, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "${viewModel.selectedIds.size} selected",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { viewModel.restoreSelected() },
+                                enabled = viewModel.actionLoading == null && viewModel.selectedIds.isNotEmpty()
+                            ) {
+                                Icon(painter = painterResource(R.drawable.ic_reload), contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Restore", fontSize = 13.sp)
+                            }
+                            Button(
+                                onClick = { viewModel.deleteSelected() },
+                                enabled = viewModel.actionLoading == null && viewModel.selectedIds.isNotEmpty()
+                            ) {
+                                Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Delete", fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Normal header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             "Trash",
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold
                         )
+                        if (viewModel.items.isNotEmpty()) {
+                            Text(
+                                "${viewModel.items.size} item${if (viewModel.items.size != 1) "s" else ""} · ${formatBytes(totalSize)} · Deleted after 30 days",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
                     }
-                    Text(
-                        if (viewModel.items.isEmpty()) "No items in trash"
-                        else "${viewModel.items.size} item${if (viewModel.items.size != 1) "s" else ""} · ${formatBytes(totalSize)} · Items are permanently deleted after 30 days",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
 
-                if (viewModel.items.isNotEmpty()) {
-                    Button(
-                        onClick = { showEmptyConfirm = true },
-                        enabled = viewModel.actionLoading == null,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFDC2626),
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text("Empty Trash", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    }
-                }
-            }
-
-            // ── Bulk action bar (shown when items are selected) ─────
-            if (viewModel.selectedIds.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF065F46).copy(alpha = 0.3f),
-                        modifier = Modifier.clickable(
-                            enabled = viewModel.actionLoading == null,
-                            onClick = { viewModel.restoreSelected() }
-                        )
-                    ) {
-                        Text(
-                            "Restore (${viewModel.selectedIds.size})",
-                            color = Color(0xFF34D399),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF991B1B).copy(alpha = 0.3f),
-                        modifier = Modifier.clickable(
-                            enabled = viewModel.actionLoading == null,
-                            onClick = { viewModel.deleteSelected() }
-                        )
-                    ) {
-                        Text(
-                            "Delete (${viewModel.selectedIds.size})",
-                            color = Color(0xFFF87171),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
+                    if (viewModel.items.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = { showEmptyConfirm = true },
+                            enabled = viewModel.actionLoading == null
+                        ) {
+                            Text("Empty Trash", fontSize = 13.sp)
+                        }
                     }
                 }
             }
@@ -388,22 +325,16 @@ fun TrashScreen(
 
             // ── Loading ─────────────────────────────────────────────
             if (viewModel.isLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
             }
             // ── Empty State ─────────────────────────────────────────
             else if (viewModel.items.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            Icons.Default.Delete,
+                            painter = painterResource(R.drawable.ic_trashcan),
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                             modifier = Modifier.size(64.dp)
@@ -425,43 +356,24 @@ fun TrashScreen(
             }
             // ── Grid ────────────────────────────────────────────────
             else {
-                // Select all link
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        if (viewModel.selectedIds.size == viewModel.items.size) "Deselect all"
-                        else "Select all",
-                        color = MaterialTheme.colorScheme.primary,
-                        fontSize = 13.sp,
-                        modifier = Modifier.clickable { viewModel.selectAll() }
-                    )
-                    if (viewModel.selectedIds.isNotEmpty()) {
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            "${viewModel.selectedIds.size} selected",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
-
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(110.dp),
-                    contentPadding = PaddingValues(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    columns = GridCells.Adaptive(100.dp),
+                    contentPadding = PaddingValues(2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     items(viewModel.items, key = { it.id }) { item ->
                         TrashTile(
                             item = item,
                             serverBaseUrl = viewModel.serverBaseUrl,
+                            isSelectionMode = viewModel.isSelectionMode,
                             isSelected = item.id in viewModel.selectedIds,
-                            isActionLoading = viewModel.actionLoading != null,
-                            onClick = { viewModel.toggleSelect(item.id) },
-                            onRestore = { viewModel.restore(item.id) },
-                            onDelete = { viewModel.permanentDelete(item.id) }
+                            onLongPress = { viewModel.enterSelectionMode(item.id) },
+                            onTap = {
+                                if (viewModel.isSelectionMode) {
+                                    viewModel.toggleSelect(item.id)
+                                }
+                            }
                         )
                     }
                 }
@@ -471,101 +383,55 @@ fun TrashScreen(
 
     // ── Empty Trash Confirmation Dialog ──────────────────────────────────
     if (showEmptyConfirm) {
-        Dialog(onDismissRequest = { showEmptyConfirm = false }) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 8.dp
-            ) {
-                Column(modifier = Modifier.padding(24.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                Icon(
-                                    Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                "Empty Trash?",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                "This will permanently delete ${viewModel.items.size} item${if (viewModel.items.size != 1) "s" else ""} (${formatBytes(totalSize)}). This action cannot be undone.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(24.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { showEmptyConfirm = false },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Cancel")
-                        }
-                        Button(
-                            onClick = {
-                                viewModel.emptyTrash()
-                                showEmptyConfirm = false
-                            },
-                            enabled = viewModel.actionLoading != "empty",
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFDC2626),
-                                contentColor = Color.White
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                if (viewModel.actionLoading == "empty") "Deleting…" else "Delete All"
-                            )
-                        }
-                    }
+        AlertDialog(
+            onDismissRequest = { showEmptyConfirm = false },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null) },
+            title = { Text("Empty Trash?") },
+            text = {
+                Text("This will permanently delete ${viewModel.items.size} item${if (viewModel.items.size != 1) "s" else ""} (${formatBytes(totalSize)}). This cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.emptyTrash()
+                        showEmptyConfirm = false
+                    },
+                    enabled = viewModel.actionLoading != "empty"
+                ) {
+                    Text(if (viewModel.actionLoading == "empty") "Deleting…" else "Delete All")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showEmptyConfirm = false }) {
+                    Text("Cancel")
                 }
             }
-        }
+        )
     }
 }
 
 // ── Trash Tile ──────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TrashTile(
     item: TrashItemDto,
     serverBaseUrl: String,
+    isSelectionMode: Boolean,
     isSelected: Boolean,
-    isActionLoading: Boolean,
-    onClick: () -> Unit,
-    onRestore: () -> Unit,
-    onDelete: () -> Unit,
+    onLongPress: () -> Unit,
+    onTap: () -> Unit,
 ) {
     val thumbUrl = "$serverBaseUrl/api/trash/${item.id}/thumb"
 
     Box(
         modifier = Modifier
             .aspectRatio(1f)
-            .clip(RoundedCornerShape(8.dp))
-            .border(
-                width = if (isSelected) 2.dp else 0.dp,
-                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                shape = RoundedCornerShape(8.dp)
+            .clip(MaterialTheme.shapes.small)
+            .combinedClickable(
+                onClick = onTap,
+                onLongClick = onLongPress
             )
-            .clickable(onClick = onClick)
     ) {
         // Thumbnail
         AsyncImage(
@@ -579,94 +445,59 @@ private fun TrashTile(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Selection checkbox
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(6.dp)
-                .size(22.dp)
-                .clip(CircleShape)
-                .background(
-                    if (isSelected) MaterialTheme.colorScheme.primary
-                    else Color.White.copy(alpha = 0.7f)
-                )
-                .border(
-                    width = 1.5.dp,
-                    color = if (isSelected) MaterialTheme.colorScheme.primary
-                    else Color.Gray.copy(alpha = 0.5f),
-                    shape = CircleShape
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isSelected) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-        }
-
         // Media type badge
-        if (item.mediaType != "photo") {
+        if (item.mediaType == "video") {
             Surface(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp),
-                shape = RoundedCornerShape(4.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                shape = MaterialTheme.shapes.extraSmall,
                 color = Color.Black.copy(alpha = 0.6f)
             ) {
                 Text(
-                    if (item.mediaType == "video") "Video" else "GIF",
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    text = if (item.durationSecs != null) {
+                        val m = (item.durationSecs / 60).toInt()
+                        val s = (item.durationSecs % 60).toInt()
+                        "\u25B6 $m:${s.toString().padStart(2, '0')}"
+                    } else "\u25B6",
+                    color = Color.White, fontSize = 10.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                 )
+            }
+        } else if (item.mediaType == "gif") {
+            Surface(
+                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                shape = MaterialTheme.shapes.extraSmall,
+                color = Color.Black.copy(alpha = 0.6f)
+            ) {
+                Text("GIF", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
             }
         }
 
-        // Bottom action row
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.5f))
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Surface(
+        // Selection circle (top-right) — always shown, empty when not selected
+        if (isSelectionMode) {
+            Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .clickable(enabled = !isActionLoading, onClick = onRestore),
-                shape = RoundedCornerShape(4.dp),
-                color = Color(0xFF059669).copy(alpha = 0.9f)
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isSelected) Color(0xFF22C55E) else Color.White.copy(alpha = 0.8f)
+                    )
+                    .border(
+                        width = 2.dp,
+                        color = if (isSelected) Color(0xFF22C55E) else Color.Gray.copy(alpha = 0.5f),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    "Restore",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-            }
-            Surface(
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable(enabled = !isActionLoading, onClick = onDelete),
-                shape = RoundedCornerShape(4.dp),
-                color = Color(0xFFDC2626).copy(alpha = 0.9f)
-            ) {
-                Text(
-                    "Delete",
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
+                if (isSelected) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }

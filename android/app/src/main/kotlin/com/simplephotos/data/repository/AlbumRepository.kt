@@ -56,8 +56,20 @@ class AlbumRepository @Inject constructor(
     /**
      * Upload an album manifest blob to the server.
      * Encrypts the manifest JSON and uploads as blob_type = album_manifest.
+     * In plain mode (no encryption key), this is a no-op — albums stay local only.
      */
     suspend fun syncAlbum(album: AlbumEntity) {
+        // In plain mode the crypto key isn't available; skip manifest sync.
+        try {
+            val encSettings = api.getEncryptionSettings()
+            if (encSettings.encryptionMode == "plain") {
+                db.albumDao().update(album.copy(syncStatus = SyncStatus.SYNCED))
+                return
+            }
+        } catch (_: Exception) {
+            // Can't determine mode — try sync anyway
+        }
+
         val photoIds = db.albumDao().getPhotoIdsForAlbum(album.localId)
 
         // Build the server's photo blob IDs from the local-to-server mapping

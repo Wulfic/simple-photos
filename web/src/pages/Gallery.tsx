@@ -13,6 +13,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { useAuthStore } from "../store/auth";
 import { useProcessingStore } from "../store/processing";
 import AppHeader from "../components/AppHeader";
+import AppIcon from "../components/AppIcon";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -32,7 +33,12 @@ interface PlainPhoto {
   taken_at: string | null;
   thumb_path: string | null;
   created_at: string;
+  is_favorite: boolean;
+  crop_metadata: string | null;
 }
+
+/** Default album filter types for organizing photos */
+type AlbumFilter = "all" | "favorites" | "photos" | "gifs" | "videos";
 
 // ── Payload shapes ────────────────────────────────────────────────────────────
 
@@ -279,6 +285,9 @@ export default function Gallery() {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const { startTask, endTask } = useProcessingStore();
+
+  // ── Album filter state ──────────────────────────────────────────────────
+  const [albumFilter, setAlbumFilter] = useState<AlbumFilter>("all");
 
   // ── Encryption migration state ──────────────────────────────────────────
   const [migrationStatus, setMigrationStatus] = useState("idle");
@@ -707,12 +716,28 @@ export default function Gallery() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   // Filter out photos that are in secure galleries (private)
-  const filteredPlainPhotos = secureBlobIds.size > 0
+  const secureFilteredPlain = secureBlobIds.size > 0
     ? plainPhotos.filter((p) => !secureBlobIds.has(p.id))
     : plainPhotos;
   const filteredPhotos = secureBlobIds.size > 0
     ? photos?.filter((p) => !secureBlobIds.has(p.blobId))
     : photos;
+
+  // Apply album filter for plain mode
+  const filteredPlainPhotos = (() => {
+    switch (albumFilter) {
+      case "favorites":
+        return secureFilteredPlain.filter((p) => p.is_favorite);
+      case "photos":
+        return secureFilteredPlain.filter((p) => p.media_type === "photo" || p.media_type === "gif");
+      case "gifs":
+        return secureFilteredPlain.filter((p) => p.media_type === "gif");
+      case "videos":
+        return secureFilteredPlain.filter((p) => p.media_type === "video");
+      default:
+        return secureFilteredPlain;
+    }
+  })();
 
   const hasContent = mode === "plain"
     ? filteredPlainPhotos.length > 0
@@ -726,9 +751,7 @@ export default function Gallery() {
             className="flex items-center justify-center w-8 h-8 rounded-md text-gray-400 hover:text-white hover:bg-white/10 cursor-pointer transition-all duration-200 select-none"
             title="Upload photos"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
+            <AppIcon name="upload" size="w-5 h-5" />
             <input
               ref={inputRef}
               type="file"
@@ -744,6 +767,36 @@ export default function Gallery() {
 
       <main className="p-4">
         {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
+
+        {/* Default album filter tabs — plain mode only */}
+        {mode === "plain" && (
+          <div className="flex gap-1 mb-4 overflow-x-auto pb-1">
+            {([
+              { key: "all" as AlbumFilter, label: "All" },
+              { key: "favorites" as AlbumFilter, label: "★ Favorites" },
+              { key: "photos" as AlbumFilter, label: "Photos" },
+              { key: "gifs" as AlbumFilter, label: "GIFs" },
+              { key: "videos" as AlbumFilter, label: "Videos" },
+            ]).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setAlbumFilter(key)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                  albumFilter === key
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                }`}
+              >
+                {label}
+                {key === "favorites" && mode === "plain" && (
+                  <span className="ml-1 opacity-70">
+                    ({secureFilteredPlain.filter(p => p.is_favorite).length})
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Migration progress banner */}
         {migrationStatus === "encrypting" && migrationTotal > 0 && (
@@ -1010,6 +1063,13 @@ function PlainMediaTile({ photo, onClick }: PlainMediaTileProps) {
       ) : (
         <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center">
           {photo.filename}
+        </div>
+      )}
+
+      {/* Favorite badge */}
+      {photo.is_favorite && (
+        <div className="absolute top-1 right-1 text-yellow-400 text-sm drop-shadow-lg">
+          ★
         </div>
       )}
 

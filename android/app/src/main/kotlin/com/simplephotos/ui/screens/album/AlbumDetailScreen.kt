@@ -1,26 +1,30 @@
 package com.simplephotos.ui.screens.album
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -34,13 +38,11 @@ import com.simplephotos.data.repository.PhotoRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
+import com.simplephotos.R
+import androidx.compose.ui.res.painterResource
 
-/**
- * ViewModel for the album detail screen.
- * Loads album metadata and the photos belonging to it.
- * Supports adding/removing photos and deleting the album.
- */
 @HiltViewModel
 class AlbumDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -59,7 +61,18 @@ class AlbumDetailViewModel @Inject constructor(
     var selectedToAdd by mutableStateOf<Set<String>>(emptySet())
     var showDeleteConfirm by mutableStateOf(false)
 
+    var serverBaseUrl by mutableStateOf("")
+        private set
+    var encryptionMode by mutableStateOf("plain")
+        private set
+
     init {
+        viewModelScope.launch {
+            try {
+                serverBaseUrl = photoRepository.getServerBaseUrl()
+                encryptionMode = photoRepository.getEncryptionMode()
+            } catch (_: Exception) {}
+        }
         loadAlbum()
     }
 
@@ -97,13 +110,22 @@ class AlbumDetailViewModel @Inject constructor(
         }
     }
 
+    fun selectAllAvailable() {
+        selectedToAdd = allPhotos.map { it.localId }.toSet()
+    }
+
     fun confirmAdd() {
         viewModelScope.launch {
             try {
                 selectedToAdd.forEach { photoId ->
                     albumRepository.addPhotoToAlbum(photoId, albumId)
                 }
-                album?.let { albumRepository.syncAlbum(it) }
+                // Only sync album manifest in encrypted mode
+                try {
+                    album?.let { albumRepository.syncAlbum(it) }
+                } catch (_: Exception) {
+                    // Sync may fail in plain mode — album data is still stored locally
+                }
                 showAddPanel = false
                 loadAlbum()
             } catch (e: Exception) {
@@ -116,7 +138,9 @@ class AlbumDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 albumRepository.removePhotoFromAlbum(photoId, albumId)
-                album?.let { albumRepository.syncAlbum(it) }
+                try {
+                    album?.let { albumRepository.syncAlbum(it) }
+                } catch (_: Exception) {}
                 loadAlbum()
             } catch (e: Exception) {
                 error = e.message
@@ -136,7 +160,9 @@ class AlbumDetailViewModel @Inject constructor(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ── Screen ──────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun AlbumDetailScreen(
     onBack: () -> Unit,
@@ -150,15 +176,12 @@ fun AlbumDetailScreen(
                 title = { Text(viewModel.album?.name ?: "Album") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.openAddPanel() }) {
-                        Icon(Icons.Default.Add, contentDescription = "Add photos")
-                    }
                     IconButton(onClick = { viewModel.showDeleteConfirm = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete album")
+                        Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = "Delete album")
                     }
                 }
             )
@@ -169,26 +192,143 @@ fun AlbumDetailScreen(
                 viewModel.loading -> {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
+                viewModel.showAddPanel -> {
+                    // ── Add Photos Panel (full content area) ─────────────
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Header bar at top of page
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shadowElevation = 1.dp
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(onClick = { viewModel.showAddPanel = false }, modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
+                                    }
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        "${viewModel.selectedToAdd.size} selected",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    TextButton(
+                                        onClick = { viewModel.selectAllAvailable() },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text("Select All", fontSize = 12.sp)
+                                    }
+                                }
+                                Button(
+                                    onClick = { viewModel.confirmAdd() },
+                                    enabled = viewModel.selectedToAdd.isNotEmpty(),
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Add ${if (viewModel.selectedToAdd.isNotEmpty()) viewModel.selectedToAdd.size else ""}", fontSize = 13.sp)
+                                }
+                            }
+                        }
+
+                        // Photo grid
+                        if (viewModel.allPhotos.isEmpty()) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    "All photos are already in this album.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Adaptive(100.dp),
+                                contentPadding = PaddingValues(2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                items(viewModel.allPhotos, key = { it.localId }) { photo ->
+                                    val selected = photo.localId in viewModel.selectedToAdd
+                                    AddPhotoTile(
+                                        photo = photo,
+                                        serverBaseUrl = viewModel.serverBaseUrl,
+                                        encryptionMode = viewModel.encryptionMode,
+                                        isSelected = selected,
+                                        onClick = { viewModel.toggleSelection(photo.localId) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 viewModel.photos.isEmpty() -> {
-                    Text(
-                        "No photos in this album.\nTap + to add some.",
-                        modifier = Modifier.align(Alignment.Center),
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_folder),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "No photos in this album.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Button(onClick = { viewModel.openAddPanel() }) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Add Photos")
+                        }
+                    }
                 }
                 else -> {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(120.dp),
-                        contentPadding = PaddingValues(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(viewModel.photos, key = { it.localId }) { photo ->
-                            AlbumPhotoTile(
-                                photo = photo,
-                                onRemove = { viewModel.removePhoto(photo.localId) }
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // Add photos button at top of page
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${viewModel.photos.size} photo${if (viewModel.photos.size != 1) "s" else ""}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            OutlinedButton(onClick = { viewModel.openAddPanel() }) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Add Photos", fontSize = 13.sp)
+                            }
+                        }
+
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(100.dp),
+                            contentPadding = PaddingValues(2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            items(viewModel.photos, key = { it.localId }) { photo ->
+                                AlbumPhotoTile(
+                                    photo = photo,
+                                    serverBaseUrl = viewModel.serverBaseUrl,
+                                    encryptionMode = viewModel.encryptionMode,
+                                    onRemove = { viewModel.removePhoto(photo.localId) }
+                                )
+                            }
                         }
                     }
                 }
@@ -202,85 +342,6 @@ fun AlbumDetailScreen(
                 }
             }
         }
-    }
-
-    // Add photos panel (bottom sheet style dialog)
-    if (viewModel.showAddPanel) {
-        AlertDialog(
-            onDismissRequest = { viewModel.showAddPanel = false },
-            title = { Text("Add Photos") },
-            text = {
-                if (viewModel.allPhotos.isEmpty()) {
-                    Text("All photos are already in this album.")
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(100.dp),
-                        modifier = Modifier.height(400.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(viewModel.allPhotos, key = { it.localId }) { photo ->
-                            val selected = photo.localId in viewModel.selectedToAdd
-                            Box(
-                                modifier = Modifier
-                                    .aspectRatio(1f)
-                                    .clip(MaterialTheme.shapes.small)
-                                    .clickable { viewModel.toggleSelection(photo.localId) }
-                            ) {
-                                // Thumbnail: use local path if available
-                                photo.localPath?.let { path ->
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(path)
-                                            .crossfade(true)
-                                            .size(200)
-                                            .build(),
-                                        contentDescription = photo.filename,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } ?: Surface(
-                                    modifier = Modifier.fillMaxSize(),
-                                    color = MaterialTheme.colorScheme.surfaceVariant
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(photo.filename.take(3), style = MaterialTheme.typography.labelSmall)
-                                    }
-                                }
-
-                                if (selected) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = "Selected",
-                                            tint = MaterialTheme.colorScheme.onPrimary
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { viewModel.confirmAdd() },
-                    enabled = viewModel.selectedToAdd.isNotEmpty()
-                ) {
-                    Text("Add ${viewModel.selectedToAdd.size}")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.showAddPanel = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
     }
 
     // Delete album confirmation
@@ -303,75 +364,158 @@ fun AlbumDetailScreen(
     }
 }
 
+// ── Add Photo Tile ──────────────────────────────────────────────────────────
+
+@Composable
+private fun AddPhotoTile(
+    photo: PhotoEntity,
+    serverBaseUrl: String,
+    encryptionMode: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(MaterialTheme.shapes.small)
+            .clickable(onClick = onClick)
+    ) {
+        val imageModel: Any? = when {
+            encryptionMode == "plain" && photo.serverPhotoId != null ->
+                "$serverBaseUrl/api/photos/${photo.serverPhotoId}/thumb"
+            photo.thumbnailPath != null -> File(photo.thumbnailPath)
+            photo.localPath != null -> photo.localPath
+            else -> null
+        }
+
+        if (imageModel != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(imageModel)
+                    .crossfade(true)
+                    .size(256)
+                    .build(),
+                contentDescription = photo.filename,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(photo.filename.take(3), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+
+        // Selection circle (top-right)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(6.dp)
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(if (isSelected) Color(0xFF22C55E) else Color.White.copy(alpha = 0.8f))
+                .border(
+                    width = 2.dp,
+                    color = if (isSelected) Color(0xFF22C55E) else Color.Gray.copy(alpha = 0.5f),
+                    shape = CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isSelected) {
+                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+// ── Album Photo Tile ────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AlbumPhotoTile(
     photo: PhotoEntity,
+    serverBaseUrl: String,
+    encryptionMode: String,
     onRemove: () -> Unit
 ) {
     val context = LocalContext.current
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Box {
-            photo.localPath?.let { path ->
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(path)
-                        .crossfade(true)
-                        .size(240)
-                        .build(),
-                    contentDescription = photo.filename,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                )
-            } ?: Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f),
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(MaterialTheme.shapes.small)
+    ) {
+        val imageModel: Any? = when {
+            encryptionMode == "plain" && photo.serverPhotoId != null ->
+                "$serverBaseUrl/api/photos/${photo.serverPhotoId}/thumb"
+            photo.thumbnailPath != null -> File(photo.thumbnailPath)
+            photo.localPath != null -> photo.localPath
+            else -> null
+        }
+
+        if (imageModel != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(imageModel)
+                    .crossfade(true)
+                    .size(256)
+                    .build(),
+                contentDescription = photo.filename,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(photo.filename.take(4), style = MaterialTheme.typography.labelSmall)
                 }
             }
+        }
 
-            // Media type badge
-            if (photo.mediaType == "video") {
-                val durationStr = photo.durationSecs?.let { secs ->
-                    val m = (secs / 60).toInt()
-                    val s = (secs % 60).toInt()
-                    "%d:%02d".format(m, s)
-                } ?: "▶"
-                Surface(
-                    modifier = Modifier.align(Alignment.BottomStart).padding(4.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                    shape = MaterialTheme.shapes.extraSmall
-                ) {
-                    Text(durationStr, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
-                }
-            } else if (photo.mediaType == "gif") {
-                Surface(
-                    modifier = Modifier.align(Alignment.BottomStart).padding(4.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
-                    shape = MaterialTheme.shapes.extraSmall
-                ) {
-                    Text("GIF", modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), style = MaterialTheme.typography.labelSmall)
-                }
-            }
-
-            // Remove button
-            IconButton(
-                onClick = onRemove,
-                modifier = Modifier.align(Alignment.TopEnd).size(32.dp)
+        // Media type badge
+        if (photo.mediaType == "video") {
+            val durationStr = photo.durationSecs?.let { secs ->
+                val m = (secs / 60).toInt()
+                val s = (secs % 60).toInt()
+                "%d:%02d".format(m, s)
+            } ?: "\u25B6"
+            Surface(
+                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = MaterialTheme.shapes.extraSmall
             ) {
-                Icon(
-                    Icons.Default.Close,
-                    contentDescription = "Remove from album",
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.error
-                )
+                Text(durationStr, color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
             }
+        } else if (photo.mediaType == "gif") {
+            Surface(
+                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = MaterialTheme.shapes.extraSmall
+            ) {
+                Text("GIF", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+            }
+        }
+
+        // Remove button
+        IconButton(
+            onClick = onRemove,
+            modifier = Modifier.align(Alignment.TopEnd).size(32.dp)
+        ) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Remove from album",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.error
+            )
         }
     }
 }

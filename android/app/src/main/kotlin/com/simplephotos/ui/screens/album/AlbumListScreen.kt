@@ -94,6 +94,7 @@ class AlbumViewModel @Inject constructor(
 @Composable
 fun AlbumListScreen(
     onGalleryClick: () -> Unit,
+    onSearchClick: () -> Unit,
     onTrashClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onLogout: () -> Unit,
@@ -110,10 +111,10 @@ fun AlbumListScreen(
                 navigation = HeaderNavigation(
                     onGalleryClick = onGalleryClick,
                     onAlbumsClick = { /* already on albums */ },
+                    onSearchClick = onSearchClick,
                     onTrashClick = onTrashClick,
                     onSettingsClick = onSettingsClick,
-                    onLogout = { viewModel.logout(onLogout) },
-                    onThemeToggle = { ThemeState.toggle(viewModel.dataStore) }
+                    onLogout = { viewModel.logout(onLogout) }
                 )
             )
         }

@@ -11,8 +11,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,10 +20,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.SweepGradient
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,7 +36,7 @@ import com.simplephotos.ui.theme.ThemeState
 /**
  * Which main tab is currently active.
  */
-enum class ActiveTab { GALLERY, ALBUMS, TRASH }
+enum class ActiveTab { GALLERY, ALBUMS, SEARCH, TRASH }
 
 /**
  * Navigation callback bundle passed into [AppHeader].
@@ -46,10 +44,10 @@ enum class ActiveTab { GALLERY, ALBUMS, TRASH }
 data class HeaderNavigation(
     val onGalleryClick: () -> Unit = {},
     val onAlbumsClick: () -> Unit = {},
+    val onSearchClick: () -> Unit = {},
     val onTrashClick: () -> Unit = {},
     val onSettingsClick: () -> Unit = {},
     val onLogout: () -> Unit = {},
-    val onThemeToggle: () -> Unit = {},
 )
 
 /**
@@ -74,17 +72,30 @@ fun AppHeader(
     syncLabel: String? = null,
     children: @Composable RowScope.() -> Unit = {},
 ) {
-    // ── Colors matching web ────────────────────────────────────────
-    val headerGradient = Brush.horizontalGradient(
-        colors = listOf(
-            Color(0xFF111827), // gray-900
-            Color(0xFF1F2937), // gray-800
-            Color(0xFF111827), // gray-900
+    // ── Theme-aware colors ───────────────────────────────────────
+    val isLightTheme = MaterialTheme.colorScheme.background.luminance() > 0.5f
+
+    val headerGradient = if (isLightTheme) {
+        Brush.horizontalGradient(
+            colors = listOf(
+                Color(0xFFF8FAFC), // slate-50
+                Color(0xFFEFF6FF), // blue-50
+                Color(0xFFF8FAFC), // slate-50
+            )
         )
-    )
-    val borderColor = Color.White.copy(alpha = 0.1f)
-    val inactiveTextColor = Color(0xFF9CA3AF) // gray-400
-    val activeTabBg = Color.White.copy(alpha = 0.15f)
+    } else {
+        Brush.horizontalGradient(
+            colors = listOf(
+                Color(0xFF111827), // gray-900
+                Color(0xFF1F2937), // gray-800
+                Color(0xFF111827), // gray-900
+            )
+        )
+    }
+    val borderColor = if (isLightTheme) Color.Black.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.1f)
+    val inactiveTextColor = if (isLightTheme) Color(0xFF6B7280) else Color(0xFF9CA3AF) // gray-500 / gray-400
+    val activeTabBg = if (isLightTheme) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.15f)
+    val activeTabText = if (isLightTheme) MaterialTheme.colorScheme.primary else Color.White
 
     Surface(
         shadowElevation = 4.dp,
@@ -120,26 +131,38 @@ fun AppHeader(
 
                 // ── Nav Tabs ─────────────────────────────────────────
                 NavTab(
-                    icon = Icons.Default.Image,
+                    iconRes = R.drawable.ic_image,
                     label = "Gallery",
                     isActive = activeTab == ActiveTab.GALLERY,
                     activeTabBg = activeTabBg,
+                    activeTextColor = activeTabText,
                     inactiveTextColor = inactiveTextColor,
                     onClick = navigation.onGalleryClick
                 )
                 NavTab(
-                    icon = Icons.Default.Folder,
+                    iconRes = R.drawable.ic_folder,
                     label = "Albums",
                     isActive = activeTab == ActiveTab.ALBUMS,
                     activeTabBg = activeTabBg,
+                    activeTextColor = activeTabText,
                     inactiveTextColor = inactiveTextColor,
                     onClick = navigation.onAlbumsClick
                 )
                 NavTab(
-                    icon = Icons.Default.Delete,
+                    iconRes = R.drawable.ic_magnify_glass,
+                    label = "Search",
+                    isActive = activeTab == ActiveTab.SEARCH,
+                    activeTabBg = activeTabBg,
+                    activeTextColor = activeTabText,
+                    inactiveTextColor = inactiveTextColor,
+                    onClick = navigation.onSearchClick
+                )
+                NavTab(
+                    iconRes = R.drawable.ic_trashcan,
                     label = "Trash",
                     isActive = activeTab == ActiveTab.TRASH,
                     activeTabBg = activeTabBg,
+                    activeTextColor = activeTabText,
                     inactiveTextColor = inactiveTextColor,
                     onClick = navigation.onTrashClick
                 )
@@ -153,36 +176,12 @@ fun AppHeader(
                 // ── Sync indicator (hidden on mobile, matching web's hidden sm:inline) ──
                 // On mobile the web hides the text label; we just skip it.
 
-                // ── Theme toggle ─────────────────────────────────────
-                val isDark = ThemeState.mode == "dark" ||
-                    (ThemeState.mode == "system") // on dark header, show moon
-                IconButton(
-                    onClick = navigation.onThemeToggle,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = if (ThemeState.mode == "dark" || (ThemeState.mode == "system"))
-                            Icons.Default.LightMode else Icons.Default.DarkMode,
-                        contentDescription = "Toggle theme",
-                        tint = inactiveTextColor,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                // ── Divider ──────────────────────────────────────────
-                Box(
-                    Modifier
-                        .padding(horizontal = 4.dp)
-                        .width(1.dp)
-                        .height(24.dp)
-                        .background(borderColor)
-                )
-
                 // ── Avatar + Dropdown ────────────────────────────────
                 UserMenu(
                     username = username,
                     isSyncing = isSyncing,
                     inactiveTextColor = inactiveTextColor,
+                    onAlbumsClick = navigation.onAlbumsClick,
                     onSettingsClick = navigation.onSettingsClick,
                     onLogout = navigation.onLogout
                 )
@@ -204,15 +203,16 @@ fun AppHeader(
 
 @Composable
 private fun NavTab(
-    icon: ImageVector,
+    iconRes: Int,
     label: String,
     isActive: Boolean,
     activeTabBg: Color,
+    activeTextColor: Color,
     inactiveTextColor: Color,
     onClick: () -> Unit,
 ) {
     val bgColor = if (isActive) activeTabBg else Color.Transparent
-    val contentColor = if (isActive) Color.White else inactiveTextColor
+    val contentColor = if (isActive) activeTextColor else inactiveTextColor
 
     // Icon-only on mobile (matching web's "hidden md:inline" on label text)
     Surface(
@@ -228,7 +228,7 @@ private fun NavTab(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                icon,
+                painter = painterResource(iconRes),
                 contentDescription = label,
                 tint = contentColor,
                 modifier = Modifier.size(18.dp)
@@ -260,6 +260,7 @@ private fun UserMenu(
     username: String,
     isSyncing: Boolean,
     inactiveTextColor: Color,
+    onAlbumsClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -330,13 +331,23 @@ private fun UserMenu(
             offset = DpOffset(0.dp, 4.dp)
         ) {
             DropdownMenuItem(
+                text = { Text("Albums") },
+                onClick = {
+                    expanded = false
+                    onAlbumsClick()
+                },
+                leadingIcon = {
+                    Icon(painter = painterResource(R.drawable.ic_folder), contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+            )
+            DropdownMenuItem(
                 text = { Text("Settings") },
                 onClick = {
                     expanded = false
                     onSettingsClick()
                 },
                 leadingIcon = {
-                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(painter = painterResource(R.drawable.ic_gear), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
             HorizontalDivider()
@@ -350,7 +361,7 @@ private fun UserMenu(
                 },
                 leadingIcon = {
                     Icon(
-                        Icons.Default.Logout,
+                        painter = painterResource(R.drawable.ic_right_arrow),
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(18.dp)

@@ -18,6 +18,8 @@ pub struct Photo {
     pub thumb_path: Option<String>,
     pub created_at: String,
     pub encrypted_blob_id: Option<String>,
+    pub is_favorite: bool,
+    pub crop_metadata: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +44,8 @@ pub struct PhotoRecord {
     pub longitude: Option<f64>,
     pub thumb_path: Option<String>,
     pub created_at: String,
+    pub is_favorite: bool,
+    pub crop_metadata: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

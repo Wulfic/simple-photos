@@ -55,7 +55,7 @@ export default function Welcome() {
   const [portSaved, setPortSaved] = useState(false);
 
   // ── Encryption mode ─────────────────────────────────────────────────────
-  const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted">("plain");
+  const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted">("encrypted");
 
   // ── Additional users ────────────────────────────────────────────────────
   const [createdUsers, setCreatedUsers] = useState<CreatedUser[]>([]);
