@@ -19,6 +19,10 @@ pub struct TrashItem {
     pub thumb_path: Option<String>,
     pub deleted_at: String,
     pub expires_at: String,
+    /// If set, this trash item came from an encrypted blob (not a plain photo).
+    pub encrypted_blob_id: Option<String>,
+    /// The companion thumbnail blob ID (encrypted mode only).
+    pub thumbnail_blob_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -31,4 +35,20 @@ pub struct TrashListResponse {
 pub struct TrashListQuery {
     pub after: Option<String>,
     pub limit: Option<i64>,
+}
+
+/// Request body sent by the client when soft-deleting an encrypted blob.
+/// The server doesn't know the metadata for encrypted blobs, so the client
+/// provides it.
+#[derive(Debug, Deserialize)]
+pub struct SoftDeleteBlobRequest {
+    pub thumbnail_blob_id: Option<String>,
+    pub filename: String,
+    pub mime_type: String,
+    pub media_type: Option<String>,
+    pub size_bytes: Option<i64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub duration_secs: Option<f64>,
+    pub taken_at: Option<String>,
 }

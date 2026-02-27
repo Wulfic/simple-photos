@@ -42,6 +42,37 @@
   pointer-events: none;
 }
 
+/* ── Photo viewer slide animations ──────────────────────────── */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(60px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-60px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.slide-in-right {
+  animation: slide-in-right 0.25s ease-out;
+}
+
+.slide-in-left {
+  animation: slide-in-left 0.25s ease-out;
+}
+
 @layer base {
   /* ── Dark-mode defaults ──────────────────────────────────────── */
   .dark {

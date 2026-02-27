@@ -268,6 +268,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/trash/{id}", delete(trash::handlers::permanent_delete))
         .route("/trash/{id}/restore", post(trash::handlers::restore_from_trash))
         .route("/trash/{id}/thumb", get(trash::handlers::serve_trash_thumbnail))
+        // Blob soft-delete to trash (encrypted mode)
+        .route("/blobs/{id}/trash", post(trash::handlers::soft_delete_blob))
         // Backup servers — admin only
         .route("/admin/backup/servers", get(backup::handlers::list_backup_servers))
         .route("/admin/backup/servers", post(backup::handlers::add_backup_server))

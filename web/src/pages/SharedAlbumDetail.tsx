@@ -105,39 +105,43 @@ export default function SharedAlbumDetail() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <AppHeader>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => navigate("/albums")}
-            className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-          >
-            <AppIcon name="back-arrow" size="w-5 h-5" />
-          </button>
-          <span className="font-medium">{albumName || "Shared Album"}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowMembers(!showMembers)}
-            className="text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 flex items-center gap-1"
-          >
-            <AppIcon name="shared" />
-            {members.length}
-          </button>
-          {isOwner && (
-            <button
-              onClick={openSharePicker}
-              className="inline-flex items-center gap-1 bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-500 text-sm font-medium"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z" />
-              </svg>
-              Add Member
-            </button>
-          )}
-        </div>
-      </AppHeader>
+      <AppHeader />
 
       <main className="p-4">
+        {/* Sub-header with album name + actions */}
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              onClick={() => navigate("/albums")}
+              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            >
+              <AppIcon name="back-arrow" size="w-5 h-5" />
+            </button>
+            <h2 className="text-xl font-semibold truncate">{albumName || "Shared Album"}</h2>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setShowMembers(!showMembers)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20 shadow-sm"
+            >
+              <AppIcon name="shared" />
+              <span>{members.length}</span>
+            </button>
+            {isOwner && (
+              <button
+                onClick={openSharePicker}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20 shadow-sm"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z" />
+                </svg>
+                <span className="hidden sm:inline">Add Member</span>
+              </button>
+            )}
+          </div>
+        </div>
+
         {error && (
           <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>
         )}
