@@ -1,232 +1,59 @@
 package com.simplephotos.ui.screens.viewer
 
 import android.app.Activity
-import android.graphics.BitmapFactory
+import android.content.ContentValues
 import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.graphics.ColorMatrix
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.SavedStateHandle
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
-import com.simplephotos.data.remote.ApiService
-import com.simplephotos.data.remote.dto.AddTagRequest
-import com.simplephotos.data.remote.dto.RemoveTagRequest
-import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.R
-import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import javax.inject.Inject
 
-// Parsed crop metadata for zoom/brightness transforms
-private data class CropInfo(
+// Mutable crop region used during edit mode (normalised 0..1)
+private data class CropCorners(
     val x: Float,
     val y: Float,
-    val width: Float,
-    val height: Float,
-    val brightness: Float
+    val w: Float,
+    val h: Float
 )
-
-// ---------------------------------------------------------------------------
-// ViewModel — loads photo list for paging + handles deletion
-// ---------------------------------------------------------------------------
-
-@HiltViewModel
-class PhotoViewerViewModel @Inject constructor(
-    private val photoRepository: PhotoRepository,
-    private val api: ApiService,
-    savedStateHandle: SavedStateHandle
-) : ViewModel() {
-
-    private val initialPhotoId: String = savedStateHandle["photoId"] ?: ""
-
-    /** Full photo list for paging (matches gallery order). */
-    var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
-        private set
-
-    /** Index of the photo that was tapped in the gallery. */
-    var initialPage by mutableStateOf(0)
-        private set
-
-    /** True while the photo list is still loading. */
-    var listLoading by mutableStateOf(true)
-        private set
-
-    var encryptionMode by mutableStateOf("plain")
-        private set
-
-    var serverBaseUrl by mutableStateOf("")
-        private set
-
-    var error by mutableStateOf<String?>(null)
-        private set
-
-    /** Tags for the currently viewed photo (plain mode only). */
-    var currentTags by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    /** All user tags for suggestions. */
-    var allTags by mutableStateOf<List<String>>(emptyList())
-        private set
-
-    /** Favorite state for the currently viewed photo. */
-    var isFavorite by mutableStateOf(false)
-        private set
-
-    init {
-        loadPhotos()
-    }
-
-    private fun loadPhotos() {
-        viewModelScope.launch {
-            try {
-                serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
-                encryptionMode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
-
-                val photos = withContext(Dispatchers.IO) {
-                    photoRepository.getAllPhotos().first()
-                }
-                allPhotos = photos
-                initialPage = photos.indexOfFirst { it.localId == initialPhotoId }
-                    .coerceAtLeast(0)
-            } catch (e: Exception) {
-                error = e.message
-            } finally {
-                listLoading = false
-            }
-        }
-    }
-
-    /**
-     * Download and decrypt an encrypted blob, returning the raw media bytes.
-     * Called from per-page composables for encrypted-mode photos.
-     */
-    suspend fun downloadAndDecrypt(blobId: String): ByteArray = withContext(Dispatchers.IO) {
-        val decrypted = photoRepository.downloadAndDecryptBlob(blobId)
-        val payload = JSONObject(String(decrypted, Charsets.UTF_8))
-        val dataBase64 = payload.getString("data")
-        android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
-    }
-
-    fun deletePhoto(photo: PhotoEntity, onDeleted: () -> Unit) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { photoRepository.deletePhoto(photo) }
-                onDeleted()
-            } catch (e: Exception) {
-                error = e.message
-            }
-        }
-    }
-
-    /** Load tags for a specific photo (called when page changes). */
-    fun loadTagsForPhoto(photoId: String?) {
-        if (photoId == null || encryptionMode != "plain") return
-        viewModelScope.launch {
-            try {
-                val response = withContext(Dispatchers.IO) { api.getPhotoTags(photoId) }
-                currentTags = response.tags
-                // Also refresh all-tags list
-                val tagsResponse = withContext(Dispatchers.IO) { api.listTags() }
-                allTags = tagsResponse.tags
-            } catch (_: Exception) {
-                currentTags = emptyList()
-            }
-        }
-    }
-
-    /** Add a tag to the current photo. */
-    fun addTag(photoId: String, tag: String) {
-        val cleaned = tag.trim().lowercase()
-        if (cleaned.isEmpty()) return
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { api.addTag(photoId, AddTagRequest(cleaned)) }
-                if (!currentTags.contains(cleaned)) {
-                    currentTags = (currentTags + cleaned).sorted()
-                }
-                if (!allTags.contains(cleaned)) {
-                    allTags = (allTags + cleaned).sorted()
-                }
-            } catch (_: Exception) {}
-        }
-    }
-
-    /** Remove a tag from the current photo. */
-    fun removeTag(photoId: String, tag: String) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { api.removeTag(photoId, RemoveTagRequest(tag)) }
-                currentTags = currentTags.filter { it != tag }
-            } catch (_: Exception) {}
-        }
-    }
-
-    /** Load favorite state for a specific photo (called when page changes). */
-    fun loadFavoriteForPhoto(photoId: String?) {
-        if (photoId == null || encryptionMode != "plain") return
-        viewModelScope.launch {
-            try {
-                val response = withContext(Dispatchers.IO) {
-                    api.listPhotos(limit = 500)
-                }
-                val photo = response.photos.find { it.id == photoId }
-                isFavorite = photo?.isFavorite ?: false
-            } catch (_: Exception) {
-                isFavorite = false
-            }
-        }
-    }
-
-    /** Toggle the favorite state of the current photo. */
-    fun toggleFavorite(photoId: String) {
-        viewModelScope.launch {
-            try {
-                val response = withContext(Dispatchers.IO) { api.toggleFavorite(photoId) }
-                isFavorite = response.isFavorite
-            } catch (_: Exception) {}
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Screen — HorizontalPager for swipe navigation between photos
@@ -265,6 +92,7 @@ fun PhotoViewerScreen(
     )
 
     val currentPhoto = viewModel.allPhotos.getOrNull(pagerState.currentPage)
+    val context = LocalContext.current
 
     // Load tags and favorite when page changes (plain mode only)
     val isPlainMode = viewModel.encryptionMode == "plain"
@@ -283,6 +111,74 @@ fun PhotoViewerScreen(
     // Controls overlay visibility — tap photo to toggle
     var showOverlay by remember { mutableStateOf(true) }
 
+    // ── Info panel state ─────────────────────────────────────────────
+    var showInfoPanel by remember { mutableStateOf(false) }
+
+    // ── Download state ───────────────────────────────────────────────
+    val scope = rememberCoroutineScope()
+    var downloadMessage by remember { mutableStateOf<String?>(null) }
+
+    // ── Edit mode state ──────────────────────────────────────────────
+    var editMode by remember { mutableStateOf(false) }
+    var editTab by remember { mutableStateOf("brightness") } // "crop" | "brightness"
+    var cropCorners by remember { mutableStateOf(CropCorners(0f, 0f, 1f, 1f)) }
+    var brightnessValue by remember { mutableStateOf(0f) }
+
+    // Initialize edit mode from existing crop metadata
+    fun enterEditMode() {
+        val photo = currentPhoto ?: return
+        val cm = photo.cropMetadata
+        if (cm != null) {
+            try {
+                val json = JSONObject(cm)
+                cropCorners = CropCorners(
+                    x = json.optDouble("x", 0.0).toFloat(),
+                    y = json.optDouble("y", 0.0).toFloat(),
+                    w = json.optDouble("width", 1.0).toFloat(),
+                    h = json.optDouble("height", 1.0).toFloat()
+                )
+                brightnessValue = json.optDouble("brightness", 0.0).toFloat()
+            } catch (_: Exception) {
+                cropCorners = CropCorners(0f, 0f, 1f, 1f)
+                brightnessValue = 0f
+            }
+        } else {
+            cropCorners = CropCorners(0f, 0f, 1f, 1f)
+            brightnessValue = 0f
+        }
+        editTab = "brightness"
+        editMode = true
+    }
+
+    fun saveEdit() {
+        val photo = currentPhoto ?: return
+        val c = cropCorners
+        val isDefaultCrop = c.x <= 0.01f && c.y <= 0.01f && c.w >= 0.99f && c.h >= 0.99f
+        val isDefaultBrightness = kotlin.math.abs(brightnessValue) < 1f
+
+        if (isDefaultCrop && isDefaultBrightness) {
+            viewModel.saveCropMetadata(photo, null)
+        } else {
+            val meta = JSONObject().apply {
+                put("x", c.x.toDouble().coerceIn(0.0, 1.0))
+                put("y", c.y.toDouble().coerceIn(0.0, 1.0))
+                put("width", c.w.toDouble().coerceIn(0.05, 1.0))
+                put("height", c.h.toDouble().coerceIn(0.05, 1.0))
+                put("rotate", 0)
+                put("brightness", brightnessValue.toDouble())
+            }.toString()
+            viewModel.saveCropMetadata(photo, meta)
+        }
+        editMode = false
+    }
+
+    fun clearCrop() {
+        val photo = currentPhoto ?: return
+        viewModel.saveCropMetadata(photo, null)
+        cropCorners = CropCorners(0f, 0f, 1f, 1f)
+        brightnessValue = 0f
+    }
+
     // Immersive full-screen: hide system bars when viewer is open
     val view = LocalView.current
     DisposableEffect(Unit) {
@@ -297,15 +193,60 @@ fun PhotoViewerScreen(
         }
     }
 
+    // Vertical swipe threshold for gestures (dp → px converted at composition time)
+    val verticalSwipeThreshold = 100f
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .pointerInput(editMode) {
+                // Detect vertical swipes: up → info panel, down → close viewer
+                // Only at the top level so it doesn't conflict with zoom panning
+                if (editMode) return@pointerInput
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var totalY = 0f
+                    var totalX = 0f
+                    var consumed = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull() ?: break
+                        if (!change.pressed) {
+                            // Finger lifted — evaluate the swipe
+                            if (!consumed && kotlin.math.abs(totalY) > verticalSwipeThreshold &&
+                                kotlin.math.abs(totalY) > kotlin.math.abs(totalX) * 1.5f
+                            ) {
+                                if (totalY < 0) {
+                                    // Swipe up → show info panel
+                                    showInfoPanel = true
+                                } else {
+                                    // Swipe down → close viewer
+                                    if (showInfoPanel) {
+                                        showInfoPanel = false
+                                    } else {
+                                        onBack()
+                                    }
+                                }
+                            }
+                            break
+                        }
+                        // Only track single-finger vertical movement
+                        if (event.changes.count { it.pressed } == 1) {
+                            totalY += change.positionChange().y
+                            totalX += change.positionChange().x
+                        } else {
+                            consumed = true // multi-touch — don't interpret as swipe
+                        }
+                    }
+                }
+            }
     ) {
         // ── Full-screen pager (behind overlays) ────────────────────────
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
+            userScrollEnabled = !editMode,
             key = { viewModel.allPhotos[it].localId }
         ) { page ->
             val photo = viewModel.allPhotos[page]
@@ -321,8 +262,120 @@ fun PhotoViewerScreen(
                     photo = photo,
                     encryptionMode = viewModel.encryptionMode,
                     serverBaseUrl = viewModel.serverBaseUrl,
-                    viewModel = viewModel
+                    viewModel = viewModel,
+                    editMode = editMode,
+                    editBrightness = brightnessValue
                 )
+            }
+        }
+
+        // ── Crop overlay drawn on top of the full-screen photo ─────────
+        if (editMode && editTab == "crop") {
+            BoxWithConstraints(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                val bw = constraints.maxWidth.toFloat()
+                val bh = constraints.maxHeight.toFloat()
+                val cc = cropCorners
+                val handleRadius = 10.dp
+
+                // Darkened overlay (semi-transparent) outside crop region
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val left = cc.x * size.width
+                    val top = cc.y * size.height
+                    val right = (cc.x + cc.w) * size.width
+                    val bottom = (cc.y + cc.h) * size.height
+
+                    val dimColor = Color.Black.copy(alpha = 0.5f)
+                    // Top
+                    drawRect(dimColor, topLeft = Offset.Zero, size = androidx.compose.ui.geometry.Size(size.width, top))
+                    // Bottom
+                    drawRect(dimColor, topLeft = Offset(0f, bottom), size = androidx.compose.ui.geometry.Size(size.width, size.height - bottom))
+                    // Left
+                    drawRect(dimColor, topLeft = Offset(0f, top), size = androidx.compose.ui.geometry.Size(left, bottom - top))
+                    // Right
+                    drawRect(dimColor, topLeft = Offset(right, top), size = androidx.compose.ui.geometry.Size(size.width - right, bottom - top))
+
+                    // Crop border
+                    drawRect(
+                        Color.White,
+                        topLeft = Offset(left, top),
+                        size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+                        style = Stroke(width = 2f)
+                    )
+                }
+
+                // Corner handles
+                val corners = listOf(
+                    "tl" to Offset(cc.x * bw, cc.y * bh),
+                    "tr" to Offset((cc.x + cc.w) * bw, cc.y * bh),
+                    "bl" to Offset(cc.x * bw, (cc.y + cc.h) * bh),
+                    "br" to Offset((cc.x + cc.w) * bw, (cc.y + cc.h) * bh)
+                )
+
+                for ((corner, pos) in corners) {
+                    Box(
+                        modifier = Modifier
+                            .offset(
+                                x = with(androidx.compose.ui.platform.LocalDensity.current) { (pos.x).toDp() } - handleRadius,
+                                y = with(androidx.compose.ui.platform.LocalDensity.current) { (pos.y).toDp() } - handleRadius
+                            )
+                            .size(handleRadius * 2)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .pointerInput(corner) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    val minSize = 0.05f
+                                    val dx = dragAmount.x / bw
+                                    val dy = dragAmount.y / bh
+                                    cropCorners = when (corner) {
+                                        "tl" -> {
+                                            val newX = (cropCorners.x + dx).coerceIn(0f, cropCorners.x + cropCorners.w - minSize)
+                                            val newY = (cropCorners.y + dy).coerceIn(0f, cropCorners.y + cropCorners.h - minSize)
+                                            CropCorners(
+                                                x = newX,
+                                                y = newY,
+                                                w = cropCorners.w + (cropCorners.x - newX),
+                                                h = cropCorners.h + (cropCorners.y - newY)
+                                            )
+                                        }
+                                        "tr" -> {
+                                            val newR = (cropCorners.x + cropCorners.w + dx).coerceIn(cropCorners.x + minSize, 1f)
+                                            val newY = (cropCorners.y + dy).coerceIn(0f, cropCorners.y + cropCorners.h - minSize)
+                                            CropCorners(
+                                                x = cropCorners.x,
+                                                y = newY,
+                                                w = newR - cropCorners.x,
+                                                h = cropCorners.h + (cropCorners.y - newY)
+                                            )
+                                        }
+                                        "bl" -> {
+                                            val newX = (cropCorners.x + dx).coerceIn(0f, cropCorners.x + cropCorners.w - minSize)
+                                            val newB = (cropCorners.y + cropCorners.h + dy).coerceIn(cropCorners.y + minSize, 1f)
+                                            CropCorners(
+                                                x = newX,
+                                                y = cropCorners.y,
+                                                w = cropCorners.w + (cropCorners.x - newX),
+                                                h = newB - cropCorners.y
+                                            )
+                                        }
+                                        "br" -> {
+                                            val newR = (cropCorners.x + cropCorners.w + dx).coerceIn(cropCorners.x + minSize, 1f)
+                                            val newB = (cropCorners.y + cropCorners.h + dy).coerceIn(cropCorners.y + minSize, 1f)
+                                            CropCorners(
+                                                x = cropCorners.x,
+                                                y = cropCorners.y,
+                                                w = newR - cropCorners.x,
+                                                h = newB - cropCorners.y
+                                            )
+                                        }
+                                        else -> cropCorners
+                                    }
+                                }
+                            }
+                    )
+                }
             }
         }
 
@@ -340,12 +393,13 @@ fun PhotoViewerScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .statusBarsPadding()
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                        .padding(top = 12.dp) // extra padding below notch / camera cutout
                         .padding(horizontal = 4.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", tint = Color.White)
+                    IconButton(onClick = onBack, modifier = Modifier.size(32.dp)) {
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", tint = Color.White, modifier = Modifier.size(12.dp))
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -371,8 +425,99 @@ fun PhotoViewerScreen(
                                 )
                             }
                         }
-                        IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }) {
-                            Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = "Delete", tint = Color.White, modifier = Modifier.size(12.dp))
+                        // Info button
+                        IconButton(onClick = { showInfoPanel = !showInfoPanel }) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Info",
+                                tint = if (showInfoPanel) Color(0xFF60A5FA) else Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        // Edit button — only for photos (not videos/gifs)
+                        if (currentPhoto.mediaType != "video") {
+                            TextButton(onClick = {
+                                if (editMode) {
+                                    editMode = false
+                                } else {
+                                    enterEditMode()
+                                }
+                            }) {
+                                Text(
+                                    if (editMode) "Done" else "Edit",
+                                    color = if (editMode) Color(0xFF60A5FA) else Color.White,
+                                    fontSize = 14.sp
+                                )
+                            }
+                        }
+                        // Download button
+                        IconButton(onClick = {
+                            val photo = currentPhoto
+                            if (photo != null) {
+                                scope.launch {
+                                    try {
+                                        // For local files, use content resolver; for server files, download
+                                        val bytes: ByteArray? = when {
+                                            photo.localPath != null -> {
+                                                try {
+                                                    context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.readBytes()
+                                                } catch (_: Exception) { null }
+                                            }
+                                            else -> viewModel.downloadPhotoBytes(photo)
+                                        }
+                                        if (bytes != null) {
+                                            val values = ContentValues().apply {
+                                                put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
+                                                put(MediaStore.MediaColumns.MIME_TYPE, when {
+                                                    photo.filename.endsWith(".png", true) -> "image/png"
+                                                    photo.filename.endsWith(".gif", true) -> "image/gif"
+                                                    photo.filename.endsWith(".mp4", true) -> "video/mp4"
+                                                    photo.filename.endsWith(".webm", true) -> "video/webm"
+                                                    else -> "image/jpeg"
+                                                })
+                                                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                            }
+                                            val uri = context.contentResolver.insert(
+                                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                                            )
+                                            uri?.let { context.contentResolver.openOutputStream(it)?.use { os -> os.write(bytes) } }
+                                            downloadMessage = "Saved to Downloads"
+                                        } else {
+                                            downloadMessage = "Download failed"
+                                        }
+                                    } catch (e: Exception) {
+                                        downloadMessage = "Download failed: ${e.message}"
+                                    }
+                                }
+                            }
+                        }) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_download),
+                                contentDescription = "Download",
+                                tint = Color.White,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                        if (viewModel.albumId != null) {
+                            // Album context: remove from album only (don't delete the photo)
+                            IconButton(onClick = { viewModel.removeFromAlbum(currentPhoto, onBack) }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_trashcan),
+                                    contentDescription = "Remove from album",
+                                    tint = Color(0xFFFFA500),
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        } else {
+                            // Gallery context: delete the photo
+                            IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_trashcan),
+                                    contentDescription = "Delete",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -471,231 +616,177 @@ fun PhotoViewerScreen(
                 }
             }
         }
-    }
-}
 
-// ---------------------------------------------------------------------------
-// Per-page content — each page independently loads and renders its photo
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun PhotoPageContent(
-    photo: PhotoEntity,
-    encryptionMode: String,
-    serverBaseUrl: String,
-    viewModel: PhotoViewerViewModel
-) {
-    val context = LocalContext.current
-
-    // Determine the content source for this photo
-    val isPlainMode = encryptionMode == "plain" && photo.serverPhotoId != null
-    val hasLocalPath = photo.localPath != null
-    val hasEncryptedBlob = photo.serverBlobId != null
-
-    // For encrypted mode, lazily download & decrypt
-    var decryptedData by remember(photo.localId) { mutableStateOf<ByteArray?>(null) }
-    var decryptLoading by remember(photo.localId) { mutableStateOf(hasEncryptedBlob && !isPlainMode && !hasLocalPath) }
-    var decryptError by remember(photo.localId) { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(photo.localId) {
-        if (!isPlainMode && !hasLocalPath && hasEncryptedBlob) {
-            decryptLoading = true
-            try {
-                decryptedData = viewModel.downloadAndDecrypt(photo.serverBlobId!!)
-            } catch (e: Exception) {
-                decryptError = e.message
-            } finally {
-                decryptLoading = false
-            }
-        }
-    }
-
-    // Parse crop metadata for zoom/brightness display
-    val cropInfo = remember(photo.cropMetadata) {
-        photo.cropMetadata?.let {
-            try {
-                val json = JSONObject(it)
-                CropInfo(
-                    x = json.optDouble("x", 0.0).toFloat(),
-                    y = json.optDouble("y", 0.0).toFloat(),
-                    width = json.optDouble("width", 1.0).toFloat(),
-                    height = json.optDouble("height", 1.0).toFloat(),
-                    brightness = json.optDouble("brightness", 0.0).toFloat()
-                )
-            } catch (_: Exception) { null }
-        }
-    }
-
-    // Brightness color filter from crop metadata
-    val brightnessFilter = remember(cropInfo?.brightness) {
-        if (cropInfo != null && cropInfo.brightness != 0f) {
-            val b = 1f + cropInfo.brightness / 100f
-            ColorFilter.colorMatrix(ColorMatrix().apply {
-                setToScale(b, b, b, 1f)
-            })
-        } else null
-    }
-
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .clipToBounds(),
-        contentAlignment = Alignment.Center
-    ) {
-        // Compute crop zoom modifier based on container + image dimensions
-        val containerW = constraints.maxWidth.toFloat()
-        val containerH = constraints.maxHeight.toFloat()
-        val cropModifier = if (
-            cropInfo != null && photo.width > 0 && photo.height > 0 &&
-            containerW > 0 && containerH > 0
+        // ── Info panel (slide up from bottom) ─────────────────────────
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showInfoPanel,
+            enter = androidx.compose.animation.slideInVertically { it },
+            exit = androidx.compose.animation.slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            val imgAspect = photo.width.toFloat() / photo.height.toFloat()
-            val containerAspect = containerW / containerH
-            val rendW: Float
-            val rendH: Float
-            if (imgAspect > containerAspect) {
-                rendW = containerW; rendH = containerW / imgAspect
-            } else {
-                rendH = containerH; rendW = containerH * imgAspect
-            }
-            val letterboxX = (containerW - rendW) / 2f
-            val letterboxY = (containerH - rendH) / 2f
-            val cx = cropInfo.x + cropInfo.width / 2f
-            val cy = cropInfo.y + cropInfo.height / 2f
-            val containerCX = (letterboxX + cx * rendW) / containerW
-            val containerCY = (letterboxY + cy * rendH) / containerH
-            val cropPixW = cropInfo.width * rendW
-            val cropPixH = cropInfo.height * rendH
-            val scale = minOf(containerW / cropPixW, containerH / cropPixH)
-            val tx = containerW * (0.5f - containerCX)
-            val ty = containerH * (0.5f - containerCY)
-            Modifier.graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                transformOrigin = TransformOrigin(containerCX, containerCY)
-                translationX = tx
-                translationY = ty
-            }
-        } else Modifier
-
-        when {
-            // Loading encrypted content
-            decryptLoading -> {
-                CircularProgressIndicator(color = Color.White)
-            }
-
-            decryptError != null -> {
-                Text(decryptError ?: "Error", color = Color.White, modifier = Modifier.padding(16.dp))
-            }
-
-            // ── Video ──────────────────────────────────────────────────
-            photo.mediaType == "video" -> {
-                val videoUri = when {
-                    isPlainMode -> Uri.parse("$serverBaseUrl/api/photos/${photo.serverPhotoId}/file")
-                    hasLocalPath -> Uri.parse(photo.localPath)
-                    decryptedData != null -> {
-                        val tempFile = remember(photo.localId, decryptedData) {
-                            java.io.File.createTempFile("video_", ".mp4", context.cacheDir).apply {
-                                writeBytes(decryptedData!!)
-                                deleteOnExit()
+            Surface(
+                color = Color(0xF2111827),
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 20.dp, vertical = 16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Photo Details", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        IconButton(onClick = { showInfoPanel = false }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    currentPhoto?.let { photo ->
+                        InfoDetailRow("Filename", photo.filename)
+                        InfoDetailRow("Type", photo.mimeType)
+                        if (photo.width > 0 && photo.height > 0) {
+                            InfoDetailRow("Dimensions", "${photo.width} × ${photo.height}")
+                        }
+                        photo.sizeBytes?.let { size ->
+                            InfoDetailRow("Size", formatInfoBytes(size))
+                        }
+                        if (photo.takenAt > 0L) {
+                            InfoDetailRow("Taken", java.text.SimpleDateFormat("MMM d, yyyy  h:mm a", java.util.Locale.getDefault()).format(java.util.Date(photo.takenAt)))
+                        }
+                        if (photo.createdAt > 0L) {
+                            InfoDetailRow("Uploaded", java.text.SimpleDateFormat("MMM d, yyyy  h:mm a", java.util.Locale.getDefault()).format(java.util.Date(photo.createdAt)))
+                        }
+                        photo.durationSecs?.let { dur ->
+                            InfoDetailRow("Duration", "%.1fs".format(dur))
+                        }
+                        photo.cameraModel?.let { cam ->
+                            InfoDetailRow("Device", cam)
+                        }
+                        if (photo.latitude != null && photo.longitude != null) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Location", color = Color.Gray, fontSize = 13.sp)
+                                Text(
+                                    "%.5f, %.5f ↗".format(photo.latitude, photo.longitude),
+                                    color = Color(0xFF60A5FA),
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.clickable {
+                                        val uri = Uri.parse(
+                                            "https://www.google.com/maps?q=${photo.latitude},${photo.longitude}"
+                                        )
+                                        context.startActivity(
+                                            android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+                                        )
+                                    }
+                                )
                             }
                         }
-                        Uri.fromFile(tempFile)
                     }
-                    else -> null
-                }
-                if (videoUri != null) {
-                    VideoPlayer(uri = videoUri)
-                } else {
-                    Text("Video not available", color = Color.White)
                 }
             }
+        }
 
-            // ── Photo / GIF ────────────────────────────────────────────
-            else -> {
-                when {
-                    // Plain mode: Coil loads via authenticated URL
-                    isPlainMode -> {
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data("$serverBaseUrl/api/photos/${photo.serverPhotoId}/file")
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = photo.filename,
-                            modifier = Modifier.fillMaxSize().then(cropModifier),
-                            contentScale = ContentScale.Fit,
-                            colorFilter = brightnessFilter
-                        )
-                    }
-                    // Local file
-                    hasLocalPath -> {
-                        val bitmap = remember(photo.localPath) {
-                            try {
-                                val stream = context.contentResolver.openInputStream(Uri.parse(photo.localPath))
-                                BitmapFactory.decodeStream(stream)
-                            } catch (_: Exception) { null }
-                        }
-                        bitmap?.let {
-                            Image(
-                                bitmap = it.asImageBitmap(),
-                                contentDescription = photo.filename,
-                                modifier = Modifier.fillMaxSize().then(cropModifier),
-                                contentScale = ContentScale.Fit,
-                                colorFilter = brightnessFilter
-                            )
+        // ── Edit mode panel (bottom) ──────────────────────────────────
+        androidx.compose.animation.AnimatedVisibility(
+            visible = editMode,
+            enter = androidx.compose.animation.slideInVertically { it },
+            exit = androidx.compose.animation.slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Surface(
+                color = Color(0xE6111827),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    // Tab selector
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        listOf("crop" to "Crop", "brightness" to "Brightness").forEach { (key, label) ->
+                            TextButton(onClick = { editTab = key }) {
+                                Text(
+                                    label,
+                                    color = if (editTab == key) Color(0xFF60A5FA) else Color.Gray,
+                                    fontSize = 14.sp
+                                )
+                            }
                         }
                     }
-                    // Decrypted blob
-                    decryptedData != null -> {
-                        val bitmap = remember(decryptedData) {
-                            BitmapFactory.decodeByteArray(decryptedData, 0, decryptedData!!.size)
-                        }
-                        bitmap?.let {
-                            Image(
-                                bitmap = it.asImageBitmap(),
-                                contentDescription = photo.filename,
-                                modifier = Modifier.fillMaxSize().then(cropModifier),
-                                contentScale = ContentScale.Fit,
-                                colorFilter = brightnessFilter
+
+                    Spacer(Modifier.height(8.dp))
+
+                    when (editTab) {
+                        "brightness" -> {
+                            Text("Brightness: ${brightnessValue.toInt()}", color = Color.White, fontSize = 12.sp)
+                            Slider(
+                                value = brightnessValue,
+                                onValueChange = { brightnessValue = it },
+                                valueRange = -100f..100f,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color(0xFF60A5FA),
+                                    activeTrackColor = Color(0xFF3B82F6)
+                                )
                             )
+                        }
+                        "crop" -> {
+                            // Crop overlay is drawn on the main photo above; just show instructions here
+                            Text("Drag the corner handles on the photo to adjust crop", color = Color.Gray, fontSize = 12.sp)
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // Action buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        TextButton(onClick = { clearCrop() }) {
+                            Text("Reset", color = Color(0xFFF87171), fontSize = 14.sp)
+                        }
+                        TextButton(onClick = { editMode = false }) {
+                            Text("Cancel", color = Color.Gray, fontSize = 14.sp)
+                        }
+                        Button(
+                            onClick = { saveEdit() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                        ) {
+                            Text("Save", color = Color.White, fontSize = 14.sp)
                         }
                     }
                 }
             }
         }
-    }
-}
 
-// ---------------------------------------------------------------------------
-// Crop zoom helper: computes Modifier for graphicsLayer transform
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Video player composable (ExoPlayer)
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun VideoPlayer(uri: Uri) {
-    val context = LocalContext.current
-    val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(uri))
-            prepare()
+        // ── Download confirmation snackbar ─────────────────────────────
+        downloadMessage?.let { msg ->
+            LaunchedEffect(msg) {
+                kotlinx.coroutines.delay(2000)
+                downloadMessage = null
+            }
+            Snackbar(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(16.dp)
+            ) {
+                Text(msg)
+            }
         }
     }
-
-    DisposableEffect(Unit) {
-        onDispose { player.release() }
-    }
-
-    AndroidView(
-        factory = {
-            PlayerView(it).apply {
-                this.player = player
-                useController = true
-            }
-        },
-        modifier = Modifier.fillMaxSize()
-    )
 }

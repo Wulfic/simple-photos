@@ -109,4 +109,110 @@ class AlbumRepository @Inject constructor(
             )
         )
     }
+
+    /**
+     * Download all album_manifest blobs from the server, decrypt, and sync
+     * into the local Room DB. Albums that no longer exist on the server are
+     * removed locally. This brings web-created albums into the Android app
+     * and vice-versa.
+     *
+     * In plain mode (no encryption) this is a no-op — albums stay local.
+     */
+    suspend fun syncAlbumsFromServer() {
+        // Skip in plain mode — manifests are encrypted
+        try {
+            val encSettings = api.getEncryptionSettings()
+            if (encSettings.encryptionMode == "plain") return
+        } catch (_: Exception) {
+            return // can't determine mode — bail out
+        }
+
+        val blobList = api.listBlobs(blobType = "album_manifest")
+        val serverAlbumIds = mutableSetOf<String>()
+
+        for (blob in blobList.blobs) {
+            try {
+                // Download and decrypt the manifest blob
+                val encryptedBody = api.downloadBlob(blob.id)
+                val encryptedBytes = encryptedBody.bytes()
+                val decryptedBytes = crypto.decrypt(encryptedBytes)
+                val payload = JSONObject(String(decryptedBytes))
+
+                val albumId = payload.getString("album_id")
+                val albumName = payload.getString("name")
+                val createdAtStr = payload.optString("created_at", "")
+                val coverBlobId = if (payload.isNull("cover_photo_blob_id")) null
+                    else payload.getString("cover_photo_blob_id")
+                val photoBlobIds = mutableListOf<String>()
+                val arr = payload.optJSONArray("photo_blob_ids")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        photoBlobIds.add(arr.getString(i))
+                    }
+                }
+
+                serverAlbumIds.add(albumId)
+
+                // Parse created_at to epoch millis
+                val createdAt = try {
+                    java.time.Instant.parse(createdAtStr).toEpochMilli()
+                } catch (_: Exception) {
+                    System.currentTimeMillis()
+                }
+
+                // Map cover blob ID → local photo ID
+                val coverLocalId = coverBlobId?.let { bId ->
+                    db.photoDao().getByServerBlobId(bId)?.localId
+                }
+
+                // Upsert the album entry
+                val existing = db.albumDao().getById(albumId)
+                if (existing != null) {
+                    db.albumDao().update(
+                        existing.copy(
+                            name = albumName,
+                            serverManifestBlobId = blob.id,
+                            coverPhotoLocalId = coverLocalId ?: existing.coverPhotoLocalId,
+                            syncStatus = SyncStatus.SYNCED
+                        )
+                    )
+                } else {
+                    db.albumDao().insert(
+                        AlbumEntity(
+                            localId = albumId,
+                            serverManifestBlobId = blob.id,
+                            name = albumName,
+                            coverPhotoLocalId = coverLocalId,
+                            syncStatus = SyncStatus.SYNCED,
+                            createdAt = createdAt
+                        )
+                    )
+                }
+
+                // Rebuild photo ↔ album cross-references
+                db.albumDao().deleteAllXRefsForAlbum(albumId)
+                for (blobId in photoBlobIds) {
+                    val photo = db.photoDao().getByServerBlobId(blobId)
+                    if (photo != null) {
+                        db.albumDao().insertXRef(
+                            PhotoAlbumXRef(photo.localId, albumId)
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                // Skip manifests we can't decrypt (e.g. different key)
+            }
+        }
+
+        // Remove local albums that no longer exist on the server
+        // (only those that have a serverManifestBlobId — i.e. were synced)
+        val allLocalIds = db.albumDao().getAllAlbumIds()
+        for (localId in allLocalIds) {
+            val album = db.albumDao().getById(localId) ?: continue
+            if (album.serverManifestBlobId != null && localId !in serverAlbumIds) {
+                db.albumDao().deleteAllXRefsForAlbum(localId)
+                db.albumDao().deleteById(localId)
+            }
+        }
+    }
 }

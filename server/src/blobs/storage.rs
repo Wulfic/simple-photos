@@ -3,11 +3,12 @@ use tokio::io::AsyncWriteExt;
 
 use crate::error::AppError;
 
-/// Build the on-disk path for a blob: {root}/{user_id[0..2]}/{user_id}/{blob_id[0..2]}/{blob_id}.bin
+/// Build the on-disk path for a blob: {root}/blobs/{user_id[0..2]}/{user_id}/{blob_id[0..2]}/{blob_id}.bin
 pub fn blob_path(root: &Path, user_id: &str, blob_id: &str) -> PathBuf {
     let user_prefix = &user_id[..2.min(user_id.len())];
     let blob_prefix = &blob_id[..2.min(blob_id.len())];
-    root.join(user_prefix)
+    root.join("blobs")
+        .join(user_prefix)
         .join(user_id)
         .join(blob_prefix)
         .join(format!("{}.bin", blob_id))
@@ -17,7 +18,66 @@ pub fn blob_path(root: &Path, user_id: &str, blob_id: &str) -> PathBuf {
 pub fn relative_path(user_id: &str, blob_id: &str) -> String {
     let user_prefix = &user_id[..2.min(user_id.len())];
     let blob_prefix = &blob_id[..2.min(blob_id.len())];
-    format!("{}/{}/{}/{}.bin", user_prefix, user_id, blob_prefix, blob_id)
+    format!("blobs/{}/{}/{}/{}.bin", user_prefix, user_id, blob_prefix, blob_id)
+}
+
+/// Build the on-disk path for a metadata file: {root}/metadata/{user_id[0..2]}/{user_id}/{blob_id}.json
+pub fn metadata_path(root: &Path, user_id: &str, blob_id: &str) -> PathBuf {
+    let user_prefix = &user_id[..2.min(user_id.len())];
+    root.join("metadata")
+        .join(user_prefix)
+        .join(user_id)
+        .join(format!("{}.json", blob_id))
+}
+
+/// Relative metadata path stored in DB
+pub fn metadata_relative_path(user_id: &str, blob_id: &str) -> String {
+    let user_prefix = &user_id[..2.min(user_id.len())];
+    format!("metadata/{}/{}/{}.json", user_prefix, user_id, blob_id)
+}
+
+/// Write metadata JSON to the metadata subtree.
+/// If `encrypt_fn` is provided, the data is encrypted before writing.
+pub async fn write_metadata(
+    root: &Path,
+    user_id: &str,
+    blob_id: &str,
+    data: &[u8],
+) -> Result<String, AppError> {
+    let path = metadata_path(root, user_id, blob_id);
+
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to create metadata directory: {}", e)))?;
+    }
+
+    tokio::fs::write(&path, data)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to write metadata: {}", e)))?;
+
+    Ok(metadata_relative_path(user_id, blob_id))
+}
+
+/// Read metadata from disk.
+pub async fn read_metadata(root: &Path, storage_path: &str) -> Result<Vec<u8>, AppError> {
+    let path = root.join(storage_path);
+    tokio::fs::read(&path)
+        .await
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Internal(format!("Failed to read metadata: {}", e)),
+        })
+}
+
+/// Delete metadata from disk.
+pub async fn delete_metadata(root: &Path, storage_path: &str) -> Result<(), AppError> {
+    let path = root.join(storage_path);
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(AppError::Internal(format!("Failed to delete metadata: {}", e))),
+    }
 }
 
 pub async fn write_blob(root: &Path, user_id: &str, blob_id: &str, data: &[u8]) -> Result<String, AppError> {

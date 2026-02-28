@@ -41,6 +41,9 @@ interface PhotoDao {
     @Query("UPDATE photos SET thumbnailPath = :path WHERE localId = :id")
     suspend fun updateThumbnailPath(id: String, path: String)
 
+    @Query("UPDATE photos SET cropMetadata = :metadata WHERE localId = :id")
+    suspend fun updateCropMetadata(id: String, metadata: String?)
+
     @Query("SELECT * FROM photos WHERE serverBlobId = :blobId LIMIT 1")
     suspend fun getByServerBlobId(blobId: String): PhotoEntity?
 

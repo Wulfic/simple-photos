@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex } from "../crypto/crypto";
@@ -17,6 +17,14 @@ export default function AlbumDetail() {
   const [showSharePicker, setShowSharePicker] = useState(false);
   const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
   const [shareSuccess, setShareSuccess] = useState("");
+  const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
+
+  // Fetch secure blob IDs so secure photos are excluded from regular albums
+  useEffect(() => {
+    api.secureGalleries.secureBlobIds()
+      .then((res) => setSecureBlobIds(new Set(res.blob_ids)))
+      .catch(() => { /* secure galleries may not be available */ });
+  }, []);
 
   const album = useLiveQuery(
     () => (albumId ? db.albums.get(albumId) : undefined),
@@ -27,19 +35,19 @@ export default function AlbumDetail() {
     db.photos.orderBy("takenAt").reverse().toArray()
   );
 
-  // Photos that belong to this album
+  // Photos that belong to this album (excluding any in secure galleries)
   const albumPhotos = useMemo(() => {
     if (!album || !allPhotos) return [];
     const idSet = new Set(album.photoBlobIds);
-    return allPhotos.filter((p) => idSet.has(p.blobId));
-  }, [album, allPhotos]);
+    return allPhotos.filter((p) => idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
+  }, [album, allPhotos, secureBlobIds]);
 
-  // Photos NOT in this album (for "add photos" view)
+  // Photos NOT in this album (for "add photos" view), also excluding secure photos
   const availablePhotos = useMemo(() => {
     if (!album || !allPhotos) return [];
     const idSet = new Set(album.photoBlobIds);
-    return allPhotos.filter((p) => !idSet.has(p.blobId));
-  }, [album, allPhotos]);
+    return allPhotos.filter((p) => !idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
+  }, [album, allPhotos, secureBlobIds]);
 
   if (!albumId) {
     return <p className="p-4 text-red-600 dark:text-red-400">Invalid album ID</p>;
@@ -54,6 +62,64 @@ export default function AlbumDetail() {
       setError(err.message);
     }
   }
+
+  // ── Multi-select state ──────────────────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const isSelectionMode = selectedIds.size > 0;
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function enterSelectionMode(blobId: string) {
+    setSelectedIds(new Set([blobId]));
+  }
+
+  function toggleSelect(blobId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(blobId)) next.delete(blobId);
+      else next.add(blobId);
+      return next;
+    });
+  }
+
+  function selectAll() {
+    setSelectedIds(new Set(albumPhotos.map((p) => p.blobId)));
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function removeSelected() {
+    if (!album || selectedIds.size === 0) return;
+    try {
+      const updated = album.photoBlobIds.filter((id) => !selectedIds.has(id));
+      await updateAlbumManifest({ ...album, photoBlobIds: updated });
+      clearSelection();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  const handleTilePointerDown = useCallback((blobId: string) => {
+    longPressTimerRef.current = setTimeout(() => {
+      enterSelectionMode(blobId);
+      longPressTimerRef.current = null;
+    }, 500);
+  }, []);
+
+  const handleTilePointerUp = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  const handleTilePointerLeave = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
 
   async function addPhotos(blobIds: string[]) {
     if (!album) return;
@@ -246,6 +312,33 @@ export default function AlbumDetail() {
       )}
 
       {/* Album photo grid */}
+      {isSelectionMode && (
+        <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={clearSelection}
+              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <span className="text-sm font-medium">{selectedIds.size} selected</span>
+            <button
+              onClick={selectAll}
+              className="text-blue-600 dark:text-blue-400 text-sm hover:underline"
+            >
+              Select All
+            </button>
+          </div>
+          <button
+            onClick={removeSelected}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm"
+          >
+            Remove ({selectedIds.size})
+          </button>
+        </div>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
         {albumPhotos.length === 0 && (
           <div className="col-span-full text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
@@ -260,12 +353,22 @@ export default function AlbumDetail() {
           <AlbumTile
             key={photo.blobId}
             photo={photo}
-            onClick={() => navigate(`/photo/${photo.blobId}`, {
-              state: {
-                photoIds: albumPhotos.map((p) => p.blobId),
-                currentIndex: idx,
-              },
-            })}
+            isSelectionMode={isSelectionMode}
+            isSelected={selectedIds.has(photo.blobId)}
+            onClick={() => {
+              if (isSelectionMode) {
+                toggleSelect(photo.blobId);
+              } else {
+                navigate(`/photo/${photo.blobId}`, {
+                  state: {
+                    photoIds: albumPhotos.map((p) => p.blobId),
+                    currentIndex: idx,
+                    albumId,
+                  },
+                });
+              }
+            }}
+            onLongPress={() => enterSelectionMode(photo.blobId)}
             onRemove={() => removePhoto(photo.blobId)}
           />
         ))}
@@ -363,16 +466,71 @@ function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPanelProps) {
 
 interface AlbumTileProps {
   photo: CachedPhoto;
+  isSelectionMode: boolean;
+  isSelected: boolean;
   onClick: () => void;
+  onLongPress: () => void;
   onRemove: () => void;
 }
 
-function AlbumTile({ photo, onClick, onRemove }: AlbumTileProps) {
+function AlbumTile({ photo, isSelectionMode, isSelected, onClick, onLongPress, onRemove }: AlbumTileProps) {
+  const longPressRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didLongPress = useRef(false);
+
+  function handlePointerDown() {
+    didLongPress.current = false;
+    longPressRef.current = setTimeout(() => {
+      didLongPress.current = true;
+      onLongPress();
+      longPressRef.current = null;
+    }, 500);
+  }
+
+  function handlePointerUp() {
+    if (longPressRef.current) {
+      clearTimeout(longPressRef.current);
+      longPressRef.current = null;
+    }
+    if (!didLongPress.current) {
+      onClick();
+    }
+  }
+
+  function handlePointerLeave() {
+    if (longPressRef.current) {
+      clearTimeout(longPressRef.current);
+      longPressRef.current = null;
+    }
+  }
+
   return (
-    <div className="relative aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer group">
-      <div onClick={onClick} className="w-full h-full">
+    <div
+      className={`relative aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer group ${
+        isSelected ? "ring-2 ring-blue-500" : ""
+      }`}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerLeave}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="w-full h-full">
         <ThumbnailImg photo={photo} />
       </div>
+
+      {/* Selection circle */}
+      {isSelectionMode && (
+        <div className={`absolute top-1.5 right-1.5 w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+          isSelected
+            ? "bg-green-500 border-green-500"
+            : "bg-white/80 border-gray-400/50"
+        }`}>
+          {isSelected && (
+            <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+            </svg>
+          )}
+        </div>
+      )}
 
       {/* Media type badge */}
       {photo.mediaType === "video" && (
@@ -389,17 +547,20 @@ function AlbumTile({ photo, onClick, onRemove }: AlbumTileProps) {
         </div>
       )}
 
-      {/* Remove button on hover */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        className="absolute top-1 right-1 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs"
-        title="Remove from album"
-      >
-        ×
-      </button>
+      {/* Remove button on hover (only when NOT in selection mode) */}
+      {!isSelectionMode && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute top-1 right-1 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+          title="Remove from album"
+        >
+          ×
+        </button>
+      )}
     </div>
   );
 }

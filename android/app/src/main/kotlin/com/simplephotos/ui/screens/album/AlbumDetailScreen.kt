@@ -66,6 +66,12 @@ class AlbumDetailViewModel @Inject constructor(
     var encryptionMode by mutableStateOf("plain")
         private set
 
+    // ── Multi-select state ────────────────────────────────────────
+    var selectedIds by mutableStateOf(emptySet<String>())
+        private set
+    var isSelectionMode by mutableStateOf(false)
+        private set
+
     init {
         viewModelScope.launch {
             try {
@@ -158,6 +164,44 @@ class AlbumDetailViewModel @Inject constructor(
             }
         }
     }
+
+    fun enterSelectionMode(id: String) {
+        isSelectionMode = true
+        selectedIds = setOf(id)
+    }
+
+    fun toggleSelect(id: String) {
+        if (!isSelectionMode) return
+        selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+        if (selectedIds.isEmpty()) isSelectionMode = false
+    }
+
+    fun selectAll() {
+        isSelectionMode = true
+        selectedIds = photos.map { it.localId }.toSet()
+    }
+
+    fun clearSelection() {
+        selectedIds = emptySet()
+        isSelectionMode = false
+    }
+
+    fun removeSelectedFromAlbum() {
+        viewModelScope.launch {
+            try {
+                for (id in selectedIds) {
+                    albumRepository.removePhotoFromAlbum(id, albumId)
+                }
+                try {
+                    album?.let { albumRepository.syncAlbum(it) }
+                } catch (_: Exception) {}
+                clearSelection()
+                loadAlbum()
+            } catch (e: Exception) {
+                error = e.message
+            }
+        }
+    }
 }
 
 // ── Screen ──────────────────────────────────────────────────────────────────
@@ -166,25 +210,80 @@ class AlbumDetailViewModel @Inject constructor(
 @Composable
 fun AlbumDetailScreen(
     onBack: () -> Unit,
+    onPhotoClick: (String) -> Unit = {},
     viewModel: AlbumDetailViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(viewModel.album?.name ?: "Album") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.showDeleteConfirm = true }) {
-                        Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = "Delete album")
+            if (viewModel.isSelectionMode) {
+                // ── Selection mode top bar ─────────────────────────
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shadowElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { viewModel.clearSelection() }, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "${viewModel.selectedIds.size} selected",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(
+                                onClick = { viewModel.selectAll() },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("Select All", fontSize = 12.sp)
+                            }
+                        }
+                        Button(
+                            onClick = { viewModel.removeSelectedFromAlbum() },
+                            enabled = viewModel.selectedIds.isNotEmpty(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Remove", fontSize = 12.sp)
+                        }
                     }
                 }
-            )
+            } else {
+                TopAppBar(
+                    title = { Text(viewModel.album?.name ?: "Album") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_back_arrow),
+                                contentDescription = "Back",
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { viewModel.showDeleteConfirm = true }) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_trashcan),
+                                contentDescription = "Delete album",
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    }
+                )
+            }
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -326,7 +425,13 @@ fun AlbumDetailScreen(
                                     photo = photo,
                                     serverBaseUrl = viewModel.serverBaseUrl,
                                     encryptionMode = viewModel.encryptionMode,
-                                    onRemove = { viewModel.removePhoto(photo.localId) }
+                                    isSelectionMode = viewModel.isSelectionMode,
+                                    isSelected = photo.localId in viewModel.selectedIds,
+                                    onTap = {
+                                        if (viewModel.isSelectionMode) viewModel.toggleSelect(photo.localId)
+                                        else onPhotoClick(photo.localId)
+                                    },
+                                    onLongPress = { viewModel.enterSelectionMode(photo.localId) }
                                 )
                             }
                         }
@@ -442,7 +547,10 @@ private fun AlbumPhotoTile(
     photo: PhotoEntity,
     serverBaseUrl: String,
     encryptionMode: String,
-    onRemove: () -> Unit
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -450,6 +558,10 @@ private fun AlbumPhotoTile(
         modifier = Modifier
             .aspectRatio(1f)
             .clip(MaterialTheme.shapes.small)
+            .combinedClickable(
+                onClick = onTap,
+                onLongClick = onLongPress
+            )
     ) {
         val imageModel: Any? = when {
             encryptionMode == "plain" && photo.serverPhotoId != null ->
@@ -505,17 +617,26 @@ private fun AlbumPhotoTile(
             }
         }
 
-        // Remove button
-        IconButton(
-            onClick = onRemove,
-            modifier = Modifier.align(Alignment.TopEnd).size(32.dp)
-        ) {
-            Icon(
-                Icons.Default.Close,
-                contentDescription = "Remove from album",
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.error
-            )
+        // Selection circle (top-right) — only visible in selection mode
+        if (isSelectionMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(if (isSelected) Color(0xFF22C55E) else Color.White.copy(alpha = 0.8f))
+                    .border(
+                        width = 2.dp,
+                        color = if (isSelected) Color(0xFF22C55E) else Color.Gray.copy(alpha = 0.5f),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                }
+            }
         }
     }
 }

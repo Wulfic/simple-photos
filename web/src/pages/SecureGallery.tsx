@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { encrypt, sha256Hex } from "../crypto/crypto";
 import { db, type CachedPhoto } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
@@ -172,6 +173,12 @@ export default function SecureGallery() {
       for (const blobId of selectedPhotos) {
         await api.secureGalleries.addItem(selectedGallery.id, blobId);
       }
+
+      // ── Remove photos from regular albums ────────────────────────────────
+      // When a photo is moved to a secure album it should no longer appear
+      // in any regular (non-secure) album.
+      await removePhotosFromRegularAlbums(selectedPhotos);
+
       setSuccess(`${selectedPhotos.size} photo${selectedPhotos.size !== 1 ? "s" : ""} added to album.`);
       setSelectedPhotos(new Set());
       setShowAddPhotos(false);
@@ -181,6 +188,60 @@ export default function SecureGallery() {
       setError(err.message);
     } finally {
       setAddingPhotos(false);
+    }
+  }
+
+  /**
+   * Remove a set of blob IDs from every regular album and update the
+   * corresponding album manifests on the server + local IndexedDB.
+   * Also clears the albumIds on the photo records themselves.
+   */
+  async function removePhotosFromRegularAlbums(blobIds: Set<string>) {
+    const allAlbums = await db.albums.toArray();
+
+    for (const album of allAlbums) {
+      const before = album.photoBlobIds.length;
+      const updated = album.photoBlobIds.filter((id) => !blobIds.has(id));
+      if (updated.length === before) continue; // nothing to change
+
+      // Determine cover: clear it if the cover photo was removed
+      const cover = album.coverPhotoBlobId && blobIds.has(album.coverPhotoBlobId)
+        ? updated[0] || undefined
+        : album.coverPhotoBlobId;
+
+      // Delete old manifest blob from server
+      if (album.manifestBlobId) {
+        try { await api.blobs.delete(album.manifestBlobId); } catch { /* ok */ }
+      }
+
+      // Upload a new manifest with the blob IDs removed
+      const payload = JSON.stringify({
+        v: 1,
+        album_id: album.albumId,
+        name: album.name,
+        created_at: new Date(album.createdAt).toISOString(),
+        cover_photo_blob_id: cover || null,
+        photo_blob_ids: updated,
+      });
+      const encrypted = await encrypt(new TextEncoder().encode(payload));
+      const hash = await sha256Hex(new Uint8Array(encrypted));
+      const res = await api.blobs.upload(encrypted, "album_manifest", hash);
+
+      // Update local cache
+      await db.albums.put({
+        ...album,
+        photoBlobIds: updated,
+        coverPhotoBlobId: cover,
+        manifestBlobId: res.blob_id,
+      });
+    }
+
+    // Clear albumIds on each photo so the gallery / album views stay consistent
+    for (const blobId of blobIds) {
+      const photo = await db.photos.get(blobId);
+      if (photo && photo.albumIds.length > 0) {
+        await db.photos.update(blobId, { albumIds: [] });
+      }
     }
   }
 
@@ -200,7 +261,7 @@ export default function SecureGallery() {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
             <div className="text-center mb-6">
               <div className="w-16 h-16 mx-auto mb-4 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">
-                <span className="text-3xl">🔒</span>
+                <AppIcon name="locks" size="w-8 h-8" />
               </div>
               <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
                 Secure Albums

@@ -43,6 +43,7 @@ import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.HeaderNavigation
+import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -142,6 +143,7 @@ fun SearchScreen(
     onAlbumsClick: () -> Unit,
     onTrashClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onSecureGalleryClick: () -> Unit = {},
     onLogout: () -> Unit,
     viewModel: SearchViewModel = hiltViewModel()
 ) {
@@ -162,7 +164,9 @@ fun SearchScreen(
                     onSearchClick = { /* already on search */ },
                     onTrashClick = onTrashClick,
                     onSettingsClick = onSettingsClick,
-                    onLogout = { viewModel.logout(onLogout) }
+                    onSecureGalleryClick = onSecureGalleryClick,
+                    onLogout = { viewModel.logout(onLogout) },
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore) }
                 )
             )
         }

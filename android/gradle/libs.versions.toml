@@ -15,6 +15,7 @@ datastore = "1.1.1"
 security-crypto = "1.1.0-alpha06"
 exifinterface = "1.3.7"
 accompanist = "0.34.0"
+biometric = "1.1.0"
 bouncycastle = "1.78.1"
 lifecycle = "2.8.0"
 media3 = "1.3.1"
@@ -70,6 +71,9 @@ exifinterface = { group = "androidx.exifinterface", name = "exifinterface", vers
 
 # Permissions
 accompanist-permissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanist" }
+
+# Biometric
+biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 
 # Crypto
 bouncycastle = { group = "org.bouncycastle", name = "bcpkix-jdk15to18", version.ref = "bouncycastle" }

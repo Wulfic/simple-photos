@@ -36,5 +36,7 @@ data class PhotoEntity(
     /** Whether this photo is favorited */
     val isFavorite: Boolean = false,
     /** JSON crop metadata for crop/edit feature */
-    val cropMetadata: String? = null
+    val cropMetadata: String? = null,
+    /** Camera model / device name (from EXIF data) */
+    val cameraModel: String? = null
 )

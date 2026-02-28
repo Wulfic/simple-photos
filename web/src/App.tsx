@@ -15,6 +15,7 @@ import Trash from "./pages/Trash";
 import SecureGallery from "./pages/SecureGallery";
 import SharedAlbumDetail from "./pages/SharedAlbumDetail";
 import Search from "./pages/Search";
+import Diagnostics from "./pages/Diagnostics";
 
 /**
  * Protected route guard.
@@ -246,6 +247,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <SecureGallery />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/diagnostics"
+          element={
+            <ProtectedRoute>
+              <Diagnostics />
             </ProtectedRoute>
           }
         />

@@ -6,10 +6,12 @@ import { deriveKey } from "../crypto/crypto";
 import ThemeToggle from "../components/ThemeToggle";
 import { checkPasswordStrength, checkUsername } from "../utils/validation";
 
-import type { WizardStep, SetupStatus, CreatedUser, ServerRole } from "./welcome/types";
+import type { WizardStep, SetupStatus, CreatedUser, ServerRole, InstallType, RestoreSource } from "./welcome/types";
 import StepIndicator from "./welcome/StepIndicator";
 import WelcomeStep from "./welcome/WelcomeStep";
 import ServerRoleStep from "./welcome/ServerRoleStep";
+import InstallTypeStep from "./welcome/InstallTypeStep";
+import RestoreStep from "./welcome/RestoreStep";
 import PairStep from "./welcome/PairStep";
 import AccountStep from "./welcome/AccountStep";
 import TwoFactorStep from "./welcome/TwoFactorStep";
@@ -29,7 +31,9 @@ export default function Welcome() {
 
   // ── Server role (primary vs backup) ─────────────────────────────────
   const [serverRole, setServerRole] = useState<ServerRole>(null);
+  const [installType, setInstallType] = useState<InstallType>(null);
   const [mainServerUrl, setMainServerUrl] = useState("");
+  const [restoreSource, setRestoreSource] = useState<RestoreSource | null>(null);
   const navigate = useNavigate();
 
   // ── Admin account form ──────────────────────────────────────────────────
@@ -344,7 +348,7 @@ export default function Welcome() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 dark:from-gray-900 to-indigo-100 dark:to-gray-800 p-4">
       <ThemeToggle />
       <div className="max-w-lg w-full">
-        <StepIndicator step={step} serverRole={serverRole} />
+        <StepIndicator step={step} serverRole={serverRole} installType={installType} />
 
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
           {step === "welcome" && (
@@ -356,6 +360,27 @@ export default function Welcome() {
               setStep={setStep}
               setServerRole={setServerRole}
               setError={setError}
+            />
+          )}
+
+          {step === "install-type" && (
+            <InstallTypeStep
+              setStep={setStep}
+              setInstallType={setInstallType}
+              setError={setError}
+            />
+          )}
+
+          {step === "restore" && (
+            <RestoreStep
+              setStep={setStep}
+              setError={setError}
+              error={error}
+              onVerified={(source) => {
+                setRestoreSource(source);
+                setError("");
+                setStep("account");
+              }}
             />
           )}
 
@@ -485,6 +510,8 @@ export default function Welcome() {
               originalPort={originalPort}
               serverRole={serverRole}
               mainServerUrl={mainServerUrl}
+              installType={installType}
+              restoreSource={restoreSource}
             />
           )}
         </div>

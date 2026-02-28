@@ -11,6 +11,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -19,9 +22,13 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.AlbumEntity
+import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.AuthRepository
+import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.HeaderNavigation
@@ -38,6 +45,7 @@ import javax.inject.Inject
 class AlbumViewModel @Inject constructor(
     private val albumRepository: AlbumRepository,
     private val authRepository: AuthRepository,
+    private val photoRepository: PhotoRepository,
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val albums = albumRepository.getAllAlbums()
@@ -47,12 +55,48 @@ class AlbumViewModel @Inject constructor(
     var username by mutableStateOf("")
         private set
 
+    /** Map of albumId -> first PhotoEntity (for cover image preview) */
+    var albumCoverPhotos by mutableStateOf<Map<String, PhotoEntity>>(emptyMap())
+        private set
+
+    /** Base URL for server-based thumbnails */
+    var serverBaseUrl by mutableStateOf("")
+        private set
+
+    var encryptionMode by mutableStateOf("plain")
+        private set
+
     init {
         viewModelScope.launch {
             try {
                 val prefs = dataStore.data.first()
                 username = prefs[KEY_USERNAME] ?: ""
             } catch (_: Exception) {}
+            // Load server config
+            try {
+                serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
+                encryptionMode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
+            } catch (_: Exception) {}
+            // Sync album manifests from server (picks up web-created albums)
+            try {
+                withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** Load cover photo for each album (call whenever albums list updates). */
+    fun loadCoverPhotos(albums: List<AlbumEntity>) {
+        viewModelScope.launch {
+            val covers = mutableMapOf<String, PhotoEntity>()
+            for (album in albums) {
+                try {
+                    val photoIds = withContext(Dispatchers.IO) { albumRepository.getPhotoIdsForAlbum(album.localId) }
+                    val firstId = photoIds.firstOrNull() ?: continue
+                    val photo = withContext(Dispatchers.IO) { photoRepository.getPhoto(firstId) }
+                    if (photo != null) covers[album.localId] = photo
+                } catch (_: Exception) {}
+            }
+            albumCoverPhotos = covers
         }
     }
 
@@ -97,11 +141,17 @@ fun AlbumListScreen(
     onSearchClick: () -> Unit,
     onTrashClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onSecureGalleryClick: () -> Unit = {},
     onLogout: () -> Unit,
     onAlbumClick: (String) -> Unit = {},
     viewModel: AlbumViewModel = hiltViewModel()
 ) {
     val albums by viewModel.albums.collectAsState(initial = emptyList())
+
+    // Load cover photos whenever the albums list changes
+    LaunchedEffect(albums) {
+        viewModel.loadCoverPhotos(albums)
+    }
 
     Scaffold(
         topBar = {
@@ -114,7 +164,9 @@ fun AlbumListScreen(
                     onSearchClick = onSearchClick,
                     onTrashClick = onTrashClick,
                     onSettingsClick = onSettingsClick,
-                    onLogout = { viewModel.logout(onLogout) }
+                    onSecureGalleryClick = onSecureGalleryClick,
+                    onLogout = { viewModel.logout(onLogout) },
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore) }
                 )
             )
         }
@@ -177,6 +229,9 @@ fun AlbumListScreen(
                     items(albums, key = { it.localId }) { album ->
                         AlbumCard(
                             album = album,
+                            coverPhoto = viewModel.albumCoverPhotos[album.localId],
+                            serverBaseUrl = viewModel.serverBaseUrl,
+                            encryptionMode = viewModel.encryptionMode,
                             onClick = { onAlbumClick(album.localId) }
                         )
                     }
@@ -217,7 +272,14 @@ fun AlbumListScreen(
 }
 
 @Composable
-private fun AlbumCard(album: AlbumEntity, onClick: () -> Unit = {}) {
+private fun AlbumCard(
+    album: AlbumEntity,
+    coverPhoto: PhotoEntity? = null,
+    serverBaseUrl: String = "",
+    encryptionMode: String = "plain",
+    onClick: () -> Unit = {}
+) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
     ) {
@@ -229,12 +291,44 @@ private fun AlbumCard(album: AlbumEntity, onClick: () -> Unit = {}) {
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = MaterialTheme.shapes.small
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        album.name.take(2).uppercase(),
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                if (coverPhoto != null) {
+                    // Determine thumbnail source
+                    val thumbModel: Any? = when {
+                        encryptionMode == "plain" && coverPhoto.serverPhotoId != null ->
+                            "$serverBaseUrl/api/photos/${coverPhoto.serverPhotoId}/thumb"
+                        coverPhoto.thumbnailPath != null -> java.io.File(coverPhoto.thumbnailPath!!)
+                        coverPhoto.localPath != null -> coverPhoto.localPath
+                        else -> null
+                    }
+                    if (thumbModel != null) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(thumbModel)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = album.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(MaterialTheme.shapes.small)
+                        )
+                    } else {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                album.name.take(2).uppercase(),
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            album.name.take(2).uppercase(),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))

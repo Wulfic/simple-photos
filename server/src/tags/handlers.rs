@@ -93,6 +93,7 @@ pub async fn remove_tag(
 }
 
 /// GET /api/search — search photos by tag, filename, date, location, or media type
+/// Supports multi-word fuzzy search: each word must match at least one field.
 pub async fn search_photos(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -105,41 +106,97 @@ pub async fn search_photos(
         return Ok(Json(SearchResponse { results: vec![] }));
     }
 
-    let like_pattern = format!("%{}%", query);
+    // Tokenize query into individual words for multi-word matching
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .collect();
 
-    // Build a comprehensive search across tags, filename, file_path, media_type,
-    // taken_at, created_at, and text representations of lat/lon
-    let rows: Vec<SearchRow> = sqlx::query_as(
+    if tokens.is_empty() {
+        return Ok(Json(SearchResponse { results: vec![] }));
+    }
+
+    // Build dynamic SQL: each token must match at least one searchable field.
+    // We use a concatenated "searchable text" approach per-row so each token
+    // can match any field independently.
+    //
+    // For fuzzy matching we also generate "stem" variants (strip common suffixes)
+    // and allow partial substring matches via LIKE.
+
+    let field_expr = "COALESCE(pt.tag, '') || ' ' || COALESCE(p.filename, '') || ' ' || \
+        COALESCE(p.file_path, '') || ' ' || COALESCE(p.media_type, '') || ' ' || \
+        COALESCE(p.taken_at, '') || ' ' || COALESCE(p.created_at, '') || ' ' || \
+        COALESCE(CAST(p.latitude AS TEXT), '') || ' ' || COALESCE(CAST(p.longitude AS TEXT), '') || ' ' || \
+        COALESCE(sa.name, '')";
+
+    // Each token: the concatenated text must LIKE %token%
+    let mut where_clauses = Vec::new();
+    let mut bind_values: Vec<String> = vec![auth.user_id.clone()];
+
+    for token in &tokens {
+        // Generate fuzzy variants: the original token, plus common stem variants
+        let mut variants: Vec<String> = vec![token.clone()];
+
+        // Strip common English suffixes for basic stemming
+        if token.len() > 4 {
+            if let Some(stem) = token.strip_suffix("ing") {
+                variants.push(stem.to_string());
+                // "running" -> "run" but also "running" -> "runn"
+                if stem.len() > 2 && stem.ends_with(|c: char| c == stem.chars().last().unwrap_or(' ')) {
+                    variants.push(stem[..stem.len()-1].to_string());
+                }
+            }
+            if let Some(stem) = token.strip_suffix("ed") {
+                variants.push(stem.to_string());
+            }
+            if let Some(stem) = token.strip_suffix("es") {
+                variants.push(stem.to_string());
+            } else if let Some(stem) = token.strip_suffix('s') {
+                variants.push(stem.to_string());
+            }
+            if let Some(stem) = token.strip_suffix("tion") {
+                variants.push(format!("{}t", stem));
+            }
+            if let Some(stem) = token.strip_suffix("ly") {
+                variants.push(stem.to_string());
+            }
+        }
+
+        // Build OR conditions for each variant of this token
+        let variant_conditions: Vec<String> = variants
+            .iter()
+            .map(|v| {
+                bind_values.push(format!("%{}%", v));
+                format!("LOWER({}) LIKE ?", field_expr)
+            })
+            .collect();
+
+        where_clauses.push(format!("({})", variant_conditions.join(" OR ")));
+    }
+
+    let sql = format!(
         "SELECT DISTINCT p.id, p.filename, p.media_type, p.mime_type, p.thumb_path,
                 p.created_at, p.taken_at, p.latitude, p.longitude, p.width, p.height
          FROM photos p
          LEFT JOIN photo_tags pt ON pt.photo_id = p.id AND pt.user_id = p.user_id
+         LEFT JOIN shared_album_photos sap ON sap.photo_ref = p.id AND sap.ref_type = 'plain'
+         LEFT JOIN shared_albums sa ON sa.id = sap.album_id
          WHERE p.user_id = ? AND p.encrypted_blob_id IS NULL
-           AND (
-             pt.tag LIKE ?
-             OR p.filename LIKE ?
-             OR p.file_path LIKE ?
-             OR p.media_type LIKE ?
-             OR p.taken_at LIKE ?
-             OR p.created_at LIKE ?
-             OR CAST(p.latitude AS TEXT) LIKE ?
-             OR CAST(p.longitude AS TEXT) LIKE ?
-           )
+           AND {}
          ORDER BY p.created_at DESC
-         LIMIT ?",
-    )
-    .bind(&auth.user_id)
-    .bind(&like_pattern)       // tag
-    .bind(&like_pattern)       // filename
-    .bind(&like_pattern)       // file_path (folder names)
-    .bind(&like_pattern)       // media_type (photo/video/gif)
-    .bind(&like_pattern)       // taken_at
-    .bind(&like_pattern)       // created_at
-    .bind(&like_pattern)       // latitude
-    .bind(&like_pattern)       // longitude
-    .bind(limit)
-    .fetch_all(&state.pool)
-    .await?;
+         LIMIT {}",
+        where_clauses.join(" AND "),
+        limit
+    );
+
+    // Build the query with dynamic bindings
+    let mut q = sqlx::query_as::<_, SearchRow>(&sql);
+    for val in &bind_values {
+        q = q.bind(val);
+    }
+
+    let rows: Vec<SearchRow> = q.fetch_all(&state.pool).await?;
 
     // Gather tags for each result
     let mut results = Vec::with_capacity(rows.len());

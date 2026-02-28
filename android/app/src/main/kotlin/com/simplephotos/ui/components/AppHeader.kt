@@ -47,7 +47,9 @@ data class HeaderNavigation(
     val onSearchClick: () -> Unit = {},
     val onTrashClick: () -> Unit = {},
     val onSettingsClick: () -> Unit = {},
+    val onSecureGalleryClick: () -> Unit = {},
     val onLogout: () -> Unit = {},
+    val onToggleTheme: () -> Unit = {},
 )
 
 /**
@@ -176,14 +178,23 @@ fun AppHeader(
                 // ── Sync indicator (hidden on mobile, matching web's hidden sm:inline) ──
                 // On mobile the web hides the text label; we just skip it.
 
-                // ── Avatar + Dropdown ────────────────────────────────
+                // ── Separator + Avatar + Dropdown ─────────────────────
+                // Vertical divider matching web's border-l border-white/10
+                Box(
+                    Modifier
+                        .padding(horizontal = 4.dp)
+                        .height(24.dp)
+                        .width(1.dp)
+                        .background(borderColor)
+                )
                 UserMenu(
                     username = username,
                     isSyncing = isSyncing,
                     inactiveTextColor = inactiveTextColor,
-                    onAlbumsClick = navigation.onAlbumsClick,
+                    onSecureGalleryClick = navigation.onSecureGalleryClick,
                     onSettingsClick = navigation.onSettingsClick,
-                    onLogout = navigation.onLogout
+                    onLogout = navigation.onLogout,
+                    onToggleTheme = navigation.onToggleTheme
                 )
             }
             // Bottom border
@@ -260,9 +271,10 @@ private fun UserMenu(
     username: String,
     isSyncing: Boolean,
     inactiveTextColor: Color,
-    onAlbumsClick: () -> Unit,
+    onSecureGalleryClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onLogout: () -> Unit,
+    onToggleTheme: () -> Unit = {},
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -325,19 +337,24 @@ private fun UserMenu(
             }
         }
 
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            offset = DpOffset(0.dp, 4.dp)
+        // Override MaterialTheme shapes.extraSmall to apply rounded corners
+        // to the dropdown menu popup (Material3 DropdownMenu uses extraSmall shape)
+        MaterialTheme(
+            shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(16.dp))
         ) {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                offset = DpOffset(0.dp, 4.dp)
+            ) {
             DropdownMenuItem(
                 text = { Text("Secure Albums") },
                 onClick = {
                     expanded = false
-                    onAlbumsClick()
+                    onSecureGalleryClick()
                 },
                 leadingIcon = {
-                    Icon(painter = painterResource(R.drawable.ic_lock), contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(painter = painterResource(R.drawable.ic_locks), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
             DropdownMenuItem(
@@ -348,6 +365,25 @@ private fun UserMenu(
                 },
                 leadingIcon = {
                     Icon(painter = painterResource(R.drawable.ic_gear), contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+            )
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = {
+                    val isDark = ThemeState.mode == "dark"
+                    Text(if (isDark) "Light Mode" else "Dark Mode")
+                },
+                onClick = {
+                    expanded = false
+                    onToggleTheme()
+                },
+                leadingIcon = {
+                    val isDark = ThemeState.mode == "dark"
+                    Icon(
+                        painter = painterResource(if (isDark) R.drawable.ic_sun else R.drawable.ic_night),
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             )
             HorizontalDivider()
@@ -369,5 +405,6 @@ private fun UserMenu(
                 }
             )
         }
+        } // end MaterialTheme shapes override
     }
 }

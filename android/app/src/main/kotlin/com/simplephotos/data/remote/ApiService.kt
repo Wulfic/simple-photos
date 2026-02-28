@@ -168,6 +168,34 @@ interface ApiService {
     @PUT("api/photos/{id}/crop")
     suspend fun setCrop(@Path("id") photoId: String, @Body request: SetCropRequest): CropResponse
 
+    // ── Secure Galleries ──────────────────────────────────────────────────
+    @GET("api/galleries/secure")
+    suspend fun listSecureGalleries(): SecureGalleryListResponse
+
+    @POST("api/galleries/secure")
+    suspend fun createSecureGallery(@Body request: SecureGalleryCreateRequest): SecureGalleryCreateResponse
+
+    @DELETE("api/galleries/secure/{id}")
+    suspend fun deleteSecureGallery(@Path("id") galleryId: String): retrofit2.Response<Unit>
+
+    @POST("api/galleries/secure/unlock")
+    suspend fun unlockSecureGalleries(@Body request: SecureGalleryUnlockRequest): SecureGalleryUnlockResponse
+
+    @GET("api/galleries/secure/{id}/items")
+    suspend fun listSecureGalleryItems(
+        @Path("id") galleryId: String,
+        @Header("X-Gallery-Token") galleryToken: String
+    ): SecureGalleryItemsResponse
+
+    @POST("api/galleries/secure/{id}/items")
+    suspend fun addSecureGalleryItem(
+        @Path("id") galleryId: String,
+        @Body request: SecureGalleryAddItemRequest
+    ): SecureGalleryAddItemResponse
+
+    @GET("api/galleries/secure/blob-ids")
+    suspend fun getSecureBlobIds(): SecureBlobIdsResponse
+
     // ── Client Diagnostic Logs ───────────────────────────────────────────
     @POST("api/client-logs")
     suspend fun submitClientLogs(@Body batch: ClientLogBatch): Map<String, Any>

@@ -5,9 +5,11 @@ mod blobs;
 mod client_logs;
 mod config;
 mod db;
+mod diagnostics;
 mod downloads;
 mod error;
 mod health;
+mod import;
 mod media;
 mod photos;
 mod ratelimit;
@@ -63,8 +65,14 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("Please set a real JWT secret. Generate one with: openssl rand -hex 32");
     }
 
-    // Ensure storage directory exists (network mounts should already be present)
+    // Ensure storage directory tree exists (network mounts should already be present)
     tokio::fs::create_dir_all(&config.storage.root).await?;
+    // Create organized subdirectories under the storage root
+    tokio::fs::create_dir_all(config.storage.root.join("blobs")).await?;
+    tokio::fs::create_dir_all(config.storage.root.join("metadata")).await?;
+    tokio::fs::create_dir_all(config.storage.root.join("logs/server")).await?;
+    tokio::fs::create_dir_all(config.storage.root.join("logs/app")).await?;
+    tracing::info!("Storage subdirectories initialized: blobs/, metadata/, logs/server/, logs/app/");
 
     let pool = db::init_pool(&config.database).await?;
 
@@ -156,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
         let pool_clone = pool.clone();
         let storage_root_clone = config.storage.root.clone();
         tokio::spawn(async move {
-            backup::handlers::background_sync_task(pool_clone, storage_root_clone).await;
+            backup::sync::background_sync_task(pool_clone, storage_root_clone).await;
         });
     }
 
@@ -166,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
         let storage_root_clone = config.storage.root.clone();
         let scan_interval = config.scan.auto_scan_interval_secs;
         tokio::spawn(async move {
-            backup::handlers::background_auto_scan_task(pool_clone, storage_root_clone, scan_interval).await;
+            backup::autoscan::background_auto_scan_task(pool_clone, storage_root_clone, scan_interval).await;
         });
     }
 
@@ -192,6 +200,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/setup/init", post(setup::handlers::init))
         .route("/setup/pair", post(setup::handlers::pair))
         .route("/setup/discover", get(setup::handlers::discover))
+        .route("/setup/verify-backup", post(setup::handlers::verify_backup))
         // Auth
         .route("/auth/register", post(auth::handlers::register))
         .route("/auth/login", post(auth::handlers::login))
@@ -233,6 +242,14 @@ async fn main() -> anyhow::Result<()> {
         // Server-side import — scan directories and serve raw files for client-side encryption
         .route("/admin/import/scan", get(setup::import::import_scan))
         .route("/admin/import/file", get(setup::import::import_file))
+        // Google Photos import — metadata parsing, Takeout directory scanning & import
+        .route("/import/metadata", post(import::handlers::import_metadata))
+        .route("/import/metadata/batch", post(import::handlers::batch_import_metadata))
+        .route("/import/metadata/upload", post(import::handlers::upload_sidecar))
+        .route("/admin/import/google-photos/scan", get(import::takeout::scan_takeout))
+        .route("/admin/import/google-photos", post(import::takeout::import_takeout))
+        .route("/photos/{id}/metadata", get(import::handlers::get_photo_metadata))
+        .route("/photos/{id}/metadata", delete(import::handlers::delete_photo_metadata))
         // Plain-mode photos — list, serve, register, thumbnail
         .route("/photos", get(photos::handlers::list_photos))
         .route("/photos/register", post(photos::handlers::register_photo))
@@ -246,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
         // Delete now soft-deletes to trash (30-day retention)
         .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Plain-mode scan & register all files on disk
-        .route("/admin/photos/scan", post(photos::handlers::scan_and_register))
+        .route("/admin/photos/scan", post(photos::scan::scan_and_register))
         // Encryption settings
         .route("/settings/encryption", get(photos::encryption::get_encryption_settings))
         .route("/admin/encryption", put(photos::encryption::set_encryption_mode))
@@ -277,14 +294,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/backup/servers/{id}", delete(backup::handlers::remove_backup_server))
         .route("/admin/backup/servers/{id}/status", get(backup::handlers::check_backup_server_status))
         .route("/admin/backup/servers/{id}/logs", get(backup::handlers::get_sync_logs))
-        .route("/admin/backup/servers/{id}/sync", post(backup::handlers::trigger_sync))
+        .route("/admin/backup/servers/{id}/sync", post(backup::sync::trigger_sync))
         .route("/admin/backup/servers/{id}/recover", post(backup::recovery::recover_from_backup))
         .route("/admin/backup/servers/{id}/photos", get(backup::recovery::proxy_backup_photos))
         .route("/admin/backup/discover", get(backup::handlers::discover_servers))
         .route("/admin/backup/mode", get(backup::handlers::get_backup_mode))
         .route("/admin/backup/mode", post(backup::handlers::set_backup_mode))
         // Auto-scan trigger — called when web UI opens
-        .route("/admin/photos/auto-scan", post(backup::handlers::trigger_auto_scan))
+        .route("/admin/photos/auto-scan", post(backup::autoscan::trigger_auto_scan))
         // Backup serve — API-key authenticated, for server-to-server recovery
         .route("/backup/list", get(backup::serve::backup_list_photos))
         .route("/backup/receive", post(backup::serve::backup_receive))
@@ -309,7 +326,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/search", get(tags::handlers::search_photos))
         // Client diagnostic logs — mobile clients submit backup debug logs
         .route("/client-logs", post(client_logs::handlers::submit_logs))
-        .route("/admin/client-logs", get(client_logs::handlers::list_logs));
+        .route("/admin/client-logs", get(client_logs::handlers::list_logs))
+        // Diagnostics — admin-only server metrics & audit log viewer
+        .route("/admin/diagnostics", get(diagnostics::handlers::get_diagnostics))
+        .route("/admin/audit-logs", get(diagnostics::handlers::list_audit_logs));
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))

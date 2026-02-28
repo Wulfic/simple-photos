@@ -55,12 +55,23 @@ export default function AppHeader({
 }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const { username, refreshToken, logout: storeLogout } = useAuthStore();
+  const { username, refreshToken, logout: storeLogout, accessToken } = useAuthStore();
   const { theme, toggle: toggleTheme } = useThemeStore();
   const { backupServers, loaded: backupLoaded, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
   const { isProcessing, activeLabel } = useProcessingStore();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Check admin status from JWT
+  const isAdmin = (() => {
+    if (!accessToken) return false;
+    try {
+      const payload = JSON.parse(atob(accessToken.split(".")[1]));
+      return payload.role === "admin";
+    } catch {
+      return false;
+    }
+  })();
 
   // Load backup servers on mount (only once)
   useEffect(() => {
@@ -97,7 +108,7 @@ export default function AppHeader({
   }
 
   return (
-    <header className="sticky top-0 z-50 bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-white/10 shadow-lg shadow-black/20">
+    <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm dark:bg-gradient-to-r dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 dark:border-white/10 dark:shadow-lg dark:shadow-black/20">
       <div className="max-w-screen-2xl mx-auto px-4 h-14 flex items-center gap-4 min-w-0">
         {/* ── Logo + Brand ────────────────────────────────────────────── */}
         <button
@@ -109,7 +120,7 @@ export default function AppHeader({
             alt="Simple Photos"
             className="w-8 h-8 rounded-md shadow-sm group-hover:shadow-md transition-shadow"
           />
-          <span className="text-white font-semibold text-lg tracking-tight hidden sm:inline">
+          <span className="text-gray-900 dark:text-white font-semibold text-lg tracking-tight hidden sm:inline">
             Simple Photos
           </span>
         </button>
@@ -130,8 +141,8 @@ export default function AppHeader({
                   transition-all duration-200
                   ${
                     isActive
-                      ? "bg-white/15 text-white shadow-inner"
-                      : "text-gray-400 hover:text-white hover:bg-white/10"
+                      ? "bg-gray-200 text-gray-900 dark:bg-white/15 dark:text-white shadow-inner"
+                      : "text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-white/10"
                   }
                 `}
               >
@@ -149,38 +160,24 @@ export default function AppHeader({
         {/* ── Spacer ──────────────────────────────────────────────────── */}
         <div className="flex-1" />
 
-        {/* ── Theme toggle ────────────────────────────────────────────── */}
-        <button
-          onClick={toggleTheme}
-          className="p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
-          title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
-        >
-          {theme === "light" ? (
-            <AppIcon name="night" size="w-5 h-5" />
-          ) : (
-            <AppIcon name="sun" size="w-5 h-5" />
-          )}
-        </button>
-
         {/* ── Activity indicator + User dropdown ──────────────────────── */}
         {username && (
-          <div className="flex items-center gap-2 border-l border-white/10 pl-2 sm:pl-4 ml-1 sm:ml-2 mr-1 shrink-0">
+          <div className="flex items-center gap-2 border-l border-gray-200 dark:border-white/10 pl-2 sm:pl-4 ml-1 sm:ml-2 mr-1 shrink-0">
             {/* Activity label when processing */}
             {isProcessing && activeLabel && (
-              <span className="text-xs text-blue-300 font-medium animate-pulse whitespace-nowrap hidden sm:inline">
+              <span className="text-xs text-blue-600 dark:text-blue-300 font-medium animate-pulse whitespace-nowrap hidden sm:inline">
                 {activeLabel}…
               </span>
             )}
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen((v) => !v)}
-                className="flex items-center gap-2 text-gray-400 hover:text-white text-xs transition-colors"
+                className="flex items-center gap-2 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white text-xs transition-colors"
               >
                 <div className={`w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold uppercase shrink-0${isProcessing ? " processing-ring" : ""}`}>
                   {username.charAt(0)}
                 </div>
                 <span className="hidden sm:inline truncate">{username}</span>
-                <AppIcon name="arrow" size="w-3 h-3" className={`transition-transform shrink-0 ${dropdownOpen ? "rotate-180" : ""}`} />
               </button>
 
               {dropdownOpen && (
@@ -189,7 +186,7 @@ export default function AppHeader({
                     onClick={() => { navigate("/secure-gallery"); setDropdownOpen(false); }}
                     className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
                   >
-                    <AppIcon name="lock" />
+                    <AppIcon name="locks" />
                     Secure Albums
                   </button>
                   <button
@@ -199,12 +196,32 @@ export default function AppHeader({
                     <AppIcon name="gear" />
                     Settings
                   </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => { navigate("/diagnostics"); setDropdownOpen(false); }}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                    >
+                      <AppIcon name="shield" />
+                      Diagnostics
+                    </button>
+                  )}
+                  <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+                  <button
+                    onClick={() => { toggleTheme(); setDropdownOpen(false); }}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                  >
+                    {theme === "light" ? (
+                      <AppIcon name="night" />
+                    ) : (
+                      <AppIcon name="sun" />
+                    )}
+                    {theme === "light" ? "Dark Mode" : "Light Mode"}
+                  </button>
                   <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                   <button
                     onClick={() => { handleLogout(); setDropdownOpen(false); }}
                     className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center gap-2 transition-colors"
                   >
-                    <AppIcon name="right-arrow" />
                     Sign Out
                   </button>
                 </div>
