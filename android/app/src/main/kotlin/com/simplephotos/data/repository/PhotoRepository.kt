@@ -35,6 +35,11 @@ class PhotoRepository @Inject constructor(
     /** Cached encryption mode — refreshed on each sync. */
     private var cachedEncryptionMode: String? = null
 
+    /** Short content-based hash: first 12 hex chars of SHA-256.
+     *  Deterministic fingerprint for cross-platform alignment. */
+    private fun computeContentHash(data: ByteArray): String =
+        crypto.sha256Hex(data).take(12)
+
     fun getAllPhotos(): Flow<List<PhotoEntity>> = db.photoDao().getAllPhotos()
 
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
@@ -163,10 +168,12 @@ class PhotoRepository @Inject constructor(
 
             val encryptedPhoto = crypto.encrypt(mediaPayload.toByteArray())
             val photoHash = crypto.sha256Hex(encryptedPhoto)
+            // Content hash: short hash of original raw bytes for cross-platform alignment
+            val contentHash = computeContentHash(photoData)
             val photoBody = encryptedPhoto.toRequestBody("application/octet-stream".toMediaType())
 
-            android.util.Log.d("PhotoRepository", "uploadPhoto: uploading media blob (${encryptedPhoto.size} bytes, type=$mediaBlobType)")
-            val photoRes = api.uploadBlob(photoBody, mediaBlobType, encryptedPhoto.size.toString(), photoHash)
+            android.util.Log.d("PhotoRepository", "uploadPhoto: uploading media blob (${encryptedPhoto.size} bytes, type=$mediaBlobType, contentHash=$contentHash)")
+            val photoRes = api.uploadBlob(photoBody, mediaBlobType, encryptedPhoto.size.toString(), photoHash, contentHash)
             android.util.Log.d("PhotoRepository", "uploadPhoto: media uploaded, blobId=${photoRes.blobId}")
 
             db.photoDao().markSynced(photo.localId, photoRes.blobId, thumbRes.blobId)
@@ -297,7 +304,8 @@ class PhotoRepository @Inject constructor(
                     syncStatus = SyncStatus.SYNCED,
                     isFavorite = photo.isFavorite,
                     cropMetadata = photo.cropMetadata,
-                    cameraModel = photo.cameraModel
+                    cameraModel = photo.cameraModel,
+                    photoHash = photo.photoHash
                 )
                 db.photoDao().insert(entity)
                 imported++
@@ -387,8 +395,8 @@ class PhotoRepository @Inject constructor(
                     }
                 }
 
-                after = if (listResult.blobs.isNotEmpty()) listResult.blobs.last().id else null
-            } while (listResult.blobs.size == 200)
+                after = listResult.nextCursor
+            } while (listResult.nextCursor != null)
         }
 
         return imported

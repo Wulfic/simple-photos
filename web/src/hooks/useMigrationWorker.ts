@@ -113,11 +113,13 @@ export function useMigrationWorker(
               console.log(`[Migration]   Encrypted: ${encPhoto.byteLength} bytes in ${Date.now() - encStart}ms`);
 
               const photoHash = await sha256Hex(new Uint8Array(encPhoto));
+              // Content hash: short hash of original raw bytes for cross-platform alignment
+              const contentHash = (await sha256Hex(new Uint8Array(fileData))).substring(0, 12);
 
               // Step 4: Upload encrypted blob
               const uploadStart = Date.now();
               console.log(`[Migration]   Uploading encrypted photo (${encPhoto.byteLength} bytes, type=${serverBlobType}, hash=${photoHash.substring(0, 12)}...)...`);
-              const uploadResult = await api.blobs.upload(encPhoto, serverBlobType, photoHash);
+              const uploadResult = await api.blobs.upload(encPhoto, serverBlobType, photoHash, contentHash);
               console.log(`[Migration]   Upload complete in ${Date.now() - uploadStart}ms (total: ${Date.now() - stepStart}ms)`);
 
               // Step 5: Link the blob to the plain photo so it won't be re-migrated

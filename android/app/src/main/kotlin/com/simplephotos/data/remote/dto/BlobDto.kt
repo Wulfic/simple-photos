@@ -18,5 +18,6 @@ data class BlobRecord(
     @SerializedName("blob_type") val blobType: String,
     @SerializedName("size_bytes") val sizeBytes: Long,
     @SerializedName("client_hash") val clientHash: String?,
-    @SerializedName("upload_time") val uploadTime: String
+    @SerializedName("upload_time") val uploadTime: String,
+    @SerializedName("content_hash") val contentHash: String? = null
 )

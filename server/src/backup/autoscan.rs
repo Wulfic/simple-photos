@@ -1,12 +1,19 @@
 use axum::extract::State;
 use axum::Json;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
 use crate::state::AppState;
+
+/// Compute short content-based hash: first 12 hex chars of SHA-256.
+fn compute_photo_hash(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    hex::encode(&digest[..6])
+}
 
 /// Background task: automatically scan the storage directory for new files
 /// every 24 hours (or when triggered by an API call).
@@ -169,10 +176,16 @@ async fn run_auto_scan(
                     let now = Utc::now().to_rfc3339();
                     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
+                    // Compute content-based hash for cross-platform alignment
+                    let photo_hash = match tokio::fs::read(&abs_path).await {
+                        Ok(bytes) => Some(compute_photo_hash(&bytes)),
+                        Err(_) => None,
+                    };
+
                     let _ = sqlx::query(
                         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                         size_bytes, width, height, taken_at, thumb_path, created_at) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)",
+                         size_bytes, width, height, taken_at, thumb_path, created_at, photo_hash) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)",
                     )
                     .bind(&photo_id)
                     .bind(&admin_id)
@@ -184,6 +197,7 @@ async fn run_auto_scan(
                     .bind(&modified)
                     .bind(&thumb_rel)
                     .bind(&now)
+                    .bind(&photo_hash)
                     .execute(pool)
                     .await;
 

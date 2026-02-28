@@ -386,7 +386,9 @@ export default function Import() {
 
     const encPhoto = await encrypt(new TextEncoder().encode(photoPayload));
     const photoHash = await sha256Hex(new Uint8Array(encPhoto));
-    const res = await api.blobs.upload(encPhoto, serverBlobType, photoHash);
+    // Content hash: short hash of original raw bytes for cross-platform alignment
+    const contentHash = (await sha256Hex(new Uint8Array(data))).substring(0, 12);
+    const res = await api.blobs.upload(encPhoto, serverBlobType, photoHash, contentHash);
 
     await db.photos.put({
       blobId: res.blob_id,
@@ -402,6 +404,7 @@ export default function Import() {
       longitude,
       albumIds: [],
       thumbnailData,
+      contentHash,
     });
   }
 

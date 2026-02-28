@@ -1,6 +1,7 @@
 use axum::extract::State;
 use axum::Json;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -9,6 +10,12 @@ use crate::media::{is_media_file, mime_from_extension};
 use crate::state::AppState;
 
 use super::metadata::extract_media_metadata;
+
+/// Compute short content-based hash: first 12 hex chars of SHA-256.
+fn compute_photo_hash(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    hex::encode(&digest[..6])
+}
 
 /// POST /api/admin/photos/scan
 /// Scan the storage directory and register all unregistered media files as plain photos.
@@ -98,10 +105,16 @@ pub async fn scan_and_register(
                     // Use EXIF taken_at if available, otherwise fall back to file modified time
                     let final_taken_at = exif_taken.or(modified);
 
+                    // Compute content-based hash for cross-platform alignment
+                    let photo_hash = match tokio::fs::read(&abs_path).await {
+                        Ok(bytes) => Some(compute_photo_hash(&bytes)),
+                        Err(_) => None,
+                    };
+
                     sqlx::query(
                         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(&photo_id)
                     .bind(&auth.user_id)
@@ -118,6 +131,7 @@ pub async fn scan_and_register(
                     .bind(&cam_model)
                     .bind(&thumb_rel)
                     .bind(&now)
+                    .bind(&photo_hash)
                     .execute(&state.pool)
                     .await?;
 
@@ -130,9 +144,9 @@ pub async fn scan_and_register(
     tracing::info!("Scan complete: registered {} new photos", new_count);
 
     // ── Retroactively fill missing metadata for existing photos ──────────
-    // Fix photos with 0×0 dimensions or missing camera_model/GPS
+    // Fix photos with 0×0 dimensions or missing camera_model/GPS/photo_hash
     let photos_needing_fix: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, file_path FROM photos WHERE user_id = ? AND (width = 0 OR height = 0 OR camera_model IS NULL)",
+        "SELECT id, file_path FROM photos WHERE user_id = ? AND (width = 0 OR height = 0 OR camera_model IS NULL OR photo_hash IS NULL)",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
@@ -146,14 +160,22 @@ pub async fn scan_and_register(
             continue;
         }
         let (w, h, cam, lat, lon, taken) = extract_media_metadata(&abs);
-        if w > 0 || h > 0 || cam.is_some() || lat.is_some() {
+
+        // Compute content hash if missing
+        let file_hash = match tokio::fs::read(&abs).await {
+            Ok(bytes) => Some(compute_photo_hash(&bytes)),
+            Err(_) => None,
+        };
+
+        if w > 0 || h > 0 || cam.is_some() || lat.is_some() || file_hash.is_some() {
             sqlx::query(
                 "UPDATE photos SET width = CASE WHEN width = 0 THEN ? ELSE width END, \
                  height = CASE WHEN height = 0 THEN ? ELSE height END, \
                  camera_model = COALESCE(camera_model, ?), \
                  latitude = COALESCE(latitude, ?), \
                  longitude = COALESCE(longitude, ?), \
-                 taken_at = COALESCE(taken_at, ?) \
+                 taken_at = COALESCE(taken_at, ?), \
+                 photo_hash = COALESCE(photo_hash, ?) \
                  WHERE id = ?",
             )
             .bind(w)
@@ -162,6 +184,7 @@ pub async fn scan_and_register(
             .bind(lat)
             .bind(lon)
             .bind(&taken)
+            .bind(&file_hash)
             .bind(pid)
             .execute(&state.pool)
             .await

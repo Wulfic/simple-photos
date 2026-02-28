@@ -46,6 +46,13 @@ export default function Viewer() {
   const isPlainMode = location.pathname.startsWith("/photo/plain/");
   const navigate = useNavigate();
 
+  // Destructure navigation context from location.state (passed by Gallery)
+  const navState = (location.state ?? {}) as ViewerLocationState;
+  const photoIds = navState.photoIds;
+  const currentIndex = navState.currentIndex ?? 0;
+  const hasPrev = !!photoIds && currentIndex > 0;
+  const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
+
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [filename, setFilename] = useState("");
   const [mimeType, setMimeType] = useState("image/jpeg");

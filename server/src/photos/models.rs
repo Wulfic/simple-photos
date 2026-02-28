@@ -21,6 +21,7 @@ pub struct Photo {
     pub is_favorite: bool,
     pub crop_metadata: Option<String>,
     pub camera_model: Option<String>,
+    pub photo_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +49,7 @@ pub struct PhotoRecord {
     pub is_favorite: bool,
     pub crop_metadata: Option<String>,
     pub camera_model: Option<String>,
+    pub photo_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

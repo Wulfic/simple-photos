@@ -74,6 +74,14 @@ pub async fn upload(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
+    // X-Content-Hash: short hash of the ORIGINAL (pre-encryption) content.
+    // Used for cross-platform photo alignment — same original photo always
+    // produces the same content_hash regardless of encryption nonce.
+    let content_hash = headers
+        .get("x-content-hash")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let size = body.len() as i64;
 
     if size == 0 {
@@ -134,8 +142,8 @@ pub async fn upload(
         storage::write_blob(&storage_root, &auth.user_id, &blob_id, &body).await?;
 
     sqlx::query(
-        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&blob_id)
     .bind(&auth.user_id)
@@ -144,6 +152,7 @@ pub async fn upload(
     .bind(&client_hash)
     .bind(&now)
     .bind(&storage_path)
+    .bind(&content_hash)
     .execute(&state.pool)
     .await?;
 
@@ -197,7 +206,7 @@ pub async fn list(
 
         if let Some(ref after) = params.after {
             sqlx::query_as::<_, BlobRecord>(
-                "SELECT id, blob_type, size_bytes, client_hash, upload_time FROM blobs \
+                "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
                  WHERE user_id = ? AND blob_type = ? AND upload_time > ? \
                  ORDER BY upload_time ASC LIMIT ?",
             )
@@ -209,7 +218,7 @@ pub async fn list(
             .await?
         } else {
             sqlx::query_as::<_, BlobRecord>(
-                "SELECT id, blob_type, size_bytes, client_hash, upload_time FROM blobs \
+                "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
                  WHERE user_id = ? AND blob_type = ? \
                  ORDER BY upload_time ASC LIMIT ?",
             )
@@ -221,7 +230,7 @@ pub async fn list(
         }
     } else if let Some(ref after) = params.after {
         sqlx::query_as::<_, BlobRecord>(
-            "SELECT id, blob_type, size_bytes, client_hash, upload_time FROM blobs \
+            "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
              WHERE user_id = ? AND upload_time > ? \
              ORDER BY upload_time ASC LIMIT ?",
         )
@@ -232,7 +241,7 @@ pub async fn list(
         .await?
     } else {
         sqlx::query_as::<_, BlobRecord>(
-            "SELECT id, blob_type, size_bytes, client_hash, upload_time FROM blobs \
+            "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
              WHERE user_id = ? \
              ORDER BY upload_time ASC LIMIT ?",
         )
