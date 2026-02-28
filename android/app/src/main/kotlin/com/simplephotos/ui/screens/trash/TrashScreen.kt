@@ -39,6 +39,7 @@ import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.HeaderNavigation
+import com.simplephotos.ui.theme.ThemeState
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -196,6 +197,7 @@ fun TrashScreen(
     onAlbumsClick: () -> Unit,
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onSecureGalleryClick: () -> Unit = {},
     onLogout: () -> Unit,
     viewModel: TrashViewModel = hiltViewModel()
 ) {
@@ -213,7 +215,9 @@ fun TrashScreen(
                     onSearchClick = onSearchClick,
                     onTrashClick = { /* already on trash */ },
                     onSettingsClick = onSettingsClick,
-                    onLogout = { viewModel.logout(onLogout) }
+                    onSecureGalleryClick = onSecureGalleryClick,
+                    onLogout = { viewModel.logout(onLogout) },
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore) }
                 )
             )
         }
@@ -223,83 +227,71 @@ fun TrashScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            // ── Header / Selection bar ──────────────────────────────
-            if (viewModel.isSelectionMode) {
-                // Selection action bar
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shadowElevation = 2.dp
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+            // ── Header ──────────────────────────────────────────────
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                // Title & subtitle
+                Text(
+                    "Trash",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                if (viewModel.items.isNotEmpty()) {
+                    Text(
+                        "${viewModel.items.size} item${if (viewModel.items.size != 1) "s" else ""} · ${formatBytes(totalSize)} · Deleted after 30 days",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+
+                // Action buttons — stacked below the header
+                if (viewModel.items.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = { showEmptyConfirm = true },
+                        enabled = viewModel.actionLoading == null
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { viewModel.clearSelection() }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "${viewModel.selectedIds.size} selected",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = { viewModel.restoreSelected() },
-                                enabled = viewModel.actionLoading == null && viewModel.selectedIds.isNotEmpty()
-                            ) {
-                                Icon(painter = painterResource(R.drawable.ic_reload), contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Restore", fontSize = 13.sp)
-                            }
-                            Button(
-                                onClick = { viewModel.deleteSelected() },
-                                enabled = viewModel.actionLoading == null && viewModel.selectedIds.isNotEmpty()
-                            ) {
-                                Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Delete", fontSize = 13.sp)
-                            }
-                        }
+                        Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Empty Trash", fontSize = 13.sp)
                     }
                 }
-            } else {
-                // Normal header
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Trash",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (viewModel.items.isNotEmpty()) {
-                            Text(
-                                "${viewModel.items.size} item${if (viewModel.items.size != 1) "s" else ""} · ${formatBytes(totalSize)} · Deleted after 30 days",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                    }
 
-                    if (viewModel.items.isNotEmpty()) {
+                // Selection-mode buttons below empty trash
+                if (viewModel.isSelectionMode && viewModel.selectedIds.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        IconButton(onClick = { viewModel.clearSelection() }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel", modifier = Modifier.size(20.dp))
+                        }
+                        Text(
+                            "${viewModel.selectedIds.size} selected",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(Modifier.weight(1f))
                         OutlinedButton(
-                            onClick = { showEmptyConfirm = true },
+                            onClick = { viewModel.restoreSelected() },
                             enabled = viewModel.actionLoading == null
                         ) {
-                            Text("Empty Trash", fontSize = 13.sp)
+                            Icon(painter = painterResource(R.drawable.ic_reload), contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Restore", fontSize = 13.sp)
+                        }
+                        Button(
+                            onClick = { viewModel.deleteSelected() },
+                            enabled = viewModel.actionLoading == null
+                        ) {
+                            Icon(painter = painterResource(R.drawable.ic_trashcan), contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Delete", fontSize = 13.sp)
                         }
                     }
                 }

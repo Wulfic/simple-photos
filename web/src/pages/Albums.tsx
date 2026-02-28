@@ -229,21 +229,7 @@ export default function Albums() {
           </p>
         )}
         {albums?.map((album) => (
-          <div
-            key={album.albumId}
-            onClick={() => navigate(`/albums/${album.albumId}`)}
-            className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
-          >
-            <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-2 flex items-center justify-center">
-              <span className="text-gray-400 text-3xl">
-                {album.photoBlobIds.length}
-              </span>
-            </div>
-            <p className="font-medium truncate">{album.name}</p>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              {album.photoBlobIds.length} items
-            </p>
-          </div>
+          <AlbumCard key={album.albumId} album={album} onClick={() => navigate(`/albums/${album.albumId}`)} />
         ))}
       </div>
 
@@ -364,6 +350,60 @@ export default function Albums() {
         </div>
       </div>
       </main>
+    </div>
+  );
+}
+
+// ── Album Card with cover thumbnail ──────────────────────────────────────────
+
+function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void }) {
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (album.photoBlobIds.length === 0) return;
+
+    // Use the first photo in the album as the cover
+    const firstBlobId = album.photoBlobIds[0];
+
+    (async () => {
+      // Try to load thumbnail from local IndexedDB first (encrypted mode)
+      const localPhoto = await db.photos.get(firstBlobId);
+      if (cancelled) return;
+      if (localPhoto?.thumbnailData) {
+        const blob = new Blob([localPhoto.thumbnailData], { type: "image/jpeg" });
+        setThumbUrl(URL.createObjectURL(blob));
+        return;
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [album.photoBlobIds]);
+
+  useEffect(() => {
+    return () => {
+      if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+    };
+  }, [thumbUrl]);
+
+  return (
+    <div
+      onClick={onClick}
+      className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+    >
+      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-2 flex items-center justify-center overflow-hidden">
+        {thumbUrl ? (
+          <img src={thumbUrl} alt={album.name} className="w-full h-full object-cover" />
+        ) : (
+          <span className="text-gray-400 text-3xl">
+            {album.photoBlobIds.length}
+          </span>
+        )}
+      </div>
+      <p className="font-medium truncate">{album.name}</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        {album.photoBlobIds.length} items
+      </p>
     </div>
   );
 }

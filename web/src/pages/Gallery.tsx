@@ -9,33 +9,19 @@ import {
   mediaTypeFromMime,
   ACCEPTED_MIME_TYPES,
 } from "../db";
+import { createFallbackThumbnail, arrayBufferToBase64, base64ToArrayBuffer, generateMigrationThumbnail } from "../utils/media";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useAuthStore } from "../store/auth";
 import { useProcessingStore } from "../store/processing";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import { type PlainPhoto, generateThumbnail, getImageDimensions, fetchAllPages } from "../utils/gallery";
+import MediaTile from "../components/gallery/MediaTile";
+import PlainMediaTile from "../components/gallery/PlainMediaTile";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type EncryptionMode = "plain" | "encrypted";
-
-/** A plain-mode photo from the server. */
-interface PlainPhoto {
-  id: string;
-  filename: string;
-  file_path: string;
-  mime_type: string;
-  media_type: string;
-  size_bytes: number;
-  width: number;
-  height: number;
-  duration_secs: number | null;
-  taken_at: string | null;
-  thumb_path: string | null;
-  created_at: string;
-  is_favorite: boolean;
-  crop_metadata: string | null;
-}
 
 /** Default album filter types for organizing photos */
 type AlbumFilter = "all" | "favorites" | "photos" | "gifs" | "videos";
@@ -66,213 +52,6 @@ interface ThumbnailPayload {
   data: string; // base64 JPEG
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Generate a JPEG thumbnail from any image or video file. */
-async function generateThumbnail(file: File, size: number): Promise<ArrayBuffer> {
-  if (file.type.startsWith("video/")) {
-    return generateVideoThumbnail(file, size);
-  }
-  return generateImageThumbnail(file, size);
-}
-
-function generateImageThumbnail(file: File, size: number): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext("2d")!;
-      // Cover-crop: fill the square
-      const scale = Math.max(size / img.width, size / img.height);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
-      canvas.toBlob(
-        (blob) => (blob ? blob.arrayBuffer().then(resolve) : reject(new Error("Canvas toBlob failed"))),
-        "image/jpeg",
-        0.8
-      );
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Image load failed")); };
-    img.src = url;
-  });
-}
-
-/** Seek to 10 % of video duration and capture a frame. */
-function generateVideoThumbnail(file: File, size: number): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    const url = URL.createObjectURL(file);
-
-    video.onloadedmetadata = () => {
-      // Seek to 10 % of the video (at least 1 s in)
-      video.currentTime = Math.min(Math.max(video.duration * 0.1, 1), video.duration);
-    };
-
-    video.onseeked = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext("2d")!;
-      const scale = Math.max(size / video.videoWidth, size / video.videoHeight);
-      const w = video.videoWidth * scale;
-      const h = video.videoHeight * scale;
-      ctx.drawImage(video, (size - w) / 2, (size - h) / 2, w, h);
-      canvas.toBlob(
-        (blob) => (blob ? blob.arrayBuffer().then(resolve) : reject(new Error("Canvas toBlob failed"))),
-        "image/jpeg",
-        0.8
-      );
-    };
-
-    video.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Video load failed")); };
-    video.src = url;
-  });
-}
-
-function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
-  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  const CHUNK = 8192;
-  const parts: string[] = [];
-  for (let i = 0; i < bytes.byteLength; i += CHUNK) {
-    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.byteLength));
-    parts.push(String.fromCharCode(...slice));
-  }
-  return btoa(parts.join(""));
-}
-
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
-
-/** Return a data URL to preview a thumbnail stored as ArrayBuffer. */
-function thumbnailSrc(data: ArrayBuffer): string {
-  return URL.createObjectURL(new Blob([data], { type: "image/jpeg" }));
-}
-
-/** Get the natural width/height of an image file. */
-function getImageDimensions(file: File): Promise<{ width: number; height: number }> {
-  return new Promise((resolve) => {
-    if (file.type.startsWith("video/")) {
-      const video = document.createElement("video");
-      const url = URL.createObjectURL(file);
-      video.onloadedmetadata = () => {
-        URL.revokeObjectURL(url);
-        resolve({ width: video.videoWidth, height: video.videoHeight });
-      };
-      video.onerror = () => { URL.revokeObjectURL(url); resolve({ width: 0, height: 0 }); };
-      video.src = url;
-    } else {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => { URL.revokeObjectURL(url); resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
-      img.onerror = () => { URL.revokeObjectURL(url); resolve({ width: 0, height: 0 }); };
-      img.src = url;
-    }
-  });
-}
-
-// ── Paginated blob fetching ───────────────────────────────────────────────────
-
-/** Fetch all pages of a given blob type from the server. */
-async function fetchAllPages(blobType: string) {
-  const allBlobs: Array<{
-    id: string;
-    blob_type: string;
-    size_bytes: number;
-    client_hash: string | null;
-    upload_time: string;
-  }> = [];
-  let cursor: string | undefined;
-  do {
-    const res = await api.blobs.list({
-      blob_type: blobType,
-      after: cursor,
-      limit: 200,
-    });
-    allBlobs.push(...res.blobs);
-    cursor = res.next_cursor ?? undefined;
-  } while (cursor);
-  return allBlobs;
-}
-
-// ── Migration helpers ─────────────────────────────────────────────────────────
-
-/** Generate a JPEG thumbnail from raw image/video bytes for migration. */
-async function generateMigrationThumbnail(
-  fileData: Uint8Array,
-  mimeType: string,
-  size: number
-): Promise<ArrayBuffer | null> {
-  const blob = new Blob([fileData as BlobPart], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  try {
-    if (mimeType.startsWith("video/")) {
-      return await new Promise<ArrayBuffer | null>((resolve) => {
-        const video = document.createElement("video");
-        video.muted = true;
-        video.playsInline = true;
-        video.onloadedmetadata = () => {
-          video.currentTime = Math.min(Math.max(video.duration * 0.1, 1), video.duration);
-        };
-        video.onseeked = () => {
-          URL.revokeObjectURL(url);
-          const canvas = document.createElement("canvas");
-          canvas.width = size;
-          canvas.height = size;
-          const ctx = canvas.getContext("2d")!;
-          const scale = Math.max(size / video.videoWidth, size / video.videoHeight);
-          const w = video.videoWidth * scale;
-          const h = video.videoHeight * scale;
-          ctx.drawImage(video, (size - w) / 2, (size - h) / 2, w, h);
-          canvas.toBlob(
-            (b) => (b ? b.arrayBuffer().then((ab) => resolve(ab)) : resolve(null)),
-            "image/jpeg",
-            0.8
-          );
-        };
-        video.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-        setTimeout(() => { URL.revokeObjectURL(url); resolve(null); }, 10_000);
-        video.src = url;
-      });
-    }
-    return await new Promise<ArrayBuffer | null>((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        const canvas = document.createElement("canvas");
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext("2d")!;
-        const scale = Math.max(size / img.naturalWidth, size / img.naturalHeight);
-        const w = img.naturalWidth * scale;
-        const h = img.naturalHeight * scale;
-        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
-        canvas.toBlob(
-          (b) => (b ? b.arrayBuffer().then((ab) => resolve(ab)) : resolve(null)),
-          "image/jpeg",
-          0.8
-        );
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-      img.src = url;
-    });
-  } catch {
-    URL.revokeObjectURL(url);
-    return null;
-  }
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Gallery() {
@@ -288,6 +67,38 @@ export default function Gallery() {
 
   // ── Album filter state ──────────────────────────────────────────────────
   const [albumFilter, setAlbumFilter] = useState<AlbumFilter>("all");
+
+  // ── Multi-select state (mobile long-press) ─────────────────────────────
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  function enterSelectionMode(id: string) {
+    setSelectionMode(true);
+    setSelectedIds(new Set([id]));
+  }
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.size === 0) setSelectionMode(false);
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }
+  async function deleteSelected() {
+    if (selectedIds.size === 0) return;
+    try {
+      for (const id of selectedIds) {
+        if (mode === "plain") await api.photos.delete(id);
+        else await api.blobs.delete(id);
+      }
+      if (mode === "plain") await loadPlainPhotos();
+    } catch { /* ignore */ }
+    clearSelection();
+  }
 
   // ── Encryption migration state ──────────────────────────────────────────
   const [migrationStatus, setMigrationStatus] = useState("idle");
@@ -614,8 +425,9 @@ export default function Gallery() {
     startTask("upload");
     setError("");
 
+    const IMAGE_VIDEO_EXTENSIONS = /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?|dng|cr2|nef|arw|orf|rw2|mp4|mov|avi|mkv|webm|m4v|3gp)$/i;
     const fileArray = Array.from(files).filter(
-      (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
+      (f) => f.type.startsWith("image/") || f.type.startsWith("video/") || IMAGE_VIDEO_EXTENSIONS.test(f.name)
     );
 
     setUploadProgress({ done: 0, total: fileArray.length });
@@ -644,7 +456,13 @@ export default function Gallery() {
     const serverBlobType = blobTypeFromMime(file.type);
 
     // Generate thumbnail (JPEG frame for videos, scaled image for photos/GIFs)
-    const thumbnailData = await generateThumbnail(file, 256);
+    let thumbnailData: ArrayBuffer;
+    try {
+      thumbnailData = await generateThumbnail(file, 256);
+    } catch {
+      console.warn(`Thumbnail generation failed for ${file.name}, using fallback`);
+      thumbnailData = await createFallbackThumbnail();
+    }
 
     // Get actual dimensions
     const dims = await getImageDimensions(file);
@@ -748,6 +566,26 @@ export default function Gallery() {
       <AppHeader />
 
       <main className="p-4">
+        {/* ── Selection mode bar ──────────────────────────────────────── */}
+        {selectionMode && (
+          <div className="flex items-center justify-between bg-gray-200 dark:bg-gray-800 rounded-lg px-4 py-2 mb-4">
+            <div className="flex items-center gap-3">
+              <button onClick={clearSelection} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white transition-colors">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{selectedIds.size} selected</span>
+            </div>
+            <button
+              onClick={deleteSelected}
+              disabled={selectedIds.size === 0}
+              className="inline-flex items-center gap-1.5 bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-500 text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              <AppIcon name="trash" size="w-4 h-4" themed={false} />
+              Delete
+            </button>
+          </div>
+        )}
+
         {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
 
         {/* Upload button — encrypted mode only */}
@@ -848,9 +686,17 @@ export default function Gallery() {
           <PlainMediaTile
             key={photo.id}
             photo={photo}
-            onClick={() => navigate(`/photo/plain/${photo.id}`, {
-              state: { photoIds: filteredPlainPhotos.map(p => p.id), currentIndex: idx },
-            })}
+            selectionMode={selectionMode}
+            isSelected={selectedIds.has(photo.id)}
+            onClick={() => {
+              if (selectionMode) toggleSelect(photo.id);
+              else navigate(`/photo/plain/${photo.id}`, {
+                state: { photoIds: filteredPlainPhotos.map(p => p.id), currentIndex: idx },
+              });
+            }}
+            onLongPress={() => {
+              if (!selectionMode) enterSelectionMode(photo.id);
+            }}
           />
         ))}
 
@@ -859,236 +705,21 @@ export default function Gallery() {
           <MediaTile
             key={photo.blobId}
             photo={photo}
-            onClick={() => navigate(`/photo/${photo.blobId}`, {
-              state: { photoIds: filteredPhotos!.map(p => p.blobId), currentIndex: idx },
-            })}
+            selectionMode={selectionMode}
+            isSelected={selectedIds.has(photo.blobId)}
+            onClick={() => {
+              if (selectionMode) toggleSelect(photo.blobId);
+              else navigate(`/photo/${photo.blobId}`, {
+                state: { photoIds: filteredPhotos!.map(p => p.blobId), currentIndex: idx },
+              });
+            }}
+            onLongPress={() => {
+              if (!selectionMode) enterSelectionMode(photo.blobId);
+            }}
           />
         ))}
       </div>
       </main>
-    </div>
-  );
-}
-
-// ── MediaTile ─────────────────────────────────────────────────────────────────
-
-interface MediaTileProps {
-  photo: CachedPhoto;
-  onClick: () => void;
-}
-
-function MediaTile({ photo, onClick }: MediaTileProps) {
-  const [src, setSrc] = useState<string | null>(null);
-  const [visible, setVisible] = useState(false);
-  const tileRef = useRef<HTMLDivElement>(null);
-
-  // Lazy-load: only create the object URL when the tile is in the viewport
-  useEffect(() => {
-    const el = tileRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "200px" }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (visible && photo.thumbnailData) {
-      const url = thumbnailSrc(photo.thumbnailData);
-      setSrc(url);
-      return () => URL.revokeObjectURL(url);
-    }
-  }, [visible, photo.thumbnailData]);
-
-  return (
-    <div
-      ref={tileRef}
-      className="relative aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group"
-      onClick={onClick}
-    >
-      {src ? (
-        <img src={src} alt={photo.filename} className="w-full h-full object-cover" loading="lazy" />
-      ) : (
-        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center">
-          {photo.filename}
-        </div>
-      )}
-
-      {/* Media type badge */}
-      {photo.mediaType === "video" && (
-        <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
-          <span>▶</span>
-          {photo.duration ? <span>{formatDuration(photo.duration)}</span> : null}
-        </div>
-      )}
-      {photo.mediaType === "gif" && (
-        <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-          GIF
-        </div>
-      )}
-    </div>
-  );
-}
-
-function formatDuration(secs: number): string {
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-// ── Thumbnail Cache ───────────────────────────────────────────────────────────
-// Uses the browser's Cache API to persistently cache thumbnails across loads.
-// Falls back to in-memory Map if Cache API is unavailable.
-
-const THUMB_CACHE_NAME = "sp-thumbnails-v1";
-const thumbMemoryCache = new Map<string, string>(); // photoId → objectURL
-
-async function getCachedThumbnail(photoId: string): Promise<string | null> {
-  // Check memory cache first (fastest)
-  const memUrl = thumbMemoryCache.get(photoId);
-  if (memUrl) return memUrl;
-
-  // Check persistent Cache API
-  try {
-    const cache = await caches.open(THUMB_CACHE_NAME);
-    const cacheKey = `/thumb-cache/${photoId}`;
-    const cached = await cache.match(cacheKey);
-    if (cached) {
-      const blob = await cached.blob();
-      const url = URL.createObjectURL(blob);
-      thumbMemoryCache.set(photoId, url);
-      return url;
-    }
-  } catch {
-    // Cache API unavailable — continue to fetch
-  }
-  return null;
-}
-
-async function cacheThumbnail(photoId: string, blob: Blob): Promise<string> {
-  const url = URL.createObjectURL(blob);
-  thumbMemoryCache.set(photoId, url);
-
-  // Persist to Cache API
-  try {
-    const cache = await caches.open(THUMB_CACHE_NAME);
-    const cacheKey = `/thumb-cache/${photoId}`;
-    const response = new Response(blob, {
-      headers: { "Content-Type": blob.type || "image/jpeg" },
-    });
-    await cache.put(cacheKey, response);
-  } catch {
-    // Cache API unavailable — memory-only cache is fine
-  }
-
-  return url;
-}
-
-// ── PlainMediaTile ────────────────────────────────────────────────────────────
-
-interface PlainMediaTileProps {
-  photo: PlainPhoto;
-  onClick: () => void;
-}
-
-function PlainMediaTile({ photo, onClick }: PlainMediaTileProps) {
-  const [visible, setVisible] = useState(false);
-  const [thumbSrc, setThumbSrc] = useState<string | null>(null);
-  const tileRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = tileRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setVisible(true);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "200px" }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // Fetch thumbnail with cache-first strategy
-  useEffect(() => {
-    if (!visible) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        // Try cache first
-        const cached = await getCachedThumbnail(photo.id);
-        if (cached && !cancelled) {
-          setThumbSrc(cached);
-          return;
-        }
-
-        // Fetch from server
-        const { accessToken } = useAuthStore.getState();
-        const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
-        if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-        const res = await fetch(api.photos.thumbUrl(photo.id), { headers });
-        if (!res.ok || cancelled) return;
-        const blob = await res.blob();
-        if (cancelled) return;
-
-        // Cache and display
-        const url = await cacheThumbnail(photo.id, blob);
-        if (!cancelled) setThumbSrc(url);
-      } catch {
-        // Thumbnail load failed — show filename instead
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [visible, photo.id]);
-
-  return (
-    <div
-      ref={tileRef}
-      className="relative aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group"
-      onClick={onClick}
-    >
-      {thumbSrc ? (
-        <img
-          src={thumbSrc}
-          alt={photo.filename}
-          className="w-full h-full object-cover"
-          loading="lazy"
-        />
-      ) : (
-        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center">
-          {photo.filename}
-        </div>
-      )}
-
-      {/* Favorite badge */}
-      {photo.is_favorite && (
-        <div className="absolute top-1 right-1 text-yellow-400 text-sm drop-shadow-lg">
-          ★
-        </div>
-      )}
-
-      {/* Media type badge */}
-      {photo.media_type === "video" && (
-        <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
-          <span>▶</span>
-          {photo.duration_secs ? <span>{formatDuration(photo.duration_secs)}</span> : null}
-        </div>
-      )}
-      {photo.media_type === "gif" && (
-        <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-          GIF
-        </div>
-      )}
     </div>
   );
 }

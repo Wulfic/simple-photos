@@ -20,6 +20,7 @@ pub struct Photo {
     pub encrypted_blob_id: Option<String>,
     pub is_favorite: bool,
     pub crop_metadata: Option<String>,
+    pub camera_model: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -46,6 +47,7 @@ pub struct PhotoRecord {
     pub created_at: String,
     pub is_favorite: bool,
     pub crop_metadata: Option<String>,
+    pub camera_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

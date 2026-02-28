@@ -296,7 +296,8 @@ class PhotoRepository @Inject constructor(
                     sizeBytes = photo.sizeBytes,
                     syncStatus = SyncStatus.SYNCED,
                     isFavorite = photo.isFavorite,
-                    cropMetadata = photo.cropMetadata
+                    cropMetadata = photo.cropMetadata,
+                    cameraModel = photo.cameraModel
                 )
                 db.photoDao().insert(entity)
                 imported++
@@ -401,6 +402,13 @@ class PhotoRepository @Inject constructor(
         val file = File(thumbnailDir, "$photoLocalId.jpg")
         file.writeBytes(thumbnailBytes)
         return file.absolutePath
+    }
+
+    /**
+     * Update crop metadata for a photo in the local database.
+     */
+    suspend fun updateCropMetadata(localId: String, cropMetadata: String?) {
+        db.photoDao().updateCropMetadata(localId, cropMetadata)
     }
 
     /**

@@ -33,6 +33,7 @@ import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.*
 import com.simplephotos.data.repository.AuthRepository
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_BIOMETRIC_ENABLED
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
@@ -72,6 +73,10 @@ class SettingsViewModel @Inject constructor(
     var diagnosticLogging by mutableStateOf(false)
         private set
 
+    // Biometric lock
+    var biometricEnabled by mutableStateOf(false)
+        private set
+
     // Free up space
     var freeableBytes by mutableStateOf(0L)
     var freeableCount by mutableStateOf(0)
@@ -85,6 +90,7 @@ class SettingsViewModel @Inject constructor(
             serverUrl = prefs[KEY_SERVER_URL] ?: ""
             username = prefs[KEY_USERNAME] ?: ""
             diagnosticLogging = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
+            biometricEnabled = prefs[KEY_BIOMETRIC_ENABLED] ?: false
         }
         loadStorageStats()
         loadEncryptionSettings()
@@ -148,6 +154,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             diagnosticLogging = !diagnosticLogging
             dataStore.edit { it[KEY_DIAGNOSTIC_LOGGING] = diagnosticLogging }
+        }
+    }
+
+    fun toggleBiometric() {
+        viewModelScope.launch {
+            biometricEnabled = !biometricEnabled
+            dataStore.edit { it[KEY_BIOMETRIC_ENABLED] = biometricEnabled }
         }
     }
 
@@ -260,6 +273,39 @@ fun SettingsScreen(
                 SettingsRow("Server", viewModel.serverUrl)
                 SettingsRow("Username", viewModel.username)
                 SettingsRow("Mode", viewModel.encryptionMode.replaceFirstChar { it.uppercase() })
+
+                // ── Change Password (inline) ─────────────────────────────
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                AccountChangePasswordSection(viewModel)
+
+                // ── Two-Factor Authentication (inline) ───────────────────
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                Text("Two-Factor Authentication", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onSetup2fa, modifier = Modifier.fillMaxWidth()) {
+                    Text("Two-Factor Authentication")
+                }
+            }
+
+            // ── Biometric Lock ───────────────────────────────────────────
+            SettingsCard(title = "Security", iconPainter = painterResource(R.drawable.ic_lock)) {
+                Text(
+                    "Require fingerprint or face unlock to open the app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Biometric Lock")
+                    Switch(
+                        checked = viewModel.biometricEnabled,
+                        onCheckedChange = { viewModel.toggleBiometric() }
+                    )
+                }
             }
 
             // ── Storage Stats ────────────────────────────────────────────
@@ -390,15 +436,7 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Change Password ──────────────────────────────────────────
-            ChangePasswordSection(viewModel)
 
-            // ── Security / 2FA ───────────────────────────────────────────
-            SettingsCard(title = "Security", iconPainter = painterResource(R.drawable.ic_shield)) {
-                OutlinedButton(onClick = onSetup2fa, modifier = Modifier.fillMaxWidth()) {
-                    Text("Two-Factor Authentication")
-                }
-            }
 
 
             // ── About ────────────────────────────────────────────────────
@@ -578,94 +616,95 @@ private fun LegendDot(color: Color, label: String) {
     }
 }
 
-// ── Change Password ─────────────────────────────────────────────────────────
+// ── Change Password (embedded in Account card) ─────────────────────────────
 
 @Composable
-private fun ChangePasswordSection(viewModel: SettingsViewModel) {
+private fun AccountChangePasswordSection(viewModel: SettingsViewModel) {
     var expanded by remember { mutableStateOf(false) }
     var currentPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var showPasswords by remember { mutableStateOf(false) }
 
-    SettingsCard(title = "Change Password", iconPainter = painterResource(R.drawable.ic_lock)) {
-        if (!expanded) {
-            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("Change Password")
-            }
-        } else {
-            OutlinedTextField(
-                value = currentPassword,
-                onValueChange = { currentPassword = it },
-                label = { Text("Current Password") },
-                visualTransformation = if (showPasswords) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = newPassword,
-                onValueChange = { newPassword = it },
-                label = { Text("New Password") },
-                visualTransformation = if (showPasswords) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = confirmPassword,
-                onValueChange = { confirmPassword = it },
-                label = { Text("Confirm New Password") },
-                visualTransformation = if (showPasswords) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+    Text("Password", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(8.dp))
 
-            // Password strength indicator
-            if (newPassword.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                val strength = passwordStrength(newPassword)
-                LinearProgressIndicator(
-                    progress = { strength.first },
-                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                    color = strength.second
-                )
-                Text(strength.third, style = MaterialTheme.typography.labelSmall, color = strength.second)
-            }
+    if (!expanded) {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("Change Password")
+        }
+    } else {
+        OutlinedTextField(
+            value = currentPassword,
+            onValueChange = { currentPassword = it },
+            label = { Text("Current Password") },
+            visualTransformation = if (showPasswords) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = newPassword,
+            onValueChange = { newPassword = it },
+            label = { Text("New Password") },
+            visualTransformation = if (showPasswords) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = confirmPassword,
+            onValueChange = { confirmPassword = it },
+            label = { Text("Confirm New Password") },
+            visualTransformation = if (showPasswords) VisualTransformation.None else PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true
+        )
 
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = showPasswords, onCheckedChange = { showPasswords = it })
-                Text("Show passwords", style = MaterialTheme.typography.bodySmall)
-            }
+        // Password strength indicator
+        if (newPassword.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            val strength = passwordStrength(newPassword)
+            LinearProgressIndicator(
+                progress = { strength.first },
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                color = strength.second
+            )
+            Text(strength.third, style = MaterialTheme.typography.labelSmall, color = strength.second)
+        }
 
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    expanded = false
-                    currentPassword = ""
-                    newPassword = ""
-                    confirmPassword = ""
-                }) { Text("Cancel") }
-                Button(
-                    onClick = {
-                        if (newPassword != confirmPassword) {
-                            viewModel.error = "Passwords do not match"
-                        } else {
-                            viewModel.changePassword(currentPassword, newPassword) {
-                                expanded = false
-                                currentPassword = ""
-                                newPassword = ""
-                                confirmPassword = ""
-                            }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = showPasswords, onCheckedChange = { showPasswords = it })
+            Text("Show passwords", style = MaterialTheme.typography.bodySmall)
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                expanded = false
+                currentPassword = ""
+                newPassword = ""
+                confirmPassword = ""
+            }) { Text("Cancel") }
+            Button(
+                onClick = {
+                    if (newPassword != confirmPassword) {
+                        viewModel.error = "Passwords do not match"
+                    } else {
+                        viewModel.changePassword(currentPassword, newPassword) {
+                            expanded = false
+                            currentPassword = ""
+                            newPassword = ""
+                            confirmPassword = ""
                         }
-                    },
-                    enabled = currentPassword.isNotEmpty() && newPassword.isNotEmpty() && confirmPassword.isNotEmpty() && !viewModel.loading
-                ) { Text("Update") }
-            }
+                    }
+                },
+                enabled = currentPassword.isNotEmpty() && newPassword.isNotEmpty() && confirmPassword.isNotEmpty() && !viewModel.loading
+            ) { Text("Update") }
         }
     }
 }

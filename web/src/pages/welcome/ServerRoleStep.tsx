@@ -15,7 +15,7 @@ export default function ServerRoleStep({
     setError("");
     setServerRole(role);
     if (role === "primary") {
-      setStep("account");
+      setStep("install-type");
     } else {
       setStep("pair");
     }

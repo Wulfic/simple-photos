@@ -25,6 +25,7 @@ class NavViewModel @Inject constructor(
         val KEY_SERVER_URL = stringPreferencesKey("server_url")
         val KEY_USERNAME = stringPreferencesKey("username")
         val KEY_DIAGNOSTIC_LOGGING = booleanPreferencesKey("diagnostic_logging")
+        val KEY_BIOMETRIC_ENABLED = booleanPreferencesKey("biometric_enabled")
     }
 
     private val _startDestination = MutableStateFlow<String?>(null)

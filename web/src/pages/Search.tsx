@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
+import { db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 
@@ -20,6 +21,10 @@ interface SearchResult {
   width: number | null;
   height: number | null;
   tags: string[];
+  /** For encrypted results, a local object URL for the thumbnail */
+  _localThumbUrl?: string;
+  /** Whether this result came from encrypted local storage */
+  _isEncrypted?: boolean;
 }
 
 // ── Search Page ──────────────────────────────────────────────────────────────
@@ -43,6 +48,58 @@ export default function Search() {
     inputRef.current?.focus();
   }, []);
 
+  // ── Fuzzy matching helper ──────────────────────────────────────────────
+  // Tokenizes the query, stems each token, and checks if all tokens match
+  // somewhere in the searchable text (filename, media type, date, etc.)
+  const fuzzyMatch = useCallback((searchText: string, queryStr: string): boolean => {
+    const lower = searchText.toLowerCase();
+    const tokens = queryStr.toLowerCase().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return false;
+
+    return tokens.every((token) => {
+      // Direct substring match
+      if (lower.includes(token)) return true;
+
+      // Basic stemming variants
+      const variants: string[] = [];
+      if (token.length > 4) {
+        if (token.endsWith("ing")) {
+          const stem = token.slice(0, -3);
+          variants.push(stem);
+          // e.g. "running" -> "run"
+          if (stem.length > 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+            variants.push(stem.slice(0, -1));
+          }
+        }
+        if (token.endsWith("ed")) variants.push(token.slice(0, -2));
+        if (token.endsWith("es")) variants.push(token.slice(0, -2));
+        else if (token.endsWith("s")) variants.push(token.slice(0, -1));
+        if (token.endsWith("ly")) variants.push(token.slice(0, -2));
+      }
+
+      // Check variants
+      if (variants.some((v) => lower.includes(v))) return true;
+
+      // Levenshtein-like: check if any word in the text is within edit distance 1
+      const words = lower.split(/[\s_\-./]+/).filter(Boolean);
+      return words.some((word) => {
+        if (word.length === 0 || token.length === 0) return false;
+        // Allow partial prefix match (at least 3 chars)
+        if (token.length >= 3 && word.startsWith(token)) return true;
+        if (token.length >= 3 && word.includes(token)) return true;
+        // Simple edit distance 1 check for short words
+        if (Math.abs(word.length - token.length) > 1) return false;
+        let diffs = 0;
+        const maxLen = Math.max(word.length, token.length);
+        for (let i = 0; i < maxLen; i++) {
+          if (word[i] !== token[i]) diffs++;
+          if (diffs > 1) return false;
+        }
+        return diffs <= 1;
+      });
+    });
+  }, []);
+
   const doSearch = useCallback(async (q: string) => {
     const trimmed = q.trim();
     if (!trimmed) {
@@ -53,14 +110,86 @@ export default function Search() {
     setLoading(true);
     setSearched(true);
     try {
-      const res = await api.search.query(trimmed);
-      setResults(res.results);
+      // Search server-side (plain mode photos)
+      const serverPromise = api.search.query(trimmed).catch(() => ({ results: [] as SearchResult[] }));
+
+      // Search local encrypted photos in IndexedDB
+      const localPromise = (async (): Promise<SearchResult[]> => {
+        try {
+          const allPhotos = await db.photos.toArray();
+          if (allPhotos.length === 0) return [];
+
+          // Load album names for album-based searching
+          const allAlbums = await db.albums.toArray();
+          const albumNameMap = new Map<string, string>();
+          for (const album of allAlbums) {
+            albumNameMap.set(album.albumId, album.name);
+          }
+
+          const matches: SearchResult[] = [];
+          for (const photo of allPhotos) {
+            // Resolve album names for this photo
+            const albumNames = (photo.albumIds ?? [])
+              .map((id) => albumNameMap.get(id))
+              .filter(Boolean)
+              .join(" ");
+
+            const searchableText = [
+              photo.filename,
+              photo.mediaType,
+              photo.mimeType,
+              photo.takenAt ? new Date(photo.takenAt).toISOString() : "",
+              photo.latitude?.toString() ?? "",
+              photo.longitude?.toString() ?? "",
+              albumNames,
+            ].join(" ");
+
+            if (fuzzyMatch(searchableText, trimmed)) {
+              let localThumbUrl: string | undefined;
+              if (photo.thumbnailData) {
+                const blob = new Blob([photo.thumbnailData], { type: "image/jpeg" });
+                localThumbUrl = URL.createObjectURL(blob);
+              }
+              matches.push({
+                id: photo.blobId,
+                filename: photo.filename,
+                media_type: photo.mediaType,
+                mime_type: photo.mimeType,
+                thumb_path: null,
+                created_at: photo.takenAt ? new Date(photo.takenAt).toISOString() : "",
+                taken_at: photo.takenAt ? new Date(photo.takenAt).toISOString() : null,
+                latitude: photo.latitude ?? null,
+                longitude: photo.longitude ?? null,
+                width: photo.width ?? null,
+                height: photo.height ?? null,
+                tags: [],
+                _localThumbUrl: localThumbUrl,
+                _isEncrypted: true,
+              });
+            }
+          }
+          return matches;
+        } catch {
+          return [];
+        }
+      })();
+
+      const [serverRes, localResults] = await Promise.all([serverPromise, localPromise]);
+
+      // Merge and deduplicate (server results take priority)
+      const serverIds = new Set(serverRes.results.map((r) => r.id));
+      const combined = [
+        ...serverRes.results,
+        ...localResults.filter((r) => !serverIds.has(r.id)),
+      ];
+
+      setResults(combined);
     } catch {
       setResults([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fuzzyMatch]);
 
   // Debounced search
   useEffect(() => {
@@ -142,20 +271,26 @@ export default function Search() {
               {results.length} result{results.length !== 1 ? "s" : ""}
             </p>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
-              {results.map((result, idx) => (
+              {results.map((result, idx) => {
+                const isEncrypted = !!(result as any)._isEncrypted;
+                const path = isEncrypted
+                  ? `/photo/${result.id}`
+                  : `/photo/plain/${result.id}`;
+                return (
                 <SearchResultTile
                   key={result.id}
                   result={result}
                   onClick={() =>
-                    navigate(`/photo/plain/${result.id}`, {
+                    navigate(path, {
                       state: {
-                        photoIds: results.map((r) => r.id),
-                        currentIndex: idx,
+                        photoIds: results.filter((r) => !!(r as any)._isEncrypted === isEncrypted).map((r) => r.id),
+                        currentIndex: results.filter((r) => !!(r as any)._isEncrypted === isEncrypted).map((r) => r.id).indexOf(result.id),
                       },
                     })
                   }
                 />
-              ))}
+                );
+              })}
             </div>
           </>
         )}
@@ -206,6 +341,11 @@ function SearchResultTile({
 
   useEffect(() => {
     if (!visible) return;
+    // If we already have a local thumbnail URL (encrypted result), use it directly
+    if (result._localThumbUrl) {
+      setThumbSrc(result._localThumbUrl);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -227,7 +367,7 @@ function SearchResultTile({
     return () => {
       cancelled = true;
     };
-  }, [visible, result.id]);
+  }, [visible, result.id, result._localThumbUrl]);
 
   return (
     <div

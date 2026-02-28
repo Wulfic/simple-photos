@@ -21,6 +21,7 @@ import com.simplephotos.ui.screens.trash.TrashScreen
 import com.simplephotos.ui.screens.twofactor.TwoFactorSetupScreen
 import com.simplephotos.ui.screens.viewer.PhotoViewerScreen
 import com.simplephotos.ui.screens.search.SearchScreen
+import com.simplephotos.ui.screens.securegallery.SecureGalleryScreen
 
 @Composable
 fun NavGraph() {
@@ -58,6 +59,7 @@ fun NavGraph() {
                 onSearchClick = { navController.navigate(Screen.Search.route) },
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
             )
         }
@@ -67,6 +69,7 @@ fun NavGraph() {
                 onSearchClick = { navController.navigate(Screen.Search.route) },
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 onAlbumClick = { albumId -> navController.navigate(Screen.AlbumDetail.createRoute(albumId)) }
             )
@@ -77,6 +80,7 @@ fun NavGraph() {
                 onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
                 onSearchClick = { navController.navigate(Screen.Search.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
             )
         }
@@ -87,20 +91,26 @@ fun NavGraph() {
                 onAlbumsClick = { navController.navigate(Screen.AlbumList.route) },
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
+                onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
             )
         }
         composable(
             route = Screen.AlbumDetail.route,
             arguments = listOf(navArgument("albumId") { type = NavType.StringType })
-        ) {
+        ) { backStackEntry ->
+            val albumId = backStackEntry.arguments?.getString("albumId")
             AlbumDetailScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId, albumId)) }
             )
         }
         composable(
             route = Screen.PhotoViewer.route,
-            arguments = listOf(navArgument("photoId") { type = NavType.StringType })
+            arguments = listOf(
+                navArgument("photoId") { type = NavType.StringType },
+                navArgument("albumId") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )
         ) {
             PhotoViewerScreen(
                 onBack = { navController.popBackStack() }
@@ -122,6 +132,12 @@ fun NavGraph() {
         composable(Screen.FolderSelection.route) {
             FolderSelectionScreen(
                 onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.SecureGallery.route) {
+            SecureGalleryScreen(
+                onBack = { navController.popBackStack() },
+                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) }
             )
         }
     }

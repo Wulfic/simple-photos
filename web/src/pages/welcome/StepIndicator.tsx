@@ -1,12 +1,13 @@
-import type { WizardStep, ServerRole } from "./types";
+import type { WizardStep, ServerRole, InstallType } from "./types";
 
 export interface StepIndicatorProps {
   step: WizardStep;
   serverRole?: ServerRole;
+  installType?: InstallType;
 }
 
-export default function StepIndicator({ step, serverRole }: StepIndicatorProps) {
-  // Different step lists depending on server role
+export default function StepIndicator({ step, serverRole, installType }: StepIndicatorProps) {
+  // Different step lists depending on server role and install type
   const steps =
     serverRole === "backup"
       ? [
@@ -16,18 +17,34 @@ export default function StepIndicator({ step, serverRole }: StepIndicatorProps) 
           { id: "storage", label: "Server" },
           { id: "complete", label: "Done" },
         ]
-      : [
-          { id: "welcome", label: "Welcome" },
-          { id: "server-role", label: "Role" },
-          { id: "account", label: "Account" },
-          { id: "admin-2fa", label: "2FA" },
-          { id: "storage", label: "Server" },
-          { id: "ssl", label: "SSL" },
-          { id: "encryption", label: "Privacy" },
-          { id: "users", label: "Users" },
-          { id: "android", label: "Android" },
-          { id: "complete", label: "Done" },
-        ];
+      : installType === "restore"
+        ? [
+            { id: "welcome", label: "Welcome" },
+            { id: "server-role", label: "Role" },
+            { id: "install-type", label: "Type" },
+            { id: "restore", label: "Restore" },
+            { id: "account", label: "Account" },
+            { id: "admin-2fa", label: "2FA" },
+            { id: "storage", label: "Server" },
+            { id: "ssl", label: "SSL" },
+            { id: "encryption", label: "Privacy" },
+            { id: "users", label: "Users" },
+            { id: "android", label: "Android" },
+            { id: "complete", label: "Done" },
+          ]
+        : [
+            { id: "welcome", label: "Welcome" },
+            { id: "server-role", label: "Role" },
+            { id: "install-type", label: "Type" },
+            { id: "account", label: "Account" },
+            { id: "admin-2fa", label: "2FA" },
+            { id: "storage", label: "Server" },
+            { id: "ssl", label: "SSL" },
+            { id: "encryption", label: "Privacy" },
+            { id: "users", label: "Users" },
+            { id: "android", label: "Android" },
+            { id: "complete", label: "Done" },
+          ];
   // Map user-2fa to users for indicator purposes
   const displayStep = step === "user-2fa" ? "users" : step;
   const currentIdx = steps.findIndex((s) => s.id === displayStep);

@@ -16,10 +16,32 @@ echo "=== Simple Photos Server Reset ==="
 echo "Stopping server..."
 pkill -9 -f simple-photos-server 2>/dev/null && sleep 2 || true
 
-# Wipe database and storage
-echo "Wiping database and storage..."
+# Wipe database
+echo "Wiping database..."
 rm -f "$SERVER_DIR/data/db/"*
+
+# Wipe internal storage
 rm -rf "$SERVER_DIR/data/storage/"*/*
+
+# Read storage root from config.toml (the external photo storage location)
+CONFIG_FILE="$SERVER_DIR/config.toml"
+STORAGE_ROOT=""
+if [[ -f "$CONFIG_FILE" ]]; then
+    STORAGE_ROOT=$(grep -E '^\s*root\s*=' "$CONFIG_FILE" | head -1 | sed 's/.*=\s*"\(.*\)"/\1/')
+fi
+
+# Clean server-managed subdirectories under the storage root, preserving user photos
+if [[ -n "$STORAGE_ROOT" && -d "$STORAGE_ROOT" ]]; then
+    echo "Cleaning storage root subdirectories in: $STORAGE_ROOT"
+    for subdir in blobs metadata logs uploads; do
+        if [[ -d "$STORAGE_ROOT/$subdir" ]]; then
+            echo "  Removing $STORAGE_ROOT/$subdir/..."
+            rm -rf "$STORAGE_ROOT/$subdir"
+        fi
+    done
+else
+    echo "Warning: Could not determine storage root from config — skipping external cleanup"
+fi
 
 # Ensure data directories are owned by the real user so the server can write
 chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true

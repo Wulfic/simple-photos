@@ -393,3 +393,159 @@ pub async fn pair(
     ))
 }
 
+// ── Restore from Backup during Primary Setup ────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct VerifyBackupRequest {
+    /// The address of the backup server (e.g. "192.168.1.20:8080")
+    pub address: String,
+    /// Admin username on the backup server
+    pub username: String,
+    /// Admin password on the backup server
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyBackupResponse {
+    pub address: String,
+    pub name: String,
+    pub version: String,
+    pub api_key: Option<String>,
+    pub photo_count: i64,
+}
+
+/// POST /api/setup/verify-backup
+///
+/// Verify connectivity to a backup server during primary setup with "restore" mode.
+/// Authenticates against the backup server, retrieves its API key and photo count.
+///
+/// # Security
+/// Only works during first-run setup (zero users in DB).
+pub async fn verify_backup(
+    State(state): State<AppState>,
+    Json(req): Json<VerifyBackupRequest>,
+) -> Result<Json<VerifyBackupResponse>, AppError> {
+    // ── Guard: only works when no users exist ────────────────────────────
+    let user_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&state.pool)
+            .await?;
+
+    if user_count > 0 {
+        return Err(AppError::Forbidden(
+            "Setup has already been completed.".into(),
+        ));
+    }
+
+    // ── Normalise the backup server URL ──────────────────────────────────
+    let base = req.address.trim().trim_end_matches('/');
+    let base_url = if base.starts_with("http://") || base.starts_with("https://") {
+        base.to_string()
+    } else {
+        format!("http://{}", base)
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
+
+    // ── Authenticate against the backup server ───────────────────────────
+    let login_url = format!("{}/api/auth/login", base_url);
+    let login_body = serde_json::json!({
+        "username": req.username,
+        "password": req.password,
+    });
+
+    let resp = client
+        .post(&login_url)
+        .header("Content-Type", "application/json")
+        .json(&login_body)
+        .send()
+        .await
+        .map_err(|e| AppError::BadRequest(format!(
+            "Cannot reach the backup server at {}: {}", base_url, e
+        )))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AppError::BadRequest(format!(
+            "Backup server rejected the credentials (HTTP {}): {}", status, body
+        )));
+    }
+
+    let login_data: serde_json::Value = resp.json().await
+        .map_err(|e| AppError::Internal(format!("Failed to parse login response: {}", e)))?;
+
+    let access_token = login_data.get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Internal("No access_token in backup server login response".into()))?;
+
+    // ── Get backup mode info (including API key) from the backup server ──
+    let mode_url = format!("{}/api/admin/backup/mode", base_url);
+    let mode_resp = client
+        .get(&mode_url)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to get backup mode: {}", e)))?;
+
+    let mut api_key: Option<String> = None;
+    let mut server_name = "Backup Server".to_string();
+    let mut version = "unknown".to_string();
+
+    if mode_resp.status().is_success() {
+        let mode_data: serde_json::Value = mode_resp.json().await.unwrap_or_default();
+        api_key = mode_data.get("api_key")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+    }
+
+    // ── Get server info from health endpoint ─────────────────────────────
+    let health_url = format!("{}/health", base_url);
+    if let Ok(health_resp) = client.get(&health_url).send().await {
+        if let Ok(health_data) = health_resp.json::<serde_json::Value>().await {
+            if let Some(name) = health_data.get("name").and_then(|v| v.as_str()) {
+                server_name = name.to_string();
+            }
+            if let Some(ver) = health_data.get("version").and_then(|v| v.as_str()) {
+                version = ver.to_string();
+            }
+        }
+    }
+
+    // ── Get photo count from the backup server ───────────────────────────
+    let mut photo_count: i64 = 0;
+    if let Some(ref key) = api_key {
+        let list_url = format!("{}/api/backup/list", base_url);
+        let list_resp = client
+            .get(&list_url)
+            .header("X-API-Key", key.as_str())
+            .send()
+            .await;
+
+        if let Ok(resp) = list_resp {
+            if resp.status().is_success() {
+                if let Ok(photos) = resp.json::<Vec<serde_json::Value>>().await {
+                    photo_count = photos.len() as i64;
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        "Verified backup server at {}: {} photos available for restore",
+        base_url, photo_count
+    );
+
+    Ok(Json(VerifyBackupResponse {
+        address: req.address.trim().to_string(),
+        name: server_name,
+        version,
+        api_key,
+        photo_count,
+    }))
+}
+

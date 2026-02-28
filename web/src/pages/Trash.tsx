@@ -288,21 +288,35 @@ export default function Trash() {
 
       <main className="max-w-screen-2xl mx-auto px-4 py-6">
         {/* ── Stats Bar ─────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-              <AppIcon name="trashcan" size="w-7 h-7" />
-              Trash
-            </h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              {items.length === 0
-                ? "No items in trash"
-                : `${items.length} item${items.length !== 1 ? "s" : ""} · ${formatBytes(totalSize)} · Items are permanently deleted after 30 days`}
-            </p>
+        <div className="mb-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                <AppIcon name="trashcan" size="w-7 h-7" />
+                Trash
+              </h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                {items.length === 0
+                  ? "No items in trash"
+                  : `${items.length} item${items.length !== 1 ? "s" : ""} · ${formatBytes(totalSize)} · Items are permanently deleted after 30 days`}
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          {/* Action buttons — stacked below the header */}
+          <div className="flex flex-col items-start gap-2 mt-4">
+            {items.length > 0 && (
+              <button
+                onClick={() => setConfirmEmpty(true)}
+                disabled={actionLoading !== null}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                <AppIcon name="trashcan" />
+                Empty Trash
+              </button>
+            )}
             {selectedIds.size > 0 && (
-              <>
+              <div className="flex items-center gap-2">
                 <button
                   onClick={handleRestoreSelected}
                   disabled={actionLoading !== null}
@@ -317,17 +331,7 @@ export default function Trash() {
                 >
                   Delete ({selectedIds.size})
                 </button>
-              </>
-            )}
-            {items.length > 0 && (
-              <button
-                onClick={() => setConfirmEmpty(true)}
-                disabled={actionLoading !== null}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2 shrink-0"
-              >
-                <AppIcon name="trashcan" />
-                Empty Trash
-              </button>
+              </div>
             )}
           </div>
         </div>
@@ -441,27 +445,7 @@ export default function Trash() {
                     </div>
                   </div>
 
-                  {/* Action buttons (visible on hover or when selected) */}
-                  <div className={`absolute bottom-0 inset-x-0 flex gap-1 p-2 transition-opacity ${
-                    isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                  }`}>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleRestore(item.id); }}
-                      disabled={actionLoading !== null}
-                      className="flex-1 py-1 text-xs font-medium text-white bg-green-600/90 hover:bg-green-500 rounded transition-colors disabled:opacity-50"
-                      title="Restore"
-                    >
-                      Restore
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handlePermanentDelete(item.id); }}
-                      disabled={actionLoading !== null}
-                      className="flex-1 py-1 text-xs font-medium text-white bg-red-600/90 hover:bg-red-500 rounded transition-colors disabled:opacity-50"
-                      title="Delete permanently"
-                    >
-                      Delete
-                    </button>
-                  </div>
+
                 </div>
               );
             })}

@@ -14,6 +14,22 @@ export function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
   return btoa(parts.join(""));
 }
 
+/** Decode a base64 string into an ArrayBuffer */
+export function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+/** Decode a base64 string into a Uint8Array */
+export function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 // ── Thumbnail generation ──────────────────────────────────────────────────────
 
 /** Generate a JPEG thumbnail from raw image data */
@@ -107,6 +123,26 @@ export function generateThumbnailFromBuffer(
   if (mimeType.startsWith("video/"))
     return generateVideoThumbnailFromBuffer(data, mimeType, size);
   return generateImageThumbnailFromBuffer(data, mimeType, size);
+}
+
+/**
+ * Migration-safe wrapper: generates a thumbnail but returns null instead of
+ * throwing on failure. Used during encryption migration and similar batch jobs.
+ */
+export async function generateMigrationThumbnail(
+  fileData: Uint8Array | ArrayBuffer,
+  mimeType: string,
+  size: number
+): Promise<ArrayBuffer | null> {
+  try {
+    return await generateThumbnailFromBuffer(
+      fileData instanceof Uint8Array ? fileData.buffer : fileData,
+      mimeType,
+      size
+    );
+  } catch {
+    return null;
+  }
 }
 
 // ── Dimension & duration extraction ───────────────────────────────────────────

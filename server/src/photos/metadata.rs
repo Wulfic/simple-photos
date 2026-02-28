@@ -1,0 +1,190 @@
+/// Extract image dimensions, camera model, and GPS coordinates from a file.
+/// Returns (width, height, camera_model, latitude, longitude, taken_at).
+pub(crate) fn extract_media_metadata(
+    file_path: &std::path::Path,
+) -> (i64, i64, Option<String>, Option<f64>, Option<f64>, Option<String>) {
+    let mut width: i64 = 0;
+    let mut height: i64 = 0;
+    let mut camera_model: Option<String> = None;
+    let mut latitude: Option<f64> = None;
+    let mut longitude: Option<f64> = None;
+    let mut taken_at: Option<String> = None;
+
+    // Try to get dimensions using imagesize (fast, header-only read)
+    if let Ok(size) = imagesize::size(file_path) {
+        width = size.width as i64;
+        height = size.height as i64;
+    }
+
+    // Try to read EXIF data for camera model, GPS, and date
+    if let Ok(file) = std::fs::File::open(file_path) {
+        let mut buf_reader = std::io::BufReader::new(&file);
+        if let Ok(exif_reader) = exif::Reader::new().read_from_container(&mut buf_reader) {
+            // Camera make + model
+            let make = exif_reader
+                .get_field(exif::Tag::Make, exif::In::PRIMARY)
+                .map(|f| f.display_value().to_string().trim().to_string());
+            let model = exif_reader
+                .get_field(exif::Tag::Model, exif::In::PRIMARY)
+                .map(|f| f.display_value().to_string().trim().to_string());
+            camera_model = match (make, model) {
+                (Some(mk), Some(md)) => {
+                    // Remove surrounding quotes from EXIF strings
+                    let mk = mk.trim_matches('"').trim().to_string();
+                    let md = md.trim_matches('"').trim().to_string();
+                    if md.starts_with(&mk) {
+                        Some(md)
+                    } else {
+                        Some(format!("{} {}", mk, md))
+                    }
+                }
+                (None, Some(md)) => Some(md.trim_matches('"').trim().to_string()),
+                (Some(mk), None) => Some(mk.trim_matches('"').trim().to_string()),
+                _ => None,
+            };
+
+            // GPS coordinates
+            if let (Some(lat_field), Some(lat_ref), Some(lon_field), Some(lon_ref)) = (
+                exif_reader.get_field(exif::Tag::GPSLatitude, exif::In::PRIMARY),
+                exif_reader.get_field(exif::Tag::GPSLatitudeRef, exif::In::PRIMARY),
+                exif_reader.get_field(exif::Tag::GPSLongitude, exif::In::PRIMARY),
+                exif_reader.get_field(exif::Tag::GPSLongitudeRef, exif::In::PRIMARY),
+            ) {
+                if let (exif::Value::Rational(ref lat_vals), exif::Value::Rational(ref lon_vals)) =
+                    (&lat_field.value, &lon_field.value)
+                {
+                    if lat_vals.len() >= 3 && lon_vals.len() >= 3 {
+                        let lat = lat_vals[0].to_f64()
+                            + lat_vals[1].to_f64() / 60.0
+                            + lat_vals[2].to_f64() / 3600.0;
+                        let lon = lon_vals[0].to_f64()
+                            + lon_vals[1].to_f64() / 60.0
+                            + lon_vals[2].to_f64() / 3600.0;
+                        let lat_ref_str = lat_ref.display_value().to_string();
+                        let lon_ref_str = lon_ref.display_value().to_string();
+                        latitude = Some(if lat_ref_str.contains('S') { -lat } else { lat });
+                        longitude = Some(if lon_ref_str.contains('W') { -lon } else { lon });
+                    }
+                }
+            }
+
+            // Date taken (EXIF DateTimeOriginal)
+            if let Some(dt_field) =
+                exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+            {
+                let dt_str = dt_field.display_value().to_string().trim_matches('"').to_string();
+                // EXIF format: "2024:01:15 14:30:00" → convert to ISO 8601
+                if dt_str.len() >= 19 {
+                    let iso = format!(
+                        "{}-{}-{}T{}",
+                        &dt_str[0..4],
+                        &dt_str[5..7],
+                        &dt_str[8..10],
+                        &dt_str[11..19]
+                    );
+                    taken_at = Some(iso);
+                }
+            }
+
+            // If imagesize failed but EXIF has dimensions, use those
+            if width == 0 || height == 0 {
+                if let Some(w_field) =
+                    exif_reader.get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY)
+                {
+                    if let Some(w) = w_field.value.get_uint(0) {
+                        width = w as i64;
+                    }
+                }
+                if let Some(h_field) =
+                    exif_reader.get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY)
+                {
+                    if let Some(h) = h_field.value.get_uint(0) {
+                        height = h as i64;
+                    }
+                }
+            }
+        }
+    }
+
+    (width, height, camera_model, latitude, longitude, taken_at)
+}
+
+/// Extract metadata from raw bytes (for upload_photo where file is in memory).
+pub(crate) fn extract_media_metadata_from_bytes(
+    data: &[u8],
+    filename: &str,
+) -> (i64, i64, Option<String>, Option<f64>, Option<f64>, Option<String>) {
+    let mut width: i64 = 0;
+    let mut height: i64 = 0;
+    let mut camera_model: Option<String> = None;
+    let mut latitude: Option<f64> = None;
+    let mut longitude: Option<f64> = None;
+    let mut taken_at: Option<String> = None;
+
+    // Get dimensions from bytes
+    if let Ok(size) = imagesize::blob_size(data) {
+        width = size.width as i64;
+        height = size.height as i64;
+    }
+
+    // EXIF from bytes
+    let mut cursor = std::io::Cursor::new(data);
+    if let Ok(exif_reader) = exif::Reader::new().read_from_container(&mut cursor) {
+        let make = exif_reader
+            .get_field(exif::Tag::Make, exif::In::PRIMARY)
+            .map(|f| f.display_value().to_string().trim().to_string());
+        let model = exif_reader
+            .get_field(exif::Tag::Model, exif::In::PRIMARY)
+            .map(|f| f.display_value().to_string().trim().to_string());
+        camera_model = match (make, model) {
+            (Some(mk), Some(md)) => {
+                let mk = mk.trim_matches('"').trim().to_string();
+                let md = md.trim_matches('"').trim().to_string();
+                if md.starts_with(&mk) { Some(md) } else { Some(format!("{} {}", mk, md)) }
+            }
+            (None, Some(md)) => Some(md.trim_matches('"').trim().to_string()),
+            (Some(mk), None) => Some(mk.trim_matches('"').trim().to_string()),
+            _ => None,
+        };
+
+        if let (Some(lat_field), Some(lat_ref), Some(lon_field), Some(lon_ref)) = (
+            exif_reader.get_field(exif::Tag::GPSLatitude, exif::In::PRIMARY),
+            exif_reader.get_field(exif::Tag::GPSLatitudeRef, exif::In::PRIMARY),
+            exif_reader.get_field(exif::Tag::GPSLongitude, exif::In::PRIMARY),
+            exif_reader.get_field(exif::Tag::GPSLongitudeRef, exif::In::PRIMARY),
+        ) {
+            if let (exif::Value::Rational(ref lat_vals), exif::Value::Rational(ref lon_vals)) =
+                (&lat_field.value, &lon_field.value)
+            {
+                if lat_vals.len() >= 3 && lon_vals.len() >= 3 {
+                    let lat = lat_vals[0].to_f64() + lat_vals[1].to_f64() / 60.0 + lat_vals[2].to_f64() / 3600.0;
+                    let lon = lon_vals[0].to_f64() + lon_vals[1].to_f64() / 60.0 + lon_vals[2].to_f64() / 3600.0;
+                    let lat_ref_str = lat_ref.display_value().to_string();
+                    let lon_ref_str = lon_ref.display_value().to_string();
+                    latitude = Some(if lat_ref_str.contains('S') { -lat } else { lat });
+                    longitude = Some(if lon_ref_str.contains('W') { -lon } else { lon });
+                }
+            }
+        }
+
+        if let Some(dt_field) = exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY) {
+            let dt_str = dt_field.display_value().to_string().trim_matches('"').to_string();
+            if dt_str.len() >= 19 {
+                let iso = format!("{}-{}-{}T{}", &dt_str[0..4], &dt_str[5..7], &dt_str[8..10], &dt_str[11..19]);
+                taken_at = Some(iso);
+            }
+        }
+
+        if width == 0 || height == 0 {
+            if let Some(w_field) = exif_reader.get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY) {
+                if let Some(w) = w_field.value.get_uint(0) { width = w as i64; }
+            }
+            if let Some(h_field) = exif_reader.get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY) {
+                if let Some(h) = h_field.value.get_uint(0) { height = h as i64; }
+            }
+        }
+    }
+
+    let _ = filename; // suppress unused warning
+    (width, height, camera_model, latitude, longitude, taken_at)
+}

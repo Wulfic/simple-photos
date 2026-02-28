@@ -33,6 +33,8 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 rustls-pemfile = "2"
 instant-acme = "0.7"
 rcgen = "0.13"
+imagesize = "0.13"
+kamadak-exif = "0.5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

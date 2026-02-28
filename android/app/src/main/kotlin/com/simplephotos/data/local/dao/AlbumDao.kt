@@ -13,6 +13,12 @@ interface AlbumDao {
     @Query("SELECT * FROM albums WHERE localId = :id")
     suspend fun getById(id: String): AlbumEntity?
 
+    @Query("SELECT * FROM albums WHERE serverManifestBlobId = :blobId LIMIT 1")
+    suspend fun getByManifestBlobId(blobId: String): AlbumEntity?
+
+    @Query("SELECT localId FROM albums")
+    suspend fun getAllAlbumIds(): List<String>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(album: AlbumEntity)
 
@@ -21,6 +27,12 @@ interface AlbumDao {
 
     @Delete
     suspend fun delete(album: AlbumEntity)
+
+    @Query("DELETE FROM albums WHERE localId = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM photo_album_xref WHERE albumLocalId = :albumId")
+    suspend fun deleteAllXRefsForAlbum(albumId: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertXRef(xRef: PhotoAlbumXRef)

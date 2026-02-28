@@ -4,6 +4,14 @@ import { api } from "../api/client";
 import { decrypt } from "../crypto/crypto";
 import { useAuthStore } from "../store/auth";
 import { db, type MediaType } from "../db";
+import AppIcon from "../components/AppIcon";
+import { base64ToUint8Array } from "../utils/media";
+import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
+import ViewerEditPanel from "../components/viewer/ViewerEditPanel";
+import TagsBar from "../components/viewer/TagsBar";
+import LeavePrompt from "../components/viewer/LeavePrompt";
+import useZoomPan from "../hooks/useZoomPan";
+import usePhotoPreload from "../hooks/usePhotoPreload";
 
 // ── Payload shape (encrypted mode) ───────────────────────────────────────────
 interface MediaPayload {
@@ -26,6 +34,8 @@ interface ViewerLocationState {
   photoIds?: string[];
   /** Current index within the photoIds array */
   currentIndex?: number;
+  /** When viewing from an album, the album ID (enables "Remove" instead of "Delete") */
+  albumId?: string;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -56,6 +66,23 @@ export default function Viewer() {
   // ── Favorite state ────────────────────────────────────────────────────────
   const [isFavorite, setIsFavorite] = useState(false);
 
+  // ── Info panel state ───────────────────────────────────────────────────────
+  const [showInfoPanel, setShowInfoPanel] = useState(false);
+  const [photoInfo, setPhotoInfo] = useState<{
+    filename: string;
+    mimeType: string;
+    width?: number;
+    height?: number;
+    takenAt?: string | null;
+    sizeBytes?: number;
+    latitude?: number | null;
+    longitude?: number | null;
+    createdAt?: string;
+    durationSecs?: number | null;
+    cameraModel?: string | null;
+    albumNames?: string[];
+  } | null>(null);
+
   // ── Slide animation direction ─────────────────────────────────────────────
   const [slideDirection, setSlideDirection] = useState<"left" | "right" | null>(null);
   const [slideKey, setSlideKey] = useState(0);
@@ -73,6 +100,77 @@ export default function Viewer() {
   const cropContainerRef = useRef<HTMLDivElement>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // ── Zoom state (double-tap / pinch-to-zoom) ─────────────────────────────
+  const [zoomScale, setZoomScale] = useState(1);
+  const [zoomOrigin, setZoomOrigin] = useState<{ x: number; y: number }>({ x: 50, y: 50 });
+  const [panOffset, setPanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lastTapTime = useRef(0);
+  const pinchStartDist = useRef<number | null>(null);
+  const pinchStartScale = useRef(1);
+  const panStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+
+  // Reset zoom when photo changes or entering edit mode
+  useEffect(() => {
+    setZoomScale(1);
+    setPanOffset({ x: 0, y: 0 });
+  }, [id, editMode]);
+
+  function handleDoubleClickZoom(e: React.MouseEvent) {
+    if (editMode) return;
+    const rect = viewerContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    if (zoomScale > 1) {
+      setZoomScale(1);
+      setPanOffset({ x: 0, y: 0 });
+    } else {
+      const x = ((e.clientX - rect.left) / rect.width) * 100;
+      const y = ((e.clientY - rect.top) / rect.height) * 100;
+      setZoomOrigin({ x, y });
+      setZoomScale(2);
+      setPanOffset({ x: 0, y: 0 });
+    }
+  }
+
+  function handleWheel(e: React.WheelEvent) {
+    if (editMode) return;
+    e.preventDefault();
+    const rect = viewerContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setZoomOrigin({ x, y });
+    setZoomScale((prev) => {
+      const next = prev - e.deltaY * 0.002;
+      if (next <= 1) { setPanOffset({ x: 0, y: 0 }); return 1; }
+      return Math.min(next, 5);
+    });
+  }
+
+  // ── Preload cache for adjacent photos ──────────────────────────────────
+  // Maps photoId → { url, filename, mimeType, mediaType } for instant display
+  const preloadCache = useRef<Map<string, {
+    url: string;
+    filename: string;
+    mimeType: string;
+    mediaType: MediaType;
+    cropData: typeof cropData;
+    isFavorite: boolean;
+  }>>(new Map());
+
+  // Cached photo list to avoid re-fetching metadata on every preload (plain mode)
+  const photoListCache = useRef<{ data: Awaited<ReturnType<typeof api.photos.list>>["photos"]; ts: number } | null>(null);
+
+  /** Get the photo list, using a short-lived cache (30s) to avoid duplicate fetches */
+  async function getCachedPhotoList() {
+    const now = Date.now();
+    if (photoListCache.current && now - photoListCache.current.ts < 30_000) {
+      return photoListCache.current.data;
+    }
+    const res = await api.photos.list({ limit: 500 });
+    photoListCache.current = { data: res.photos, ts: now };
+    return res.photos;
+  }
 
   // ── Full-screen overlay state ──────────────────────────────────────────
   const [showOverlay, setShowOverlay] = useState(true);
@@ -127,10 +225,23 @@ export default function Viewer() {
       api.tags.getPhotoTags(id).then((res) => setTags(res.tags)).catch(() => {});
       api.tags.list().then((res) => setAllTags(res.tags)).catch(() => {});
       // Load favorite and crop from photo metadata
-      api.photos.list({ limit: 500 }).then((res) => {
-        const photo = res.photos.find((p) => p.id === id);
+      getCachedPhotoList().then((photos) => {
+        const photo = photos.find((p) => p.id === id);
         if (photo) {
           setIsFavorite(!!photo.is_favorite);
+          setPhotoInfo({
+            filename: photo.filename,
+            mimeType: photo.mime_type,
+            width: photo.width,
+            height: photo.height,
+            takenAt: photo.taken_at,
+            sizeBytes: photo.size_bytes,
+            latitude: photo.latitude,
+            longitude: photo.longitude,
+            createdAt: photo.created_at,
+            durationSecs: photo.duration_secs,
+            cameraModel: photo.camera_model,
+          });
           if (photo.crop_metadata) {
             try { setCropData(JSON.parse(photo.crop_metadata)); } catch { setCropData(null); }
           } else {
@@ -139,10 +250,29 @@ export default function Viewer() {
         }
       }).catch(() => {});
     } else {
-      // Encrypted mode: load crop data from local IndexedDB
-      db.photos.get(id).then((cached) => {
-        if (cached?.cropData) {
-          try { setCropData(JSON.parse(cached.cropData)); } catch { setCropData(null); }
+      // Encrypted mode: load crop data and metadata from local IndexedDB
+      db.photos.get(id).then(async (cached) => {
+        if (cached) {
+          // Look up album names for this photo
+          const allAlbums = await db.albums.toArray();
+          const albumNames = allAlbums
+            .filter((a) => a.photoBlobIds.includes(id!))
+            .map((a) => a.name);
+          setPhotoInfo({
+            filename: cached.filename,
+            mimeType: cached.mimeType,
+            width: cached.width,
+            height: cached.height,
+            takenAt: cached.takenAt ? new Date(cached.takenAt).toISOString() : null,
+            latitude: cached.latitude,
+            longitude: cached.longitude,
+            albumNames,
+          });
+          if (cached.cropData) {
+            try { setCropData(JSON.parse(cached.cropData)); } catch { setCropData(null); }
+          } else {
+            setCropData(null);
+          }
         } else {
           setCropData(null);
         }
@@ -318,13 +448,6 @@ export default function Viewer() {
     (t) => !tags.includes(t) && t.includes(tagInput.toLowerCase())
   ).slice(0, 5);
 
-  // ── Navigation state ──────────────────────────────────────────────────────
-  const state = location.state as ViewerLocationState | null;
-  const photoIds = state?.photoIds;
-  const currentIndex = state?.currentIndex ?? -1;
-  const hasPrev = photoIds != null && currentIndex > 0;
-  const hasNext = photoIds != null && currentIndex >= 0 && currentIndex < photoIds.length - 1;
-
   const navigateToPhoto = useCallback(
     (index: number) => {
       if (!photoIds || index < 0 || index >= photoIds.length) return;
@@ -349,20 +472,106 @@ export default function Viewer() {
     if (hasNext) navigateToPhoto(currentIndex + 1);
   }, [hasNext, currentIndex, navigateToPhoto]);
 
-  // ── Swipe handling ──────────────────────────────────────────────────────
+  // ── Swipe / pinch-to-zoom / double-tap handling ─────────────────────────
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
   const swiped = useRef(false);
 
   function handleTouchStart(e: React.TouchEvent) {
+    if (e.touches.length === 2) {
+      // Pinch start
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchStartDist.current = Math.sqrt(dx * dx + dy * dy);
+      pinchStartScale.current = zoomScale;
+      // Set zoom origin to midpoint between fingers
+      const rect = viewerContainerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const mx = ((e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left) / rect.width * 100;
+        const my = ((e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top) / rect.height * 100;
+        setZoomOrigin({ x: mx, y: my });
+      }
+      swiped.current = true; // prevent swipe when pinching
+      return;
+    }
     touchStartX.current = e.touches[0].clientX;
     touchStartY.current = e.touches[0].clientY;
     swiped.current = false;
+
+    // Double-tap detection
+    const now = Date.now();
+    if (now - lastTapTime.current < 300 && !editMode) {
+      // Double tap — toggle zoom
+      const rect = viewerContainerRef.current?.getBoundingClientRect();
+      if (rect) {
+        if (zoomScale > 1) {
+          setZoomScale(1);
+          setPanOffset({ x: 0, y: 0 });
+        } else {
+          const x = ((e.touches[0].clientX - rect.left) / rect.width) * 100;
+          const y = ((e.touches[0].clientY - rect.top) / rect.height) * 100;
+          setZoomOrigin({ x, y });
+          setZoomScale(2);
+          setPanOffset({ x: 0, y: 0 });
+        }
+      }
+      swiped.current = true; // prevent swipe
+      lastTapTime.current = 0;
+      return;
+    }
+    lastTapTime.current = now;
+
+    // Pan start when zoomed in
+    if (zoomScale > 1) {
+      panStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, ox: panOffset.x, oy: panOffset.y };
+    }
+  }
+
+  function handleTouchMove(e: React.TouchEvent) {
+    if (editMode) return;
+    // Pinch-to-zoom
+    if (e.touches.length === 2 && pinchStartDist.current !== null) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const ratio = dist / pinchStartDist.current;
+      const newScale = Math.max(1, Math.min(5, pinchStartScale.current * ratio));
+      setZoomScale(newScale);
+      if (newScale <= 1) setPanOffset({ x: 0, y: 0 });
+      return;
+    }
+    // Pan when zoomed
+    if (zoomScale > 1 && panStart.current && e.touches.length === 1) {
+      const dx = e.touches[0].clientX - panStart.current.x;
+      const dy = e.touches[0].clientY - panStart.current.y;
+      setPanOffset({ x: panStart.current.ox + dx, y: panStart.current.oy + dy });
+      swiped.current = true; // prevent swipe navigation when panning
+    }
   }
 
   function handleTouchEnd(e: React.TouchEvent) {
     if (editMode) return;
+    const wasPinching = pinchStartDist.current !== null;
+    pinchStartDist.current = null;
+    panStart.current = null;
+
+    // Snap back to normal mode when zoom reaches 1× (after pinch-out)
+    if (zoomScale <= 1.05) {
+      setZoomScale(1);
+      setPanOffset({ x: 0, y: 0 });
+    }
+
+    // If we were pinching and ended up back at 1×, allow next swipe gesture
+    if (wasPinching && zoomScale <= 1.05) {
+      swiped.current = false;
+      touchStartX.current = null;
+      touchStartY.current = null;
+      return;
+    }
+
     if (touchStartX.current === null || touchStartY.current === null || swiped.current) return;
+    // Only allow swipe navigation when not zoomed in
+    if (zoomScale > 1) return;
     const dx = e.changedTouches[0].clientX - touchStartX.current;
     const dy = e.changedTouches[0].clientY - touchStartY.current;
     const absDx = Math.abs(dx);
@@ -373,32 +582,83 @@ export default function Viewer() {
       if (dx > 0) goPrev();
       else goNext();
     }
+    // Vertical swipe: up → info panel, down → close viewer
+    else if (absDy > 80 && absDy > absDx * 1.5) {
+      swiped.current = true;
+      if (dy < 0) {
+        // Swipe up → show info panel
+        setShowInfoPanel(true);
+      } else {
+        // Swipe down → close viewer (or dismiss info panel)
+        if (showInfoPanel) {
+          setShowInfoPanel(false);
+        } else {
+          navigate(-1);
+        }
+      }
+    }
     touchStartX.current = null;
     touchStartY.current = null;
   }
 
-  // ── Load media on id change ───────────────────────────────────────────────
+  // ── Load media on id change (with preload cache) ───────────────────────
   useEffect(() => {
     if (!id) return;
 
-    // Reset state for new photo
-    setMediaUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
-    setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
-    setLoading(true);
-    setError("");
-
-    if (isPlainMode) {
-      loadPlainMedia(id);
-    } else {
-      // Show cached thumbnail immediately for a live-preview feel
-      db.photos.get(id).then((cached) => {
-        if (cached?.thumbnailData) {
-          const url = URL.createObjectURL(new Blob([cached.thumbnailData], { type: "image/jpeg" }));
-          setPreviewUrl(url);
+    // Check preload cache first — if we have a hit, display instantly
+    const cached = preloadCache.current.get(id);
+    if (cached) {
+      // Don't revoke the old mediaUrl if it's still in the preload cache
+      setMediaUrl((prev) => {
+        if (prev && !Array.from(preloadCache.current.values()).some(e => e.url === prev)) {
+          URL.revokeObjectURL(prev);
         }
+        return cached.url;
       });
-      loadEncryptedMedia(id);
+      setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+      setFilename(cached.filename);
+      setMimeType(cached.mimeType);
+      setMediaType(cached.mediaType);
+      setIsFavorite(cached.isFavorite);
+      if (cached.cropData) {
+        setCropData(cached.cropData);
+      } else {
+        setCropData(null);
+      }
+      setLoading(false);
+      setError("");
+    } else {
+      // Cache miss — load normally
+      setMediaUrl((prev) => {
+        if (prev && !Array.from(preloadCache.current.values()).some(e => e.url === prev)) {
+          URL.revokeObjectURL(prev);
+        }
+        return null;
+      });
+      setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+      setLoading(true);
+      setError("");
+
+      if (isPlainMode) {
+        loadPlainMedia(id);
+      } else {
+        // Show cached thumbnail immediately for a live-preview feel
+        db.photos.get(id).then((dbCached) => {
+          if (dbCached?.thumbnailData) {
+            const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: "image/jpeg" }));
+            setPreviewUrl(url);
+          }
+        });
+        loadEncryptedMedia(id);
+      }
     }
+
+    // Preload adjacent photos (±2) after a short delay to not compete with current load
+    const preloadTimer = setTimeout(() => {
+      preloadAdjacentPhotos(id);
+    }, 150);
+
+    return () => clearTimeout(preloadTimer);
   }, [id]);
 
   // ── Keyboard navigation ────────────────────────────────────────────────
@@ -427,16 +687,27 @@ export default function Viewer() {
     setLoading(true);
     setError("");
     try {
-      // Fetch photo metadata to get filename and media type
-      const res = await api.photos.list({ limit: 500 });
-      const photo = res.photos.find((p) => p.id === photoId);
+      // Fetch photo metadata to get filename and media type (uses cached list)
+      const photos = await getCachedPhotoList();
+      const photo = photos.find((p) => p.id === photoId);
+      let resolvedFilename = "";
+      let resolvedMime = "image/jpeg";
+      let resolved: MediaType = "photo";
+      let photoCropData = null;
+      let photoIsFavorite = false;
       if (photo) {
-        setFilename(photo.filename);
-        setMimeType(photo.mime_type);
-        const resolved: MediaType =
+        resolvedFilename = photo.filename;
+        resolvedMime = photo.mime_type;
+        resolved =
           photo.media_type === "gif" ? "gif"
           : photo.media_type === "video" ? "video"
           : "photo";
+        photoIsFavorite = !!photo.is_favorite;
+        if (photo.crop_metadata) {
+          try { photoCropData = JSON.parse(photo.crop_metadata); } catch { /* ignore */ }
+        }
+        setFilename(resolvedFilename);
+        setMimeType(resolvedMime);
         setMediaType(resolved);
       }
 
@@ -449,6 +720,16 @@ export default function Viewer() {
       const blob = await fileRes.blob();
       const url = URL.createObjectURL(blob);
       setMediaUrl(url);
+
+      // Store in preload cache so swiping back is instant
+      preloadCache.current.set(photoId, {
+        url,
+        filename: resolvedFilename,
+        mimeType: resolvedMime,
+        mediaType: resolved,
+        cropData: photoCropData,
+        isFavorite: photoIsFavorite,
+      });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load media");
     } finally {
@@ -483,6 +764,23 @@ export default function Viewer() {
       const blob = new Blob([bytes], { type: payload.mime_type });
       const url = URL.createObjectURL(blob);
       setMediaUrl(url);
+
+      // Load crop data from IndexedDB for cache entry
+      let photoCropData = null;
+      const dbEntry = await db.photos.get(blobId);
+      if (dbEntry?.cropData) {
+        try { photoCropData = JSON.parse(dbEntry.cropData); } catch { /* ignore */ }
+      }
+
+      // Store in preload cache so swiping back is instant
+      preloadCache.current.set(blobId, {
+        url,
+        filename: payload.filename,
+        mimeType: payload.mime_type,
+        mediaType: resolvedType,
+        cropData: photoCropData,
+        isFavorite: false,
+      });
 
       // Revoke the preview now that full media is ready
       if (previewUrl) {
@@ -546,6 +844,49 @@ export default function Viewer() {
     }
   }
 
+  async function handleRemoveFromAlbum() {
+    if (!id || !albumId) return;
+    try {
+      const album = await db.albums.get(albumId);
+      if (!album) return;
+      const updated = album.photoBlobIds.filter((bid: string) => bid !== id);
+
+      // Delete old manifest blob
+      if (album.manifestBlobId) {
+        try { await api.blobs.delete(album.manifestBlobId); } catch { /* ok */ }
+      }
+
+      // Upload new manifest
+      const payload = JSON.stringify({
+        v: 1,
+        album_id: album.albumId,
+        name: album.name,
+        created_at: new Date(album.createdAt).toISOString(),
+        cover_photo_blob_id: album.coverPhotoBlobId || null,
+        photo_blob_ids: updated,
+      });
+      const { encrypt: enc, sha256Hex: sha } = await import("../crypto/crypto");
+      const encrypted = await enc(new TextEncoder().encode(payload));
+      const hash = await sha(new Uint8Array(encrypted));
+      const res = await api.blobs.upload(encrypted, "album_manifest", hash);
+
+      await db.albums.put({ ...album, photoBlobIds: updated, manifestBlobId: res.blob_id });
+
+      // Navigate to next photo or back to album
+      if (photoIds && photoIds.length > 1) {
+        const remaining = photoIds.filter((pid) => pid !== id);
+        const nextIdx = Math.min(currentIndex, remaining.length - 1);
+        const nextId = remaining[nextIdx];
+        const prefix = isPlainMode ? "/photo/plain/" : "/photo/";
+        navigate(prefix + nextId, { replace: true, state: { photoIds: remaining, currentIndex: nextIdx, albumId } });
+      } else {
+        navigate(`/album/${albumId}`);
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Remove failed");
+    }
+  }
+
   function handleDownload() {
     if (!mediaUrl) return;
     const a = document.createElement("a");
@@ -559,6 +900,7 @@ export default function Viewer() {
     <div
       className="fixed inset-0 bg-black select-none"
       onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
       {/* Top bar (overlay) */}
@@ -574,11 +916,24 @@ export default function Viewer() {
               navigate("/gallery");
             }
           }}
-          className="text-white hover:text-gray-300 text-sm flex items-center gap-1"
+          className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
+          title="Back"
         >
-          ← Back
+          <AppIcon name="back-arrow" size="w-5 h-5" themed={false} className="invert" />
         </button>
         <div className="flex gap-3 items-center">
+          {/* Info button — shows metadata panel */}
+          <button
+            onClick={() => setShowInfoPanel((v) => !v)}
+            className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
+              showInfoPanel ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
+            }`}
+            title="Info"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
           {/* Edit button — available for all photos (not videos/gifs) */}
           {mediaType === "photo" && (
             <button
@@ -613,17 +968,31 @@ export default function Viewer() {
           )}
           <button
             onClick={handleDownload}
-            className="text-white hover:text-gray-300 text-sm"
+            className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
             disabled={!mediaUrl}
+            title="Download"
           >
-            Download
+            <AppIcon name="download" size="w-5 h-5" themed={false} className="invert" />
           </button>
-          <button
-            onClick={handleDelete}
-            className="text-red-400 hover:text-red-300 text-sm"
-          >
-            Delete
-          </button>
+          {albumId ? (
+            <button
+              onClick={handleRemoveFromAlbum}
+              className="text-orange-400 hover:text-orange-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
+              title="Remove from album"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              onClick={handleDelete}
+              className="text-red-400 hover:text-red-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
+              title="Delete"
+            >
+              <AppIcon name="trashcan" size="w-5 h-5" themed={false} className="invert" />
+            </button>
+          )}
         </div>
       </div>
       </div>{/* end top bar overlay */}
@@ -637,6 +1006,8 @@ export default function Viewer() {
           if ((e.target as HTMLElement).closest('button')) return;
           if (!editMode) setShowOverlay(prev => !prev);
         }}
+        onDoubleClick={handleDoubleClickZoom}
+        onWheel={handleWheel}
       >
         {/* Live preview: blurred thumbnail shown while full media loads */}
         {previewUrl && loading && (
@@ -697,11 +1068,16 @@ export default function Viewer() {
             ref={viewImgRef}
             src={mediaUrl}
             alt={filename}
-            className="max-w-full max-h-full object-contain"
+            className="max-w-full max-h-full object-contain transition-transform duration-150"
             onLoad={computeCropZoom}
             style={{
               imageRendering: mediaType === "gif" ? "auto" : undefined,
-              ...(cropData ? cropZoomStyle : {}),
+              ...(cropData && zoomScale <= 1 ? cropZoomStyle : {}),
+              ...(zoomScale > 1 ? {
+                transform: `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)`,
+                transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                cursor: 'grab',
+              } : {}),
             }}
           />
         )}
@@ -804,195 +1180,49 @@ export default function Viewer() {
 
       {/* ── Edit panel (Crop / Brightness tabs + Save) ───────────────── */}
       {editMode && mediaUrl && mediaType === "photo" && (
-        <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 py-3 space-y-3">
-          {/* Tab switcher */}
-          <div className="flex items-center justify-center gap-2">
-            <button
-              onClick={() => setEditTab("crop")}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                editTab === "crop"
-                  ? "bg-white text-black"
-                  : "bg-white/10 text-white hover:bg-white/20"
-              }`}
-            >
-              Crop
-            </button>
-            <button
-              onClick={() => setEditTab("brightness")}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                editTab === "brightness"
-                  ? "bg-white text-black"
-                  : "bg-white/10 text-white hover:bg-white/20"
-              }`}
-            >
-              Brightness
-            </button>
-          </div>
-
-          {/* Brightness slider */}
-          {editTab === "brightness" && (
-            <div className="flex items-center gap-3 max-w-sm mx-auto">
-              <svg className="w-5 h-5 text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="12" cy="12" r="4" />
-              </svg>
-              <input
-                type="range"
-                min={-100}
-                max={100}
-                value={brightness}
-                onChange={(e) => setBrightness(Number(e.target.value))}
-                className="flex-1 h-1.5 rounded-full appearance-none bg-white/20 accent-white cursor-pointer"
-              />
-              <svg className="w-5 h-5 text-yellow-300 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="12" cy="12" r="4" />
-                <path strokeLinecap="round" d="M12 2v2m0 16v2m-7.07-3.93l1.41-1.41m9.9-9.9l1.41-1.41M2 12h2m16 0h2M4.93 4.93l1.41 1.41m9.9 9.9l1.41 1.41" />
-              </svg>
-            </div>
-          )}
-
-          {/* Action buttons */}
-          <div className="flex items-center justify-center gap-2">
-            <button
-              onClick={handleSaveEdit}
-              className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-            >
-              Save
-            </button>
-            {cropData && (
-              <button
-                onClick={handleClearCrop}
-                className="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm font-medium hover:bg-gray-500 transition-colors"
-              >
-                Reset
-              </button>
-            )}
-            <button
-              onClick={() => setEditMode(false)}
-              className="px-4 py-2 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-600 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <ViewerEditPanel
+          editTab={editTab}
+          setEditTab={setEditTab}
+          brightness={brightness}
+          setBrightness={setBrightness}
+          cropData={cropData}
+          onSave={handleSaveEdit}
+          onClear={handleClearCrop}
+          onCancel={() => setEditMode(false)}
+        />
       )}
 
       {/* Bottom meta bar (shown when media is loaded, overlay) */}
       {mediaUrl && !editMode && (
-        <div className={`absolute bottom-0 left-0 right-0 z-20 transition-opacity duration-300 ${
-          showOverlay ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        } px-4 py-2 bg-black/60 text-gray-400 text-xs space-y-2`}>
-          {/* Tags section — plain mode only */}
-          {isPlainMode && (
-            <div className="flex items-center gap-2 flex-wrap">
-              {tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-600/30 text-blue-300 text-xs"
-                >
-                  {tag}
-                  <button
-                    onClick={() => handleRemoveTag(tag)}
-                    className="hover:text-white ml-0.5"
-                    title={`Remove tag "${tag}"`}
-                  >
-                    ✕
-                  </button>
-                </span>
-              ))}
-
-              {/* Add tag button / inline input */}
-              {showTagInput ? (
-                <div className="relative inline-flex items-center">
-                  <input
-                    ref={tagInputRef}
-                    type="text"
-                    value={tagInput}
-                    onChange={(e) => setTagInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleAddTag();
-                      if (e.key === "Escape") { setShowTagInput(false); setTagInput(""); }
-                    }}
-                    placeholder="tag name"
-                    className="w-28 px-2 py-0.5 rounded bg-gray-700 text-white text-xs border border-gray-600 focus:outline-none focus:border-blue-500"
-                  />
-                  <button
-                    onClick={handleAddTag}
-                    className="ml-1 text-blue-400 hover:text-blue-300 text-xs font-medium"
-                  >
-                    Add
-                  </button>
-                  <button
-                    onClick={() => { setShowTagInput(false); setTagInput(""); }}
-                    className="ml-1 text-gray-500 hover:text-gray-300 text-xs"
-                  >
-                    ✕
-                  </button>
-                  {/* Suggestions dropdown */}
-                  {tagInput && tagSuggestions.length > 0 && (
-                    <div className="absolute bottom-full left-0 mb-1 bg-gray-800 border border-gray-600 rounded shadow-lg z-50 min-w-[8rem]">
-                      {tagSuggestions.map((s) => (
-                        <button
-                          key={s}
-                          className="block w-full text-left px-2 py-1 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
-                          onClick={() => { setTagInput(s); }}
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <button
-                  onClick={() => setShowTagInput(true)}
-                  className="px-2 py-0.5 rounded-full border border-dashed border-gray-500 text-gray-400 hover:text-white hover:border-gray-300 text-xs transition-colors"
-                >
-                  + Tag
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+        <TagsBar
+          show={showOverlay}
+          isPlainMode={isPlainMode}
+          tags={tags}
+          showTagInput={showTagInput}
+          tagInput={tagInput}
+          setTagInput={setTagInput}
+          setShowTagInput={setShowTagInput}
+          tagSuggestions={tagSuggestions}
+          onAddTag={handleAddTag}
+          onRemoveTag={handleRemoveTag}
+          tagInputRef={tagInputRef}
+        />
       )}
+
+      {/* ── Info Panel (slides up from bottom) ───────────────────── */}
+      <PhotoInfoPanel
+        show={showInfoPanel}
+        onClose={() => setShowInfoPanel(false)}
+        photoInfo={photoInfo}
+      />
 
       {/* Save/Discard prompt when leaving photo in edit mode */}
-      {showLeavePrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <div className="bg-gray-800 rounded-xl p-6 max-w-sm w-full mx-4 space-y-4">
-            <h3 className="text-white text-lg font-semibold">Unsaved Changes</h3>
-            <p className="text-gray-300 text-sm">You have unsaved edits. Would you like to save or discard them?</p>
-            <div className="flex gap-3 justify-end">
-              <button
-                onClick={() => setShowLeavePrompt(false)}
-                className="px-4 py-2 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-600 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleLeaveAndDiscard}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
-              >
-                Discard
-              </button>
-              <button
-                onClick={handleLeaveAndSave}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <LeavePrompt
+        show={showLeavePrompt}
+        onCancel={() => setShowLeavePrompt(false)}
+        onDiscard={handleLeaveAndDiscard}
+        onSave={handleLeaveAndSave}
+      />
     </div>
   );
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }

@@ -95,6 +95,9 @@ dependencies {
     // Permissions
     implementation(libs.accompanist.permissions)
 
+    // Biometric
+    implementation(libs.biometric)
+
     // Crypto
     implementation(libs.bouncycastle)
 

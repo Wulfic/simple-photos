@@ -1,224 +1,31 @@
-import { useAuthStore } from "../store/auth";
+import { request, downloadRaw, BASE } from "./core";
+import { adminApi } from "./admin";
+import type {
+  RegisterResponse,
+  LoginResponse,
+  TotpSetupResponse,
+  ChangePasswordResponse,
+  DiagnosticsResponse,
+  AuditLogListResponse,
+  AuditLogParams,
+  ClientLogListResponse,
+  ClientLogParams,
+} from "./types";
 
-const BASE = "/api";
-
-/**
- * Centralized, security-hardened API client.
- *
- * Security features:
- * - X-Requested-With header on all requests (basic CSRF protection)
- * - Full refresh-token rotation (server returns new refresh token on each refresh)
- * - Automatic token refresh on 401, with single-flight deduplication
- * - Rate-limit aware: surfaces 429 messages to the user
- * - Rejects blobs with non-2xx status even on download
- * - Never logs tokens
- */
-
-// ── Single-flight refresh deduplication ──────────────────────────────────────
-// If multiple requests 401 at the same time, only one refresh attempt runs.
-let refreshPromise: Promise<boolean> | null = null;
-
-async function request<T>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const { accessToken } = useAuthStore.getState();
-
-  const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string>),
-    // Basic CSRF protection — server can reject requests without this header
-    "X-Requested-With": "SimplePhotos",
-  };
-
-  if (accessToken) {
-    headers["Authorization"] = `Bearer ${accessToken}`;
-  }
-
-  // Only set Content-Type for JSON bodies (not raw blob uploads)
-  if (options.body && typeof options.body === "string") {
-    headers["Content-Type"] = "application/json";
-  }
-
-  const res = await fetch(`${BASE}${path}`, { ...options, headers });
-
-  // ── Rate limiting ────────────────────────────────────────────────────────
-  if (res.status === 429) {
-    const retryAfter = res.headers.get("Retry-After");
-    const err = await res.json().catch(() => ({ error: "Too many requests" }));
-    const msg = retryAfter
-      ? `${err.error || "Too many requests"}. Try again in ${retryAfter}s.`
-      : err.error || "Too many requests. Please wait and try again.";
-    throw new Error(msg);
-  }
-
-  // ── Automatic token refresh on 401 ──────────────────────────────────────
-  // Skip refresh logic for auth endpoints — their 401s are real errors
-  // (wrong password, invalid token), not expired-session indicators.
-  const isAuthEndpoint = path.startsWith("/auth/");
-  if (res.status === 401 && !isAuthEndpoint) {
-    const refreshed = await tryRefresh();
-    if (refreshed) {
-      const newToken = useAuthStore.getState().accessToken;
-      headers["Authorization"] = `Bearer ${newToken}`;
-      const retry = await fetch(`${BASE}${path}`, { ...options, headers });
-
-      if (retry.status === 429) {
-        throw new Error("Too many requests. Please wait and try again.");
-      }
-      if (!retry.ok) {
-        const rawText = await retry.text().catch(() => "");
-        let errorMessage: string;
-        try {
-          const parsed = JSON.parse(rawText);
-          errorMessage = parsed.error || `HTTP ${retry.status}`;
-        } catch {
-          errorMessage = rawText
-            ? `HTTP ${retry.status}: ${rawText.substring(0, 200)}`
-            : `HTTP ${retry.status}`;
-        }
-        console.error(`[API] ${options.method || "GET"} ${path} failed after token refresh: ${retry.status}`, rawText.substring(0, 500));
-        throw new Error(errorMessage);
-      }
-      if (retry.status === 204) return undefined as T;
-      const retryText = await retry.text();
-      if (!retryText) return undefined as T;
-      return JSON.parse(retryText) as T;
-    }
-    // Refresh failed — force logout
-    useAuthStore.getState().logout();
-    throw new Error("Session expired. Please sign in again.");
-  }
-
-  if (!res.ok) {
-    const rawText = await res.text().catch(() => "");
-    let errorMessage: string;
-    try {
-      const parsed = JSON.parse(rawText);
-      errorMessage = parsed.error || `HTTP ${res.status}`;
-    } catch {
-      errorMessage = rawText
-        ? `HTTP ${res.status}: ${rawText.substring(0, 200)}`
-        : `HTTP ${res.status}`;
-    }
-    console.error(`[API] ${options.method || "GET"} ${path} failed: ${res.status}`, rawText.substring(0, 500));
-    throw new Error(errorMessage);
-  }
-
-  if (res.status === 204) return undefined as T;
-
-  // Handle empty response bodies (e.g. 200 OK with no content)
-  const text = await res.text();
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
-}
-
-/**
- * Attempt to refresh the access token.
- *
- * Supports full token rotation: the server returns a NEW refresh token
- * alongside the new access token. Both are persisted.
- *
- * Uses single-flight deduplication so concurrent 401s don't cause
- * multiple refresh attempts (which would fail with revoked-token detection).
- */
-async function tryRefresh(): Promise<boolean> {
-  // If a refresh is already in flight, piggyback on it
-  if (refreshPromise) return refreshPromise;
-
-  refreshPromise = (async () => {
-    const { refreshToken, setTokens } = useAuthStore.getState();
-    if (!refreshToken) return false;
-
-    try {
-      const res = await fetch(`${BASE}/auth/refresh`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Requested-With": "SimplePhotos",
-        },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-      if (!res.ok) return false;
-
-      const data = await res.json();
-      // Server returns rotated refresh token — persist both new tokens
-      const newRefresh = data.refresh_token || refreshToken;
-      setTokens(data.access_token, newRefresh);
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-
-  try {
-    return await refreshPromise;
-  } finally {
-    refreshPromise = null;
-  }
-}
-
-/**
- * Download raw binary data from a URL with automatic 401 token refresh.
- * Used for non-JSON endpoints (photo files, thumbnails, blobs) where the
- * standard `request()` helper can't be used because it parses JSON.
- */
-async function downloadRaw(url: string): Promise<ArrayBuffer> {
-  const { accessToken } = useAuthStore.getState();
-  const headers: Record<string, string> = {
-    "X-Requested-With": "SimplePhotos",
-  };
-  if (accessToken) {
-    headers["Authorization"] = `Bearer ${accessToken}`;
-  }
-
-  const res = await fetch(url, { headers });
-
-  if (res.status === 401) {
-    const refreshed = await tryRefresh();
-    if (refreshed) {
-      const newToken = useAuthStore.getState().accessToken;
-      headers["Authorization"] = `Bearer ${newToken}`;
-      const retry = await fetch(url, { headers });
-      if (!retry.ok) {
-        console.error(`[API] Download ${url} failed after refresh: ${retry.status}`);
-        throw new Error(`Download failed: HTTP ${retry.status}`);
-      }
-      return retry.arrayBuffer();
-    }
-    useAuthStore.getState().logout();
-    throw new Error("Session expired");
-  }
-
-  if (!res.ok) {
-    console.error(`[API] Download ${url} failed: ${res.status}`);
-    throw new Error(`Download failed: HTTP ${res.status}`);
-  }
-  return res.arrayBuffer();
-}
-
-// ── Type definitions ─────────────────────────────────────────────────────────
-
-export interface RegisterResponse {
-  user_id: string;
-  username: string;
-}
-
-export interface LoginResponse {
-  access_token?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  requires_totp?: boolean;
-  totp_session_token?: string;
-}
-
-export interface TotpSetupResponse {
-  otpauth_uri: string;
-  backup_codes: string[];
-}
-
-export interface ChangePasswordResponse {
-  message: string;
-}
+// Re-export all types for backward compatibility
+export type {
+  RegisterResponse,
+  LoginResponse,
+  TotpSetupResponse,
+  ChangePasswordResponse,
+  DiagnosticsResponse,
+  AuditLogEntry,
+  AuditLogListResponse,
+  AuditLogParams,
+  ClientLogEntry,
+  ClientLogListResponse,
+  ClientLogParams,
+} from "./types";
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
@@ -357,196 +164,7 @@ export const api = {
       ),
   },
 
-  admin: {
-    createUser: (username: string, password: string, role: "admin" | "user" = "user") =>
-      request<{
-        user_id: string;
-        username: string;
-        role: string;
-      }>("/admin/users", {
-        method: "POST",
-        body: JSON.stringify({ username, password, role }),
-      }),
-
-    listUsers: () =>
-      request<
-        Array<{
-          id: string;
-          username: string;
-          role: string;
-          totp_enabled: boolean;
-          created_at: string;
-        }>
-      >("/admin/users"),
-
-    deleteUser: (userId: string) =>
-      request<void>(`/admin/users/${userId}`, { method: "DELETE" }),
-
-    updateUserRole: (userId: string, role: "admin" | "user") =>
-      request<{ message: string; user_id: string; role: string }>(
-        `/admin/users/${userId}/role`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ role }),
-        }
-      ),
-
-    resetUserPassword: (userId: string, newPassword: string) =>
-      request<{ message: string }>(
-        `/admin/users/${userId}/password`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ new_password: newPassword }),
-        }
-      ),
-
-    resetUser2fa: (userId: string) =>
-      request<{ message: string }>(`/admin/users/${userId}/2fa`, {
-        method: "DELETE",
-      }),
-
-    setupUser2fa: (userId: string) =>
-      request<TotpSetupResponse>(`/admin/users/${userId}/2fa/setup`, {
-        method: "POST",
-      }),
-
-    confirmUser2fa: (userId: string, totpCode: string) =>
-      request<{ message: string }>(`/admin/users/${userId}/2fa/confirm`, {
-        method: "POST",
-        body: JSON.stringify({ totp_code: totpCode }),
-      }),
-
-    getStorage: () =>
-      request<{
-        storage_path: string;
-        message: string;
-      }>("/admin/storage"),
-
-    updateStorage: (path: string) =>
-      request<{
-        storage_path: string;
-        message: string;
-      }>("/admin/storage", {
-        method: "PUT",
-        body: JSON.stringify({ path }),
-      }),
-
-    browseDirectory: (path?: string) =>
-      request<{
-        current_path: string;
-        parent_path: string | null;
-        directories: Array<{ name: string; path: string }>;
-        writable: boolean;
-      }>(`/admin/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`),
-
-    importScan: (path?: string) =>
-      request<{
-        directory: string;
-        files: Array<{
-          name: string;
-          path: string;
-          size: number;
-          mime_type: string;
-          modified: string | null;
-        }>;
-        total_size: number;
-      }>(`/admin/import/scan${path ? `?path=${encodeURIComponent(path)}` : ""}`),
-
-    importFile: async (filePath: string): Promise<ArrayBuffer> => {
-      const { accessToken } = useAuthStore.getState();
-      const headers: Record<string, string> = {
-        "X-Requested-With": "SimplePhotos",
-      };
-      if (accessToken) {
-        headers["Authorization"] = `Bearer ${accessToken}`;
-      }
-
-      const url = `${BASE}/admin/import/file?path=${encodeURIComponent(filePath)}`;
-      const res = await fetch(url, { headers });
-
-      if (res.status === 401) {
-        const refreshed = await tryRefresh();
-        if (refreshed) {
-          const newToken = useAuthStore.getState().accessToken;
-          headers["Authorization"] = `Bearer ${newToken}`;
-          const retry = await fetch(url, { headers });
-          if (!retry.ok) throw new Error(`Download failed: ${retry.status}`);
-          return retry.arrayBuffer();
-        }
-        useAuthStore.getState().logout();
-        throw new Error("Session expired");
-      }
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-      return res.arrayBuffer();
-    },
-
-    getPort: () =>
-      request<{ port: number; message: string }>("/admin/port"),
-
-    updatePort: (port: number) =>
-      request<{ port: number; message: string }>("/admin/port", {
-        method: "PUT",
-        body: JSON.stringify({ port }),
-      }),
-
-    restart: () =>
-      request<{ message: string }>("/admin/restart", {
-        method: "POST",
-      }),
-
-    /** Scan storage and register all unregistered media files (plain mode) */
-    scanAndRegister: () =>
-      request<{ registered: number; message: string }>("/admin/photos/scan", {
-        method: "POST",
-      }),
-
-    // ── SSL / TLS ──────────────────────────────────────────────────────────
-
-    /** Get current TLS configuration */
-    getSsl: () =>
-      request<{
-        enabled: boolean;
-        cert_path: string | null;
-        key_path: string | null;
-        message: string;
-      }>("/admin/ssl"),
-
-    /** Update TLS configuration (manual cert paths) */
-    updateSsl: (data: {
-      enabled: boolean;
-      cert_path?: string;
-      key_path?: string;
-    }) =>
-      request<{
-        enabled: boolean;
-        cert_path: string | null;
-        key_path: string | null;
-        message: string;
-      }>("/admin/ssl", {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }),
-
-    /** Generate a Let's Encrypt certificate via ACME HTTP-01 */
-    generateLetsEncrypt: (data: {
-      domain: string;
-      email: string;
-      staging?: boolean;
-    }) =>
-      request<{
-        success: boolean;
-        cert_path: string;
-        key_path: string;
-        message: string;
-      }>("/admin/ssl/letsencrypt", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-  },
+  admin: adminApi,
 
   // ── Plain-mode Photos ─────────────────────────────────────────────────────
 
@@ -576,6 +194,7 @@ export const api = {
           created_at: string;
           is_favorite: boolean;
           crop_metadata: string | null;
+          camera_model: string | null;
         }>;
         next_cursor: string | null;
       }>(`/photos${qs ? `?${qs}` : ""}`);
@@ -1089,6 +708,43 @@ export const api = {
           tags: string[];
         }>;
       }>(`/search?${params.toString()}`);
+    },
+  },
+
+  // ── Diagnostics (admin) ─────────────────────────────────────────────────
+
+  diagnostics: {
+    /** Get comprehensive server metrics (admin only) */
+    getMetrics: () =>
+      request<DiagnosticsResponse>("/admin/diagnostics"),
+
+    /** List audit log entries with optional filters (admin only) */
+    listAuditLogs: (params?: AuditLogParams) => {
+      const search = new URLSearchParams();
+      if (params?.event_type) search.set("event_type", params.event_type);
+      if (params?.user_id) search.set("user_id", params.user_id);
+      if (params?.ip_address) search.set("ip_address", params.ip_address);
+      if (params?.after) search.set("after", params.after);
+      if (params?.before) search.set("before", params.before);
+      if (params?.limit) search.set("limit", params.limit.toString());
+      const qs = search.toString();
+      return request<AuditLogListResponse>(
+        `/admin/audit-logs${qs ? `?${qs}` : ""}`
+      );
+    },
+
+    /** List client diagnostic logs with optional filters (admin only) */
+    listClientLogs: (params?: ClientLogParams) => {
+      const search = new URLSearchParams();
+      if (params?.user_id) search.set("user_id", params.user_id);
+      if (params?.session_id) search.set("session_id", params.session_id);
+      if (params?.level) search.set("level", params.level);
+      if (params?.after) search.set("after", params.after);
+      if (params?.limit) search.set("limit", params.limit.toString());
+      const qs = search.toString();
+      return request<ClientLogListResponse>(
+        `/admin/client-logs${qs ? `?${qs}` : ""}`
+      );
     },
   },
 };
