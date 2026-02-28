@@ -49,20 +49,34 @@ chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true
 echo "Data cleared."
 
 # Restart server as the real user (not root)
-echo "Starting server as $RUN_USER..."
+LOG_FILE="/tmp/simple-photos-server.log"
+echo "Starting server as $RUN_USER (log: $LOG_FILE)..."
 if [[ "$RUN_USER" != "$(id -un)" ]]; then
-    # We're root via sudo — drop privileges. Use nohup + setsid so the server
-    # survives after this script exits.
-    sudo -u "$RUN_USER" setsid nohup "$SERVER_DIR/target/release/simple-photos-server" \
-        > /dev/null 2>&1 &
+    # We're root via sudo — drop privileges and cd to SERVER_DIR so relative
+    # config paths (./data/db/...) resolve correctly.
+    sudo -u "$RUN_USER" bash -c "cd '$SERVER_DIR' && setsid nohup ./target/release/simple-photos-server > '$LOG_FILE' 2>&1 &"
 else
     cd "$SERVER_DIR"
-    nohup ./target/release/simple-photos-server > /dev/null 2>&1 &
+    nohup ./target/release/simple-photos-server > "$LOG_FILE" 2>&1 &
     disown
 fi
-sleep 3
+
+# Wait for server to become responsive (up to 10 seconds)
+echo -n "Waiting for server"
+for i in $(seq 1 10); do
+    if curl -sf http://localhost:8080/api/setup/status > /dev/null 2>&1; then
+        echo " ready!"
+        break
+    fi
+    echo -n "."
+    sleep 1
+done
 
 # Verify setup state
 STATUS=$(curl -s http://localhost:8080/api/setup/status 2>/dev/null || echo '{"error":"server not responding"}')
+if echo "$STATUS" | grep -q '"error"'; then
+    echo "WARNING: Server may have failed to start. Check $LOG_FILE"
+    tail -20 "$LOG_FILE" 2>/dev/null
+fi
 echo "Setup status: $STATUS"
 echo "=== Reset complete ==="

@@ -69,7 +69,6 @@ class LoginViewModel @Inject constructor(
 @Composable
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
-    onNavigateToRegister: () -> Unit,
     viewModel: LoginViewModel = hiltViewModel()
 ) {
     var showPassword by remember { mutableStateOf(false) }
@@ -183,12 +182,7 @@ fun LoginScreen(
                 }
             }
 
-            if (viewModel.totpSessionToken == null) {
-                Spacer(Modifier.height(8.dp))
-                TextButton(onClick = onNavigateToRegister) {
-                    Text("Don't have an account? Register")
-                }
-            }
+
         }
     }
 }

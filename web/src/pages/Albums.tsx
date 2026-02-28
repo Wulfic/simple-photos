@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex } from "../crypto/crypto";
-import { db, type CachedAlbum } from "../db";
+import { db, type CachedAlbum, type CachedPhoto } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
@@ -24,6 +24,7 @@ export default function Albums() {
   const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
+  const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted" | null>(null);
   const navigate = useNavigate();
 
   // Shared albums state
@@ -35,12 +36,58 @@ export default function Albums() {
   const [sharePickerAlbumId, setSharePickerAlbumId] = useState<string | null>(null);
   const [confirmDeleteSharedId, setConfirmDeleteSharedId] = useState<string | null>(null);
 
+  // Smart/default album counts
+  const [plainPhotoCounts, setPlainPhotoCounts] = useState<{
+    all: number; favorites: number; photos: number; gifs: number; videos: number;
+  } | null>(null);
+
+  // Encrypted photos from IndexedDB (for smart album counts)
+  const encryptedPhotos = useLiveQuery(() => db.photos.toArray());
+
   const albums = useLiveQuery(() => db.albums.orderBy("name").toArray());
 
   useEffect(() => {
     loadAlbums();
     loadSharedAlbums();
+    loadEncryptionMode();
   }, []);
+
+  async function loadEncryptionMode() {
+    try {
+      const settings = await api.encryption.getSettings();
+      const mode = settings.encryption_mode as "plain" | "encrypted";
+      setEncryptionMode(mode);
+
+      // If plain mode, also load photo counts for smart albums
+      if (mode === "plain") {
+        const allPhotos: Array<{ media_type: string; is_favorite: boolean }> = [];
+        let cursor: string | undefined;
+        do {
+          const res = await api.photos.list({ after: cursor, limit: 200 });
+          allPhotos.push(...res.photos);
+          cursor = res.next_cursor ?? undefined;
+        } while (cursor);
+        setPlainPhotoCounts({
+          all: allPhotos.length,
+          favorites: allPhotos.filter(p => p.is_favorite).length,
+          photos: allPhotos.filter(p => p.media_type === "photo" || p.media_type === "gif").length,
+          gifs: allPhotos.filter(p => p.media_type === "gif").length,
+          videos: allPhotos.filter(p => p.media_type === "video").length,
+        });
+      }
+    } catch {
+      // Fallback — assume encrypted
+      setEncryptionMode("encrypted");
+    }
+  }
+
+  // Compute encrypted smart album counts from IndexedDB
+  const encryptedPhotoCounts = encryptedPhotos ? {
+    all: encryptedPhotos.length,
+    photos: encryptedPhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
+    gifs: encryptedPhotos.filter(p => p.mediaType === "gif").length,
+    videos: encryptedPhotos.filter(p => p.mediaType === "video").length,
+  } : null;
 
   async function loadAlbums() {
     setLoading(true);
@@ -184,7 +231,9 @@ export default function Albums() {
       <AppHeader />
 
       <main className="p-4">
-        <div className="flex justify-end mb-4">
+        {/* ── User Albums ────────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Albums</h2>
           <button
             onClick={() => setShowCreate(!showCreate)}
             className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors shadow-sm shadow-blue-900/20"
@@ -218,6 +267,31 @@ export default function Albums() {
       {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+        {/* ── Smart albums pinned at top ────────────────────────────────── */}
+        {encryptionMode === "plain" && (
+          <SmartAlbumCard
+            label="Favorites"
+            count={plainPhotoCounts?.favorites ?? 0}
+            onClick={() => navigate("/albums/smart-favorites")}
+          />
+        )}
+        <SmartAlbumCard
+          label="Photos"
+          count={encryptionMode === "plain" ? (plainPhotoCounts?.photos ?? 0) : (encryptedPhotoCounts?.photos ?? 0)}
+          onClick={() => navigate("/albums/smart-photos")}
+        />
+        <SmartAlbumCard
+          label="GIFs"
+          count={encryptionMode === "plain" ? (plainPhotoCounts?.gifs ?? 0) : (encryptedPhotoCounts?.gifs ?? 0)}
+          onClick={() => navigate("/albums/smart-gifs")}
+        />
+        <SmartAlbumCard
+          label="Videos"
+          count={encryptionMode === "plain" ? (plainPhotoCounts?.videos ?? 0) : (encryptedPhotoCounts?.videos ?? 0)}
+          onClick={() => navigate("/albums/smart-videos")}
+        />
+
+        {/* ── User-created albums ───────────────────────────────────────── */}
         {loading && (!albums || albums.length === 0) && (
           <p className="col-span-full text-gray-500 dark:text-gray-400 text-center py-12">
             Loading albums...
@@ -403,6 +477,25 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
       <p className="font-medium truncate">{album.name}</p>
       <p className="text-sm text-gray-500 dark:text-gray-400">
         {album.photoBlobIds.length} items
+      </p>
+    </div>
+  );
+}
+
+// ── Smart Album Card (same style as regular album cards) ─────────────────────
+
+function SmartAlbumCard({ label, count, onClick }: { label: string; count: number; onClick: () => void }) {
+  return (
+    <div
+      onClick={onClick}
+      className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+    >
+      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-2 flex items-center justify-center overflow-hidden">
+        <span className="text-gray-400 text-3xl">{count}</span>
+      </div>
+      <p className="font-medium truncate">{label}</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        {count} items
       </p>
     </div>
   );
