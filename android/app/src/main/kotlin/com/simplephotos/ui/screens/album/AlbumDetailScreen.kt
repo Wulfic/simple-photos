@@ -52,6 +52,18 @@ class AlbumDetailViewModel @Inject constructor(
 
     val albumId: String = savedStateHandle["albumId"] ?: ""
 
+    /** Whether this is a virtual smart album (favorites, photos, gifs, videos) */
+    val isSmartAlbum: Boolean = albumId.startsWith("smart-")
+
+    /** Human-readable label for smart albums */
+    val smartAlbumLabel: String = when (albumId) {
+        "smart-favorites" -> "Favorites"
+        "smart-photos" -> "Photos"
+        "smart-gifs" -> "GIFs"
+        "smart-videos" -> "Videos"
+        else -> "Album"
+    }
+
     var album by mutableStateOf<AlbumEntity?>(null)
     var photos by mutableStateOf<List<PhotoEntity>>(emptyList())
     var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
@@ -79,7 +91,28 @@ class AlbumDetailViewModel @Inject constructor(
                 encryptionMode = photoRepository.getEncryptionMode()
             } catch (_: Exception) {}
         }
-        loadAlbum()
+        if (isSmartAlbum) loadSmartAlbum() else loadAlbum()
+    }
+
+    /** Load filtered photos for smart albums */
+    private fun loadSmartAlbum() {
+        viewModelScope.launch {
+            loading = true
+            try {
+                val all = photoRepository.getAllPhotos().first()
+                photos = when (albumId) {
+                    "smart-favorites" -> all.filter { it.isFavorite }
+                    "smart-photos" -> all.filter { it.mediaType == "photo" || it.mediaType == "gif" }
+                    "smart-gifs" -> all.filter { it.mediaType == "gif" }
+                    "smart-videos" -> all.filter { it.mediaType == "video" }
+                    else -> all
+                }
+            } catch (e: Exception) {
+                error = e.message
+            } finally {
+                loading = false
+            }
+        }
     }
 
     fun loadAlbum() {
@@ -263,7 +296,12 @@ fun AlbumDetailScreen(
                 }
             } else {
                 TopAppBar(
-                    title = { Text(viewModel.album?.name ?: "Album") },
+                    title = {
+                        Text(
+                            if (viewModel.isSmartAlbum) viewModel.smartAlbumLabel
+                            else (viewModel.album?.name ?: "Album")
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(
@@ -274,12 +312,14 @@ fun AlbumDetailScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { viewModel.showDeleteConfirm = true }) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_trashcan),
-                                contentDescription = "Delete album",
-                                modifier = Modifier.size(12.dp)
-                            )
+                        if (!viewModel.isSmartAlbum) {
+                            IconButton(onClick = { viewModel.showDeleteConfirm = true }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_trashcan),
+                                    contentDescription = "Delete album",
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
                         }
                     }
                 )
@@ -291,7 +331,7 @@ fun AlbumDetailScreen(
                 viewModel.loading -> {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
-                viewModel.showAddPanel -> {
+                viewModel.showAddPanel && !viewModel.isSmartAlbum -> {
                     // ── Add Photos Panel (full content area) ─────────────
                     Column(modifier = Modifier.fillMaxSize()) {
                         // Header bar at top of page
@@ -380,38 +420,51 @@ fun AlbumDetailScreen(
                         )
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            "No photos in this album.",
+                            if (viewModel.isSmartAlbum) "No ${viewModel.smartAlbumLabel.lowercase()} found."
+                            else "No photos in this album.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
                         )
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = { viewModel.openAddPanel() }) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Add Photos")
+                        if (!viewModel.isSmartAlbum) {
+                            Spacer(Modifier.height(12.dp))
+                            Button(onClick = { viewModel.openAddPanel() }) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Add Photos")
+                            }
                         }
                     }
                 }
                 else -> {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Add photos button at top of page
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "${viewModel.photos.size} photo${if (viewModel.photos.size != 1) "s" else ""}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedButton(onClick = { viewModel.openAddPanel() }) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Add Photos", fontSize = 13.sp)
+                        // Add photos button at top of page (not for smart albums)
+                        if (!viewModel.isSmartAlbum) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${viewModel.photos.size} photo${if (viewModel.photos.size != 1) "s" else ""}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                OutlinedButton(onClick = { viewModel.openAddPanel() }) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Add Photos", fontSize = 13.sp)
+                                }
                             }
+                        } else {
+                            // Just show photo count for smart albums
+                            Text(
+                                "${viewModel.photos.size} item${if (viewModel.photos.size != 1) "s" else ""}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                            )
                         }
 
                         LazyVerticalGrid(

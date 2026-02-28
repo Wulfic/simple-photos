@@ -9,7 +9,7 @@ import {
   mediaTypeFromMime,
   ACCEPTED_MIME_TYPES,
 } from "../db";
-import { createFallbackThumbnail, arrayBufferToBase64, base64ToArrayBuffer, generateMigrationThumbnail } from "../utils/media";
+import { createFallbackThumbnail, arrayBufferToBase64, base64ToArrayBuffer } from "../utils/media";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useAuthStore } from "../store/auth";
 import { useProcessingStore } from "../store/processing";
@@ -23,8 +23,7 @@ import PlainMediaTile from "../components/gallery/PlainMediaTile";
 
 type EncryptionMode = "plain" | "encrypted";
 
-/** Default album filter types for organizing photos */
-type AlbumFilter = "all" | "favorites" | "photos" | "gifs" | "videos";
+
 
 // ── Payload shapes ────────────────────────────────────────────────────────────
 
@@ -64,9 +63,6 @@ export default function Gallery() {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const { startTask, endTask } = useProcessingStore();
-
-  // ── Album filter state ──────────────────────────────────────────────────
-  const [albumFilter, setAlbumFilter] = useState<AlbumFilter>("all");
 
   // ── Multi-select state (mobile long-press) ─────────────────────────────
   const [selectionMode, setSelectionMode] = useState(false);
@@ -161,11 +157,13 @@ export default function Gallery() {
     init();
   }, []);
 
-  // ── Encryption migration worker ─────────────────────────────────────────
-  // When the server reports an active "encrypting" migration (e.g. after
-  // initial setup chose encrypted mode and photos were discovered in plain
-  // mode), this worker downloads each plain photo, encrypts it client-side,
-  // uploads the encrypted blob, and reports progress to the server.
+  // ── Encryption migration worker (runs in a dedicated Web Worker) ──────────
+  // When the server reports an active "encrypting" migration, we spawn a
+  // Web Worker that handles download → encrypt → upload for each photo.
+  // Web Workers are NOT subject to background-tab throttling, so encryption
+  // continues at full speed even when the user switches tabs or minimizes.
+  const migrationWorkerRef = useRef<Worker | null>(null);
+
   useEffect(() => {
     if (migrationStatus !== "encrypting") return;
     if (migrationRunningRef.current) return;
@@ -176,7 +174,7 @@ export default function Gallery() {
 
     (async () => {
       try {
-        console.log("[Gallery Migration] Starting encryption migration...");
+        console.log("[Gallery Migration] Fetching photo list for worker...");
 
         // Fetch ALL plain photos that need encrypting
         const allPhotos: PlainPhoto[] = [];
@@ -187,117 +185,92 @@ export default function Gallery() {
           cursor = res.next_cursor ?? undefined;
         } while (cursor);
 
-        console.log(`[Gallery Migration] Found ${allPhotos.length} photos to encrypt`);
-        const total = allPhotos.length;
-        let completed = 0;
-        let succeeded = 0;
-        let failedCount = 0;
-        let lastError = "";
-
-        for (const photo of allPhotos) {
-          let attempts = 0;
-          let itemSuccess = false;
-
-          while (attempts < 3 && !itemSuccess) {
-            attempts++;
-            try {
-              // Step 1: Download the raw file
-              const fileBuffer = await api.photos.downloadFile(photo.id);
-              const fileData = new Uint8Array(fileBuffer);
-
-              // Step 2: Generate thumbnail
-              let thumbBlobId: string | undefined;
-              try {
-                const thumbData = await generateMigrationThumbnail(fileData, photo.mime_type, 256);
-                if (thumbData) {
-                  const thumbPayload = JSON.stringify({
-                    v: 1, photo_blob_id: "", width: 256, height: 256,
-                    data: arrayBufferToBase64(thumbData),
-                  });
-                  const encThumb = await encrypt(new TextEncoder().encode(thumbPayload));
-                  const thumbHash = await sha256Hex(new Uint8Array(encThumb));
-                  const thumbBlobType = photo.media_type === "video" ? "video_thumbnail" : "thumbnail";
-                  const thumbUpload = await api.blobs.upload(encThumb, thumbBlobType, thumbHash);
-                  thumbBlobId = thumbUpload.blob_id;
-                }
-              } catch (thumbErr: any) {
-                console.warn(`[Gallery Migration] Thumbnail failed for "${photo.filename}" (continuing):`, thumbErr.message);
-              }
-
-              // Step 3: Build and encrypt photo payload
-              const serverBlobType = blobTypeFromMime(photo.mime_type);
-              const photoPayload = JSON.stringify({
-                v: 1,
-                filename: photo.filename,
-                taken_at: photo.taken_at || photo.created_at,
-                mime_type: photo.mime_type,
-                media_type: (photo.media_type || mediaTypeFromMime(photo.mime_type)) as "photo" | "gif" | "video",
-                width: photo.width,
-                height: photo.height,
-                duration: photo.duration_secs ?? undefined,
-                album_ids: [],
-                thumbnail_blob_id: thumbBlobId || "",
-                data: arrayBufferToBase64(fileData),
-              });
-
-              const encPhoto = await encrypt(new TextEncoder().encode(photoPayload));
-              const photoHash = await sha256Hex(new Uint8Array(encPhoto));
-
-              // Content hash: short hash of original raw bytes for cross-platform alignment
-              const contentHash = (await sha256Hex(fileData)).substring(0, 12);
-
-              // Step 4: Upload encrypted blob
-              const uploadResult = await api.blobs.upload(encPhoto, serverBlobType, photoHash, contentHash);
-
-              // Step 5: Link blob to the plain photo so it won't be re-migrated
-              await api.photos.markEncrypted(photo.id, uploadResult.blob_id);
-
-              itemSuccess = true;
-              succeeded++;
-            } catch (itemErr: any) {
-              console.error(`[Gallery Migration] FAILED "${photo.filename}" attempt ${attempts}/3:`, itemErr.message);
-              if (attempts >= 3) {
-                failedCount++;
-                lastError = `Failed on "${photo.filename}": ${itemErr.message}`;
-              } else {
-                await new Promise((r) => setTimeout(r, 500 * attempts));
-              }
-            }
-          }
-
-          completed++;
-          setMigrationCompleted(completed);
-          await api.encryption.reportProgress({
-            completed_count: completed,
-            ...(itemSuccess ? {} : { error: lastError }),
-          });
+        if (allPhotos.length === 0) {
+          console.log("[Gallery Migration] No photos to encrypt, marking done");
+          await api.encryption.reportProgress({ completed_count: 0, done: true });
+          setMigrationStatus("idle");
+          migrationRunningRef.current = false;
+          endTask("encryption");
+          return;
         }
 
-        console.log(`[Gallery Migration] Complete: ${succeeded} succeeded, ${failedCount} failed out of ${total}`);
+        setMigrationTotal(allPhotos.length);
+        console.log(`[Gallery Migration] Spawning worker for ${allPhotos.length} photos`);
 
-        // Mark migration complete
-        await api.encryption.reportProgress({
-          completed_count: total,
-          done: true,
-          ...(failedCount > 0
-            ? { error: `Migration finished with ${failedCount}/${total} failures. Last error: ${lastError}` }
-            : {}),
+        // Get auth tokens and encryption key for the worker
+        const { accessToken, refreshToken } = useAuthStore.getState();
+        const keyHex = sessionStorage.getItem("sp_key");
+        if (!accessToken || !keyHex) {
+          throw new Error("Missing auth token or encryption key");
+        }
+
+        // Spawn the migration Web Worker
+        const worker = new Worker(
+          new URL("../workers/migrationWorker.ts", import.meta.url),
+          { type: "module" }
+        );
+        migrationWorkerRef.current = worker;
+
+        worker.onmessage = async (e) => {
+          const msg = e.data;
+
+          if (msg.type === "progress") {
+            setMigrationCompleted(msg.completed);
+          } else if (msg.type === "done") {
+            console.log(
+              `[Gallery Migration] Worker done: ${msg.succeeded}/${msg.total} succeeded, ${msg.failed} failed`
+            );
+            setMigrationStatus("idle");
+            migrationRunningRef.current = false;
+            migrationWorkerRef.current = null;
+            worker.terminate();
+            endTask("encryption");
+            await loadEncryptedPhotos();
+          } else if (msg.type === "error") {
+            console.error("[Gallery Migration] Worker error:", msg.message);
+            migrationRunningRef.current = false;
+            migrationWorkerRef.current = null;
+            worker.terminate();
+            endTask("encryption");
+          } else if (msg.type === "tokenUpdate") {
+            // Worker refreshed the token — update main thread stores
+            useAuthStore.getState().setTokens(msg.accessToken, msg.refreshToken);
+          }
+        };
+
+        worker.onerror = (err) => {
+          console.error("[Gallery Migration] Worker fatal error:", err);
+          migrationRunningRef.current = false;
+          migrationWorkerRef.current = null;
+          endTask("encryption");
+        };
+
+        // Start the worker
+        worker.postMessage({
+          type: "start",
+          accessToken,
+          refreshToken: refreshToken || "",
+          keyHex,
+          photos: allPhotos,
         });
-
-        // Reload encrypted photos so they appear in the gallery
-        setMigrationStatus("idle");
-        await loadEncryptedPhotos();
       } catch (err: any) {
-        console.error("[Gallery Migration] Top-level error:", err.message);
+        console.error("[Gallery Migration] Setup error:", err.message);
         await api.encryption.reportProgress({
           completed_count: 0,
           error: `Migration failed: ${err.message}`,
         }).catch(() => {});
-      } finally {
         migrationRunningRef.current = false;
         endTask("encryption");
       }
     })();
+
+    return () => {
+      // Cleanup worker if component unmounts during migration
+      if (migrationWorkerRef.current) {
+        migrationWorkerRef.current.terminate();
+        migrationWorkerRef.current = null;
+      }
+    };
   }, [migrationStatus]);
 
   // ── Load plain-mode photos from server ─────────────────────────────────────
@@ -543,24 +516,66 @@ export default function Gallery() {
   const secureFilteredPlain = secureBlobIds.size > 0
     ? plainPhotos.filter((p) => !secureBlobIds.has(p.id))
     : plainPhotos;
-  const filteredPhotos = secureBlobIds.size > 0
+  const secureFilteredEncrypted = secureBlobIds.size > 0
     ? photos?.filter((p) => !secureBlobIds.has(p.blobId))
     : photos;
 
-  // Apply album filter for plain mode
-  const filteredPlainPhotos = (() => {
-    switch (albumFilter) {
-      case "favorites":
-        return secureFilteredPlain.filter((p) => p.is_favorite);
-      case "photos":
-        return secureFilteredPlain.filter((p) => p.media_type === "photo" || p.media_type === "gif");
-      case "gifs":
-        return secureFilteredPlain.filter((p) => p.media_type === "gif");
-      case "videos":
-        return secureFilteredPlain.filter((p) => p.media_type === "video");
-      default:
-        return secureFilteredPlain;
+  // All photos (after excluding secure gallery items)
+  const filteredPlainPhotos = secureFilteredPlain;
+  const filteredPhotos = secureFilteredEncrypted;
+
+  // ── Group photos by day for date separators ─────────────────────────────
+  // Matches the Android app's "EEEE, MMMM d, yyyy" format (e.g. "Friday, February 27, 2026")
+  const dateFormatter = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  // Day key for grouping (YYYY-MM-DD to avoid locale issues)
+  function dayKey(timestamp: number | string): string {
+    const d = typeof timestamp === "number" ? new Date(timestamp) : new Date(timestamp);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function dayLabel(timestamp: number | string): string {
+    const d = typeof timestamp === "number" ? new Date(timestamp) : new Date(timestamp);
+    return dateFormatter.format(d);
+  }
+
+  // Group plain photos by day
+  type PlainDayGroup = { key: string; label: string; photos: PlainPhoto[] };
+  const plainDayGroups: PlainDayGroup[] = (() => {
+    if (mode !== "plain" || filteredPlainPhotos.length === 0) return [];
+    const groups = new Map<string, PlainDayGroup>();
+    // Photos are already sorted by date descending
+    let globalIdx = 0;
+    for (const photo of filteredPlainPhotos) {
+      const ts = photo.taken_at || photo.created_at;
+      const dk = dayKey(ts);
+      if (!groups.has(dk)) {
+        groups.set(dk, { key: dk, label: dayLabel(ts), photos: [] });
+      }
+      groups.get(dk)!.photos.push(photo);
+      globalIdx++;
     }
+    return Array.from(groups.values());
+  })();
+
+  // Group encrypted photos by day
+  type EncryptedDayGroup = { key: string; label: string; photos: CachedPhoto[] };
+  const encryptedDayGroups: EncryptedDayGroup[] = (() => {
+    if (mode !== "encrypted" || !filteredPhotos || filteredPhotos.length === 0) return [];
+    const groups = new Map<string, EncryptedDayGroup>();
+    for (const photo of filteredPhotos) {
+      const dk = dayKey(photo.takenAt);
+      if (!groups.has(dk)) {
+        groups.set(dk, { key: dk, label: dayLabel(photo.takenAt), photos: [] });
+      }
+      groups.get(dk)!.photos.push(photo);
+    }
+    return Array.from(groups.values());
   })();
 
   const hasContent = mode === "plain"
@@ -616,36 +631,6 @@ export default function Gallery() {
           </div>
         )}
 
-        {/* Default album filter tabs — plain mode only */}
-        {mode === "plain" && (
-          <div className="flex gap-1 mb-4 overflow-x-auto pb-1">
-            {([
-              { key: "all" as AlbumFilter, label: "All" },
-              { key: "favorites" as AlbumFilter, label: "★ Favorites" },
-              { key: "photos" as AlbumFilter, label: "Photos" },
-              { key: "gifs" as AlbumFilter, label: "GIFs" },
-              { key: "videos" as AlbumFilter, label: "Videos" },
-            ]).map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => setAlbumFilter(key)}
-                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-                  albumFilter === key
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
-                }`}
-              >
-                {label}
-                {key === "favorites" && mode === "plain" && (
-                  <span className="ml-1 opacity-70">
-                    ({secureFilteredPlain.filter(p => p.is_favorite).length})
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-
         {/* Migration progress banner */}
         {migrationStatus === "encrypting" && migrationTotal > 0 && (
           <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-4">
@@ -670,14 +655,13 @@ export default function Gallery() {
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={handleDrop}
-          className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2"
         >
         {loading && !hasContent && (
-          <p className="col-span-full text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
         )}
 
         {!loading && !hasContent && (
-          <div className="col-span-full text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
             <p className="text-gray-500 dark:text-gray-400 mb-2">No media yet</p>
             <p className="text-gray-400 text-sm">
               {mode === "plain"
@@ -687,43 +671,94 @@ export default function Gallery() {
           </div>
         )}
 
-        {/* Plain mode tiles */}
-        {mode === "plain" && filteredPlainPhotos.map((photo, idx) => (
-          <PlainMediaTile
-            key={photo.id}
-            photo={photo}
-            selectionMode={selectionMode}
-            isSelected={selectedIds.has(photo.id)}
-            onClick={() => {
-              if (selectionMode) toggleSelect(photo.id);
-              else navigate(`/photo/plain/${photo.id}`, {
-                state: { photoIds: filteredPlainPhotos.map(p => p.id), currentIndex: idx },
-              });
-            }}
-            onLongPress={() => {
-              if (!selectionMode) enterSelectionMode(photo.id);
-            }}
-          />
-        ))}
+        {/* Plain mode tiles — grouped by day */}
+        {mode === "plain" && plainDayGroups.map((group) => {
+          // Compute global start index for this group (for photo viewer navigation)
+          let groupStartIdx = 0;
+          for (const g of plainDayGroups) {
+            if (g.key === group.key) break;
+            groupStartIdx += g.photos.length;
+          }
+          return (
+            <div key={group.key}>
+              <div className="flex items-center gap-2 py-2 mt-2 first:mt-0">
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  {group.label}
+                </h3>
+                <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  {group.photos.length}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+                {group.photos.map((photo, localIdx) => {
+                  const globalIdx = groupStartIdx + localIdx;
+                  return (
+                    <PlainMediaTile
+                      key={photo.id}
+                      photo={photo}
+                      selectionMode={selectionMode}
+                      isSelected={selectedIds.has(photo.id)}
+                      onClick={() => {
+                        if (selectionMode) toggleSelect(photo.id);
+                        else navigate(`/photo/plain/${photo.id}`, {
+                          state: { photoIds: filteredPlainPhotos.map(p => p.id), currentIndex: globalIdx },
+                        });
+                      }}
+                      onLongPress={() => {
+                        if (!selectionMode) enterSelectionMode(photo.id);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
 
-        {/* Encrypted mode tiles */}
-        {mode === "encrypted" && filteredPhotos?.map((photo, idx) => (
-          <MediaTile
-            key={photo.blobId}
-            photo={photo}
-            selectionMode={selectionMode}
-            isSelected={selectedIds.has(photo.blobId)}
-            onClick={() => {
-              if (selectionMode) toggleSelect(photo.blobId);
-              else navigate(`/photo/${photo.blobId}`, {
-                state: { photoIds: filteredPhotos!.map(p => p.blobId), currentIndex: idx },
-              });
-            }}
-            onLongPress={() => {
-              if (!selectionMode) enterSelectionMode(photo.blobId);
-            }}
-          />
-        ))}
+        {/* Encrypted mode tiles — grouped by day */}
+        {mode === "encrypted" && encryptedDayGroups.map((group) => {
+          let groupStartIdx = 0;
+          for (const g of encryptedDayGroups) {
+            if (g.key === group.key) break;
+            groupStartIdx += g.photos.length;
+          }
+          return (
+            <div key={group.key}>
+              <div className="flex items-center gap-2 py-2 mt-2 first:mt-0">
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  {group.label}
+                </h3>
+                <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  {group.photos.length}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+                {group.photos.map((photo, localIdx) => {
+                  const globalIdx = groupStartIdx + localIdx;
+                  return (
+                    <MediaTile
+                      key={photo.blobId}
+                      photo={photo}
+                      selectionMode={selectionMode}
+                      isSelected={selectedIds.has(photo.blobId)}
+                      onClick={() => {
+                        if (selectionMode) toggleSelect(photo.blobId);
+                        else navigate(`/photo/${photo.blobId}`, {
+                          state: { photoIds: filteredPhotos!.map(p => p.blobId), currentIndex: globalIdx },
+                        });
+                      }}
+                      onLongPress={() => {
+                        if (!selectionMode) enterSelectionMode(photo.blobId);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
       </main>
     </div>

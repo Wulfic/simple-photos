@@ -1,10 +1,10 @@
 package com.simplephotos.ui.screens.album
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
@@ -66,6 +66,18 @@ class AlbumViewModel @Inject constructor(
     var encryptionMode by mutableStateOf("plain")
         private set
 
+    /** Photo counts for smart/default albums */
+    var totalCount by mutableStateOf(0)
+        private set
+    var favoritesCount by mutableStateOf(0)
+        private set
+    var photosCount by mutableStateOf(0)
+        private set
+    var gifsCount by mutableStateOf(0)
+        private set
+    var videosCount by mutableStateOf(0)
+        private set
+
     init {
         viewModelScope.launch {
             try {
@@ -80,6 +92,23 @@ class AlbumViewModel @Inject constructor(
             // Sync album manifests from server (picks up web-created albums)
             try {
                 withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() }
+            } catch (_: Exception) {}
+            // Load photo counts for smart albums
+            loadSmartAlbumCounts()
+        }
+    }
+
+    private fun loadSmartAlbumCounts() {
+        viewModelScope.launch {
+            try {
+                val allPhotos = withContext(Dispatchers.IO) {
+                    photoRepository.getAllPhotos().first()
+                }
+                totalCount = allPhotos.size
+                favoritesCount = allPhotos.count { it.isFavorite }
+                photosCount = allPhotos.count { it.mediaType == "photo" || it.mediaType == "gif" }
+                gifsCount = allPhotos.count { it.mediaType == "gif" }
+                videosCount = allPhotos.count { it.mediaType == "video" }
             } catch (_: Exception) {}
         }
     }
@@ -171,7 +200,11 @@ fun AlbumListScreen(
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding)) {
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+        ) {
             // ── Page header with inline "New Album" button ───────────
             Row(
                 modifier = Modifier
@@ -208,9 +241,61 @@ fun AlbumListScreen(
                 )
             }
 
-            if (albums.isEmpty()) {
+            // Build combined list: smart albums pinned at top, then user albums
+            val smartAlbumEntries = buildList {
+                if (viewModel.encryptionMode == "plain") {
+                    add(Triple("smart-favorites", "Favorites", viewModel.favoritesCount))
+                }
+                add(Triple("smart-photos", "Photos", viewModel.photosCount))
+                add(Triple("smart-gifs", "GIFs", viewModel.gifsCount))
+                add(Triple("smart-videos", "Videos", viewModel.videosCount))
+            }
+
+            // Render all cards (smart + user) in 2-column rows
+            val allItems = smartAlbumEntries.map { (id, label, count) ->
+                AlbumGridItem.Smart(id, label, count)
+            } + albums.map { AlbumGridItem.UserAlbum(it) }
+
+            allItems.chunked(2).forEach { rowItems ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowItems.forEach { item ->
+                        Box(modifier = Modifier.weight(1f)) {
+                            when (item) {
+                                is AlbumGridItem.Smart -> {
+                                    SmartAlbumCard(
+                                        label = item.label,
+                                        count = item.count,
+                                        onClick = { onAlbumClick(item.id) }
+                                    )
+                                }
+                                is AlbumGridItem.UserAlbum -> {
+                                    AlbumCard(
+                                        album = item.album,
+                                        coverPhoto = viewModel.albumCoverPhotos[item.album.localId],
+                                        serverBaseUrl = viewModel.serverBaseUrl,
+                                        encryptionMode = viewModel.encryptionMode,
+                                        onClick = { onAlbumClick(item.album.localId) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if (rowItems.size == 1) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+
+            if (allItems.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 48.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -218,23 +303,6 @@ fun AlbumListScreen(
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(150.dp),
-                    contentPadding = PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(albums, key = { it.localId }) { album ->
-                        AlbumCard(
-                            album = album,
-                            coverPhoto = viewModel.albumCoverPhotos[album.localId],
-                            serverBaseUrl = viewModel.serverBaseUrl,
-                            encryptionMode = viewModel.encryptionMode,
-                            onClick = { onAlbumClick(album.localId) }
-                        )
-                    }
                 }
             }
         }
@@ -337,6 +405,59 @@ private fun AlbumCard(
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1
             )
+        }
+    }
+}
+
+// ── Smart/Default Album support ─────────────────────────────────────
+
+/** Sealed class for unified rendering of smart and user albums in one grid. */
+private sealed class AlbumGridItem {
+    data class Smart(val id: String, val label: String, val count: Int) : AlbumGridItem()
+    data class UserAlbum(val album: AlbumEntity) : AlbumGridItem()
+}
+
+/** Renders a smart album card that looks identical to a regular album card. */
+@Composable
+private fun SmartAlbumCard(
+    label: String,
+    count: Int,
+    onClick: () -> Unit = {}
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Column {
+            // Placeholder thumbnail area (same aspect ratio as album cover)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "$count",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Column(modifier = Modifier.padding(8.dp)) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Text(
+                    "$count items",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

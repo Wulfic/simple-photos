@@ -88,22 +88,8 @@ fun GalleryScreen(
     val context = LocalContext.current
     var showAlbumPicker by remember { mutableStateOf(false) }
 
-    // Album filter state
-    var albumFilter by remember { mutableStateOf("all") }
-
-    // Apply album filter
-    val filteredPhotos = remember(photos, albumFilter) {
-        when (albumFilter) {
-            "favorites" -> photos.filter { it.isFavorite }
-            "photos" -> photos.filter { it.mediaType == "photo" || it.mediaType == "gif" }
-            "gifs" -> photos.filter { it.mediaType == "gif" }
-            "videos" -> photos.filter { it.mediaType == "video" }
-            else -> photos
-        }
-    }
-
-    // Build day-grouped grid items from filtered photos
-    val gridItems = remember(filteredPhotos) { buildGridItems(groupPhotosByDay(filteredPhotos)) }
+    // Build day-grouped grid items
+    val gridItems = remember(photos) { buildGridItems(groupPhotosByDay(photos)) }
 
     val pickMediaLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -227,30 +213,7 @@ fun GalleryScreen(
                     Text(err, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
                 }
 
-                // Album filter tabs (plain mode only)
-                if (viewModel.encryptionMode == "plain") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        listOf("all" to "All", "favorites" to "★ Favorites", "photos" to "Photos", "gifs" to "GIFs", "videos" to "Videos").forEach { (key, label) ->
-                            FilterChip(
-                                selected = albumFilter == key,
-                                onClick = { albumFilter = key },
-                                label = { Text(label, fontSize = 12.sp) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primary,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimary
-                                ),
-                                modifier = Modifier.height(30.dp)
-                            )
-                        }
-                    }
-                }
-
-                if (filteredPhotos.isEmpty() && !viewModel.isSyncing) {
+                if (photos.isEmpty() && !viewModel.isSyncing) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("No photos yet", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -258,7 +221,7 @@ fun GalleryScreen(
                             Text("Tap + to add photos or grant permissions for auto-backup", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 32.dp))
                         }
                     }
-                } else if (filteredPhotos.isEmpty() && viewModel.isSyncing) {
+                } else if (photos.isEmpty() && viewModel.isSyncing) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator()

@@ -1,16 +1,194 @@
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import { decrypt, encrypt, sha256Hex } from "../crypto/crypto";
+import { decrypt, encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
 import { db, type CachedPhoto, type CachedAlbum } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import { type PlainPhoto } from "../utils/gallery";
+import PlainMediaTile from "../components/gallery/PlainMediaTile";
+
+// ── Smart album definitions ───────────────────────────────────────────────────
+
+const SMART_ALBUM_DEFS: Record<string, { label: string; filterEncrypted: (p: CachedPhoto) => boolean; filterPlain: (p: PlainPhoto) => boolean }> = {
+  "smart-favorites": {
+    label: "Favorites",
+    filterEncrypted: () => false, // not supported in encrypted mode
+    filterPlain: (p) => p.is_favorite,
+  },
+  "smart-photos": {
+    label: "Photos",
+    filterEncrypted: (p) => p.mediaType === "photo" || p.mediaType === "gif",
+    filterPlain: (p) => p.media_type === "photo" || p.media_type === "gif",
+  },
+  "smart-gifs": {
+    label: "GIFs",
+    filterEncrypted: (p) => p.mediaType === "gif",
+    filterPlain: (p) => p.media_type === "gif",
+  },
+  "smart-videos": {
+    label: "Videos",
+    filterEncrypted: (p) => p.mediaType === "video",
+    filterPlain: (p) => p.media_type === "video",
+  },
+};
+
+function isSmartAlbum(id: string | undefined): id is string {
+  return !!id && id in SMART_ALBUM_DEFS;
+}
 
 type ShareUser = { id: string; username: string };
 
 export default function AlbumDetail() {
   const { albumId } = useParams<{ albumId: string }>();
+  const navigate = useNavigate();
+
+  // ── Smart album rendering (delegates to a separate sub-component) ───────
+  if (isSmartAlbum(albumId)) {
+    return <SmartAlbumView albumId={albumId} />;
+  }
+
+  return <RegularAlbumView albumId={albumId} />;
+}
+
+// ── Smart Album View ──────────────────────────────────────────────────────────
+
+function SmartAlbumView({ albumId }: { albumId: string }) {
+  const navigate = useNavigate();
+  const def = SMART_ALBUM_DEFS[albumId];
+  const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted" | null>(null);
+  const [plainPhotos, setPlainPhotos] = useState<PlainPhoto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
+
+  // Encrypted photos from IndexedDB
+  const allEncryptedPhotos = useLiveQuery(() =>
+    db.photos.orderBy("takenAt").reverse().toArray()
+  );
+
+  useEffect(() => {
+    (async () => {
+      try {
+        // Fetch secure blob IDs
+        try {
+          const secureRes = await api.secureGalleries.secureBlobIds();
+          setSecureBlobIds(new Set(secureRes.blob_ids));
+        } catch { /* ignore */ }
+
+        const settings = await api.encryption.getSettings();
+        const mode = settings.encryption_mode as "plain" | "encrypted";
+        setEncryptionMode(mode);
+
+        if (mode === "plain") {
+          // Fetch all plain photos
+          const allPhotos: PlainPhoto[] = [];
+          let cursor: string | undefined;
+          do {
+            const res = await api.photos.list({ after: cursor, limit: 200 });
+            allPhotos.push(...res.photos);
+            cursor = res.next_cursor ?? undefined;
+          } while (cursor);
+          allPhotos.sort((a, b) => {
+            const aDate = a.taken_at || a.created_at;
+            const bDate = b.taken_at || b.created_at;
+            return bDate.localeCompare(aDate);
+          });
+          setPlainPhotos(allPhotos);
+        }
+      } catch { /* fallback */ }
+      setLoading(false);
+    })();
+  }, []);
+
+  // Compute filtered photos
+  const filteredEncrypted = useMemo(() => {
+    if (encryptionMode !== "encrypted" || !allEncryptedPhotos) return [];
+    return allEncryptedPhotos
+      .filter((p) => !secureBlobIds.has(p.blobId))
+      .filter(def.filterEncrypted);
+  }, [allEncryptedPhotos, secureBlobIds, encryptionMode]);
+
+  const filteredPlain = useMemo(() => {
+    if (encryptionMode !== "plain") return [];
+    return plainPhotos
+      .filter((p) => !secureBlobIds.has(p.id))
+      .filter(def.filterPlain);
+  }, [plainPhotos, secureBlobIds, encryptionMode]);
+
+  const photoCount = encryptionMode === "plain" ? filteredPlain.length : filteredEncrypted.length;
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <AppHeader />
+
+      <main className="p-4">
+        {/* Sub-header */}
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => navigate("/albums")}
+            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            title="Back to Albums"
+          >
+            <AppIcon name="back-arrow" size="w-5 h-5" />
+          </button>
+          <h2 className="text-xl font-semibold truncate">{def.label}</h2>
+          <span className="text-gray-400 text-sm shrink-0">{photoCount} items</span>
+        </div>
+
+        {loading ? (
+          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+        ) : photoCount === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+            <p className="text-gray-500 dark:text-gray-400">No {def.label.toLowerCase()} found</p>
+          </div>
+        ) : encryptionMode === "encrypted" ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+            {filteredEncrypted.map((photo, idx) => (
+              <AlbumTile
+                key={photo.blobId}
+                photo={photo}
+                isSelectionMode={false}
+                isSelected={false}
+                onClick={() => {
+                  navigate(`/photo/${photo.blobId}`, {
+                    state: {
+                      photoIds: filteredEncrypted.map((p) => p.blobId),
+                      currentIndex: idx,
+                    },
+                  });
+                }}
+                onLongPress={() => {}}
+                onRemove={() => {}}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+            {filteredPlain.map((photo, idx) => (
+              <PlainMediaTile
+                key={photo.id}
+                photo={photo}
+                onClick={() => {
+                  navigate(`/photo/plain/${photo.id}`, {
+                    state: {
+                      photoIds: filteredPlain.map((p) => p.id),
+                      currentIndex: idx,
+                    },
+                  });
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ── Regular Album View ────────────────────────────────────────────────────────
+
+function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   const navigate = useNavigate();
   const [error, setError] = useState("");
   const [showAddPhotos, setShowAddPhotos] = useState(false);

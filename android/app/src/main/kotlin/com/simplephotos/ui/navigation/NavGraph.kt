@@ -12,7 +12,6 @@ import androidx.navigation.navArgument
 import com.simplephotos.ui.screens.album.AlbumDetailScreen
 import com.simplephotos.ui.screens.album.AlbumListScreen
 import com.simplephotos.ui.screens.auth.LoginScreen
-import com.simplephotos.ui.screens.auth.RegisterScreen
 import com.simplephotos.ui.screens.gallery.GalleryScreen
 import com.simplephotos.ui.screens.settings.FolderSelectionScreen
 import com.simplephotos.ui.screens.settings.SettingsScreen
@@ -42,14 +41,7 @@ fun NavGraph() {
         }
         composable(Screen.Login.route) {
             LoginScreen(
-                onLoginSuccess = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } },
-                onNavigateToRegister = { navController.navigate(Screen.Register.route) }
-            )
-        }
-        composable(Screen.Register.route) {
-            RegisterScreen(
-                onRegisterSuccess = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
-                onNavigateToLogin = { navController.popBackStack() }
+                onLoginSuccess = { navController.navigate(Screen.Gallery.route) { popUpTo(0) } }
             )
         }
         composable(Screen.Gallery.route) {
