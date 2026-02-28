@@ -5,6 +5,7 @@ use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -14,6 +15,15 @@ use crate::state::AppState;
 
 use super::metadata::extract_media_metadata_from_bytes;
 use super::models::*;
+
+/// Compute a short content-based hash: first 12 hex chars of SHA-256.
+/// This deterministic fingerprint is the same regardless of which platform
+/// uploads the photo, guaranteeing cross-platform alignment.
+pub fn compute_photo_hash(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    hex::encode(&digest[..6]) // 6 bytes → 12 hex chars (48-bit)
+}
+
 // ── Plain Photo Endpoints ─────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +47,7 @@ pub async fn list_photos(
     // Build dynamic query
     let mut sql = String::from(
         "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
-         duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, crop_metadata, camera_model \
+         duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, crop_metadata, camera_model, photo_hash \
          FROM photos WHERE user_id = ? AND encrypted_blob_id IS NULL"
     );
     let mut binds: Vec<String> = vec![auth.user_id.clone()];
@@ -52,11 +62,11 @@ pub async fn list_photos(
     }
 
     if let Some(ref after) = params.after {
-        sql.push_str(" AND created_at > ?");
+        sql.push_str(" AND COALESCE(taken_at, created_at) < ?");
         binds.push(after.clone());
     }
 
-    sql.push_str(" ORDER BY created_at ASC LIMIT ?");
+    sql.push_str(" ORDER BY COALESCE(taken_at, created_at) DESC LIMIT ?");
     binds.push((limit + 1).to_string());
 
     let mut query = sqlx::query_as::<_, PhotoRecord>(&sql);
@@ -72,7 +82,7 @@ pub async fn list_photos(
     let photos = query.fetch_all(&state.pool).await?;
 
     let next_cursor = if photos.len() as i64 > limit {
-        photos.last().map(|p| p.created_at.clone())
+        photos.last().map(|p| p.taken_at.clone().unwrap_or_else(|| p.created_at.clone()))
     } else {
         None
     };
@@ -123,14 +133,20 @@ pub async fn register_photo(
         }
     });
 
+    // Compute content-based hash for cross-platform alignment
+    let file_bytes = tokio::fs::read(&full_path).await.map_err(|e| {
+        AppError::Internal(format!("Failed to read file for hashing: {}", e))
+    })?;
+    let photo_hash = compute_photo_hash(&file_bytes);
+
     // Generate thumbnail path (will be created by a separate endpoint/process)
     let thumb_filename = format!("{}.thumb.jpg", photo_id);
     let thumb_rel = format!(".thumbnails/{}", thumb_filename);
 
     sqlx::query(
         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, size_bytes, \
-         width, height, duration_secs, taken_at, latitude, longitude, thumb_path, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         width, height, duration_secs, taken_at, latitude, longitude, thumb_path, created_at, photo_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
@@ -147,6 +163,7 @@ pub async fn register_photo(
     .bind(req.longitude)
     .bind(&thumb_rel)
     .bind(&now)
+    .bind(&photo_hash)
     .execute(&state.pool)
     .await?;
 
@@ -155,6 +172,7 @@ pub async fn register_photo(
         Json(serde_json::json!({
             "photo_id": photo_id,
             "thumb_path": thumb_rel,
+            "photo_hash": photo_hash,
         })),
     ))
 }
@@ -345,24 +363,27 @@ pub async fn upload_photo(
         safe_filename
     };
 
-    // ── Content-aware dedup ─────────────────────────────────────────────
-    // If a file with the same filename AND identical size already exists
-    // for this user, return the existing record instead of storing a duplicate.
-    let existing: Option<(String, String, String, i64)> = sqlx::query_as(
-        "SELECT id, filename, file_path, size_bytes FROM photos \
-         WHERE user_id = ? AND filename = ? AND size_bytes = ? LIMIT 1",
+    // ── Content hash for cross-platform alignment ───────────────────────
+    let photo_hash = compute_photo_hash(&body);
+
+    // ── Content-aware dedup (hash-based) ────────────────────────────────
+    // If a photo with the identical content hash already exists for this
+    // user, return it immediately — no duplicate stored.
+    let existing: Option<(String, String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, filename, file_path, size_bytes, photo_hash FROM photos \
+         WHERE user_id = ? AND photo_hash = ? LIMIT 1",
     )
     .bind(&auth.user_id)
-    .bind(&safe_filename)
-    .bind(size_bytes)
+    .bind(&photo_hash)
     .fetch_optional(&state.pool)
     .await?;
 
-    if let Some((eid, efn, efp, esz)) = existing {
+    if let Some((eid, efn, efp, esz, ehash)) = existing {
         tracing::info!(
             user_id = %auth.user_id,
             filename = %efn,
-            "Duplicate upload detected — returning existing record"
+            photo_hash = %photo_hash,
+            "Duplicate upload detected (hash match) — returning existing record"
         );
         return Ok((
             StatusCode::OK,
@@ -371,6 +392,7 @@ pub async fn upload_photo(
                 "filename": efn,
                 "file_path": efp,
                 "size_bytes": esz,
+                "photo_hash": ehash,
             })),
         ));
     }
@@ -396,7 +418,7 @@ pub async fn upload_photo(
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("jpg");
-        final_filename = format!("{}_{}.{}", stem, counter, ext);
+        final_filename = format!("{}-{}.{}", stem, counter, ext);
         counter += 1;
     }
 
@@ -422,8 +444,8 @@ pub async fn upload_photo(
 
     sqlx::query(
         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
@@ -440,6 +462,7 @@ pub async fn upload_photo(
     .bind(&cam_model)
     .bind(&thumb_rel)
     .bind(&now)
+    .bind(&photo_hash)
     .execute(&state.pool)
     .await?;
 
@@ -447,6 +470,7 @@ pub async fn upload_photo(
         user_id = %auth.user_id,
         filename = %final_filename,
         size = size_bytes,
+        photo_hash = %photo_hash,
         "Uploaded photo via mobile client"
     );
 
@@ -457,6 +481,7 @@ pub async fn upload_photo(
             "filename": final_filename,
             "file_path": rel_path,
             "size_bytes": size_bytes,
+            "photo_hash": photo_hash,
         })),
     ))
 }

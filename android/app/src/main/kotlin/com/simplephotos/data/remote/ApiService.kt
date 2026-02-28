@@ -68,7 +68,8 @@ interface ApiService {
         @Body body: RequestBody,
         @Header("X-Blob-Type") blobType: String,
         @Header("X-Blob-Size") blobSize: String,
-        @Header("X-Client-Hash") clientHash: String? = null
+        @Header("X-Client-Hash") clientHash: String? = null,
+        @Header("X-Content-Hash") contentHash: String? = null
     ): BlobUploadResponse
 
     @GET("api/blobs")

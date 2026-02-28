@@ -22,6 +22,8 @@ export interface CachedPhoto {
   duration?: number;
   /** Crop/edit metadata (JSON string) — used for encrypted-mode crops stored locally */
   cropData?: string;
+  /** Short content-based hash (12 hex chars of SHA-256) for cross-platform alignment */
+  contentHash?: string;
 }
 
 export interface CachedAlbum {
@@ -103,6 +105,13 @@ class SimplePhotosDB extends Dexie {
     // v4 — added cropData field to photos (no index change needed, just bump version)
     this.version(4).stores({
       photos: "blobId, takenAt, mediaType, *albumIds",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+    });
+
+    // v5 — added contentHash for cross-platform photo alignment
+    this.version(5).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash",
       albums: "albumId, name",
       trash: "trashId, blobId, deletedAt",
     });

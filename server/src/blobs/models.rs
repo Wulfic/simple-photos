@@ -7,6 +7,7 @@ pub struct BlobRecord {
     pub size_bytes: i64,
     pub client_hash: Option<String>,
     pub upload_time: String,
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

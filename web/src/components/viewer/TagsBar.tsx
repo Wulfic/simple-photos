@@ -9,7 +9,7 @@ interface TagsBarProps {
   tagSuggestions: string[];
   onAddTag: () => void;
   onRemoveTag: (tag: string) => void;
-  tagInputRef: React.RefObject<HTMLInputElement | null>;
+  tagInputRef: React.RefObject<HTMLInputElement>;
 }
 
 export default function TagsBar({

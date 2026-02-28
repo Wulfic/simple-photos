@@ -38,5 +38,7 @@ data class PhotoEntity(
     /** JSON crop metadata for crop/edit feature */
     val cropMetadata: String? = null,
     /** Camera model / device name (from EXIF data) */
-    val cameraModel: String? = null
+    val cameraModel: String? = null,
+    /** Short content-based hash (12 hex chars of SHA-256) for cross-platform alignment */
+    val photoHash: String? = null
 )

@@ -243,8 +243,11 @@ export default function Gallery() {
               const encPhoto = await encrypt(new TextEncoder().encode(photoPayload));
               const photoHash = await sha256Hex(new Uint8Array(encPhoto));
 
+              // Content hash: short hash of original raw bytes for cross-platform alignment
+              const contentHash = (await sha256Hex(fileData)).substring(0, 12);
+
               // Step 4: Upload encrypted blob
-              const uploadResult = await api.blobs.upload(encPhoto, serverBlobType, photoHash);
+              const uploadResult = await api.blobs.upload(encPhoto, serverBlobType, photoHash, contentHash);
 
               // Step 5: Link blob to the plain photo so it won't be re-migrated
               await api.photos.markEncrypted(photo.id, uploadResult.blob_id);
@@ -383,6 +386,7 @@ export default function Gallery() {
             longitude: payload.longitude,
             albumIds: payload.album_ids ?? [],
             thumbnailData,
+            contentHash: blob.content_hash ?? undefined,
           });
         } catch {
           // Skip items we can't decrypt (wrong key or corrupt blob)
@@ -505,7 +509,9 @@ export default function Gallery() {
 
     const encPhoto = await encrypt(new TextEncoder().encode(photoPayload));
     const photoHash = await sha256Hex(new Uint8Array(encPhoto));
-    await api.blobs.upload(encPhoto, serverBlobType, photoHash);
+    // Content hash: short hash of original raw bytes for cross-platform alignment
+    const contentHash = (await sha256Hex(new Uint8Array(data))).substring(0, 12);
+    await api.blobs.upload(encPhoto, serverBlobType, photoHash, contentHash);
   }
 
   function getVideoDuration(file: File): Promise<number> {

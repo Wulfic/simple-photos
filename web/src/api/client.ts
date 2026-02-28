@@ -99,12 +99,13 @@ export const api = {
   },
 
   blobs: {
-    upload: (data: ArrayBuffer, blobType: string, clientHash?: string) => {
+    upload: (data: ArrayBuffer, blobType: string, clientHash?: string, contentHash?: string) => {
       const headers: Record<string, string> = {
         "X-Blob-Type": blobType,
         "X-Blob-Size": data.byteLength.toString(),
       };
       if (clientHash) headers["X-Client-Hash"] = clientHash;
+      if (contentHash) headers["X-Content-Hash"] = contentHash;
 
       return request<{
         blob_id: string;
@@ -134,6 +135,7 @@ export const api = {
           size_bytes: number;
           client_hash: string | null;
           upload_time: string;
+          content_hash: string | null;
         }>;
         next_cursor: string | null;
       }>(`/blobs${qs ? `?${qs}` : ""}`);
@@ -195,6 +197,7 @@ export const api = {
           is_favorite: boolean;
           crop_metadata: string | null;
           camera_model: string | null;
+          photo_hash: string | null;
         }>;
         next_cursor: string | null;
       }>(`/photos${qs ? `?${qs}` : ""}`);

@@ -21,7 +21,8 @@ data class PlainPhotoRecord(
     @SerializedName("created_at") val createdAt: String,
     @SerializedName("is_favorite") val isFavorite: Boolean = false,
     @SerializedName("crop_metadata") val cropMetadata: String? = null,
-    @SerializedName("camera_model") val cameraModel: String? = null
+    @SerializedName("camera_model") val cameraModel: String? = null,
+    @SerializedName("photo_hash") val photoHash: String? = null
 )
 
 data class PlainPhotoListResponse(
