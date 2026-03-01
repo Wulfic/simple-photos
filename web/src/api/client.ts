@@ -222,11 +222,16 @@ export const api = {
         body: JSON.stringify(data),
       }),
 
-    /** Get the URL for serving a plain photo file */
+    /** Get the URL for serving a plain photo file (original format) */
     fileUrl: (photoId: string) => `${BASE}/photos/${photoId}/file`,
 
     /** Get the URL for serving a plain photo thumbnail */
     thumbUrl: (photoId: string) => `${BASE}/photos/${photoId}/thumb`,
+
+    /** Get the URL for serving a browser-compatible version of the media.
+     *  For non-browser-native formats (HEIC, CR2, WMA, etc.), serves a
+     *  pre-converted web preview. For browser-native formats, serves the original. */
+    webUrl: (photoId: string) => `${BASE}/photos/${photoId}/web`,
 
     /** Download a plain photo file as raw binary, with 401 refresh retry */
     downloadFile: (photoId: string) =>

@@ -1,7 +1,10 @@
+use std::path::Path;
+
 use axum::extract::State;
 use axum::Json;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -11,10 +14,202 @@ use crate::state::AppState;
 
 use super::metadata::extract_media_metadata;
 
-/// Compute short content-based hash: first 12 hex chars of SHA-256.
-fn compute_photo_hash(data: &[u8]) -> String {
-    let digest = Sha256::digest(data);
-    hex::encode(&digest[..6])
+/// Streaming SHA-256 hash — reads in 64 KB chunks to avoid loading entire file into memory.
+/// Returns the first 12 hex chars of the hash.
+async fn compute_photo_hash_streaming(path: &Path) -> Option<String> {
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 65536]; // 64 KB chunks
+    loop {
+        let n = file.read(&mut buf).await.ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(hex::encode(&hasher.finalize()[..6]))
+}
+
+/// Check if FFmpeg is available on the system.
+async fn ffmpeg_available() -> bool {
+    tokio::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Generate a JPEG thumbnail using FFmpeg.
+/// For videos: extracts a frame at ~1 second.
+/// For images: converts to JPEG and resizes.
+/// For audio: generates a black placeholder.
+async fn generate_thumbnail_file(input_path: &Path, output_path: &Path, mime: &str) -> bool {
+    if let Some(parent) = output_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
+    // For audio, create a simple black 256×256 JPEG using the image crate (no FFmpeg needed)
+    if mime.starts_with("audio/") {
+        let img = image::RgbImage::from_pixel(256, 256, image::Rgb([0u8, 0, 0]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        if image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .is_ok()
+        {
+            return tokio::fs::write(output_path, buf.into_inner())
+                .await
+                .is_ok();
+        }
+        return false;
+    }
+
+    let input_str = input_path.to_str().unwrap_or("");
+    let output_str = output_path.to_str().unwrap_or("");
+
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.arg("-y");
+
+    // For raw video streams (.hevc, .h264, .h265), force the demuxer format
+    // since they lack a container with timing info
+    match mime {
+        "video/hevc" => {
+            cmd.args(["-f", "hevc"]);
+        }
+        "video/h264" => {
+            cmd.args(["-f", "h264"]);
+        }
+        _ => {}
+    }
+
+    // For videos, seek to 1 second for a more interesting frame
+    // (skip seek for raw streams — seeking is unreliable without a container)
+    if mime.starts_with("video/") && mime != "video/hevc" && mime != "video/h264" {
+        cmd.args(["-ss", "1"]);
+    }
+
+    cmd.args(["-i", input_str])
+        .args([
+            "-vf",
+            "scale=256:256:force_original_aspect_ratio=decrease,pad=256:256:(ow-iw)/2:(oh-ih)/2:black",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "5",
+        ])
+        .arg(output_str)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    if matches!(cmd.status().await, Ok(s) if s.success()) {
+        return true;
+    }
+
+    // FFmpeg failed — try ImageMagick as fallback (better for HEIC, CR2 RAW, etc.)
+    if !mime.starts_with("video/") {
+        let magick_result = tokio::process::Command::new("convert")
+            .args([
+                input_str,
+                "-thumbnail",
+                "256x256>",
+                "-background",
+                "black",
+                "-gravity",
+                "center",
+                "-extent",
+                "256x256",
+                "-quality",
+                "85",
+                output_str,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        if matches!(magick_result, Ok(s) if s.success()) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Returns the web preview file extension if this format is not browser-native.
+/// Images → "jpg", Audio → "mp3", Videos → None (too expensive to pre-convert).
+fn needs_web_preview(filename: &str) -> Option<&'static str> {
+    let ext = filename.rsplit('.').next()?.to_ascii_lowercase();
+    match ext.as_str() {
+        // Images that browsers cannot display natively
+        "heic" | "heif" | "tiff" | "tif" | "hdr" | "cr2" | "cur" | "cursor" => Some("jpg"),
+        // Audio that browsers cannot play natively
+        "wma" | "aiff" | "aif" => Some("mp3"),
+        _ => None,
+    }
+}
+
+/// Generate a browser-compatible web preview file.
+/// Images → high-quality JPEG (FFmpeg, then ImageMagick fallback), Audio → MP3 (FFmpeg).
+async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext: &str) -> bool {
+    if let Some(parent) = output_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
+    let input_str = input_path.to_str().unwrap_or("");
+    let output_str = output_path.to_str().unwrap_or("");
+
+    let ffmpeg_ok = match preview_ext {
+        "jpg" => {
+            // Convert image to high-quality JPEG via FFmpeg
+            let status = tokio::process::Command::new("ffmpeg")
+                .args(["-y", "-i", input_str, "-q:v", "2", output_str])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            matches!(status, Ok(s) if s.success())
+        }
+        "mp3" => {
+            // Convert audio to MP3
+            let status = tokio::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-i",
+                    input_str,
+                    "-codec:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "192k",
+                    output_str,
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            matches!(status, Ok(s) if s.success())
+        }
+        _ => false,
+    };
+
+    if ffmpeg_ok {
+        return true;
+    }
+
+    // FFmpeg failed — try ImageMagick as fallback for image conversions
+    if preview_ext == "jpg" {
+        let magick_result = tokio::process::Command::new("convert")
+            .args([input_str, "-quality", "92", output_str])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        if matches!(magick_result, Ok(s) if s.success()) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// POST /api/admin/photos/scan
@@ -34,6 +229,12 @@ pub async fn scan_and_register(
     }
 
     let storage_root = state.storage_root.read().await.clone();
+
+    // Check FFmpeg availability for thumbnail/preview generation
+    let has_ffmpeg = ffmpeg_available().await;
+    if !has_ffmpeg {
+        tracing::warn!("FFmpeg not found — thumbnails and web previews will not be generated");
+    }
 
     // Get already-registered file paths
     let existing: Vec<String> = sqlx::query_scalar(
@@ -88,6 +289,8 @@ pub async fn scan_and_register(
                     let mime = mime_from_extension(&name).to_string();
                     let media_type = if mime.starts_with("video/") {
                         "video"
+                    } else if mime.starts_with("audio/") {
+                        "audio"
                     } else if mime == "image/gif" {
                         "gif"
                     } else {
@@ -105,11 +308,8 @@ pub async fn scan_and_register(
                     // Use EXIF taken_at if available, otherwise fall back to file modified time
                     let final_taken_at = exif_taken.or(modified);
 
-                    // Compute content-based hash for cross-platform alignment
-                    let photo_hash = match tokio::fs::read(&abs_path).await {
-                        Ok(bytes) => Some(compute_photo_hash(&bytes)),
-                        Err(_) => None,
-                    };
+                    // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
+                    let photo_hash = compute_photo_hash_streaming(&abs_path).await;
 
                     sqlx::query(
                         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
@@ -134,6 +334,30 @@ pub async fn scan_and_register(
                     .bind(&photo_hash)
                     .execute(&state.pool)
                     .await?;
+
+                    // Generate thumbnail using FFmpeg (or image crate for audio)
+                    if has_ffmpeg || mime.starts_with("audio/") {
+                        let thumb_abs = storage_root.join(&thumb_rel);
+                        if generate_thumbnail_file(&abs_path, &thumb_abs, &mime).await {
+                            tracing::debug!(file = %rel_path, "Generated thumbnail");
+                        } else {
+                            tracing::warn!(file = %rel_path, "Failed to generate thumbnail");
+                        }
+                    }
+
+                    // Generate web preview for non-browser-native formats
+                    if has_ffmpeg {
+                        if let Some(ext) = needs_web_preview(&name) {
+                            let preview_rel =
+                                format!(".web_previews/{}.web.{}", photo_id, ext);
+                            let preview_abs = storage_root.join(&preview_rel);
+                            if generate_web_preview(&abs_path, &preview_abs, ext).await {
+                                tracing::debug!(file = %rel_path, "Generated web preview");
+                            } else {
+                                tracing::warn!(file = %rel_path, "Failed to generate web preview");
+                            }
+                        }
+                    }
 
                     new_count += 1;
                 }
@@ -161,11 +385,8 @@ pub async fn scan_and_register(
         }
         let (w, h, cam, lat, lon, taken) = extract_media_metadata(&abs);
 
-        // Compute content hash if missing
-        let file_hash = match tokio::fs::read(&abs).await {
-            Ok(bytes) => Some(compute_photo_hash(&bytes)),
-            Err(_) => None,
-        };
+        // Compute content hash if missing (streaming to avoid loading huge files into memory)
+        let file_hash = compute_photo_hash_streaming(&abs).await;
 
         if w > 0 || h > 0 || cam.is_some() || lat.is_some() || file_hash.is_some() {
             sqlx::query(
@@ -195,6 +416,53 @@ pub async fn scan_and_register(
 
     if fixed_count > 0 {
         tracing::info!("Updated metadata for {} existing photos", fixed_count);
+    }
+
+    // ── Generate missing thumbnails and web previews for existing photos ──
+    if has_ffmpeg {
+        let thumbs_to_gen: Vec<(String, String, String, String)> = sqlx::query_as(
+            "SELECT id, file_path, thumb_path, mime_type FROM photos WHERE user_id = ? AND thumb_path IS NOT NULL",
+        )
+        .bind(&auth.user_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+
+        let mut thumb_count = 0i64;
+        let mut preview_count = 0i64;
+        for (pid, fpath, tpath, mime) in &thumbs_to_gen {
+            let abs = storage_root.join(fpath);
+            if !abs.exists() {
+                continue;
+            }
+
+            // Generate thumbnail if file doesn't exist yet
+            let thumb_abs = storage_root.join(tpath);
+            if !thumb_abs.exists() {
+                if generate_thumbnail_file(&abs, &thumb_abs, mime).await {
+                    thumb_count += 1;
+                }
+            }
+
+            // Generate web preview if needed and doesn't exist yet
+            let filename = fpath.rsplit('/').next().unwrap_or(fpath);
+            if let Some(ext) = needs_web_preview(filename) {
+                let preview_abs =
+                    storage_root.join(format!(".web_previews/{}.web.{}", pid, ext));
+                if !preview_abs.exists() {
+                    if generate_web_preview(&abs, &preview_abs, ext).await {
+                        preview_count += 1;
+                    }
+                }
+            }
+        }
+
+        if thumb_count > 0 {
+            tracing::info!("Generated {} missing thumbnails", thumb_count);
+        }
+        if preview_count > 0 {
+            tracing::info!("Generated {} missing web previews", preview_count);
+        }
     }
 
     Ok(Json(serde_json::json!({

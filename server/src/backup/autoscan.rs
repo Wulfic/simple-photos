@@ -1,7 +1,10 @@
+use std::path::Path;
+
 use axum::extract::State;
 use axum::Json;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -9,10 +12,19 @@ use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
 use crate::state::AppState;
 
-/// Compute short content-based hash: first 12 hex chars of SHA-256.
-fn compute_photo_hash(data: &[u8]) -> String {
-    let digest = Sha256::digest(data);
-    hex::encode(&digest[..6])
+/// Streaming SHA-256 hash — reads in 64 KB chunks to avoid loading entire file into memory.
+async fn compute_photo_hash_streaming(path: &Path) -> Option<String> {
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).await.ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(hex::encode(&hasher.finalize()[..6]))
 }
 
 /// Background task: automatically scan the storage directory for new files
@@ -157,6 +169,8 @@ async fn run_auto_scan(
                     let mime = mime_from_extension(&name).to_string();
                     let media_type = if mime.starts_with("video/") {
                         "video"
+                    } else if mime.starts_with("audio/") {
+                        "audio"
                     } else if mime == "image/gif" {
                         "gif"
                     } else {
@@ -167,11 +181,8 @@ async fn run_auto_scan(
                     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
-                    // Compute content-based hash for cross-platform alignment
-                    let photo_hash = match tokio::fs::read(&abs_path).await {
-                        Ok(bytes) => Some(compute_photo_hash(&bytes)),
-                        Err(_) => None,
-                    };
+                    // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
+                    let photo_hash = compute_photo_hash_streaming(&abs_path).await;
 
                     let _ = sqlx::query(
                         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \

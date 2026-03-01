@@ -32,6 +32,11 @@ const SMART_ALBUM_DEFS: Record<string, { label: string; filterEncrypted: (p: Cac
     filterEncrypted: (p) => p.mediaType === "video",
     filterPlain: (p) => p.media_type === "video",
   },
+  "smart-audio": {
+    label: "Audio",
+    filterEncrypted: (p) => p.mediaType === "audio",
+    filterPlain: (p) => p.media_type === "audio",
+  },
 };
 
 function isSmartAlbum(id: string | undefined): id is string {

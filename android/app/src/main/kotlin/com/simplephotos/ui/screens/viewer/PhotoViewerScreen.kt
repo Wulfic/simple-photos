@@ -572,7 +572,7 @@ fun PhotoViewerScreen(
                             if (showTagInput) {
                                 OutlinedTextField(
                                     value = tagInputText,
-                                    onValueChange = { tagInputText = it },
+                                    onValueChange = { if (it.length <= 100) tagInputText = it },
                                     modifier = Modifier
                                         .width(120.dp)
                                         .height(36.dp),

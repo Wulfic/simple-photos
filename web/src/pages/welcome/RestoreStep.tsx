@@ -236,6 +236,7 @@ export default function RestoreStep({
             value={serverAddress}
             onChange={(e) => setServerAddress(e.target.value)}
             placeholder="e.g. 192.168.1.20:8080"
+            maxLength={500}
             className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent font-mono"
           />
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">

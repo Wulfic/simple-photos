@@ -16,6 +16,7 @@ import {
   matchMetadataToFiles,
   formatBytes,
   createFallbackThumbnail,
+  createAudioFallbackThumbnail,
 } from "../utils/media";
 import ImportFileList from "./import/ImportFileList";
 
@@ -212,7 +213,8 @@ export default function Import() {
       } else if (
         file.type.startsWith("image/") ||
         file.type.startsWith("video/") ||
-        /\.(heic|heif|avif|webp|dng|cr2|nef|arw|raw|jpg|jpeg|png|gif|mp4|mov|mkv|webm)$/i.test(
+        file.type.startsWith("audio/") ||
+        /\.(heic|heif|avif|webp|dng|cr2|nef|arw|raw|jpg|jpeg|png|gif|mp4|mov|mkv|webm|wmv|asf|hevc|h264|h265|mpg|mpeg|ico|cur|hdr|svg|bmp|tiff?|mp3|aiff|flac|ogg|wav|wma)$/i.test(
           file.name
         )
       ) {
@@ -348,11 +350,15 @@ export default function Import() {
     }
 
     let thumbnailData: ArrayBuffer;
-    try {
-      thumbnailData = await generateThumbnailFromBuffer(rawData, mimeType, 256);
-    } catch {
-      console.warn(`Thumbnail generation failed for ${item.name}, using fallback`);
-      thumbnailData = await createFallbackThumbnail();
+    if (mediaType === "audio") {
+      thumbnailData = await createAudioFallbackThumbnail();
+    } else {
+      try {
+        thumbnailData = await generateThumbnailFromBuffer(rawData, mimeType, 256);
+      } catch {
+        console.warn(`Thumbnail generation failed for ${item.name}, using fallback`);
+        thumbnailData = await createFallbackThumbnail();
+      }
     }
 
     const thumbPayload = JSON.stringify({
@@ -553,7 +559,7 @@ export default function Import() {
                   ref={inputRef}
                   type="file"
                   multiple
-                  accept="image/*,video/*,.json,.heic,.heif,.avif,.dng,.cr2,.nef,.arw"
+                  accept="image/*,video/*,audio/*,.json,.heic,.heif,.avif,.dng,.cr2,.nef,.arw,.ico,.cur,.hdr,.wmv,.asf,.hevc,.h264,.h265,.mpg,.mpeg,.aiff,.flac,.wma"
                   className="hidden"
                   onChange={(e) => {
                     if (e.target.files && e.target.files.length > 0) processFiles(e.target.files);

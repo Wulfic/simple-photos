@@ -164,7 +164,10 @@ class PhotoViewerViewModel @Inject constructor(
 
     /** Add a tag to the current photo. */
     fun addTag(photoId: String, tag: String) {
+        // Strip dangerous control chars, bidi overrides, zero-width chars
         val cleaned = tag.trim().lowercase()
+            .replace(Regex("[\\u0000-\\u001F\\u007F\\u0080-\\u009F\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF\\uFFFE]"), "")
+            .take(100)
         if (cleaned.isEmpty()) return
         viewModelScope.launch {
             try {

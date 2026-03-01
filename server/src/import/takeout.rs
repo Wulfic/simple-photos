@@ -247,6 +247,8 @@ pub async fn import_takeout(
         let mime = crate::media::mime_from_extension(&filename).to_string();
         let media_type = if mime.starts_with("video/") {
             "video"
+        } else if mime.starts_with("audio/") {
+            "audio"
         } else if mime == "image/gif" {
             "gif"
         } else {

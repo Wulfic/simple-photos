@@ -82,19 +82,143 @@ fn progress_store() -> &'static tokio::sync::RwLock<Option<Arc<MigrationProgress
 
 // ── Thumbnail generation ────────────────────────────────────────────────────
 
-/// Generate a 256×256 JPEG thumbnail using the `image` crate.
-/// Returns `None` for videos or on failure (non-fatal).
+/// Generate a 256×256 JPEG thumbnail.
+/// Uses `image` crate for supported formats, falls back to FFmpeg for others.
+/// Returns a black placeholder for audio.
 fn generate_thumbnail(data: &[u8], mime_type: &str) -> Option<Vec<u8>> {
-    // Skip videos — we can't decode them with the image crate
-    if mime_type.starts_with("video/") {
-        return None;
+    // For audio, generate a black 256×256 placeholder
+    if mime_type.starts_with("audio/") {
+        let img = image::RgbImage::from_pixel(256, 256, image::Rgb([0u8, 0, 0]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .ok()?;
+        return Some(buf.into_inner());
     }
 
-    let img = image::load_from_memory(data).ok()?;
-    let thumb = img.resize_to_fill(256, 256, image::imageops::FilterType::Triangle);
+    // For videos and unsupported image formats, use FFmpeg via temp files
+    if mime_type.starts_with("video/") {
+        return generate_thumbnail_ffmpeg(data, mime_type);
+    }
 
+    // Try the image crate first (supports JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, HDR)
+    if let Ok(img) = image::load_from_memory(data) {
+        let thumb = img.resize_to_fill(256, 256, image::imageops::FilterType::Triangle);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        thumb
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .ok()?;
+        return Some(buf.into_inner());
+    }
+
+    // image crate failed (likely HEIC, CR2, SVG, CUR, etc.) — try FFmpeg
+    generate_thumbnail_ffmpeg(data, mime_type)
+}
+
+/// Use FFmpeg subprocess to generate a JPEG thumbnail from raw file data.
+/// Writes input to temp file, runs FFmpeg, reads output.
+fn generate_thumbnail_ffmpeg(data: &[u8], mime_type: &str) -> Option<Vec<u8>> {
+    use std::io::Write;
+
+    // Determine input file extension for FFmpeg format detection
+    let input_ext = if mime_type.starts_with("video/") {
+        match mime_type {
+            "video/mp4" => ".mp4",
+            "video/x-matroska" => ".mkv",
+            "video/x-msvideo" => ".avi",
+            "video/x-ms-wmv" => ".wmv",
+            "video/x-ms-asf" => ".asf",
+            "video/mpeg" => ".mpg",
+            "video/hevc" | "video/h265" => ".hevc",
+            "video/h264" => ".h264",
+            "video/x-m4v" => ".m4v",
+            _ => ".mp4",
+        }
+    } else {
+        match mime_type {
+            "image/heic" | "image/heif" => ".heic",
+            "image/tiff" => ".tiff",
+            "image/hdr" => ".hdr",
+            "image/svg+xml" => ".svg",
+            "image/x-cursor" => ".cur",
+            _ => ".bin",
+        }
+    };
+
+    let tmp_dir = std::env::temp_dir();
+    let unique = Uuid::new_v4();
+    let input_path = tmp_dir.join(format!("sp_thumb_in_{}{}", unique, input_ext));
+    let output_path = tmp_dir.join(format!("sp_thumb_out_{}.jpg", unique));
+
+    // Write input data to temp file
+    let mut f = std::fs::File::create(&input_path).ok()?;
+    f.write_all(data).ok()?;
+    drop(f);
+
+    // Build FFmpeg command
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.arg("-y");
+    if mime_type.starts_with("video/") {
+        cmd.args(["-ss", "1"]);
+    }
+    cmd.args(["-i", input_path.to_str()?])
+        .args([
+            "-vf",
+            "scale=256:256:force_original_aspect_ratio=decrease,pad=256:256:(ow-iw)/2:(oh-ih)/2:black",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "5",
+        ])
+        .arg(output_path.to_str()?)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    let status = cmd.status().ok()?;
+
+    if status.success() {
+        let result = std::fs::read(&output_path).ok();
+        let _ = std::fs::remove_file(&input_path);
+        let _ = std::fs::remove_file(&output_path);
+        return result;
+    }
+
+    // FFmpeg failed — try ImageMagick as fallback for non-video formats (HEIC, CR2, etc.)
+    if !mime_type.starts_with("video/") {
+        let magick_status = std::process::Command::new("convert")
+            .args([
+                input_path.to_str().unwrap_or(""),
+                "-thumbnail",
+                "256x256>",
+                "-background",
+                "black",
+                "-gravity",
+                "center",
+                "-extent",
+                "256x256",
+                "-quality",
+                "85",
+                output_path.to_str().unwrap_or(""),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        if matches!(magick_status, Ok(s) if s.success()) {
+            let result = std::fs::read(&output_path).ok();
+            let _ = std::fs::remove_file(&input_path);
+            let _ = std::fs::remove_file(&output_path);
+            return result;
+        }
+    }
+
+    // All methods failed — clean up and return black placeholder
+    let _ = std::fs::remove_file(&input_path);
+    let _ = std::fs::remove_file(&output_path);
+    // Fallback: black placeholder
+    let img = image::RgbImage::from_pixel(256, 256, image::Rgb([0u8, 0, 0]));
     let mut buf = std::io::Cursor::new(Vec::new());
-    thumb
+    image::DynamicImage::ImageRgb8(img)
         .write_to(&mut buf, image::ImageFormat::Jpeg)
         .ok()?;
     Some(buf.into_inner())
@@ -203,6 +327,8 @@ async fn encrypt_one_photo(
         "gif"
     } else if photo.mime_type.starts_with("video/") {
         "video"
+    } else if photo.mime_type.starts_with("audio/") {
+        "audio"
     } else {
         "photo"
     };

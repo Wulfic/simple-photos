@@ -332,7 +332,7 @@ fun AlbumListScreen(
             text = {
                 OutlinedTextField(
                     value = viewModel.newAlbumName,
-                    onValueChange = { viewModel.newAlbumName = it },
+                    onValueChange = { if (it.length <= 200) viewModel.newAlbumName = it },
                     label = { Text("Album name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()

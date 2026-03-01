@@ -88,6 +88,10 @@ export async function generateThumbnail(file: File, size: number): Promise<Array
   if (file.type.startsWith("video/")) {
     return generateVideoThumbnail(file, size);
   }
+  if (file.type.startsWith("audio/")) {
+    // Audio files have no visual content; return a small placeholder
+    return generateImageThumbnail(new File([new Blob()], file.name, { type: "image/png" }), size).catch(() => new ArrayBuffer(0));
+  }
   return generateImageThumbnail(file, size);
 }
 
@@ -99,7 +103,10 @@ export function thumbnailSrc(data: ArrayBuffer): string {
 /** Get the natural width/height of an image file. */
 export function getImageDimensions(file: File): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
-    if (file.type.startsWith("video/")) {
+    if (file.type.startsWith("audio/")) {
+      // Audio files have no visual dimensions
+      resolve({ width: 0, height: 0 });
+    } else if (file.type.startsWith("video/")) {
       const video = document.createElement("video");
       const url = URL.createObjectURL(file);
       video.onloadedmetadata = () => {

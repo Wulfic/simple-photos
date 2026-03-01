@@ -109,6 +109,12 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
           GIF
         </div>
       )}
+      {photo.media_type === "audio" && (
+        <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+          <span>♫</span>
+          {photo.duration_secs ? <span>{formatDuration(photo.duration_secs)}</span> : null}
+        </div>
+      )}
 
       {/* Selection indicator */}
       {selectionMode && (

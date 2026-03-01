@@ -24,6 +24,7 @@ const VALID_BLOB_TYPES: &[&str] = &[
     "photo",
     "gif",
     "video",
+    "audio",
     "thumbnail",
     "video_thumbnail",
     "album_manifest",

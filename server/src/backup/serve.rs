@@ -7,6 +7,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::sanitize;
 use crate::state::AppState;
 
 use super::models::BackupPhotoRecord;
@@ -168,6 +169,10 @@ pub async fn backup_receive(
         .ok_or_else(|| AppError::BadRequest("Missing X-File-Path header".into()))?
         .to_string();
 
+    // Security: validate the file_path is a safe relative path (no traversal, no absolute)
+    sanitize::validate_relative_path(&file_path)
+        .map_err(|reason| AppError::BadRequest(format!("Invalid X-File-Path: {}", reason)))?;
+
     let source = headers
         .get("X-Source")
         .and_then(|v| v.to_str().ok())
@@ -177,11 +182,17 @@ pub async fn backup_receive(
     let storage_root = state.storage_root.read().await.clone();
     let full_path = storage_root.join(&file_path);
 
-    // Create parent directories if they don't exist
+    // Defense-in-depth: verify the resolved path is still within storage_root
+    let canonical_root = storage_root.canonicalize().unwrap_or_else(|_| storage_root.clone());
+    // We can't canonicalize full_path yet (file doesn't exist), so check the parent
     if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
             AppError::Internal(format!("Failed to create directories: {}", e))
         })?;
+        let canonical_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+        if !canonical_parent.starts_with(&canonical_root) {
+            return Err(AppError::BadRequest("File path escapes storage root".into()));
+        }
     }
 
     // Write the file to disk
@@ -218,17 +229,33 @@ pub async fn backup_receive(
         Some("bmp") => "image/bmp",
         Some("tiff") | Some("tif") => "image/tiff",
         Some("svg") => "image/svg+xml",
+        Some("ico") | Some("cur") => "image/x-icon",
+        Some("hdr") => "image/vnd.radiance",
         Some("mp4") => "video/mp4",
         Some("mov") => "video/quicktime",
         Some("avi") => "video/x-msvideo",
         Some("mkv") => "video/x-matroska",
         Some("webm") => "video/webm",
+        Some("wmv") => "video/x-ms-wmv",
+        Some("asf") => "video/x-ms-asf",
+        Some("hevc") | Some("h265") => "video/hevc",
+        Some("h264") => "video/h264",
+        Some("mpg") | Some("mpeg") => "video/mpeg",
+        Some("m4v") => "video/x-m4v",
+        Some("mp3") => "audio/mpeg",
+        Some("aiff") => "audio/aiff",
+        Some("flac") => "audio/flac",
+        Some("ogg") => "audio/ogg",
+        Some("wav") => "audio/wav",
+        Some("wma") => "audio/x-ms-wma",
         _ => "application/octet-stream",
     }
     .to_string();
 
     let media_type = if mime_type.starts_with("video/") {
         "video"
+    } else if mime_type.starts_with("audio/") {
+        "audio"
     } else if mime_type == "image/gif" {
         "gif"
     } else {

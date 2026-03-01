@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::sanitize;
 use crate::state::AppState;
 
 use super::broadcast;
@@ -41,11 +42,13 @@ pub async fn add_backup_server(
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     require_admin(&state, &auth).await?;
 
-    // Validate address format
+    // Validate and sanitize inputs
     let address = req.address.trim().to_string();
     if address.is_empty() {
         return Err(AppError::BadRequest("Address is required".into()));
     }
+    let name = sanitize::sanitize_display_name(&req.name, 200)
+        .map_err(|reason| AppError::BadRequest(reason.into()))?;
 
     // Check for duplicates
     let exists: bool = sqlx::query_scalar(
@@ -72,7 +75,7 @@ pub async fn add_backup_server(
          VALUES (?, ?, ?, ?, ?, 'never', 1, ?)",
     )
     .bind(&id)
-    .bind(&req.name)
+    .bind(&name)
     .bind(&address)
     .bind(&req.api_key)
     .bind(freq)
@@ -80,13 +83,13 @@ pub async fn add_backup_server(
     .execute(&state.pool)
     .await?;
 
-    tracing::info!("Added backup server '{}' at {}", req.name, address);
+    tracing::info!("Added backup server '{}' at {}", name, address);
 
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
             "id": id,
-            "name": req.name,
+            "name": name,
             "address": address,
             "sync_frequency_hours": freq,
         })),
@@ -116,8 +119,10 @@ pub async fn update_backup_server(
     }
 
     if let Some(ref name) = req.name {
+        let safe_name = sanitize::sanitize_display_name(name, 200)
+            .map_err(|reason| AppError::BadRequest(reason.into()))?;
         sqlx::query("UPDATE backup_servers SET name = ? WHERE id = ?")
-            .bind(name)
+            .bind(&safe_name)
             .bind(&server_id)
             .execute(&state.pool)
             .await?;

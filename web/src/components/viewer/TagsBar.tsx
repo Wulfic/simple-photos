@@ -61,6 +61,7 @@ export default function TagsBar({
                   if (e.key === "Escape") { setShowTagInput(false); setTagInput(""); }
                 }}
                 placeholder="tag name"
+                maxLength={100}
                 className="w-28 px-2 py-0.5 rounded bg-gray-700 text-white text-xs border border-gray-600 focus:outline-none focus:border-blue-500"
               />
               <button

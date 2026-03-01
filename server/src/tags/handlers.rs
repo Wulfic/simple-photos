@@ -5,6 +5,7 @@ use chrono::Utc;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::sanitize;
 use crate::state::AppState;
 
 use super::models::*;
@@ -53,7 +54,7 @@ pub async fn add_tag(
     Path(photo_id): Path<String>,
     Json(body): Json<AddTagRequest>,
 ) -> Result<StatusCode, AppError> {
-    let tag = body.tag.trim().to_lowercase();
+    let tag = sanitize::sanitize_text(&body.tag).to_lowercase();
     if tag.is_empty() || tag.len() > 100 {
         return Err(AppError::BadRequest("Tag must be 1-100 characters".into()));
     }
@@ -79,8 +80,7 @@ pub async fn remove_tag(
     Path(photo_id): Path<String>,
     Json(body): Json<RemoveTagRequest>,
 ) -> Result<StatusCode, AppError> {
-    let tag = body.tag.trim().to_lowercase();
-    sqlx::query(
+    let tag = sanitize::sanitize_text(&body.tag).to_lowercase();    sqlx::query(
         "DELETE FROM photo_tags WHERE photo_id = ? AND user_id = ? AND tag = ?",
     )
     .bind(&photo_id)
@@ -167,8 +167,8 @@ pub async fn search_photos(
         let variant_conditions: Vec<String> = variants
             .iter()
             .map(|v| {
-                bind_values.push(format!("%{}%", v));
-                format!("LOWER({}) LIKE ?", field_expr)
+                bind_values.push(format!("%{}%", sanitize::escape_like(v)));
+                format!("LOWER({}) LIKE ? ESCAPE '\\'", field_expr)
             })
             .collect();
 

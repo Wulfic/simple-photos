@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::sanitize;
 use crate::state::AppState;
 
 use super::models::*;
@@ -188,6 +189,10 @@ pub async fn soft_delete_blob(
     let media_type = req.media_type.as_deref().unwrap_or("photo");
     let size_bytes = req.size_bytes.unwrap_or(0);
 
+    // Sanitize client-supplied metadata
+    let safe_filename = sanitize::sanitize_filename(&req.filename);
+    let safe_mime = sanitize::sanitize_freeform(&req.mime_type, 128);
+
     // Insert into trash_items with blob references
     sqlx::query(
         "INSERT INTO trash_items (id, user_id, photo_id, filename, file_path, mime_type, \
@@ -198,9 +203,9 @@ pub async fn soft_delete_blob(
     .bind(&trash_id)
     .bind(&auth.user_id)
     .bind(&blob_id) // photo_id = blob_id for encrypted items
-    .bind(&req.filename)
+    .bind(&safe_filename)
     .bind(&storage_path) // file_path = blob storage_path
-    .bind(&req.mime_type)
+    .bind(&safe_mime)
     .bind(media_type)
     .bind(size_bytes)
     .bind(req.width.unwrap_or(0))
@@ -278,6 +283,7 @@ pub async fn restore_from_trash(
         let blob_type = match row.media_type.as_str() {
             "gif" => "gif",
             "video" => "video",
+            "audio" => "audio",
             _ => "photo",
         };
 

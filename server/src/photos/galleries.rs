@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::sanitize;
 use crate::state::AppState;
 
 use super::models::*;
@@ -41,11 +42,8 @@ pub async fn create_secure_gallery(
     auth: AuthUser,
     Json(req): Json<CreateSecureGalleryRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    if req.name.is_empty() || req.name.len() > 100 {
-        return Err(AppError::BadRequest(
-            "Gallery name must be 1-100 characters".into(),
-        ));
-    }
+    let name = sanitize::sanitize_display_name(&req.name, 100)
+        .map_err(|reason| AppError::BadRequest(reason.into()))?;
 
     let gallery_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -58,7 +56,7 @@ pub async fn create_secure_gallery(
     )
     .bind(&gallery_id)
     .bind(&auth.user_id)
-    .bind(&req.name)
+    .bind(&name)
     .bind("account-auth") // placeholder — not used for verification
     .bind(&now)
     .execute(&state.pool)
@@ -68,7 +66,7 @@ pub async fn create_secure_gallery(
         StatusCode::CREATED,
         Json(serde_json::json!({
             "gallery_id": gallery_id,
-            "name": req.name,
+            "name": name,
         })),
     ))
 }

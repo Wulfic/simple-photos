@@ -6,6 +6,8 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 
+use crate::sanitize;
+
 use super::models::{GooglePhotosMetadata, PhotoMetadataRecord};
 
 /// Parse a Google Photos JSON sidecar file from raw bytes.
@@ -60,15 +62,17 @@ pub fn normalise(
         photo_id,
         blob_id,
         source: "google_photos".to_string(),
-        title: meta.title.clone(),
-        description: meta.description.clone().filter(|d| !d.is_empty()),
+        title: meta.title.as_deref().map(|t| sanitize::sanitize_freeform(t, 500)),
+        description: meta.description.clone()
+            .filter(|d| !d.is_empty())
+            .map(|d| sanitize::sanitize_freeform(&d, 2000)),
         taken_at,
         created_at_src,
         latitude,
         longitude,
         altitude,
         image_views,
-        original_url: meta.url.clone(),
+        original_url: meta.url.as_deref().map(|u| sanitize::sanitize_freeform(u, 2048)),
         storage_path: None,
         is_encrypted: false,
         imported_at: now,

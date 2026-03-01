@@ -98,13 +98,14 @@ export default function usePhotoPreload(
       const resolvedType: MediaType =
         photo.media_type === "gif" ? "gif"
         : photo.media_type === "video" ? "video"
+        : photo.media_type === "audio" ? "audio"
         : "photo";
 
-      // Fetch the full file
+      // Fetch the full file (use /web endpoint for browser-compatible format)
       const { accessToken } = useAuthStore.getState();
       const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
       if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-      const fileRes = await fetch(api.photos.fileUrl(photoId), { headers });
+      const fileRes = await fetch(api.photos.webUrl(photoId), { headers });
       if (!fileRes.ok) return;
       const blob = await fileRes.blob();
       const url = URL.createObjectURL(blob);
@@ -173,6 +174,8 @@ export default function usePhotoPreload(
           ? "gif"
           : payload.mime_type.startsWith("video/")
           ? "video"
+          : payload.mime_type.startsWith("audio/")
+          ? "audio"
           : "photo");
 
       const bytes = base64ToUint8Array(payload.data).buffer as ArrayBuffer;
