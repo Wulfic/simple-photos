@@ -38,7 +38,7 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
                   <span className="text-base">
-                    {item.mimeType?.startsWith("video/") ? "\uD83C\uDFAC" : "\uD83D\uDDBC\uFE0F"}
+                    {item.mimeType?.startsWith("video/") ? "\uD83C\uDFAC" : item.mimeType?.startsWith("audio/") ? "\uD83C\uDFB5" : "\uD83D\uDDBC\uFE0F"}
                   </span>
                   <span
                     className="truncate max-w-[250px] dark:text-gray-200"

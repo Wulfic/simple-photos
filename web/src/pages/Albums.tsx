@@ -38,10 +38,10 @@ export default function Albums() {
 
   // Smart/default album counts + first photo ID for cover thumbnail
   const [plainPhotoCounts, setPlainPhotoCounts] = useState<{
-    all: number; favorites: number; photos: number; gifs: number; videos: number;
+    all: number; favorites: number; photos: number; gifs: number; videos: number; audio: number;
   } | null>(null);
   const [plainFirstIds, setPlainFirstIds] = useState<{
-    favorites?: string; photos?: string; gifs?: string; videos?: string;
+    favorites?: string; photos?: string; gifs?: string; videos?: string; audio?: string;
   }>({});
 
   // Encrypted photos from IndexedDB (for smart album counts)
@@ -76,12 +76,14 @@ export default function Albums() {
           photos: allPhotos.filter(p => p.media_type === "photo" || p.media_type === "gif").length,
           gifs: allPhotos.filter(p => p.media_type === "gif").length,
           videos: allPhotos.filter(p => p.media_type === "video").length,
+          audio: allPhotos.filter(p => p.media_type === "audio").length,
         });
         setPlainFirstIds({
           favorites: allPhotos.find(p => p.is_favorite)?.id,
           photos: allPhotos.find(p => p.media_type === "photo" || p.media_type === "gif")?.id,
           gifs: allPhotos.find(p => p.media_type === "gif")?.id,
           videos: allPhotos.find(p => p.media_type === "video")?.id,
+          audio: allPhotos.find(p => p.media_type === "audio")?.id,
         });
       }
     } catch {
@@ -96,11 +98,13 @@ export default function Albums() {
     photos: encryptedPhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
     gifs: encryptedPhotos.filter(p => p.mediaType === "gif").length,
     videos: encryptedPhotos.filter(p => p.mediaType === "video").length,
+    audio: encryptedPhotos.filter(p => p.mediaType === "audio").length,
   } : null;
   const encryptedFirstThumbs = encryptedPhotos ? {
     photos: encryptedPhotos.find(p => (p.mediaType === "photo" || p.mediaType === "gif") && p.thumbnailData)?.thumbnailData,
     gifs: encryptedPhotos.find(p => p.mediaType === "gif" && p.thumbnailData)?.thumbnailData,
     videos: encryptedPhotos.find(p => p.mediaType === "video" && p.thumbnailData)?.thumbnailData,
+    audio: encryptedPhotos.find(p => p.mediaType === "audio" && p.thumbnailData)?.thumbnailData,
   } : {};
 
   async function loadAlbums() {
@@ -266,6 +270,7 @@ export default function Albums() {
             value={newAlbumName}
             onChange={(e) => setNewAlbumName(e.target.value)}
             placeholder="Album name"
+            maxLength={200}
             className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
             autoFocus
           />
@@ -311,6 +316,13 @@ export default function Albums() {
           encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.videos : undefined}
           onClick={() => navigate("/albums/smart-videos")}
         />
+        <SmartAlbumCard
+          label="Audio"
+          count={encryptionMode === "plain" ? (plainPhotoCounts?.audio ?? 0) : (encryptedPhotoCounts?.audio ?? 0)}
+          plainThumbId={encryptionMode === "plain" ? plainFirstIds.audio : undefined}
+          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.audio : undefined}
+          onClick={() => navigate("/albums/smart-audio")}
+        />
 
         {/* ── User-created albums ───────────────────────────────────────── */}
         {loading && (!albums || albums.length === 0) && (
@@ -341,6 +353,7 @@ export default function Albums() {
               value={newSharedName}
               onChange={(e) => setNewSharedName(e.target.value)}
               placeholder="Shared album name"
+              maxLength={200}
               className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
               autoFocus
             />

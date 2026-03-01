@@ -14,6 +14,7 @@ mod import;
 mod media;
 mod photos;
 mod ratelimit;
+mod sanitize;
 mod security;
 mod setup;
 mod sharing;
@@ -259,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/upload", post(photos::handlers::upload_photo))
         .route("/photos/{id}/file", get(photos::handlers::serve_photo))
         .route("/photos/{id}/thumb", get(photos::handlers::serve_thumbnail))
+        .route("/photos/{id}/web", get(photos::handlers::serve_web))
         // Favorite toggle
         .route("/photos/{id}/favorite", put(photos::handlers::toggle_favorite))
         // Crop metadata

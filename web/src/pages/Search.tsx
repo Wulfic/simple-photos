@@ -217,6 +217,7 @@ export default function Search() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search tags, filenames, dates, media types…"
+            maxLength={500}
             className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
           />
           {query && (
@@ -397,6 +398,11 @@ function SearchResultTile({
       {result.media_type === "gif" && (
         <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
           GIF
+        </div>
+      )}
+      {result.media_type === "audio" && (
+        <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+          <span>♫</span>
         </div>
       )}
 

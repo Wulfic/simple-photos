@@ -343,6 +343,7 @@ class GalleryViewModel @Inject constructor(
                     val mimeType = resolver.getType(uri) ?: "image/jpeg"
                     val mediaType = when {
                         mimeType.startsWith("video/") -> "video"
+                        mimeType.startsWith("audio/") -> "audio"
                         mimeType == "image/gif" -> "gif"
                         else -> "photo"
                     }

@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::sanitize;
 use crate::state::AppState;
 
 use super::models::{ClientLogBatch, ClientLogListResponse, ClientLogRecord};
@@ -46,23 +47,24 @@ pub async fn submit_logs(
             continue; // skip invalid entries silently
         }
 
-        // Truncate excessively long messages
-        let message = if entry.message.len() > 4096 {
-            format!("{}…", &entry.message[..4096])
-        } else {
-            entry.message.clone()
-        };
+        // Truncate excessively long messages and strip control chars
+        let message = sanitize::sanitize_freeform(&entry.message, 4096);
 
-        let tag = if entry.tag.len() > 128 {
-            entry.tag[..128].to_string()
-        } else {
-            entry.tag.clone()
-        };
+        let tag = sanitize::sanitize_freeform(&entry.tag, 128);
 
+        // Limit context JSON size to prevent storage abuse
         let context_str = entry
             .context
             .as_ref()
-            .map(|c| c.to_string())
+            .map(|c| {
+                let s = c.to_string();
+                if s.len() > 8192 {
+                    // Truncate oversized JSON context
+                    "{\"error\": \"context_truncated\"}".to_string()
+                } else {
+                    s
+                }
+            })
             .unwrap_or_else(|| "null".to_string());
 
         let id = Uuid::new_v4().to_string();

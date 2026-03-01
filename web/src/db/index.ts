@@ -1,7 +1,7 @@
 import Dexie, { type Table } from "dexie";
 
-/** Discriminated union for the three media categories */
-export type MediaType = "photo" | "gif" | "video";
+/** Discriminated union for the four media categories */
+export type MediaType = "photo" | "gif" | "video" | "audio";
 
 export interface CachedPhoto {
   blobId: string;
@@ -105,6 +105,8 @@ class SimplePhotosDB extends Dexie {
                 photo.mediaType = "gif";
               } else if (photo.mimeType?.startsWith("video/")) {
                 photo.mediaType = "video";
+              } else if (photo.mimeType?.startsWith("audio/")) {
+                photo.mediaType = "audio";
               } else {
                 photo.mediaType = "photo";
               }
@@ -150,6 +152,7 @@ export const db = new SimplePhotosDB();
 export function blobTypeFromMime(mimeType: string): string {
   if (mimeType === "image/gif") return "gif";
   if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
   return "photo";
 }
 
@@ -157,6 +160,7 @@ export function blobTypeFromMime(mimeType: string): string {
 export function mediaTypeFromMime(mimeType: string): MediaType {
   if (mimeType === "image/gif") return "gif";
   if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
   return "photo";
 }
 
@@ -170,4 +174,6 @@ export const ACCEPTED_MIME_TYPES = [
   "image/*",
   // ── Videos ──────────────────────────────────────────────────────────────────
   "video/*",
+  // ── Audio ───────────────────────────────────────────────────────────────────
+  "audio/*",
 ].join(",");

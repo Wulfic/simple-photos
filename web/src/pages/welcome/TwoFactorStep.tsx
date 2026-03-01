@@ -1,3 +1,4 @@
+import { QRCodeSVG } from "qrcode.react";
 import type { TotpSetupResponse } from "../../api/client";
 import type { WizardStep, CreatedUser } from "./types";
 
@@ -83,12 +84,9 @@ export default function TwoFactorStep({
         <div className="space-y-4">
           <div className="flex justify-center">
             <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border-2 border-gray-200 dark:border-gray-700">
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(totpData.otpauth_uri)}`}
-                alt="TOTP QR Code"
-                width={200}
-                height={200}
-                className="rounded"
+              <QRCodeSVG
+                value={totpData.otpauth_uri}
+                size={200}
               />
             </div>
           </div>

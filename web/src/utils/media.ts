@@ -120,6 +120,8 @@ export function generateThumbnailFromBuffer(
   mimeType: string,
   size: number
 ): Promise<ArrayBuffer> {
+  if (mimeType.startsWith("audio/"))
+    return Promise.reject(new Error("Audio files have no visual thumbnail"));
   if (mimeType.startsWith("video/"))
     return generateVideoThumbnailFromBuffer(data, mimeType, size);
   return generateImageThumbnailFromBuffer(data, mimeType, size);
@@ -156,7 +158,10 @@ export function getDimensionsFromBuffer(
     const blob = new Blob([data], { type: mimeType });
     const url = URL.createObjectURL(blob);
 
-    if (mimeType.startsWith("video/")) {
+    if (mimeType.startsWith("audio/")) {
+      // Audio files have no visual dimensions
+      resolve({ width: 0, height: 0 });
+    } else if (mimeType.startsWith("video/")) {
       const video = document.createElement("video");
       video.onloadedmetadata = () => {
         URL.revokeObjectURL(url);
@@ -220,6 +225,9 @@ export function guessMimeFromName(name: string): string {
     tiff: "image/tiff",
     tif: "image/tiff",
     svg: "image/svg+xml",
+    ico: "image/x-icon",
+    cur: "image/x-icon",
+    hdr: "image/vnd.radiance",
     mp4: "video/mp4",
     mov: "video/quicktime",
     mkv: "video/x-matroska",
@@ -227,6 +235,19 @@ export function guessMimeFromName(name: string): string {
     avi: "video/x-msvideo",
     "3gp": "video/3gpp",
     m4v: "video/x-m4v",
+    wmv: "video/x-ms-wmv",
+    asf: "video/x-ms-asf",
+    hevc: "video/hevc",
+    h264: "video/h264",
+    h265: "video/hevc",
+    mpg: "video/mpeg",
+    mpeg: "video/mpeg",
+    mp3: "audio/mpeg",
+    aiff: "audio/aiff",
+    flac: "audio/flac",
+    ogg: "audio/ogg",
+    wav: "audio/wav",
+    wma: "audio/x-ms-wma",
   };
   return mimeMap[ext || ""] || "application/octet-stream";
 }
@@ -295,6 +316,28 @@ export async function createFallbackThumbnail(): Promise<ArrayBuffer> {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("\uD83D\uDCF7", 128, 128);
+  return new Promise((resolve) => {
+    canvas.toBlob(
+      (blob) => blob!.arrayBuffer().then(resolve),
+      "image/jpeg",
+      0.5
+    );
+  });
+}
+
+/** Create a black placeholder thumbnail with a music note for audio files */
+export async function createAudioFallbackThumbnail(): Promise<ArrayBuffer> {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = "#888";
+  ctx.font = "80px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("\u266B", 128, 128);
   return new Promise((resolve) => {
     canvas.toBlob(
       (blob) => blob!.arrayBuffer().then(resolve),

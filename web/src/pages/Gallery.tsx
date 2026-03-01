@@ -5,11 +5,12 @@ import { decrypt, encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
 import {
   db,
   type CachedPhoto,
+  type MediaType,
   blobTypeFromMime,
   mediaTypeFromMime,
   ACCEPTED_MIME_TYPES,
 } from "../db";
-import { createFallbackThumbnail, arrayBufferToBase64, base64ToArrayBuffer } from "../utils/media";
+import { createFallbackThumbnail, createAudioFallbackThumbnail, arrayBufferToBase64, base64ToArrayBuffer } from "../utils/media";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useAuthStore } from "../store/auth";
 import { useProcessingStore } from "../store/processing";
@@ -32,7 +33,7 @@ interface PhotoPayload {
   filename: string;
   taken_at: string;
   mime_type: string;
-  media_type: "photo" | "gif" | "video";
+  media_type: "photo" | "gif" | "video" | "audio";
   width: number;
   height: number;
   duration?: number;
@@ -490,7 +491,7 @@ export default function Gallery() {
           filename: photo.filename,
           takenAt,
           mimeType: photo.mime_type,
-          mediaType: (photo.media_type as "photo" | "gif" | "video") ?? mediaTypeFromMime(photo.mime_type),
+          mediaType: (photo.media_type as MediaType) ?? mediaTypeFromMime(photo.mime_type),
           width: photo.width,
           height: photo.height,
           duration: photo.duration_secs ?? undefined,
@@ -585,9 +586,9 @@ export default function Gallery() {
     startTask("upload");
     setError("");
 
-    const IMAGE_VIDEO_EXTENSIONS = /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?|dng|cr2|nef|arw|orf|rw2|mp4|mov|avi|mkv|webm|m4v|3gp)$/i;
+    const IMAGE_VIDEO_EXTENSIONS = /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?|dng|cr2|nef|arw|orf|rw2|ico|cur|hdr|svg|mp4|mov|avi|mkv|webm|m4v|3gp|wmv|asf|hevc|h264|h265|mpg|mpeg|mp3|aiff|flac|ogg|wav|wma)$/i;
     const fileArray = Array.from(files).filter(
-      (f) => f.type.startsWith("image/") || f.type.startsWith("video/") || IMAGE_VIDEO_EXTENSIONS.test(f.name)
+      (f) => f.type.startsWith("image/") || f.type.startsWith("video/") || f.type.startsWith("audio/") || IMAGE_VIDEO_EXTENSIONS.test(f.name)
     );
 
     setUploadProgress({ done: 0, total: fileArray.length });
@@ -617,11 +618,15 @@ export default function Gallery() {
 
     // Generate thumbnail (JPEG frame for videos, scaled image for photos/GIFs)
     let thumbnailData: ArrayBuffer;
-    try {
-      thumbnailData = await generateThumbnail(file, 256);
-    } catch {
-      console.warn(`Thumbnail generation failed for ${file.name}, using fallback`);
-      thumbnailData = await createFallbackThumbnail();
+    if (mediaType === "audio") {
+      thumbnailData = await createAudioFallbackThumbnail();
+    } else {
+      try {
+        thumbnailData = await generateThumbnail(file, 256);
+      } catch {
+        console.warn(`Thumbnail generation failed for ${file.name}, using fallback`);
+        thumbnailData = await createFallbackThumbnail();
+      }
     }
 
     // Get actual dimensions

@@ -250,6 +250,7 @@ async function reportProgress(payload: {
 function blobTypeFromMime(mimeType: string): string {
   if (mimeType === "image/gif") return "gif";
   if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
   return "photo";
 }
 
@@ -349,7 +350,7 @@ async function runMigration(
           filename: photo.filename,
           taken_at: photo.taken_at || photo.created_at,
           mime_type: photo.mime_type,
-          media_type: photo.media_type || (photo.mime_type === "image/gif" ? "gif" : photo.mime_type.startsWith("video/") ? "video" : "photo"),
+          media_type: photo.media_type || (photo.mime_type === "image/gif" ? "gif" : photo.mime_type.startsWith("video/") ? "video" : photo.mime_type.startsWith("audio/") ? "audio" : "photo"),
           width: photo.width,
           height: photo.height,
           duration: photo.duration_secs ?? undefined,

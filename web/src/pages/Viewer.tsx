@@ -60,6 +60,7 @@ export default function Viewer() {
   const [mediaType, setMediaType] = useState<MediaType>("photo");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [videoError, setVideoError] = useState(false);
 
   // For live preview: show the cached thumbnail while the full media is loading
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -617,6 +618,7 @@ export default function Viewer() {
       }
       setLoading(false);
       setError("");
+      setVideoError(false);
     } else {
       // Cache miss — load normally
       setMediaUrl((prev) => {
@@ -628,6 +630,7 @@ export default function Viewer() {
       setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
       setLoading(true);
       setError("");
+      setVideoError(false);
 
       if (isPlainMode) {
         loadPlainMedia(id);
@@ -715,11 +718,11 @@ export default function Viewer() {
         return;
       }
 
-      // Cache miss — fetch from server
+      // Cache miss — fetch from server (use /web endpoint for browser-compatible format)
       const { accessToken } = useAuthStore.getState();
       const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
       if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-      const fileRes = await fetch(api.photos.fileUrl(photoId), { headers });
+      const fileRes = await fetch(api.photos.webUrl(photoId), { headers });
       if (!fileRes.ok) throw new Error(`Failed to load photo: ${fileRes.status}`);
       const blob = await fileRes.blob();
       const url = URL.createObjectURL(blob);
@@ -804,6 +807,8 @@ export default function Viewer() {
           ? "gif"
           : payload.mime_type.startsWith("video/")
           ? "video"
+          : payload.mime_type.startsWith("audio/")
+          ? "audio"
           : "photo");
       setMediaType(resolvedType);
 
@@ -1219,7 +1224,7 @@ export default function Viewer() {
         )}
 
         {/* ── Video player ───────────────────────────────────────────────── */}
-        {mediaUrl && mediaType === "video" && (
+        {mediaUrl && mediaType === "video" && !videoError && (
           <video
             ref={videoRef}
             src={mediaUrl}
@@ -1228,11 +1233,40 @@ export default function Viewer() {
             autoPlay={false}
             className="max-w-full max-h-full"
             style={{ background: "black" }}
-          >
-            <p className="text-white text-sm">
-              Your browser doesn't support this video format.
-            </p>
-          </video>
+            onError={() => setVideoError(true)}
+          />
+        )}
+
+        {/* ── Video format not supported fallback ────────────────────────── */}
+        {mediaUrl && mediaType === "video" && videoError && (
+          <div className="w-full h-full flex flex-col items-center justify-center" style={{ background: "black" }}>
+            <svg className="w-16 h-16 text-gray-500 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+            </svg>
+            <p className="text-gray-300 text-sm mb-1">This video format is not supported by your browser.</p>
+            <p className="text-gray-500 text-xs mb-4 px-4 text-center truncate max-w-[80%]">{filename}</p>
+            <button
+              onClick={handleDownload}
+              className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Download Original
+            </button>
+          </div>
+        )}
+
+        {/* ── Audio player (black screen + playbar) ──────────────────────── */}
+        {mediaUrl && mediaType === "audio" && (
+          <div className="w-full h-full flex flex-col items-center justify-center" style={{ background: "black" }}>
+            <div className="text-gray-400 text-6xl mb-6">♫</div>
+            <p className="text-gray-300 text-sm mb-6 px-4 text-center truncate max-w-[80%]">{filename}</p>
+            <audio
+              src={mediaUrl}
+              controls
+              autoPlay={false}
+              className="w-full max-w-md"
+              style={{ filter: "invert(1) hue-rotate(180deg)", opacity: 0.85 }}
+            />
+          </div>
         )}
         </div>{/* end slide animation wrapper */}
       </div>

@@ -424,6 +424,7 @@ export default function BackupStep({ setStep, setError, error }: BackupStepProps
               value={manualName}
               onChange={(e) => setManualName(e.target.value)}
               placeholder="e.g., Living Room NAS"
+              maxLength={200}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
@@ -437,6 +438,7 @@ export default function BackupStep({ setStep, setError, error }: BackupStepProps
               value={manualAddress}
               onChange={(e) => setManualAddress(e.target.value)}
               placeholder="e.g., 192.168.1.100:8080 or backup.local:8080"
+              maxLength={500}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
             <p className="text-xs text-gray-400 mt-1">
@@ -453,6 +455,7 @@ export default function BackupStep({ setStep, setError, error }: BackupStepProps
               value={manualApiKey}
               onChange={(e) => setManualApiKey(e.target.value)}
               placeholder="Shared secret for authentication"
+              maxLength={256}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>

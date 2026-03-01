@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::sanitize;
 use crate::state::AppState;
 
 use super::models::EncryptionSettingsResponse;
@@ -175,7 +176,10 @@ pub async fn report_migration_progress(
     _auth: AuthUser,
     Json(req): Json<MigrationProgressRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(ref err) = req.error {
+    // Sanitize error messages — cap length and strip control characters
+    let error = req.error.as_deref().map(|e| sanitize::sanitize_freeform(e, 2048));
+
+    if let Some(ref err) = error {
         tracing::warn!(
             completed = req.completed_count,
             done = req.done.unwrap_or(false),
@@ -192,7 +196,7 @@ pub async fn report_migration_progress(
 
     if req.done.unwrap_or(false) {
         // Migration finished — preserve error message if one was sent with done flag
-        if let Some(ref err) = req.error {
+        if let Some(ref err) = error {
             sqlx::query(
                 "UPDATE encryption_migration SET status = 'idle', completed = total, error = ? WHERE id = 'singleton'",
             )
@@ -206,7 +210,7 @@ pub async fn report_migration_progress(
             .execute(&state.pool)
             .await?;
         }
-    } else if let Some(ref err) = req.error {
+    } else if let Some(ref err) = error {
         sqlx::query(
             "UPDATE encryption_migration SET error = ?, completed = ? WHERE id = 'singleton'",
         )

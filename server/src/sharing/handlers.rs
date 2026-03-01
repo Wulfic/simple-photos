@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::sanitize;
 use crate::state::AppState;
 
 use super::models::*;
@@ -125,11 +126,8 @@ pub async fn create_shared_album(
     auth: AuthUser,
     Json(req): Json<CreateSharedAlbumRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    if req.name.trim().is_empty() || req.name.len() > 200 {
-        return Err(AppError::BadRequest(
-            "Album name must be between 1 and 200 characters".into(),
-        ));
-    }
+    let name = sanitize::sanitize_display_name(&req.name, 200)
+        .map_err(|reason| AppError::BadRequest(reason.into()))?;
 
     let album_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -137,7 +135,7 @@ pub async fn create_shared_album(
     sqlx::query("INSERT INTO shared_albums (id, owner_user_id, name, created_at) VALUES (?, ?, ?, ?)")
         .bind(&album_id)
         .bind(&auth.user_id)
-        .bind(req.name.trim())
+        .bind(&name)
         .bind(&now)
         .execute(&state.pool)
         .await?;
@@ -146,7 +144,7 @@ pub async fn create_shared_album(
         StatusCode::CREATED,
         Json(serde_json::json!({
             "id": album_id,
-            "name": req.name.trim(),
+            "name": name,
             "created_at": now,
         })),
     ))

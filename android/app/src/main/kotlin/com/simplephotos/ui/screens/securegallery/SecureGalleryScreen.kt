@@ -357,7 +357,7 @@ private fun GalleryListView(
                 ) {
                     OutlinedTextField(
                         value = newName,
-                        onValueChange = { newName = it },
+                        onValueChange = { if (it.length <= 100) newName = it },
                         placeholder = { Text("Album name") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)

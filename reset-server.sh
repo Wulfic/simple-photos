@@ -33,7 +33,7 @@ fi
 # Clean server-managed subdirectories under the storage root, preserving user photos
 if [[ -n "$STORAGE_ROOT" && -d "$STORAGE_ROOT" ]]; then
     echo "Cleaning storage root subdirectories in: $STORAGE_ROOT"
-    for subdir in blobs metadata logs uploads; do
+    for subdir in blobs metadata logs uploads .thumbnails .web_previews; do
         if [[ -d "$STORAGE_ROOT/$subdir" ]]; then
             echo "  Removing $STORAGE_ROOT/$subdir/..."
             rm -rf "$STORAGE_ROOT/$subdir"
