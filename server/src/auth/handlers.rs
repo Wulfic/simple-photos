@@ -605,3 +605,32 @@ pub async fn change_password(
     tracing::info!("Password changed for user {}", auth.user_id);
     Ok(StatusCode::OK)
 }
+
+/// POST /api/auth/verify-password
+/// Verify the current user's password without any side effects.
+/// Used by clients to gate sensitive actions (e.g. enabling biometric lock).
+pub async fn verify_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+    Json(req): Json<VerifyPasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    let ip = extract_client_ip(&headers);
+    state.rate_limiters.login.check(ip)?;
+
+    let current_hash: String = sqlx::query_scalar(
+        "SELECT password_hash FROM users WHERE id = ?",
+    )
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let valid = bcrypt::verify(&req.password, &current_hash)
+        .map_err(|e| AppError::Internal(format!("bcrypt error: {}", e)))?;
+
+    if !valid {
+        return Err(AppError::Unauthorized("Password is incorrect".into()));
+    }
+
+    Ok(StatusCode::OK)
+}

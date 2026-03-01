@@ -46,6 +46,30 @@ data class EncryptionSettingsResponse(
     @SerializedName("migration_error") val migrationError: String?
 )
 
+// ── Encrypted-mode sync (lightweight manifest from photos table) ─────────────
+
+data class EncryptedSyncRecord(
+    val id: String,
+    val filename: String,
+    @SerializedName("mime_type") val mimeType: String,
+    @SerializedName("media_type") val mediaType: String,
+    @SerializedName("size_bytes") val sizeBytes: Long,
+    val width: Long,
+    val height: Long,
+    @SerializedName("duration_secs") val durationSecs: Double? = null,
+    @SerializedName("taken_at") val takenAt: String? = null,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("encrypted_blob_id") val encryptedBlobId: String? = null,
+    @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
+    @SerializedName("is_favorite") val isFavorite: Boolean = false,
+    @SerializedName("photo_hash") val photoHash: String? = null
+)
+
+data class EncryptedSyncResponse(
+    val photos: List<EncryptedSyncRecord>,
+    @SerializedName("next_cursor") val nextCursor: String?
+)
+
 // ── Storage stats ────────────────────────────────────────────────────────────
 
 data class StorageStatsResponse(
@@ -67,6 +91,12 @@ data class StorageStatsResponse(
 data class ChangePasswordRequest(
     @SerializedName("current_password") val currentPassword: String,
     @SerializedName("new_password") val newPassword: String
+)
+
+// ── Verify password ──────────────────────────────────────────────────────────
+
+data class VerifyPasswordRequest(
+    val password: String
 )
 
 // ── Admin user management ────────────────────────────────────────────────────

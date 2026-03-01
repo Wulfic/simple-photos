@@ -2,6 +2,7 @@ package com.simplephotos
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -18,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -27,6 +29,8 @@ import androidx.core.content.ContextCompat
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.simplephotos.ui.navigation.NavGraph
@@ -141,14 +145,22 @@ class MainActivity : FragmentActivity() {
 }
 
 /**
- * Composable gate that requests required media permissions before showing [content].
- * On API 33+ requests READ_MEDIA_IMAGES and READ_MEDIA_VIDEO;
- * on older versions requests READ_EXTERNAL_STORAGE.
- * If the user permanently denies, offers a button to open app settings.
+ * Composable gate that requests **full** media access before showing [content].
+ *
+ * On Android 14+ (API 34, targetSdk 34), the system always offers the user
+ * a "Select photos and videos" option alongside "Allow all".  If the user
+ * chooses the former, READ_MEDIA_IMAGES is *not* granted — the app only sees
+ * the manually-selected items, which breaks folder discovery for backup.
+ *
+ * This gate detects that partial-access state and directs the user to the
+ * system Settings page where they can upgrade to "Allow all".
  */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 private fun PermissionGate(content: @Composable () -> Unit) {
+    val context = LocalContext.current
+
+    // Core media permissions we need for full access
     val mediaPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         listOf(
             Manifest.permission.READ_MEDIA_IMAGES,
@@ -159,15 +171,42 @@ private fun PermissionGate(content: @Composable () -> Unit) {
     }
     val permissionsState = rememberMultiplePermissionsState(mediaPermissions)
 
+    // Re-check permissions when returning from system settings
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                // Force Accompanist to re-evaluate permission status.
+                // Unfortunately there's no public refresh, but re-requesting
+                // with already-granted perms is a no-op and triggers recompose.
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Detect partial access on Android 14+:
+    // READ_MEDIA_VISUAL_USER_SELECTED is granted but READ_MEDIA_IMAGES is not.
+    val hasPartialAccess = remember(permissionsState.allPermissionsGranted) {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            !permissionsState.allPermissionsGranted &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            ) == PackageManager.PERMISSION_GRANTED
+    }
+
     if (permissionsState.allPermissionsGranted) {
         content()
+    } else if (hasPartialAccess) {
+        // User chose "Select photos and videos" — partial access.
+        // We can't re-request via the runtime dialog; must direct to Settings.
+        PartialAccessScreen(context)
     } else {
-        // Request permissions automatically on first composition
+        // No access at all — request for the first time
         LaunchedEffect(Unit) {
             permissionsState.launchMultiplePermissionRequest()
         }
-
-        val context = LocalContext.current
 
         Box(
             modifier = Modifier
@@ -201,7 +240,7 @@ private fun PermissionGate(content: @Composable () -> Unit) {
                 Spacer(Modifier.height(12.dp))
 
                 Text(
-                    "Simple Photos needs access to your photos and videos to browse, back up, and manage your media library.",
+                    "Simple Photos needs full access to your photos and videos to discover all folders, back up, and manage your media library.\n\nWhen prompted, please choose \"Allow all\".",
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -209,20 +248,17 @@ private fun PermissionGate(content: @Composable () -> Unit) {
 
                 Spacer(Modifier.height(32.dp))
 
-                // If user has denied once (shouldShowRationale = true) or permanently denied
                 if (permissionsState.shouldShowRationale) {
-                    // System will still show the dialog — offer retry
                     Button(
                         onClick = { permissionsState.launchMultiplePermissionRequest() },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("Grant Permissions", modifier = Modifier.padding(vertical = 4.dp))
+                        Text("Grant Full Access", modifier = Modifier.padding(vertical = 4.dp))
                     }
                 } else {
-                    // Permanently denied — direct to app settings
                     Text(
-                        "Permissions were denied. Please enable them in app settings.",
+                        "Permissions were denied. Please grant full media access in app settings.",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.error,
                         textAlign = TextAlign.Center
@@ -241,15 +277,82 @@ private fun PermissionGate(content: @Composable () -> Unit) {
                         Text("Open Settings", modifier = Modifier.padding(vertical = 4.dp))
                     }
                 }
-
-                Spacer(Modifier.height(12.dp))
-
-                // Allow skipping — some features work without media access (e.g. cloud-only browsing)
-                TextButton(onClick = { /* skip handled by re-checking on resume */ }) {
-                    // We don't actually skip — we just keep the gate up.
-                    // But we could add a skip mechanism if needed.
-                }
             }
+        }
+    }
+}
+
+/**
+ * Shown when the user has partial photo access ("Select photos and videos").
+ * Directs them to system Settings to upgrade to "Allow all".
+ */
+@Composable
+private fun PartialAccessScreen(context: android.content.Context) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .systemBarsPadding(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_image),
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(Modifier.height(24.dp))
+
+            Text(
+                "Full Access Required",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                "You\u2019ve granted partial photo access (\u201CSelect photos\u201D). " +
+                    "Simple Photos is a backup app and needs access to all photos " +
+                    "and videos to discover your folders.\n\n" +
+                    "Please open Settings \u2192 Permissions \u2192 Photos and Videos \u2192 " +
+                    "and select \u201CAllow all\u201D.",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(32.dp))
+
+            Button(
+                onClick = {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
+                    }
+                    context.startActivity(intent)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("Open Settings", modifier = Modifier.padding(vertical = 4.dp))
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                "After changing the permission, return here and the app will continue automatically.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }

@@ -64,7 +64,7 @@ async fn update_last_scan_time(pool: &sqlx::SqlitePool) {
 
 /// POST /api/admin/photos/auto-scan
 /// Trigger an immediate auto-scan (called when web UI or app opens).
-/// This is non-blocking — it kicks off a background scan and returns immediately.
+/// Runs synchronously so the client can await completion before loading photos.
 pub async fn trigger_auto_scan(
     State(state): State<AppState>,
     _auth: AuthUser,
@@ -72,26 +72,17 @@ pub async fn trigger_auto_scan(
     let pool = state.pool.clone();
     let storage_root = state.storage_root.read().await.clone();
 
-    // Spawn as a background task so the UI doesn't block
-    tokio::spawn(async move {
-        let count = run_auto_scan(&pool, &storage_root).await;
-        if count > 0 {
-            tracing::info!("On-demand scan: registered {} new files", count);
-        }
+    let count = run_auto_scan(&pool, &storage_root).await;
+    if count > 0 {
+        tracing::info!("On-demand scan: registered {} new files", count);
+    }
 
-        // Update last scan time
-        let now = Utc::now().to_rfc3339();
-        let _ = sqlx::query(
-            "INSERT INTO server_settings (key, value) VALUES ('last_auto_scan', ?) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(&now)
-        .execute(&pool)
-        .await;
-    });
+    // Update last scan time
+    update_last_scan_time(&pool).await;
 
     Ok(Json(serde_json::json!({
-        "message": "Scan started in background",
+        "message": "Scan complete",
+        "new_count": count,
     })))
 }
 
@@ -159,7 +150,7 @@ async fn run_auto_scan(
                     let modified = file_meta.and_then(|m| {
                         m.modified().ok().map(|t| {
                             let dt: chrono::DateTime<chrono::Utc> = t.into();
-                            dt.to_rfc3339()
+                            dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
                         })
                     });
 
@@ -173,7 +164,7 @@ async fn run_auto_scan(
                     };
 
                     let photo_id = Uuid::new_v4().to_string();
-                    let now = Utc::now().to_rfc3339();
+                    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
                     // Compute content-based hash for cross-platform alignment

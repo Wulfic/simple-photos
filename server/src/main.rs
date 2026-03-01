@@ -4,6 +4,7 @@ mod backup;
 mod blobs;
 mod client_logs;
 mod config;
+mod crypto;
 mod db;
 mod diagnostics;
 mod downloads;
@@ -208,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/refresh", post(auth::handlers::refresh))
         .route("/auth/logout", post(auth::handlers::logout))
         .route("/auth/password", put(auth::handlers::change_password))
+        .route("/auth/verify-password", post(auth::handlers::verify_password))
         // 2FA
         .route("/auth/2fa/setup", post(auth::handlers::setup_2fa))
         .route("/auth/2fa/confirm", post(auth::handlers::confirm_2fa))
@@ -252,6 +254,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/{id}/metadata", delete(import::handlers::delete_photo_metadata))
         // Plain-mode photos — list, serve, register, thumbnail
         .route("/photos", get(photos::handlers::list_photos))
+        .route("/photos/encrypted-sync", get(photos::sync::encrypted_sync))
         .route("/photos/register", post(photos::handlers::register_photo))
         .route("/photos/upload", post(photos::handlers::upload_photo))
         .route("/photos/{id}/file", get(photos::handlers::serve_photo))
@@ -269,6 +272,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/encryption", put(photos::encryption::set_encryption_mode))
         .route("/admin/encryption/progress", post(photos::encryption::report_migration_progress))
         .route("/photos/{id}/mark-encrypted", post(photos::encryption::mark_photo_encrypted))
+        // Server-side parallel encryption migration
+        .route("/admin/encryption/migrate", post(photos::server_migrate::start_migration))
+        .route("/admin/encryption/migrate/stream", get(photos::server_migrate::migration_stream))
         // Secure galleries
         .route("/galleries/secure", get(photos::galleries::list_secure_galleries))
         .route("/galleries/secure", post(photos::galleries::create_secure_gallery))

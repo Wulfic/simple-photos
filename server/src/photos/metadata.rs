@@ -76,7 +76,7 @@ pub(crate) fn extract_media_metadata(
                 // EXIF format: "2024:01:15 14:30:00" → convert to ISO 8601
                 if dt_str.len() >= 19 {
                     let iso = format!(
-                        "{}-{}-{}T{}",
+                        "{}-{}-{}T{}Z",
                         &dt_str[0..4],
                         &dt_str[5..7],
                         &dt_str[8..10],
@@ -170,7 +170,7 @@ pub(crate) fn extract_media_metadata_from_bytes(
         if let Some(dt_field) = exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY) {
             let dt_str = dt_field.display_value().to_string().trim_matches('"').to_string();
             if dt_str.len() >= 19 {
-                let iso = format!("{}-{}-{}T{}", &dt_str[0..4], &dt_str[5..7], &dt_str[8..10], &dt_str[11..19]);
+                let iso = format!("{}-{}-{}T{}Z", &dt_str[0..4], &dt_str[5..7], &dt_str[8..10], &dt_str[11..19]);
                 taken_at = Some(iso);
             }
         }

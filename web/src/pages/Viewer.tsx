@@ -154,30 +154,12 @@ export default function Viewer() {
     });
   }
 
-  // ── Preload cache for adjacent photos ──────────────────────────────────
-  // Maps photoId → { url, filename, mimeType, mediaType } for instant display
-  const preloadCache = useRef<Map<string, {
-    url: string;
-    filename: string;
-    mimeType: string;
-    mediaType: MediaType;
-    cropData: typeof cropData;
-    isFavorite: boolean;
-  }>>(new Map());
-
-  // Cached photo list to avoid re-fetching metadata on every preload (plain mode)
-  const photoListCache = useRef<{ data: Awaited<ReturnType<typeof api.photos.list>>["photos"]; ts: number } | null>(null);
-
-  /** Get the photo list, using a short-lived cache (30s) to avoid duplicate fetches */
-  async function getCachedPhotoList() {
-    const now = Date.now();
-    if (photoListCache.current && now - photoListCache.current.ts < 30_000) {
-      return photoListCache.current.data;
-    }
-    const res = await api.photos.list({ limit: 500 });
-    photoListCache.current = { data: res.photos, ts: now };
-    return res.photos;
-  }
+  // ── Preload cache for adjacent photos (from hook) ──────────────────────
+  const { preloadCache, getCachedPhotoList, preloadAdjacentPhotos } = usePhotoPreload(
+    photoIds,
+    currentIndex,
+    isPlainMode,
+  );
 
   // ── Full-screen overlay state ──────────────────────────────────────────
   const [showOverlay, setShowOverlay] = useState(true);
@@ -660,10 +642,10 @@ export default function Viewer() {
       }
     }
 
-    // Preload adjacent photos (±2) after a short delay to not compete with current load
+    // Preload adjacent photos (±5 direction-aware) after a very short delay
     const preloadTimer = setTimeout(() => {
       preloadAdjacentPhotos(id);
-    }, 150);
+    }, 50);
 
     return () => clearTimeout(preloadTimer);
   }, [id]);
@@ -689,7 +671,7 @@ export default function Viewer() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [goPrev, goNext, navigate, editMode, showLeavePrompt]);
 
-  /** Load a plain-mode photo — fetch with auth and create object URL */
+  /** Load a plain-mode photo — check IndexedDB cache first, then fetch */
   async function loadPlainMedia(photoId: string) {
     setLoading(true);
     setError("");
@@ -718,7 +700,21 @@ export default function Viewer() {
         setMediaType(resolved);
       }
 
-      // Fetch the file with auth headers and create a local object URL
+      // Check IndexedDB full-photo cache for instant display
+      const idbCached = await db.fullPhotos?.get(photoId);
+      if (idbCached?.data) {
+        const blob = new Blob([idbCached.data], { type: idbCached.mimeType });
+        const url = URL.createObjectURL(blob);
+        setMediaUrl(url);
+        preloadCache.current.set(photoId, {
+          url, filename: resolvedFilename, mimeType: resolvedMime,
+          mediaType: resolved, cropData: photoCropData, isFavorite: photoIsFavorite,
+        });
+        setLoading(false);
+        return;
+      }
+
+      // Cache miss — fetch from server
       const { accessToken } = useAuthStore.getState();
       const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
       if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
@@ -737,6 +733,18 @@ export default function Viewer() {
         cropData: photoCropData,
         isFavorite: photoIsFavorite,
       });
+
+      // Also cache in IndexedDB for cross-session persistence
+      if (blob.size < 50 * 1024 * 1024) {
+        try {
+          const arrayBuf = await blob.arrayBuffer();
+          await db.fullPhotos?.put({
+            photoId, filename: resolvedFilename, mimeType: resolvedMime,
+            mediaType: resolved, cropData: photo?.crop_metadata ?? undefined,
+            isFavorite: photoIsFavorite, data: arrayBuf, cachedAt: Date.now(),
+          });
+        } catch { /* non-fatal */ }
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load media");
     } finally {
@@ -744,11 +752,43 @@ export default function Viewer() {
     }
   }
 
-  /** Load an encrypted blob, decrypt, and display */
+  /** Load an encrypted blob — check IndexedDB cache first, then decrypt */
   async function loadEncryptedMedia(blobId: string) {
     setLoading(true);
     setError("");
     try {
+      // Check IndexedDB full-photo cache for instant display
+      const idbCached = await db.fullPhotos?.get(blobId);
+      if (idbCached?.data) {
+        const blob = new Blob([idbCached.data], { type: idbCached.mimeType });
+        const url = URL.createObjectURL(blob);
+        setMediaUrl(url);
+        setFilename(idbCached.filename);
+        setMimeType(idbCached.mimeType);
+        const resolvedType: MediaType =
+          idbCached.mediaType === "gif" ? "gif"
+          : idbCached.mediaType === "video" ? "video"
+          : "photo";
+        setMediaType(resolvedType);
+
+        let photoCropData = null;
+        if (idbCached.cropData) {
+          try { photoCropData = JSON.parse(idbCached.cropData); } catch { /* ignore */ }
+        }
+        preloadCache.current.set(blobId, {
+          url, filename: idbCached.filename, mimeType: idbCached.mimeType,
+          mediaType: resolvedType, cropData: photoCropData,
+          isFavorite: idbCached.isFavorite ?? false,
+        });
+        if (previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+          setPreviewUrl(null);
+        }
+        setLoading(false);
+        return;
+      }
+
+      // Cache miss — download, decrypt, display
       const encrypted = await api.blobs.download(blobId);
       const decrypted = await decrypt(encrypted);
       const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
@@ -788,6 +828,17 @@ export default function Viewer() {
         cropData: photoCropData,
         isFavorite: false,
       });
+
+      // Cache decrypted data in IndexedDB for cross-session persistence
+      if (blob.size < 50 * 1024 * 1024) {
+        try {
+          await db.fullPhotos?.put({
+            photoId: blobId, filename: payload.filename, mimeType: payload.mime_type,
+            mediaType: resolvedType, cropData: dbEntry?.cropData ?? undefined,
+            isFavorite: false, data: bytes, cachedAt: Date.now(),
+          });
+        } catch { /* non-fatal */ }
+      }
 
       // Revoke the preview now that full media is ready
       if (previewUrl) {

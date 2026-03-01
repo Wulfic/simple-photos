@@ -4,4 +4,6 @@ pub mod handlers;
 pub mod metadata;
 pub mod models;
 pub mod scan;
+pub mod server_migrate;
 pub mod storage_stats;
+pub mod sync;

@@ -2,6 +2,7 @@ package com.simplephotos.ui.screens.settings
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -20,11 +21,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.MultiplePermissionsState
+import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.simplephotos.data.local.entities.BackupFolderEntity
 import com.simplephotos.data.repository.BackupFolderRepository
@@ -58,8 +61,6 @@ class FolderSelectionViewModel @Inject constructor(
     var error by mutableStateOf<String?>(null)
         private set
 
-    private var hasScanned = false
-
     // Observe saved folders from the database
     val savedFolders = backupFolderRepository.getSelectedFolders()
 
@@ -70,7 +71,7 @@ class FolderSelectionViewModel @Inject constructor(
 
     /** Called by the Screen once permissions have been granted. */
     fun scanFolders() {
-        if (hasScanned) return
+        if (loading) return           // already scanning
         viewModelScope.launch {
             loading = true
             error = null
@@ -87,7 +88,6 @@ class FolderSelectionViewModel @Inject constructor(
                 error = "Failed to scan folders: ${e.message}"
             } finally {
                 loading = false
-                hasScanned = true
             }
         }
     }
@@ -124,7 +124,9 @@ fun FolderSelectionScreen(
     onBack: () -> Unit,
     viewModel: FolderSelectionViewModel = hiltViewModel()
 ) {
-    // Build the list of required permissions based on API level
+    val context = LocalContext.current
+
+    // Check for full media access (READ_MEDIA_IMAGES granted, not just partial)
     val mediaPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         listOf(
             Manifest.permission.READ_MEDIA_IMAGES,
@@ -135,9 +137,22 @@ fun FolderSelectionScreen(
     }
     val permissionsState = rememberMultiplePermissionsState(mediaPermissions)
 
-    // When permissions are granted, trigger the scan exactly once
-    LaunchedEffect(permissionsState.allPermissionsGranted) {
-        if (permissionsState.allPermissionsGranted) {
+    val hasFullAccess = permissionsState.allPermissionsGranted
+
+    // Detect Android 14+ partial access: READ_MEDIA_VISUAL_USER_SELECTED is
+    // granted (user chose "Select photos") but READ_MEDIA_IMAGES is not.
+    val hasPartialAccess = remember(hasFullAccess) {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            !hasFullAccess &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    // When full permissions are granted, trigger the scan exactly once
+    LaunchedEffect(hasFullAccess) {
+        if (hasFullAccess) {
             viewModel.scanFolders()
         }
     }
@@ -148,7 +163,7 @@ fun FolderSelectionScreen(
                 title = { Text("Backup Folders") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", modifier = Modifier.size(24.dp))
                     }
                 }
             )
@@ -159,12 +174,19 @@ fun FolderSelectionScreen(
                 .padding(padding)
                 .fillMaxSize()
         ) {
-            if (!permissionsState.allPermissionsGranted) {
-                // ── Permission not yet granted ─────────────────────────
-                PermissionRequest(permissionsState)
-            } else {
-                // ── Permission granted — show folder list ──────────────
-                FolderListContent(viewModel)
+            when {
+                hasFullAccess -> {
+                    // ── Full access — show folder list ─────────────────
+                    FolderListContent(viewModel)
+                }
+                hasPartialAccess -> {
+                    // ── Partial access — user chose "Select photos" ────
+                    PartialAccessBanner(context)
+                }
+                else -> {
+                    // ── No access — request permission ─────────────────
+                    PermissionRequest(permissionsState)
+                }
             }
         }
     }
@@ -240,6 +262,76 @@ private fun PermissionRequest(permissionsState: MultiplePermissionsState) {
                         Text("Grant Access")
                     }
                 }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Partial access UI (Android 14+ "Select photos" chosen instead of "Allow all")
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun PartialAccessBanner(context: android.content.Context) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_image),
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.error
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Full access required",
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "You've granted partial photo access (\"Select photos\"). " +
+                        "Simple Photos needs full access to discover all folders on your device.\n\n" +
+                        "Open Settings → Permissions → Photos and Videos → choose \"Allow all\".",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                        context.startActivity(intent)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Open Settings")
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "After changing the permission, return here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
+                )
             }
         }
     }

@@ -164,6 +164,38 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Verify password with the server, then enable biometric lock.
+     * Only used when ENABLING biometrics — disabling doesn't require verification.
+     */
+    fun enableBiometricWithPassword(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    api.verifyPassword(VerifyPasswordRequest(password))
+                }
+                if (response.isSuccessful) {
+                    biometricEnabled = true
+                    dataStore.edit { it[KEY_BIOMETRIC_ENABLED] = true }
+                    onSuccess()
+                } else {
+                    onError("Incorrect password")
+                }
+            } catch (e: retrofit2.HttpException) {
+                onError("Incorrect password")
+            } catch (e: Exception) {
+                onError("Verification failed: ${e.message}")
+            }
+        }
+    }
+
+    fun disableBiometric() {
+        viewModelScope.launch {
+            biometricEnabled = false
+            dataStore.edit { it[KEY_BIOMETRIC_ENABLED] = false }
+        }
+    }
+
     fun calculateFreeableSpace() {
         viewModelScope.launch {
             try {
@@ -254,7 +286,7 @@ fun SettingsScreen(
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", modifier = Modifier.size(24.dp))
                     }
                 }
             )
@@ -295,6 +327,14 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
+
+                // Password verification dialog state
+                var showBiometricPasswordDialog by remember { mutableStateOf(false) }
+                var biometricPassword by remember { mutableStateOf("") }
+                var biometricPasswordError by remember { mutableStateOf<String?>(null) }
+                var biometricPasswordVisible by remember { mutableStateOf(false) }
+                var biometricVerifying by remember { mutableStateOf(false) }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -303,7 +343,99 @@ fun SettingsScreen(
                     Text("Biometric Lock")
                     Switch(
                         checked = viewModel.biometricEnabled,
-                        onCheckedChange = { viewModel.toggleBiometric() }
+                        onCheckedChange = { enabling ->
+                            if (enabling) {
+                                // Prompt for password before enabling
+                                biometricPassword = ""
+                                biometricPasswordError = null
+                                showBiometricPasswordDialog = true
+                            } else {
+                                // Disabling doesn't need verification
+                                viewModel.disableBiometric()
+                            }
+                        }
+                    )
+                }
+
+                if (showBiometricPasswordDialog) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            if (!biometricVerifying) {
+                                showBiometricPasswordDialog = false
+                            }
+                        },
+                        icon = { Icon(painter = painterResource(R.drawable.ic_lock), contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary) },
+                        title = { Text("Enable Biometric Lock") },
+                        text = {
+                            Column {
+                                Text(
+                                    "Enter your password to enable biometric lock.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = biometricPassword,
+                                    onValueChange = {
+                                        biometricPassword = it
+                                        biometricPasswordError = null
+                                    },
+                                    label = { Text("Password") },
+                                    singleLine = true,
+                                    visualTransformation = if (biometricPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                    trailingIcon = {
+                                        IconButton(onClick = { biometricPasswordVisible = !biometricPasswordVisible }) {
+                                            Icon(
+                                                imageVector = if (biometricPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                                contentDescription = if (biometricPasswordVisible) "Hide password" else "Show password"
+                                            )
+                                        }
+                                    },
+                                    isError = biometricPasswordError != null,
+                                    supportingText = biometricPasswordError?.let { err -> { Text(err) } },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !biometricVerifying
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    biometricVerifying = true
+                                    viewModel.enableBiometricWithPassword(
+                                        password = biometricPassword,
+                                        onSuccess = {
+                                            biometricVerifying = false
+                                            showBiometricPasswordDialog = false
+                                            biometricPassword = ""
+                                        },
+                                        onError = { errorMsg ->
+                                            biometricVerifying = false
+                                            biometricPasswordError = errorMsg
+                                        }
+                                    )
+                                },
+                                enabled = biometricPassword.isNotEmpty() && !biometricVerifying
+                            ) {
+                                if (biometricVerifying) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text("Enable")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    showBiometricPasswordDialog = false
+                                    biometricPassword = ""
+                                },
+                                enabled = !biometricVerifying
+                            ) {
+                                Text("Cancel")
+                            }
+                        }
                     )
                 }
             }

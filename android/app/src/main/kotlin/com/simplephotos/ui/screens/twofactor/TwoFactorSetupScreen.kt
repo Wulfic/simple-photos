@@ -125,7 +125,7 @@ fun TwoFactorSetupScreen(
                 title = { Text("Two-Factor Authentication") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back")
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", modifier = Modifier.size(24.dp))
                     }
                 }
             )

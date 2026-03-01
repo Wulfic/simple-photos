@@ -78,6 +78,10 @@ class AlbumViewModel @Inject constructor(
     var videosCount by mutableStateOf(0)
         private set
 
+    /** Cover photos for smart albums (keyed by smart album ID) */
+    var smartAlbumCoverPhotos by mutableStateOf<Map<String, PhotoEntity>>(emptyMap())
+        private set
+
     init {
         viewModelScope.launch {
             try {
@@ -109,6 +113,15 @@ class AlbumViewModel @Inject constructor(
                 photosCount = allPhotos.count { it.mediaType == "photo" || it.mediaType == "gif" }
                 gifsCount = allPhotos.count { it.mediaType == "gif" }
                 videosCount = allPhotos.count { it.mediaType == "video" }
+
+                // Load cover photos for smart albums (most recent photo matching each filter)
+                val sorted = allPhotos.sortedByDescending { it.takenAt }
+                val covers = mutableMapOf<String, PhotoEntity>()
+                sorted.firstOrNull { it.isFavorite }?.let { covers["smart-favorites"] = it }
+                sorted.firstOrNull { it.mediaType == "photo" || it.mediaType == "gif" }?.let { covers["smart-photos"] = it }
+                sorted.firstOrNull { it.mediaType == "gif" }?.let { covers["smart-gifs"] = it }
+                sorted.firstOrNull { it.mediaType == "video" }?.let { covers["smart-videos"] = it }
+                smartAlbumCoverPhotos = covers
             } catch (_: Exception) {}
         }
     }
@@ -270,6 +283,9 @@ fun AlbumListScreen(
                                     SmartAlbumCard(
                                         label = item.label,
                                         count = item.count,
+                                        coverPhoto = viewModel.smartAlbumCoverPhotos[item.id],
+                                        serverBaseUrl = viewModel.serverBaseUrl,
+                                        encryptionMode = viewModel.encryptionMode,
                                         onClick = { onAlbumClick(item.id) }
                                     )
                                 }
@@ -417,13 +433,17 @@ private sealed class AlbumGridItem {
     data class UserAlbum(val album: AlbumEntity) : AlbumGridItem()
 }
 
-/** Renders a smart album card that looks identical to a regular album card. */
+/** Renders a smart album card with cover photo thumbnail (mirrors AlbumCard style). */
 @Composable
 private fun SmartAlbumCard(
     label: String,
     count: Int,
+    coverPhoto: PhotoEntity? = null,
+    serverBaseUrl: String = "",
+    encryptionMode: String = "plain",
     onClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -431,19 +451,52 @@ private fun SmartAlbumCard(
         shape = MaterialTheme.shapes.medium
     ) {
         Column {
-            // Placeholder thumbnail area (same aspect ratio as album cover)
-            Box(
+            // Thumbnail area (same aspect ratio as album cover)
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
+                    .aspectRatio(1f),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.small
             ) {
-                Text(
-                    "$count",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (coverPhoto != null) {
+                    val thumbModel: Any? = when {
+                        encryptionMode == "plain" && coverPhoto.serverPhotoId != null ->
+                            "$serverBaseUrl/api/photos/${coverPhoto.serverPhotoId}/thumb"
+                        coverPhoto.thumbnailPath != null -> java.io.File(coverPhoto.thumbnailPath!!)
+                        coverPhoto.localPath != null -> coverPhoto.localPath
+                        else -> null
+                    }
+                    if (thumbModel != null) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(thumbModel)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = label,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(MaterialTheme.shapes.small)
+                        )
+                    } else {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                "$count",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            "$count",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
             Column(modifier = Modifier.padding(8.dp)) {
                 Text(

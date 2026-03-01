@@ -2,11 +2,14 @@ package com.simplephotos.ui.screens.auth
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.datastore.core.DataStore
@@ -92,7 +95,12 @@ fun RegisterScreen(
                         onValueChange = { viewModel.username = it },
                         label = { Text("Username") },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Ascii,
+                            autoCorrect = false,
+                            capitalization = KeyboardCapitalization.None
+                        )
                     )
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
@@ -101,7 +109,11 @@ fun RegisterScreen(
                         label = { Text("Password") },
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            autoCorrect = false
+                        )
                     )
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
@@ -110,7 +122,11 @@ fun RegisterScreen(
                         label = { Text("Confirm Password") },
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            autoCorrect = false
+                        )
                     )
 
                     viewModel.error?.let { err ->

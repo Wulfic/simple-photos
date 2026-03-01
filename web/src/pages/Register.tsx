@@ -120,6 +120,9 @@ export default function Register() {
               minLength={3}
               maxLength={50}
               autoComplete="username"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               autoFocus
             />
             {username.length > 0 && (
@@ -148,6 +151,9 @@ export default function Register() {
               minLength={8}
               maxLength={128}
               autoComplete="new-password"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
             />
 
             {/* Strength bar */}
@@ -202,6 +208,9 @@ export default function Register() {
               className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
               required
               autoComplete="new-password"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
             />
             {confirmPassword.length > 0 && password !== confirmPassword && (
               <p className="text-xs text-red-500 dark:text-red-400 mt-1">Passwords do not match</p>
