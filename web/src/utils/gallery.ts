@@ -128,6 +128,7 @@ export async function fetchAllPages(blobType: string) {
     size_bytes: number;
     client_hash: string | null;
     upload_time: string;
+    content_hash: string | null;
   }> = [];
   let cursor: string | undefined;
   do {

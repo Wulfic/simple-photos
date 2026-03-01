@@ -99,7 +99,7 @@ pub async fn list_photos(
         binds.push(after.clone());
     }
 
-    sql.push_str(" ORDER BY COALESCE(taken_at, created_at) DESC LIMIT ?");
+    sql.push_str(" ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?");
     binds.push((limit + 1).to_string());
 
     let mut query = sqlx::query_as::<_, PhotoRecord>(&sql);

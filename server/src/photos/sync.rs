@@ -62,7 +62,7 @@ pub async fn encrypted_sync(
              FROM photos \
              WHERE user_id = ? AND encrypted_blob_id IS NOT NULL \
              AND COALESCE(taken_at, created_at) < ? \
-             ORDER BY COALESCE(taken_at, created_at) DESC \
+             ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \
              LIMIT ?",
         )
         .bind(&auth.user_id)
@@ -77,7 +77,7 @@ pub async fn encrypted_sync(
              is_favorite, photo_hash \
              FROM photos \
              WHERE user_id = ? AND encrypted_blob_id IS NOT NULL \
-             ORDER BY COALESCE(taken_at, created_at) DESC \
+             ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \
              LIMIT ?",
         )
         .bind(&auth.user_id)

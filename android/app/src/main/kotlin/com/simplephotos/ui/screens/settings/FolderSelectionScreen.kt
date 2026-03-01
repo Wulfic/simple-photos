@@ -76,15 +76,26 @@ class FolderSelectionViewModel @Inject constructor(
             loading = true
             error = null
             try {
+                // Log permission state at scan time
+                val permSnapshot = backupFolderRepository.getPermissionSnapshot()
+                android.util.Log.i("FolderSelection", "scanFolders: permissions=$permSnapshot, API=${android.os.Build.VERSION.SDK_INT}")
+
                 // Initialize defaults if first launch
                 backupFolderRepository.initializeDefaultsIfNeeded()
 
                 // Scan device for available folders
                 deviceFolders = backupFolderRepository.scanDeviceFolders()
+                android.util.Log.i("FolderSelection", "scanFolders: found ${deviceFolders.size} folders")
 
                 // Get currently enabled bucket IDs
                 enabledBucketIds = backupFolderRepository.getEnabledBucketIds().toSet()
+                android.util.Log.i("FolderSelection", "scanFolders: ${enabledBucketIds.size} folders enabled, bucketIds=$enabledBucketIds")
+
+                if (deviceFolders.size <= 1) {
+                    android.util.Log.w("FolderSelection", "scanFolders: WARNING — only ${deviceFolders.size} folder(s) found. This likely indicates a permission issue on Android ${android.os.Build.VERSION.SDK_INT}.")
+                }
             } catch (e: Exception) {
+                android.util.Log.e("FolderSelection", "scanFolders failed", e)
                 error = "Failed to scan folders: ${e.message}"
             } finally {
                 loading = false
