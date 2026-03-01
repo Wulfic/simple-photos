@@ -26,6 +26,9 @@ interface ApiService {
     @PUT("api/auth/password")
     suspend fun changePassword(@Body request: ChangePasswordRequest): Response<Unit>
 
+    @POST("api/auth/verify-password")
+    suspend fun verifyPassword(@Body request: VerifyPasswordRequest): Response<Unit>
+
     // ── 2FA ──────────────────────────────────────────────────────────────
     @POST("api/auth/2fa/setup")
     suspend fun setup2fa(): TotpSetupResponse
@@ -43,6 +46,12 @@ interface ApiService {
         @Query("limit") limit: Int? = null,
         @Query("media_type") mediaType: String? = null
     ): PlainPhotoListResponse
+
+    @GET("api/photos/encrypted-sync")
+    suspend fun encryptedSync(
+        @Query("after") after: String? = null,
+        @Query("limit") limit: Int? = null
+    ): EncryptedSyncResponse
 
     @GET("api/photos/{id}/thumb")
     @Streaming

@@ -3,7 +3,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -15,6 +15,39 @@ use crate::state::AppState;
 
 use super::metadata::extract_media_metadata_from_bytes;
 use super::models::*;
+
+/// Produce a UTC ISO-8601 timestamp with millisecond precision and Z suffix.
+/// Format: `2024-02-28T22:44:29.043Z`
+///
+/// This is critical for consistent text-based sorting in SQLite — all
+/// timestamps (taken_at, created_at) must use the same format so that
+/// `ORDER BY COALESCE(taken_at, created_at) DESC` works correctly.
+pub fn utc_now_iso() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+/// Normalize a timestamp string to consistent ISO-8601 Z-suffix format.
+/// Handles:
+/// - Naive "2024-01-15T14:30:00" → "2024-01-15T14:30:00.000Z" (treated as UTC)
+/// - Offset "+00:00" → "Z"
+/// - Already "Z" → passed through
+pub fn normalize_iso_timestamp(ts: &str) -> String {
+    // Try parsing as a full DateTime<Utc> or DateTime<FixedOffset>
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+        return dt.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
+    }
+    // Try parsing as naive datetime (no timezone) — treat as UTC
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f") {
+        let dt = naive.and_utc();
+        return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
+    }
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S") {
+        let dt = naive.and_utc();
+        return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
+    }
+    // Fallback: return as-is
+    ts.to_string()
+}
 
 /// Compute a short content-based hash: first 12 hex chars of SHA-256.
 /// This deterministic fingerprint is the same regardless of which platform
@@ -122,7 +155,7 @@ pub async fn register_photo(
     }
 
     let photo_id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
+    let now = utc_now_iso();
     let media_type = req.media_type.unwrap_or_else(|| {
         if req.mime_type.starts_with("video/") {
             "video".to_string()
@@ -158,7 +191,7 @@ pub async fn register_photo(
     .bind(req.width.unwrap_or(0))
     .bind(req.height.unwrap_or(0))
     .bind(req.duration_secs)
-    .bind(&req.taken_at)
+    .bind(req.taken_at.as_ref().map(|t| normalize_iso_timestamp(t)))
     .bind(req.latitude)
     .bind(req.longitude)
     .bind(&thumb_rel)
@@ -433,14 +466,16 @@ pub async fn upload_photo(
 
     // Register in database
     let photo_id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
+    let now = utc_now_iso();
     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
     // Extract metadata from the uploaded bytes
     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
         extract_media_metadata_from_bytes(&body, &final_filename);
 
-    let final_taken_at = exif_taken.unwrap_or_else(|| now.clone());
+    let final_taken_at = exif_taken
+        .map(|t| normalize_iso_timestamp(&t))
+        .unwrap_or_else(|| now.clone());
 
     sqlx::query(
         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \

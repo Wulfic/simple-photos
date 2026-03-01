@@ -35,4 +35,7 @@ interface BackupFolderDao {
 
     @Query("SELECT bucketId FROM backup_folders WHERE enabled = 1")
     suspend fun getEnabledBucketIds(): List<Long>
+
+    @Query("SELECT bucketId FROM backup_folders")
+    suspend fun getAllBucketIds(): List<Long>
 }

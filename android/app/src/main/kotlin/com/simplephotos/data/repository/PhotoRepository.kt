@@ -18,6 +18,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -29,6 +32,28 @@ class PhotoRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     @ApplicationContext private val context: Context
 ) {
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    /**
+     * Parse an ISO-8601 timestamp string to epoch millis.
+     * Handles both timezone-aware ("2026-02-22T17:12:42+00:00", "...Z")
+     * and naive ("2008-05-24T23:39:22") formats. Naive timestamps are
+     * treated as UTC to match the server's SQLite text sort order.
+     */
+    private fun parseIsoToEpochMs(iso: String): Long {
+        // Try timezone-aware first (Instant handles +00:00 and Z)
+        return try {
+            Instant.parse(iso).toEpochMilli()
+        } catch (_: Exception) {
+            // Fallback: naive timestamp — treat as UTC
+            try {
+                LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC).toEpochMilli()
+            } catch (_: Exception) {
+                System.currentTimeMillis()
+            }
+        }
+    }
+
     private val thumbnailDir: File
         get() = File(context.filesDir, "thumbnails").also { it.mkdirs() }
 
@@ -281,12 +306,9 @@ class PhotoRepository @Inject constructor(
                 }
 
                 val localId = java.util.UUID.randomUUID().toString()
-                val takenAtMs = try {
-                    photo.takenAt?.let { java.time.Instant.parse(it).toEpochMilli() }
-                        ?: System.currentTimeMillis()
-                } catch (_: Exception) {
-                    System.currentTimeMillis()
-                }
+                val takenAtMs = parseIsoToEpochMs(
+                    photo.takenAt ?: photo.createdAt
+                )
 
                 val entity = PhotoEntity(
                     localId = localId,
@@ -318,86 +340,70 @@ class PhotoRepository @Inject constructor(
     }
 
     /**
-     * Pull encrypted-mode photos from the server.
+     * Pull encrypted-mode photos from the server using the lightweight sync
+     * manifest. This avoids downloading and decrypting every full-size photo
+     * blob — it reads photo metadata directly from the server's photos table
+     * and then downloads only the small thumbnail blobs (~30 KB each).
      */
     private suspend fun syncFromServerEncrypted(): Int {
         var imported = 0
         var after: String? = null
 
-        val blobTypes = listOf("photo", "gif", "video")
+        do {
+            val result = api.encryptedSync(after = after, limit = 500)
 
-        for (blobType in blobTypes) {
-            after = null
-            do {
-                val listResult = api.listBlobs(blobType = blobType, after = after, limit = 200)
+            for (photo in result.photos) {
+                val blobId = photo.encryptedBlobId ?: continue
 
-                for (blob in listResult.blobs) {
-                    if (db.photoDao().getByServerBlobId(blob.id) != null) continue
+                // Skip if already in local DB
+                if (db.photoDao().getByServerBlobId(blobId) != null) continue
 
+                val localId = java.util.UUID.randomUUID().toString()
+                val takenAtMs = parseIsoToEpochMs(
+                    photo.takenAt ?: photo.createdAt
+                )
+
+                // Download and decrypt thumbnail blob if available
+                var thumbPath: String? = null
+                val thumbBlobId = photo.encryptedThumbBlobId
+                if (!thumbBlobId.isNullOrEmpty()) {
                     try {
-                        val decrypted = downloadAndDecryptBlob(blob.id)
-                        val payload = JSONObject(String(decrypted, Charsets.UTF_8))
-
-                        val thumbnailBlobId = payload.optString("thumbnail_blob_id", "")
-                        val filename = payload.optString("filename", "unknown")
-                        val takenAt = payload.optString("taken_at", "")
-                        val mimeType = payload.optString("mime_type", "image/jpeg")
-                        val mediaType = payload.optString("media_type", "photo")
-                        val width = payload.optInt("width", 0)
-                        val height = payload.optInt("height", 0)
-                        val duration = if (payload.has("duration")) payload.getDouble("duration").toFloat() else null
-                        val lat = if (payload.has("latitude")) payload.getDouble("latitude") else null
-                        val lng = if (payload.has("longitude")) payload.getDouble("longitude") else null
-
-                        val takenAtMs = try {
-                            java.time.Instant.parse(takenAt).toEpochMilli()
-                        } catch (_: Exception) {
-                            System.currentTimeMillis()
+                        val thumbDecrypted = downloadAndDecryptBlob(thumbBlobId)
+                        val thumbPayload = JSONObject(String(thumbDecrypted, Charsets.UTF_8))
+                        val thumbBase64 = thumbPayload.optString("data", "")
+                        if (thumbBase64.isNotEmpty()) {
+                            val thumbBytes = android.util.Base64.decode(thumbBase64, android.util.Base64.NO_WRAP)
+                            thumbPath = saveThumbnailToDisk(localId, thumbBytes)
                         }
-
-                        val localId = java.util.UUID.randomUUID().toString()
-
-                        var thumbPath: String? = null
-                        if (thumbnailBlobId.isNotEmpty()) {
-                            try {
-                                val thumbDecrypted = downloadAndDecryptBlob(thumbnailBlobId)
-                                val thumbPayload = JSONObject(String(thumbDecrypted, Charsets.UTF_8))
-                                val thumbBase64 = thumbPayload.optString("data", "")
-                                if (thumbBase64.isNotEmpty()) {
-                                    val thumbBytes = android.util.Base64.decode(thumbBase64, android.util.Base64.NO_WRAP)
-                                    thumbPath = saveThumbnailToDisk(localId, thumbBytes)
-                                }
-                            } catch (_: Exception) {}
-                        }
-
-                        val photo = PhotoEntity(
-                            localId = localId,
-                            serverBlobId = blob.id,
-                            thumbnailBlobId = thumbnailBlobId.ifEmpty { null },
-                            filename = filename,
-                            takenAt = takenAtMs,
-                            mimeType = mimeType,
-                            mediaType = mediaType,
-                            width = width,
-                            height = height,
-                            durationSecs = duration,
-                            latitude = lat,
-                            longitude = lng,
-                            localPath = null,
-                            thumbnailPath = thumbPath,
-                            syncStatus = SyncStatus.SYNCED,
-                            encryptedBlobSize = null
-                        )
-                        db.photoDao().insert(photo)
-                        imported++
                     } catch (e: Exception) {
-                        continue
+                        android.util.Log.w("PhotoRepository", "Thumbnail download failed for blob $blobId: ${e.message}")
                     }
                 }
 
-                after = listResult.nextCursor
-            } while (listResult.nextCursor != null)
-        }
+                val entity = PhotoEntity(
+                    localId = localId,
+                    serverBlobId = blobId,
+                    thumbnailBlobId = thumbBlobId,
+                    filename = photo.filename,
+                    takenAt = takenAtMs,
+                    mimeType = photo.mimeType,
+                    mediaType = photo.mediaType,
+                    width = photo.width.toInt(),
+                    height = photo.height.toInt(),
+                    durationSecs = photo.durationSecs?.toFloat(),
+                    sizeBytes = photo.sizeBytes,
+                    localPath = null,
+                    thumbnailPath = thumbPath,
+                    syncStatus = SyncStatus.SYNCED,
+                    isFavorite = photo.isFavorite,
+                    photoHash = photo.photoHash
+                )
+                db.photoDao().insert(entity)
+                imported++
+            }
+
+            after = result.nextCursor
+        } while (result.nextCursor != null)
 
         return imported
     }

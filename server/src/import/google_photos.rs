@@ -52,7 +52,7 @@ pub fn normalise(
         .as_ref()
         .and_then(|v| v.parse::<i64>().ok());
 
-    let now = Utc::now().to_rfc3339();
+    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
     PhotoMetadataRecord {
         id,
@@ -79,7 +79,7 @@ pub fn normalise(
 fn timestamp_to_rfc3339(ts: Option<&str>) -> Option<String> {
     ts.and_then(|s| s.parse::<i64>().ok())
         .and_then(|secs| Utc.timestamp_opt(secs, 0).single())
-        .map(|dt: DateTime<Utc>| dt.to_rfc3339())
+        .map(|dt: DateTime<Utc>| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 #[cfg(test)]

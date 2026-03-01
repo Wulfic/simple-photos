@@ -82,6 +82,11 @@ pub struct ChangePasswordRequest {
     pub new_password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct VerifyPasswordRequest {
+    pub password: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TotpSetupResponse {
     pub otpauth_uri: String,

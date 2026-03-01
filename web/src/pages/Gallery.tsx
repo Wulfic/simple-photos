@@ -130,10 +130,13 @@ export default function Gallery() {
           // Secure galleries may not be available — ignore
         }
 
-        // Trigger a background auto-scan whenever the gallery opens
-        api.backup.triggerAutoScan().catch(() => {
+        // Run auto-scan synchronously before loading photos so newly
+        // added files in the storage directory appear immediately.
+        try {
+          await api.backup.triggerAutoScan();
+        } catch {
           // Non-critical — if the user isn't admin or endpoint fails, just ignore
-        });
+        }
 
         if (detected === "encrypted") {
           if (!hasCryptoKey()) {
@@ -157,12 +160,50 @@ export default function Gallery() {
     init();
   }, []);
 
-  // ── Encryption migration worker (runs in a dedicated Web Worker) ──────────
-  // When the server reports an active "encrypting" migration, we spawn a
-  // Web Worker that handles download → encrypt → upload for each photo.
-  // Web Workers are NOT subject to background-tab throttling, so encryption
-  // continues at full speed even when the user switches tabs or minimizes.
+  // ── Encryption migration (server-side parallel, with Web Worker fallback) ──
+  // When the server reports an active "encrypting" migration, we first try to
+  // trigger the server-side parallel migration endpoint which encrypts all photos
+  // using multiple CPU cores without any network round-trips. If the server
+  // endpoint isn't available (older server), we fall back to the Web Worker.
+  //
+  // Progress is tracked via a polling fallback that queries the server's
+  // authoritative migration state every 2 seconds. This is more reliable than
+  // SSE alone because if the SSE stream fails, the banner would otherwise
+  // stay stuck at 0/N forever.
   const migrationWorkerRef = useRef<Worker | null>(null);
+  const migrationAbortRef = useRef<AbortController | null>(null);
+  const migrationPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /** Poll the server for migration progress (reliable fallback). */
+  function startMigrationPolling() {
+    // Clear any existing poller
+    if (migrationPollRef.current) clearInterval(migrationPollRef.current);
+    migrationPollRef.current = setInterval(async () => {
+      try {
+        const settings = await api.encryption.getSettings();
+        setMigrationCompleted(settings.migration_completed);
+        setMigrationTotal(settings.migration_total);
+
+        if (settings.migration_status !== "encrypting") {
+          // Migration finished on the server — clean up
+          console.log("[Gallery Migration] Polling detected migration complete");
+          if (migrationPollRef.current) {
+            clearInterval(migrationPollRef.current);
+            migrationPollRef.current = null;
+          }
+          setMigrationStatus("idle");
+          migrationRunningRef.current = false;
+          endTask("encryption");
+          // Reload the gallery since photos are now encrypted
+          if (settings.encryption_mode === "encrypted") {
+            await loadEncryptedPhotos();
+          }
+        }
+      } catch {
+        // Network error during poll — keep trying
+      }
+    }, 2000);
+  }
 
   useEffect(() => {
     if (migrationStatus !== "encrypting") return;
@@ -172,106 +213,172 @@ export default function Gallery() {
     migrationRunningRef.current = true;
     startTask("encryption");
 
+    const keyHex = sessionStorage.getItem("sp_key");
+    if (!keyHex) {
+      console.error("[Gallery Migration] No encryption key in session");
+      migrationRunningRef.current = false;
+      endTask("encryption");
+      return;
+    }
+
+    // Always start polling as a reliable progress mechanism
+    startMigrationPolling();
+
+    // Try server-side migration first (parallel, no network overhead per photo)
     (async () => {
       try {
-        console.log("[Gallery Migration] Fetching photo list for worker...");
+        console.log("[Gallery Migration] Attempting server-side parallel migration...");
+        const result = await api.encryption.startServerMigration(keyHex);
+        console.log(`[Gallery Migration] Server accepted: ${result.message}`);
+        setMigrationTotal(result.total);
 
-        // Fetch ALL plain photos that need encrypting
-        const allPhotos: PlainPhoto[] = [];
-        let cursor: string | undefined;
-        do {
-          const res = await api.photos.list({ after: cursor, limit: 200 });
-          allPhotos.push(...res.photos);
-          cursor = res.next_cursor ?? undefined;
-        } while (cursor);
-
-        if (allPhotos.length === 0) {
-          console.log("[Gallery Migration] No photos to encrypt, marking done");
-          await api.encryption.reportProgress({ completed_count: 0, done: true });
+        if (result.total === 0) {
+          if (migrationPollRef.current) {
+            clearInterval(migrationPollRef.current);
+            migrationPollRef.current = null;
+          }
           setMigrationStatus("idle");
           migrationRunningRef.current = false;
           endTask("encryption");
           return;
         }
 
-        setMigrationTotal(allPhotos.length);
-        console.log(`[Gallery Migration] Spawning worker for ${allPhotos.length} photos`);
-
-        // Get auth tokens and encryption key for the worker
-        const { accessToken, refreshToken } = useAuthStore.getState();
-        const keyHex = sessionStorage.getItem("sp_key");
-        if (!accessToken || !keyHex) {
-          throw new Error("Missing auth token or encryption key");
+        // Also listen to SSE progress stream for faster updates (non-critical)
+        try {
+          const controller = await api.encryption.streamMigrationProgress(
+            (data) => {
+              setMigrationCompleted(data.completed);
+              setMigrationTotal(data.total);
+            },
+            async () => {
+              console.log("[Gallery Migration] SSE: migration complete");
+              // Polling will handle the final state transition —
+              // just stop the SSE stream cleanly.
+              migrationAbortRef.current = null;
+            },
+            (err) => {
+              // SSE failed — polling will handle progress from here.
+              console.warn("[Gallery Migration] SSE stream error (polling continues):", err);
+              migrationAbortRef.current = null;
+            },
+          );
+          migrationAbortRef.current = controller;
+        } catch {
+          // SSE connection failed — polling handles progress
+          console.warn("[Gallery Migration] SSE unavailable, relying on polling");
         }
-
-        // Spawn the migration Web Worker
-        const worker = new Worker(
-          new URL("../workers/migrationWorker.ts", import.meta.url),
-          { type: "module" }
+      } catch (serverErr: any) {
+        // Server-side migration not available — fall back to Web Worker
+        console.warn(
+          "[Gallery Migration] Server-side migration unavailable, falling back to Web Worker:",
+          serverErr.message
         );
-        migrationWorkerRef.current = worker;
-
-        worker.onmessage = async (e) => {
-          const msg = e.data;
-
-          if (msg.type === "progress") {
-            setMigrationCompleted(msg.completed);
-          } else if (msg.type === "done") {
-            console.log(
-              `[Gallery Migration] Worker done: ${msg.succeeded}/${msg.total} succeeded, ${msg.failed} failed`
-            );
-            setMigrationStatus("idle");
-            migrationRunningRef.current = false;
-            migrationWorkerRef.current = null;
-            worker.terminate();
-            endTask("encryption");
-            await loadEncryptedPhotos();
-          } else if (msg.type === "error") {
-            console.error("[Gallery Migration] Worker error:", msg.message);
-            migrationRunningRef.current = false;
-            migrationWorkerRef.current = null;
-            worker.terminate();
-            endTask("encryption");
-          } else if (msg.type === "tokenUpdate") {
-            // Worker refreshed the token — update main thread stores
-            useAuthStore.getState().setTokens(msg.accessToken, msg.refreshToken);
-          }
-        };
-
-        worker.onerror = (err) => {
-          console.error("[Gallery Migration] Worker fatal error:", err);
-          migrationRunningRef.current = false;
-          migrationWorkerRef.current = null;
-          endTask("encryption");
-        };
-
-        // Start the worker
-        worker.postMessage({
-          type: "start",
-          accessToken,
-          refreshToken: refreshToken || "",
-          keyHex,
-          photos: allPhotos,
-        });
-      } catch (err: any) {
-        console.error("[Gallery Migration] Setup error:", err.message);
-        await api.encryption.reportProgress({
-          completed_count: 0,
-          error: `Migration failed: ${err.message}`,
-        }).catch(() => {});
-        migrationRunningRef.current = false;
-        endTask("encryption");
+        await startWebWorkerMigration();
       }
     })();
 
     return () => {
-      // Cleanup worker if component unmounts during migration
+      // Cleanup on unmount
+      if (migrationAbortRef.current) {
+        migrationAbortRef.current.abort();
+        migrationAbortRef.current = null;
+      }
       if (migrationWorkerRef.current) {
         migrationWorkerRef.current.terminate();
         migrationWorkerRef.current = null;
       }
+      if (migrationPollRef.current) {
+        clearInterval(migrationPollRef.current);
+        migrationPollRef.current = null;
+      }
     };
   }, [migrationStatus]);
+
+  /** Fallback: run encryption migration in a Web Worker (sequential, one-at-a-time) */
+  async function startWebWorkerMigration() {
+    try {
+      console.log("[Gallery Migration] Fetching photo list for worker...");
+      const allPhotos: PlainPhoto[] = [];
+      let cursor: string | undefined;
+      do {
+        const res = await api.photos.list({ after: cursor, limit: 200 });
+        allPhotos.push(...res.photos);
+        cursor = res.next_cursor ?? undefined;
+      } while (cursor);
+
+      if (allPhotos.length === 0) {
+        console.log("[Gallery Migration] No photos to encrypt, marking done");
+        await api.encryption.reportProgress({ completed_count: 0, done: true });
+        setMigrationStatus("idle");
+        migrationRunningRef.current = false;
+        endTask("encryption");
+        return;
+      }
+
+      setMigrationTotal(allPhotos.length);
+      console.log(`[Gallery Migration] Spawning worker for ${allPhotos.length} photos`);
+
+      const { accessToken, refreshToken } = useAuthStore.getState();
+      const keyHex = sessionStorage.getItem("sp_key");
+      if (!accessToken || !keyHex) {
+        throw new Error("Missing auth token or encryption key");
+      }
+
+      const worker = new Worker(
+        new URL("../workers/migrationWorker.ts", import.meta.url),
+        { type: "module" }
+      );
+      migrationWorkerRef.current = worker;
+
+      worker.onmessage = async (e) => {
+        const msg = e.data;
+        if (msg.type === "progress") {
+          setMigrationCompleted(msg.completed);
+        } else if (msg.type === "done") {
+          console.log(
+            `[Gallery Migration] Worker done: ${msg.succeeded}/${msg.total} succeeded, ${msg.failed} failed`
+          );
+          setMigrationStatus("idle");
+          migrationRunningRef.current = false;
+          migrationWorkerRef.current = null;
+          worker.terminate();
+          endTask("encryption");
+          await loadEncryptedPhotos();
+        } else if (msg.type === "error") {
+          console.error("[Gallery Migration] Worker error:", msg.message);
+          migrationRunningRef.current = false;
+          migrationWorkerRef.current = null;
+          worker.terminate();
+          endTask("encryption");
+        } else if (msg.type === "tokenUpdate") {
+          useAuthStore.getState().setTokens(msg.accessToken, msg.refreshToken);
+        }
+      };
+
+      worker.onerror = (err) => {
+        console.error("[Gallery Migration] Worker fatal error:", err);
+        migrationRunningRef.current = false;
+        migrationWorkerRef.current = null;
+        endTask("encryption");
+      };
+
+      worker.postMessage({
+        type: "start",
+        accessToken,
+        refreshToken: refreshToken || "",
+        keyHex,
+        photos: allPhotos,
+      });
+    } catch (err: any) {
+      console.error("[Gallery Migration] Setup error:", err.message);
+      await api.encryption.reportProgress({
+        completed_count: 0,
+        error: `Migration failed: ${err.message}`,
+      }).catch(() => {});
+      migrationRunningRef.current = false;
+      endTask("encryption");
+    }
+  }
 
   // ── Load plain-mode photos from server ─────────────────────────────────────
 
@@ -304,18 +411,35 @@ export default function Gallery() {
   async function loadEncryptedPhotos() {
     setLoading(true);
     try {
-      // Fetch ALL blob types that represent media, with full pagination
-      const allMedia = [
+      // ── Phase 1: Fetch metadata via encrypted-sync endpoint ──────────
+      // Uses the same server-side data source as the Android app, ensuring
+      // consistent sort order (COALESCE(taken_at, created_at) DESC).
+      type SyncRecord = Awaited<ReturnType<typeof api.photos.encryptedSync>>["photos"][number];
+      const allSyncPhotos: SyncRecord[] = [];
+      let cursor: string | undefined;
+      do {
+        const res = await api.photos.encryptedSync({ after: cursor, limit: 500 });
+        allSyncPhotos.push(...res.photos);
+        cursor = res.next_cursor ?? undefined;
+      } while (cursor);
+
+      // Build set of server blob IDs for stale-entry cleanup
+      const serverBlobIds = new Set(
+        allSyncPhotos.map((p) => p.encrypted_blob_id).filter(Boolean) as string[]
+      );
+
+      // ── Phase 2: Also fetch blobs list for directly-uploaded encrypted
+      //    photos (not yet in photos table — no encrypted_blob_id link).
+      const allBlobMedia = [
         ...(await fetchAllPages("photo")),
         ...(await fetchAllPages("gif")),
         ...(await fetchAllPages("video")),
       ];
-
-      // Build set of server-side blob IDs for stale-entry cleanup
-      const serverBlobIds = new Set(allMedia.map((b) => b.id));
+      for (const blob of allBlobMedia) {
+        serverBlobIds.add(blob.id);
+      }
 
       // Remove stale entries from IndexedDB that no longer exist on server
-      // (e.g. after a server DB reset or blob deletion)
       const cachedPhotos = await db.photos.toArray();
       const staleIds = cachedPhotos
         .map((p) => p.blobId)
@@ -324,7 +448,63 @@ export default function Gallery() {
         await db.photos.bulkDelete(staleIds);
       }
 
-      for (const blob of allMedia) {
+      // ── Phase 3: Populate IndexedDB from sync records (migrated photos).
+      //    Only download small thumbnail blobs (~30 KB) — not full photos.
+      for (const photo of allSyncPhotos) {
+        const blobId = photo.encrypted_blob_id;
+        if (!blobId) continue;
+
+        const existing = await db.photos.get(blobId);
+        if (existing) continue;
+
+        // Parse takenAt: prefer taken_at, fall back to created_at (matches Android)
+        let takenAt: number;
+        try {
+          takenAt = photo.taken_at
+            ? new Date(photo.taken_at).getTime()
+            : new Date(photo.created_at).getTime();
+        } catch {
+          takenAt = new Date(photo.created_at).getTime();
+        }
+
+        // Download and decrypt thumbnail blob if available
+        let thumbnailData: ArrayBuffer | undefined;
+        const thumbBlobId = photo.encrypted_thumb_blob_id;
+        if (thumbBlobId) {
+          try {
+            const thumbEnc = await api.blobs.download(thumbBlobId);
+            const thumbDec = await decrypt(thumbEnc);
+            const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
+            thumbnailData = base64ToArrayBuffer(thumbPayload.data);
+          } catch {
+            // Thumbnail fetch failed — show placeholder
+          }
+        }
+
+        await db.photos.put({
+          blobId,
+          thumbnailBlobId: thumbBlobId ?? undefined,
+          filename: photo.filename,
+          takenAt,
+          mimeType: photo.mime_type,
+          mediaType: (photo.media_type as "photo" | "gif" | "video") ?? mediaTypeFromMime(photo.mime_type),
+          width: photo.width,
+          height: photo.height,
+          duration: photo.duration_secs ?? undefined,
+          albumIds: [],
+          thumbnailData,
+          contentHash: photo.photo_hash ?? undefined,
+        });
+      }
+
+      // ── Phase 4: Handle directly-uploaded encrypted blobs not in photos table.
+      //    These require full blob decryption to extract metadata.
+      const syncedBlobIds = new Set(
+        allSyncPhotos.map((p) => p.encrypted_blob_id).filter(Boolean)
+      );
+      const unsyncedBlobs = allBlobMedia.filter((b) => !syncedBlobIds.has(b.id));
+
+      for (const blob of unsyncedBlobs) {
         const existing = await db.photos.get(blob.id);
         if (existing) continue;
 
@@ -690,7 +870,7 @@ export default function Gallery() {
                   {group.photos.length}
                 </span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+              <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
                 {group.photos.map((photo, localIdx) => {
                   const globalIdx = groupStartIdx + localIdx;
                   return (
@@ -734,7 +914,7 @@ export default function Gallery() {
                   {group.photos.length}
                 </span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+              <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
                 {group.photos.map((photo, localIdx) => {
                   const globalIdx = groupStartIdx + localIdx;
                   return (

@@ -29,12 +29,33 @@ interface MediaPayload {
   data: string; // base64-encoded raw file bytes
 }
 
+/**
+ * Preloads adjacent photos into an in-memory cache for instant swiping.
+ *
+ * Features:
+ * - ±5 preload window (up to 10 photos preloaded around the current)
+ * - Direction-aware: biases preload toward swipe direction (+5 forward, -2 back)
+ * - Caches decrypted full photos in IndexedDB for cross-session persistence
+ * - Evicts ObjectURLs beyond ±7 to manage memory
+ */
 export default function usePhotoPreload(
   photoIds: string[] | undefined,
   currentIndex: number,
   isPlainMode: boolean,
 ) {
   const preloadCache = useRef<Map<string, PreloadEntry>>(new Map());
+  const lastDirection = useRef<"forward" | "backward">("forward");
+  const prevIndex = useRef(currentIndex);
+
+  // Track swipe direction
+  useEffect(() => {
+    if (currentIndex > prevIndex.current) {
+      lastDirection.current = "forward";
+    } else if (currentIndex < prevIndex.current) {
+      lastDirection.current = "backward";
+    }
+    prevIndex.current = currentIndex;
+  }, [currentIndex]);
 
   // Cached photo list to avoid re-fetching metadata on every preload (plain mode)
   const photoListCache = useRef<{ data: Awaited<ReturnType<typeof api.photos.list>>["photos"]; ts: number } | null>(null);
@@ -53,6 +74,22 @@ export default function usePhotoPreload(
   /** Preload a plain-mode photo into the cache (background, no state updates) */
   async function preloadPlainPhoto(photoId: string) {
     try {
+      // Check IndexedDB full-photo cache first
+      const idbCached = await db.fullPhotos?.get(photoId);
+      if (idbCached?.data) {
+        const blob = new Blob([idbCached.data], { type: idbCached.mimeType });
+        const url = URL.createObjectURL(blob);
+        preloadCache.current.set(photoId, {
+          url,
+          filename: idbCached.filename,
+          mimeType: idbCached.mimeType,
+          mediaType: idbCached.mediaType,
+          cropData: idbCached.cropData ? JSON.parse(idbCached.cropData) : null,
+          isFavorite: idbCached.isFavorite,
+        });
+        return;
+      }
+
       // Fetch metadata to get filename/type (uses cached list)
       const photos = await getCachedPhotoList();
       const photo = photos.find((p) => p.id === photoId);
@@ -85,6 +122,23 @@ export default function usePhotoPreload(
         cropData: photoCropData,
         isFavorite: !!photo.is_favorite,
       });
+
+      // Cache in IndexedDB for cross-session persistence (skip large videos > 50MB)
+      if (blob.size < 50 * 1024 * 1024) {
+        try {
+          const arrayBuf = await blob.arrayBuffer();
+          await db.fullPhotos?.put({
+            photoId,
+            filename: photo.filename,
+            mimeType: photo.mime_type,
+            mediaType: resolvedType,
+            cropData: photo.crop_metadata ?? undefined,
+            isFavorite: !!photo.is_favorite,
+            data: arrayBuf,
+            cachedAt: Date.now(),
+          });
+        } catch { /* IndexedDB write failure is non-fatal */ }
+      }
     } catch {
       // Preload failures are silent — the normal load path handles errors
     }
@@ -93,6 +147,22 @@ export default function usePhotoPreload(
   /** Preload an encrypted photo into the cache (background, no state updates) */
   async function preloadEncryptedPhoto(blobId: string) {
     try {
+      // Check IndexedDB full-photo cache first
+      const idbCached = await db.fullPhotos?.get(blobId);
+      if (idbCached?.data) {
+        const blob = new Blob([idbCached.data], { type: idbCached.mimeType });
+        const url = URL.createObjectURL(blob);
+        preloadCache.current.set(blobId, {
+          url,
+          filename: idbCached.filename,
+          mimeType: idbCached.mimeType,
+          mediaType: idbCached.mediaType,
+          cropData: idbCached.cropData ? JSON.parse(idbCached.cropData) : null,
+          isFavorite: idbCached.isFavorite,
+        });
+        return;
+      }
+
       const encrypted = await api.blobs.download(blobId);
       const decrypted = await decrypt(encrypted);
       const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
@@ -124,20 +194,45 @@ export default function usePhotoPreload(
         cropData: photoCropData,
         isFavorite: false,
       });
+
+      // Cache in IndexedDB for cross-session persistence (skip large videos > 50MB)
+      if (bytes.byteLength < 50 * 1024 * 1024) {
+        try {
+          await db.fullPhotos?.put({
+            photoId: blobId,
+            filename: payload.filename,
+            mimeType: payload.mime_type,
+            mediaType: resolvedType,
+            cropData: dbEntry?.cropData,
+            isFavorite: false,
+            data: bytes,
+            cachedAt: Date.now(),
+          });
+        } catch { /* IndexedDB write failure is non-fatal */ }
+      }
     } catch {
       // Preload failures are silent
     }
   }
 
-  // Preloads ±2 photos around the current index for instant swiping.
-  // Each preloaded photo is stored as an ObjectURL in the cache ref.
+  /**
+   * Preloads photos around the current index for instant swiping.
+   *
+   * Direction-aware: when swiping forward, preload +5 ahead / -2 behind.
+   * When swiping backward, preload -5 behind / +2 ahead.
+   * This prioritizes what the user is most likely to view next.
+   */
   const preloadAdjacentPhotos = useCallback(
     (currentId: string) => {
       if (!photoIds || currentIndex < 0) return;
 
-      // Determine which IDs to preload: 2 before, 2 after
+      // Direction-aware window: bias toward swipe direction
+      const isForward = lastDirection.current === "forward";
+      const aheadCount = isForward ? 5 : 2;
+      const behindCount = isForward ? 2 : 5;
+
       const idsToPreload: string[] = [];
-      for (let offset = -2; offset <= 2; offset++) {
+      for (let offset = -behindCount; offset <= aheadCount; offset++) {
         if (offset === 0) continue; // skip current
         const idx = currentIndex + offset;
         if (idx >= 0 && idx < photoIds.length) {
@@ -145,19 +240,29 @@ export default function usePhotoPreload(
         }
       }
 
-      // Evict cache entries that are now too far away (beyond ±3)
+      // Evict cache entries that are now too far away (beyond ±7)
+      const evictThreshold = 7;
       const keepSet = new Set<string>([currentId, ...idsToPreload]);
       for (const [cachedId, entry] of preloadCache.current.entries()) {
-        if (!keepSet.has(cachedId) && cachedId !== currentId) {
-          URL.revokeObjectURL(entry.url);
-          preloadCache.current.delete(cachedId);
+        if (!keepSet.has(cachedId)) {
+          const cachedIdx = photoIds.indexOf(cachedId);
+          if (cachedIdx === -1 || Math.abs(cachedIdx - currentIndex) > evictThreshold) {
+            URL.revokeObjectURL(entry.url);
+            preloadCache.current.delete(cachedId);
+          }
         }
       }
 
-      // Kick off preloads for any not already cached
-      for (const preloadId of idsToPreload) {
-        if (preloadCache.current.has(preloadId)) continue; // already cached
+      // Kick off preloads — prioritize by distance from current index
+      const sortedIds = idsToPreload
+        .filter((id) => !preloadCache.current.has(id))
+        .sort((a, b) => {
+          const idxA = photoIds.indexOf(a);
+          const idxB = photoIds.indexOf(b);
+          return Math.abs(idxA - currentIndex) - Math.abs(idxB - currentIndex);
+        });
 
+      for (const preloadId of sortedIds) {
         if (isPlainMode) {
           preloadPlainPhoto(preloadId);
         } else {

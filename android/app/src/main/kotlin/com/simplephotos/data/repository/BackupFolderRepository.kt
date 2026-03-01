@@ -38,6 +38,16 @@ class BackupFolderRepository @Inject constructor(
 
         /** Sentinel bucket ID used when no camera photos exist yet. */
         val PLACEHOLDER_BUCKET_ID = DEFAULT_CAMERA_PATH.hashCode().toLong()
+
+        /** Patterns for folders that should be auto-enabled on fresh install. */
+        private val AUTO_ENABLE_PATTERNS = listOf(
+            "DCIM/Camera",
+            "DCIM",
+            "Pictures",
+            "Screenshots",
+            "Download",
+            "Movies"
+        )
     }
 
     fun getSelectedFolders(): Flow<List<BackupFolderEntity>> =
@@ -51,34 +61,28 @@ class BackupFolderRepository @Inject constructor(
 
     /**
      * Initialize default folders on first launch.
-     * Sets DCIM/Camera as the default backup folder.
+     * Auto-enables all well-known media folders (Camera, Pictures, Screenshots,
+     * Download, Movies) so the user gets comprehensive backup out of the box.
      */
     suspend fun initializeDefaultsIfNeeded() {
         if (db.backupFolderDao().count() > 0) {
             // Already initialized — but check if we have a placeholder bucket ID
             // that needs to be resolved to a real MediaStore bucket ID.
             resolvePlaceholderBucket()
+
+            // Merge in any newly-visible folders (e.g. after a permission upgrade
+            // from partial to full media access).
+            mergeNewDeviceFolders()
             return
         }
 
-        // Find the Camera bucket from MediaStore
-        val cameraFolder = scanDeviceFolders().find { folder ->
-            folder.relativePath.contains("DCIM/Camera", ignoreCase = true) ||
-            folder.bucketName.equals("Camera", ignoreCase = true)
-        }
+        // Fresh install / DB was wiped — discover all device folders and
+        // auto-enable the well-known ones.
+        val allFolders = scanDeviceFolders()
 
-        if (cameraFolder != null) {
-            db.backupFolderDao().insert(
-                BackupFolderEntity(
-                    bucketId = cameraFolder.bucketId,
-                    bucketName = cameraFolder.bucketName,
-                    relativePath = cameraFolder.relativePath,
-                    enabled = true
-                )
-            )
-        } else {
-            // Camera folder not found (empty device?), insert a placeholder
-            // that will match once photos are taken
+        if (allFolders.isEmpty()) {
+            // No media at all — insert a Camera placeholder so the user
+            // sees something once photos are taken.
             db.backupFolderDao().insert(
                 BackupFolderEntity(
                     bucketId = PLACEHOLDER_BUCKET_ID,
@@ -87,7 +91,50 @@ class BackupFolderRepository @Inject constructor(
                     enabled = true
                 )
             )
+            return
         }
+
+        val entities = allFolders.map { folder ->
+            val shouldEnable = AUTO_ENABLE_PATTERNS.any { pattern ->
+                folder.relativePath.contains(pattern, ignoreCase = true) ||
+                folder.bucketName.equals(pattern, ignoreCase = true)
+            }
+            BackupFolderEntity(
+                bucketId = folder.bucketId,
+                bucketName = folder.bucketName,
+                relativePath = folder.relativePath,
+                enabled = shouldEnable
+            )
+        }
+        db.backupFolderDao().insertAll(entities)
+    }
+
+    /**
+     * After a permission upgrade (e.g. from partial READ_MEDIA_VISUAL_USER_SELECTED
+     * to full READ_MEDIA_IMAGES), the device may expose folders that were previously
+     * invisible.  Insert any newly-discovered folders into Room so they appear on the
+     * folder-selection screen.  Well-known media folders are auto-enabled.
+     */
+    private suspend fun mergeNewDeviceFolders() {
+        val allDeviceFolders = scanDeviceFolders()
+        val knownBucketIds = db.backupFolderDao().getAllBucketIds().toSet()
+
+        val newFolders = allDeviceFolders.filter { it.bucketId !in knownBucketIds }
+        if (newFolders.isEmpty()) return
+
+        val entities = newFolders.map { folder ->
+            val shouldEnable = AUTO_ENABLE_PATTERNS.any { pattern ->
+                folder.relativePath.contains(pattern, ignoreCase = true) ||
+                folder.bucketName.equals(pattern, ignoreCase = true)
+            }
+            BackupFolderEntity(
+                bucketId = folder.bucketId,
+                bucketName = folder.bucketName,
+                relativePath = folder.relativePath,
+                enabled = shouldEnable
+            )
+        }
+        db.backupFolderDao().insertAll(entities)
     }
 
     /**

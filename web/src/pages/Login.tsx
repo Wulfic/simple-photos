@@ -77,6 +77,10 @@ export default function Login() {
                   className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   required
                   autoFocus
+                  autoComplete="username"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
                 />
               </div>
               <div>
@@ -90,6 +94,10 @@ export default function Login() {
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full border rounded-md px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     required
+                    autoComplete="current-password"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
                   />
                   <button
                     type="button"
@@ -127,6 +135,11 @@ export default function Login() {
                 placeholder="6-digit code or backup code"
                 required
                 autoFocus
+                autoComplete="one-time-code"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                inputMode="numeric"
               />
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                 Enter code from your authenticator app or a backup code

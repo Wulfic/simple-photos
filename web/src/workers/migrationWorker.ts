@@ -227,8 +227,8 @@ async function markEncrypted(
   photoId: string,
   blobId: string
 ): Promise<void> {
-  const res = await apiFetch(`/photos/${photoId}/encrypted`, {
-    method: "PUT",
+  const res = await apiFetch(`/photos/${photoId}/mark-encrypted`, {
+    method: "POST",
     body: JSON.stringify({ blob_id: blobId }),
   });
   if (!res.ok) throw new Error(`markEncrypted failed: ${res.status}`);

@@ -329,7 +329,8 @@ pub async fn download(
                     &format!("bytes {}-{}/{}", start, end, total_size)
                 ).unwrap())
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header("Cache-Control", HeaderValue::from_static("no-store"))
+                .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
+                .header("ETag", HeaderValue::from_str(&format!("\"{}\"", blob_id)).unwrap())
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         } else {
@@ -358,8 +359,9 @@ pub async fn download(
         .header("Content-Type", HeaderValue::from_static("application/octet-stream"))
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-        // Prevent browsers from caching decrypted blobs
-        .header("Cache-Control", HeaderValue::from_static("no-store"))
+        // Blobs are immutable (content-addressed by UUID) — cache aggressively
+        .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
+        .header("ETag", HeaderValue::from_str(&format!("\"{}\"", blob_id)).unwrap())
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }

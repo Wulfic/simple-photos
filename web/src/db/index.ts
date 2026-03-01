@@ -57,10 +57,27 @@ export interface CachedTrashItem {
   albumIds: string[];
 }
 
+/** Cached full-size photo data for instant viewing across sessions.
+ *  LRU-evicted: keeps the most recently viewed photos in IndexedDB. */
+export interface CachedFullPhoto {
+  /** Photo ID (plain mode) or blob ID (encrypted mode) */
+  photoId: string;
+  filename: string;
+  mimeType: string;
+  mediaType: MediaType;
+  cropData?: string;
+  isFavorite: boolean;
+  /** The raw decrypted photo bytes */
+  data: ArrayBuffer;
+  /** Timestamp when this entry was cached (for LRU eviction) */
+  cachedAt: number;
+}
+
 class SimplePhotosDB extends Dexie {
   photos!: Table<CachedPhoto, string>;
   albums!: Table<CachedAlbum, string>;
   trash!: Table<CachedTrashItem, string>;
+  fullPhotos!: Table<CachedFullPhoto, string>;
 
   constructor() {
     super("simple-photos");
@@ -114,6 +131,15 @@ class SimplePhotosDB extends Dexie {
       photos: "blobId, takenAt, mediaType, *albumIds, contentHash",
       albums: "albumId, name",
       trash: "trashId, blobId, deletedAt",
+    });
+
+    // v6 — added fullPhotos table for cross-session full-photo caching
+    //       LRU-evicted to keep the 200 most recently viewed photos.
+    this.version(6).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+      fullPhotos: "photoId, cachedAt",
     });
   }
 }

@@ -36,10 +36,13 @@ export default function Albums() {
   const [sharePickerAlbumId, setSharePickerAlbumId] = useState<string | null>(null);
   const [confirmDeleteSharedId, setConfirmDeleteSharedId] = useState<string | null>(null);
 
-  // Smart/default album counts
+  // Smart/default album counts + first photo ID for cover thumbnail
   const [plainPhotoCounts, setPlainPhotoCounts] = useState<{
     all: number; favorites: number; photos: number; gifs: number; videos: number;
   } | null>(null);
+  const [plainFirstIds, setPlainFirstIds] = useState<{
+    favorites?: string; photos?: string; gifs?: string; videos?: string;
+  }>({});
 
   // Encrypted photos from IndexedDB (for smart album counts)
   const encryptedPhotos = useLiveQuery(() => db.photos.toArray());
@@ -58,9 +61,9 @@ export default function Albums() {
       const mode = settings.encryption_mode as "plain" | "encrypted";
       setEncryptionMode(mode);
 
-      // If plain mode, also load photo counts for smart albums
+      // If plain mode, also load photo counts + first photo IDs for smart albums
       if (mode === "plain") {
-        const allPhotos: Array<{ media_type: string; is_favorite: boolean }> = [];
+        const allPhotos: Array<{ id: string; media_type: string; is_favorite: boolean }> = [];
         let cursor: string | undefined;
         do {
           const res = await api.photos.list({ after: cursor, limit: 200 });
@@ -74,6 +77,12 @@ export default function Albums() {
           gifs: allPhotos.filter(p => p.media_type === "gif").length,
           videos: allPhotos.filter(p => p.media_type === "video").length,
         });
+        setPlainFirstIds({
+          favorites: allPhotos.find(p => p.is_favorite)?.id,
+          photos: allPhotos.find(p => p.media_type === "photo" || p.media_type === "gif")?.id,
+          gifs: allPhotos.find(p => p.media_type === "gif")?.id,
+          videos: allPhotos.find(p => p.media_type === "video")?.id,
+        });
       }
     } catch {
       // Fallback — assume encrypted
@@ -81,13 +90,18 @@ export default function Albums() {
     }
   }
 
-  // Compute encrypted smart album counts from IndexedDB
+  // Compute encrypted smart album counts + first thumbnails from IndexedDB
   const encryptedPhotoCounts = encryptedPhotos ? {
     all: encryptedPhotos.length,
     photos: encryptedPhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
     gifs: encryptedPhotos.filter(p => p.mediaType === "gif").length,
     videos: encryptedPhotos.filter(p => p.mediaType === "video").length,
   } : null;
+  const encryptedFirstThumbs = encryptedPhotos ? {
+    photos: encryptedPhotos.find(p => (p.mediaType === "photo" || p.mediaType === "gif") && p.thumbnailData)?.thumbnailData,
+    gifs: encryptedPhotos.find(p => p.mediaType === "gif" && p.thumbnailData)?.thumbnailData,
+    videos: encryptedPhotos.find(p => p.mediaType === "video" && p.thumbnailData)?.thumbnailData,
+  } : {};
 
   async function loadAlbums() {
     setLoading(true);
@@ -272,22 +286,29 @@ export default function Albums() {
           <SmartAlbumCard
             label="Favorites"
             count={plainPhotoCounts?.favorites ?? 0}
+            plainThumbId={plainFirstIds.favorites}
             onClick={() => navigate("/albums/smart-favorites")}
           />
         )}
         <SmartAlbumCard
           label="Photos"
           count={encryptionMode === "plain" ? (plainPhotoCounts?.photos ?? 0) : (encryptedPhotoCounts?.photos ?? 0)}
+          plainThumbId={encryptionMode === "plain" ? plainFirstIds.photos : undefined}
+          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.photos : undefined}
           onClick={() => navigate("/albums/smart-photos")}
         />
         <SmartAlbumCard
           label="GIFs"
           count={encryptionMode === "plain" ? (plainPhotoCounts?.gifs ?? 0) : (encryptedPhotoCounts?.gifs ?? 0)}
+          plainThumbId={encryptionMode === "plain" ? plainFirstIds.gifs : undefined}
+          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.gifs : undefined}
           onClick={() => navigate("/albums/smart-gifs")}
         />
         <SmartAlbumCard
           label="Videos"
           count={encryptionMode === "plain" ? (plainPhotoCounts?.videos ?? 0) : (encryptedPhotoCounts?.videos ?? 0)}
+          plainThumbId={encryptionMode === "plain" ? plainFirstIds.videos : undefined}
+          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.videos : undefined}
           onClick={() => navigate("/albums/smart-videos")}
         />
 
@@ -482,16 +503,73 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
   );
 }
 
-// ── Smart Album Card (same style as regular album cards) ─────────────────────
+// ── Smart Album Card with cover thumbnail ────────────────────────────────────
 
-function SmartAlbumCard({ label, count, onClick }: { label: string; count: number; onClick: () => void }) {
+function SmartAlbumCard({
+  label,
+  count,
+  onClick,
+  plainThumbId,
+  encryptedThumbData,
+}: {
+  label: string;
+  count: number;
+  onClick: () => void;
+  /** Plain-mode: photo ID whose thumbnail to load from server */
+  plainThumbId?: string;
+  /** Encrypted-mode: raw JPEG ArrayBuffer from IndexedDB */
+  encryptedThumbData?: ArrayBuffer;
+}) {
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (encryptedThumbData) {
+      // Encrypted mode — thumbnail data already available from IndexedDB
+      const blob = new Blob([encryptedThumbData], { type: "image/jpeg" });
+      const url = URL.createObjectURL(blob);
+      setThumbUrl(url);
+      return () => { cancelled = true; URL.revokeObjectURL(url); };
+    }
+
+    if (plainThumbId) {
+      // Plain mode — fetch thumbnail from server
+      (async () => {
+        try {
+          const buf = await api.photos.downloadThumb(plainThumbId);
+          if (cancelled) return;
+          const blob = new Blob([buf], { type: "image/jpeg" });
+          setThumbUrl(URL.createObjectURL(blob));
+        } catch {
+          // Thumbnail load failed — keep showing count fallback
+        }
+      })();
+      return () => { cancelled = true; };
+    }
+
+    // No thumbnail source — reset
+    setThumbUrl(null);
+  }, [plainThumbId, encryptedThumbData]);
+
+  // Revoke previous object URL when thumbUrl changes
+  useEffect(() => {
+    return () => {
+      if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+    };
+  }, [thumbUrl]);
+
   return (
     <div
       onClick={onClick}
       className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
     >
       <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-2 flex items-center justify-center overflow-hidden">
-        <span className="text-gray-400 text-3xl">{count}</span>
+        {thumbUrl ? (
+          <img src={thumbUrl} alt={label} className="w-full h-full object-cover" />
+        ) : (
+          <span className="text-gray-400 text-3xl">{count}</span>
+        )}
       </div>
       <p className="font-medium truncate">{label}</p>
       <p className="text-sm text-gray-500 dark:text-gray-400">

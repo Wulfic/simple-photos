@@ -18,6 +18,7 @@ pub struct Photo {
     pub thumb_path: Option<String>,
     pub created_at: String,
     pub encrypted_blob_id: Option<String>,
+    pub encrypted_thumb_blob_id: Option<String>,
     pub is_favorite: bool,
     pub crop_metadata: Option<String>,
     pub camera_model: Option<String>,
