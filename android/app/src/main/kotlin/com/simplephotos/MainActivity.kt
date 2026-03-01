@@ -196,6 +196,28 @@ private fun PermissionGate(content: @Composable () -> Unit) {
             ) == PackageManager.PERMISSION_GRANTED
     }
 
+    // Log permission state for diagnostics
+    LaunchedEffect(permissionsState.allPermissionsGranted, hasPartialAccess) {
+        val readImages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else null
+        val readVideo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        } else null
+        val visualUserSelected = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        } else null
+        android.util.Log.i("PermissionGate",
+            "Permission state: allGranted=${permissionsState.allPermissionsGranted} " +
+            "hasPartialAccess=$hasPartialAccess " +
+            "READ_MEDIA_IMAGES=$readImages " +
+            "READ_MEDIA_VIDEO=$readVideo " +
+            "VISUAL_USER_SELECTED=$visualUserSelected " +
+            "API=${Build.VERSION.SDK_INT} " +
+            "shouldShowRationale=${permissionsState.shouldShowRationale}"
+        )
+    }
+
     if (permissionsState.allPermissionsGranted) {
         content()
     } else if (hasPartialAccess) {

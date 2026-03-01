@@ -43,13 +43,19 @@ class PhotoRepository @Inject constructor(
     private fun parseIsoToEpochMs(iso: String): Long {
         // Try timezone-aware first (Instant handles +00:00 and Z)
         return try {
-            Instant.parse(iso).toEpochMilli()
+            val result = Instant.parse(iso).toEpochMilli()
+            android.util.Log.d("PhotoRepository", "parseIso: '$iso' → $result (Instant.parse)")
+            result
         } catch (_: Exception) {
             // Fallback: naive timestamp — treat as UTC
             try {
-                LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC).toEpochMilli()
+                val result = LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC).toEpochMilli()
+                android.util.Log.d("PhotoRepository", "parseIso: '$iso' → $result (LocalDateTime fallback)")
+                result
             } catch (_: Exception) {
-                System.currentTimeMillis()
+                val result = System.currentTimeMillis()
+                android.util.Log.w("PhotoRepository", "parseIso: '$iso' → $result (FAILED — using currentTimeMillis)")
+                result
             }
         }
     }
@@ -270,9 +276,11 @@ class PhotoRepository @Inject constructor(
     private suspend fun syncFromServerPlain(): Int {
         var imported = 0
         var after: String? = null
+        android.util.Log.i("PhotoRepository", "syncFromServerPlain: starting sync")
 
         do {
             val listResult = api.listPhotos(after = after, limit = 100)
+            android.util.Log.d("PhotoRepository", "syncFromServerPlain: fetched page with ${listResult.photos.size} photos, nextCursor=${listResult.nextCursor}")
 
             for (photo in listResult.photos) {
                 // Skip if we already have this server photo ID tracked
@@ -306,9 +314,9 @@ class PhotoRepository @Inject constructor(
                 }
 
                 val localId = java.util.UUID.randomUUID().toString()
-                val takenAtMs = parseIsoToEpochMs(
-                    photo.takenAt ?: photo.createdAt
-                )
+                val serverTimestamp = photo.takenAt ?: photo.createdAt
+                val takenAtMs = parseIsoToEpochMs(serverTimestamp)
+                android.util.Log.d("PhotoRepository", "syncFromServerPlain: importing '${photo.filename}' serverTs='$serverTimestamp' → takenAtMs=$takenAtMs")
 
                 val entity = PhotoEntity(
                     localId = localId,
@@ -336,6 +344,7 @@ class PhotoRepository @Inject constructor(
             after = listResult.nextCursor
         } while (after != null)
 
+        android.util.Log.i("PhotoRepository", "syncFromServerPlain: finished — imported $imported photos")
         return imported
     }
 
@@ -348,9 +357,11 @@ class PhotoRepository @Inject constructor(
     private suspend fun syncFromServerEncrypted(): Int {
         var imported = 0
         var after: String? = null
+        android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: starting sync")
 
         do {
             val result = api.encryptedSync(after = after, limit = 500)
+            android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: fetched page with ${result.photos.size} photos, nextCursor=${result.nextCursor}")
 
             for (photo in result.photos) {
                 val blobId = photo.encryptedBlobId ?: continue
@@ -359,9 +370,9 @@ class PhotoRepository @Inject constructor(
                 if (db.photoDao().getByServerBlobId(blobId) != null) continue
 
                 val localId = java.util.UUID.randomUUID().toString()
-                val takenAtMs = parseIsoToEpochMs(
-                    photo.takenAt ?: photo.createdAt
-                )
+                val serverTimestamp = photo.takenAt ?: photo.createdAt
+                val takenAtMs = parseIsoToEpochMs(serverTimestamp)
+                android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: importing '${photo.filename}' serverTs='$serverTimestamp' → takenAtMs=$takenAtMs blobId=$blobId")
 
                 // Download and decrypt thumbnail blob if available
                 var thumbPath: String? = null
@@ -405,6 +416,7 @@ class PhotoRepository @Inject constructor(
             after = result.nextCursor
         } while (result.nextCursor != null)
 
+        android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: finished — imported $imported photos")
         return imported
     }
 

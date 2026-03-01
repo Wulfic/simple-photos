@@ -1,6 +1,7 @@
 package com.simplephotos.ui.screens.gallery
 
 import android.net.Uri
+import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -14,6 +15,7 @@ import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.AuthRepository
+import com.simplephotos.data.repository.BackupFolderRepository
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.sync.DiagnosticLogger
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
@@ -32,7 +34,10 @@ import javax.inject.Inject
 internal fun groupPhotosByDay(photos: List<PhotoEntity>): List<Pair<String, List<PhotoEntity>>> {
     val fmt = SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.getDefault())
     return photos
-        .sortedByDescending { it.takenAt }
+        // Primary: newest first. Secondary: filename ASC for deterministic
+        // ordering when multiple photos share the exact same takenAt.
+        // This matches the server's ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC
+        .sortedWith(compareByDescending<PhotoEntity> { it.takenAt }.thenBy { it.filename })
         .groupBy { fmt.format(Date(it.takenAt)) }
         .toList()
 }
@@ -63,6 +68,7 @@ class GalleryViewModel @Inject constructor(
     private val api: ApiService,
     private val db: AppDatabase,
     private val albumRepository: AlbumRepository,
+    private val backupFolderRepository: BackupFolderRepository,
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val photos = photoRepository.getAllPhotos()
@@ -180,6 +186,19 @@ class GalleryViewModel @Inject constructor(
                 val diag = DiagnosticLogger(api, loggingEnabled)
                 diag.info("AppDiagnostic", "Gallery opened — sending diagnostic report")
 
+                // ── Device info ─────────────────────────────────────────
+                diag.info("AppDiagnostic", "Device info", mapOf(
+                    "apiLevel" to Build.VERSION.SDK_INT.toString(),
+                    "release" to Build.VERSION.RELEASE,
+                    "manufacturer" to Build.MANUFACTURER,
+                    "model" to Build.MODEL,
+                    "securityPatch" to (Build.VERSION.SECURITY_PATCH ?: "unknown")
+                ))
+
+                // ── Permission state ────────────────────────────────────
+                val permSnapshot = withContext(Dispatchers.IO) { backupFolderRepository.getPermissionSnapshot() }
+                diag.info("AppDiagnostic", "Permission state", permSnapshot.mapValues { it.value.toString() })
+
                 val pendingCount = withContext(Dispatchers.IO) { db.photoDao().getByStatus(SyncStatus.PENDING).size }
                 val failedCount = withContext(Dispatchers.IO) { db.photoDao().getByStatus(SyncStatus.FAILED).size }
                 val uploadingCount = withContext(Dispatchers.IO) { db.photoDao().getByStatus(SyncStatus.UPLOADING).size }
@@ -192,11 +211,69 @@ class GalleryViewModel @Inject constructor(
                 val mode = try { withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() } } catch (e: Exception) { "error: ${e.message}" }
                 diag.info("AppDiagnostic", "Encryption mode: $mode")
 
+                // ── Photo ordering diagnostic ───────────────────────────
+                // Log the first 10 photos in Room order so we can compare with web/server
+                try {
+                    val allPhotos = withContext(Dispatchers.IO) { photos.first() }
+                    diag.info("AppDiagnostic", "Photo ordering — first 10 from Room (takenAt DESC, filename ASC)", mapOf(
+                        "totalPhotos" to allPhotos.size.toString()
+                    ))
+                    for ((i, p) in allPhotos.take(10).withIndex()) {
+                        diag.info("AppDiagnostic", "Photo[$i]: filename='${p.filename}' takenAt=${p.takenAt} (${java.util.Date(p.takenAt)}) localId=${p.localId}", mapOf(
+                            "index" to i.toString(),
+                            "filename" to p.filename,
+                            "takenAt" to p.takenAt.toString(),
+                            "takenAtDate" to java.util.Date(p.takenAt).toString(),
+                            "localId" to p.localId,
+                            "serverPhotoId" to (p.serverPhotoId ?: "null"),
+                            "serverBlobId" to (p.serverBlobId ?: "null")
+                        ))
+                    }
+                    // Log photos with duplicate takenAt timestamps — potential ordering issues
+                    val dupeTimestamps = allPhotos.groupBy { it.takenAt }.filter { it.value.size > 1 }
+                    if (dupeTimestamps.isNotEmpty()) {
+                        diag.warn("AppDiagnostic", "Photos with DUPLICATE takenAt timestamps (order may be non-deterministic without tiebreaker)", mapOf(
+                            "duplicateTimestampCount" to dupeTimestamps.size.toString(),
+                            "affectedPhotoCount" to dupeTimestamps.values.sumOf { it.size }.toString()
+                        ))
+                        for ((ts, photos) in dupeTimestamps.entries.take(5)) {
+                            val names = photos.map { it.filename }.sorted()
+                            diag.info("AppDiagnostic", "Duplicate takenAt=$ts: ${names.joinToString(", ")}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    diag.error("AppDiagnostic", "Photo ordering diagnostic failed: ${e.message}")
+                }
+
+                // ── Backup folder diagnostic ────────────────────────────
                 val enabledFolders = withContext(Dispatchers.IO) { db.backupFolderDao().getEnabledFolders() }
-                diag.info("AppDiagnostic", "Backup folders", mapOf(
+                val allSavedFolders = withContext(Dispatchers.IO) { db.backupFolderDao().count() }
+                diag.info("AppDiagnostic", "Backup folders in DB", mapOf(
+                    "totalInDB" to allSavedFolders.toString(),
                     "enabledCount" to enabledFolders.size.toString(),
-                    "folders" to enabledFolders.joinToString(", ") { "${it.bucketName}(${it.relativePath}, enabled=${it.enabled})" }
+                    "folders" to enabledFolders.joinToString(", ") { "${it.bucketName}(path='${it.relativePath}', bucketId=${it.bucketId}, enabled=${it.enabled})" }
                 ))
+
+                // Perform a live scan of device folders for comparison
+                try {
+                    val deviceFolders = withContext(Dispatchers.IO) { backupFolderRepository.scanDeviceFolders() }
+                    diag.info("AppDiagnostic", "Live device folder scan", mapOf(
+                        "totalFoldersFound" to deviceFolders.size.toString()
+                    ))
+                    for (f in deviceFolders) {
+                        diag.info("AppDiagnostic", "Device folder: name='${f.bucketName}' path='${f.relativePath}' bucketId=${f.bucketId} count=${f.mediaCount}", mapOf(
+                            "bucketName" to f.bucketName,
+                            "relativePath" to f.relativePath,
+                            "bucketId" to f.bucketId.toString(),
+                            "mediaCount" to f.mediaCount.toString()
+                        ))
+                    }
+                    if (deviceFolders.size <= 1) {
+                        diag.warn("AppDiagnostic", "Only ${deviceFolders.size} folder(s) visible — possible permission issue. Expected multiple folders (Camera, Screenshots, etc.) with full media access.")
+                    }
+                } catch (e: Exception) {
+                    diag.error("AppDiagnostic", "Device folder scan failed: ${e.message}", mapOf("exception" to (e::class.simpleName ?: "Unknown")))
+                }
 
                 try {
                     val wm = androidx.work.WorkManager.getInstance(context)

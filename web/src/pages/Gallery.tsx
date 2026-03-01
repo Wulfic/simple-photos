@@ -395,9 +395,12 @@ export default function Gallery() {
 
       setPlainPhotos(allPhotos.sort((a, b) => {
         // Sort by taken_at descending, fallback to created_at
+        // Secondary sort by filename ASC for deterministic ordering (matches server + app)
         const aDate = a.taken_at || a.created_at;
         const bDate = b.taken_at || b.created_at;
-        return bDate.localeCompare(aDate);
+        const dateCmp = bDate.localeCompare(aDate);
+        if (dateCmp !== 0) return dateCmp;
+        return (a.filename || "").localeCompare(b.filename || "");
       }));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load photos");
@@ -781,7 +784,7 @@ export default function Gallery() {
               disabled={selectedIds.size === 0}
               className="inline-flex items-center gap-1.5 bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-500 text-sm font-medium transition-colors disabled:opacity-50"
             >
-              <AppIcon name="trash" size="w-4 h-4" themed={false} />
+              <AppIcon name="trashcan" size="w-4 h-4" themed={false} />
               Delete
             </button>
           </div>

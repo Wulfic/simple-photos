@@ -50,6 +50,7 @@ export default function Viewer() {
   const navState = (location.state ?? {}) as ViewerLocationState;
   const photoIds = navState.photoIds;
   const currentIndex = navState.currentIndex ?? 0;
+  const albumId = navState.albumId;
   const hasPrev = !!photoIds && currentIndex > 0;
   const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
 

@@ -136,7 +136,7 @@ export async function generateMigrationThumbnail(
 ): Promise<ArrayBuffer | null> {
   try {
     return await generateThumbnailFromBuffer(
-      fileData instanceof Uint8Array ? fileData.buffer : fileData,
+      fileData instanceof Uint8Array ? (fileData.buffer as ArrayBuffer) : fileData,
       mimeType,
       size
     );

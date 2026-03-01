@@ -1,8 +1,13 @@
 package com.simplephotos.data.repository
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
+import androidx.core.content.ContextCompat
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.BackupFolderEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -32,6 +37,8 @@ class BackupFolderRepository @Inject constructor(
     private val db: AppDatabase
 ) {
     companion object {
+        private const val TAG = "BackupFolderRepo"
+
         /** Default folder: the standard camera roll path. */
         private const val DEFAULT_CAMERA_PATH = "DCIM/Camera"
         private const val DEFAULT_CAMERA_NAME = "Camera"
@@ -50,6 +57,33 @@ class BackupFolderRepository @Inject constructor(
         )
     }
 
+    /**
+     * Snapshot the current permission state for diagnostic logging.
+     * Returns a map of permission name → granted status.
+     */
+    fun getPermissionSnapshot(): Map<String, Boolean> {
+        val perms = mutableMapOf<String, Boolean>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms["READ_MEDIA_IMAGES"] = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_MEDIA_IMAGES
+            ) == PackageManager.PERMISSION_GRANTED
+            perms["READ_MEDIA_VIDEO"] = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_MEDIA_VIDEO
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            perms["READ_MEDIA_VISUAL_USER_SELECTED"] = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            perms["READ_EXTERNAL_STORAGE"] = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        return perms
+    }
+
     fun getSelectedFolders(): Flow<List<BackupFolderEntity>> =
         db.backupFolderDao().getAllFolders()
 
@@ -65,7 +99,12 @@ class BackupFolderRepository @Inject constructor(
      * Download, Movies) so the user gets comprehensive backup out of the box.
      */
     suspend fun initializeDefaultsIfNeeded() {
-        if (db.backupFolderDao().count() > 0) {
+        val permSnapshot = getPermissionSnapshot()
+        Log.i(TAG, "initializeDefaultsIfNeeded: API=${Build.VERSION.SDK_INT}, permissions=$permSnapshot")
+
+        val existingCount = db.backupFolderDao().count()
+        if (existingCount > 0) {
+            Log.i(TAG, "initializeDefaultsIfNeeded: already have $existingCount folders in DB")
             // Already initialized — but check if we have a placeholder bucket ID
             // that needs to be resolved to a real MediaStore bucket ID.
             resolvePlaceholderBucket()
@@ -76,11 +115,13 @@ class BackupFolderRepository @Inject constructor(
             return
         }
 
+        Log.i(TAG, "initializeDefaultsIfNeeded: fresh install — scanning device folders")
         // Fresh install / DB was wiped — discover all device folders and
         // auto-enable the well-known ones.
         val allFolders = scanDeviceFolders()
 
         if (allFolders.isEmpty()) {
+            Log.w(TAG, "initializeDefaultsIfNeeded: no media folders found — inserting placeholder")
             // No media at all — insert a Camera placeholder so the user
             // sees something once photos are taken.
             db.backupFolderDao().insert(
@@ -99,6 +140,7 @@ class BackupFolderRepository @Inject constructor(
                 folder.relativePath.contains(pattern, ignoreCase = true) ||
                 folder.bucketName.equals(pattern, ignoreCase = true)
             }
+            Log.i(TAG, "initializeDefaultsIfNeeded: folder '${folder.bucketName}' path='${folder.relativePath}' bucketId=${folder.bucketId} count=${folder.mediaCount} autoEnable=$shouldEnable")
             BackupFolderEntity(
                 bucketId = folder.bucketId,
                 bucketName = folder.bucketName,
@@ -107,6 +149,7 @@ class BackupFolderRepository @Inject constructor(
             )
         }
         db.backupFolderDao().insertAll(entities)
+        Log.i(TAG, "initializeDefaultsIfNeeded: inserted ${entities.size} folders, ${entities.count { it.enabled }} enabled")
     }
 
     /**
@@ -120,6 +163,7 @@ class BackupFolderRepository @Inject constructor(
         val knownBucketIds = db.backupFolderDao().getAllBucketIds().toSet()
 
         val newFolders = allDeviceFolders.filter { it.bucketId !in knownBucketIds }
+        Log.i(TAG, "mergeNewDeviceFolders: device=${allDeviceFolders.size} known=${knownBucketIds.size} new=${newFolders.size}")
         if (newFolders.isEmpty()) return
 
         val entities = newFolders.map { folder ->
@@ -127,6 +171,7 @@ class BackupFolderRepository @Inject constructor(
                 folder.relativePath.contains(pattern, ignoreCase = true) ||
                 folder.bucketName.equals(pattern, ignoreCase = true)
             }
+            Log.i(TAG, "mergeNewDeviceFolders: new folder '${folder.bucketName}' path='${folder.relativePath}' bucketId=${folder.bucketId} count=${folder.mediaCount} autoEnable=$shouldEnable")
             BackupFolderEntity(
                 bucketId = folder.bucketId,
                 bucketName = folder.bucketName,
@@ -171,31 +216,48 @@ class BackupFolderRepository @Inject constructor(
      * Returns unique folders with media counts.
      */
     suspend fun scanDeviceFolders(): List<DeviceFolder> {
+        val permSnapshot = getPermissionSnapshot()
+        Log.i(TAG, "scanDeviceFolders: starting scan, API=${Build.VERSION.SDK_INT}, permissions=$permSnapshot")
+
         val folders = mutableMapOf<Long, DeviceFolder>()
 
         // Scan image folders
+        Log.d(TAG, "scanDeviceFolders: querying Images MediaStore...")
         scanMediaFolders(
             uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             bucketIdColumn = MediaStore.Images.Media.BUCKET_ID,
             bucketNameColumn = MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
             relativePathColumn = MediaStore.Images.Media.RELATIVE_PATH,
+            mediaType = "images",
             folders = folders
         )
+        Log.i(TAG, "scanDeviceFolders: after images scan — ${folders.size} unique folders found")
 
         // Scan video folders
+        Log.d(TAG, "scanDeviceFolders: querying Videos MediaStore...")
+        val foldersBefore = folders.size
         scanMediaFolders(
             uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
             bucketIdColumn = MediaStore.Video.Media.BUCKET_ID,
             bucketNameColumn = MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
             relativePathColumn = MediaStore.Video.Media.RELATIVE_PATH,
+            mediaType = "videos",
             folders = folders
         )
+        Log.i(TAG, "scanDeviceFolders: after videos scan — ${folders.size} unique folders (${folders.size - foldersBefore} new from videos)")
 
-        return folders.values
+        val result = folders.values
             .sortedWith(compareByDescending<DeviceFolder> {
                 // Camera first, then by count
                 it.relativePath.contains("DCIM/Camera", ignoreCase = true)
             }.thenByDescending { it.mediaCount })
+
+        // Log every discovered folder for diagnostics
+        for (folder in result) {
+            Log.i(TAG, "  folder: name='${folder.bucketName}' path='${folder.relativePath}' bucketId=${folder.bucketId} count=${folder.mediaCount}")
+        }
+        Log.i(TAG, "scanDeviceFolders: returning ${result.size} total folders")
+        return result
     }
 
     private fun scanMediaFolders(
@@ -203,6 +265,7 @@ class BackupFolderRepository @Inject constructor(
         bucketIdColumn: String,
         bucketNameColumn: String,
         relativePathColumn: String,
+        mediaType: String,
         folders: MutableMap<Long, DeviceFolder>
     ) {
         val projection = arrayOf(
@@ -211,17 +274,39 @@ class BackupFolderRepository @Inject constructor(
             relativePathColumn
         )
 
-        context.contentResolver.query(
+        val cursor = context.contentResolver.query(
             uri, projection, null, null, null
-        )?.use { cursor ->
-            val bucketIdIdx = cursor.getColumnIndexOrThrow(bucketIdColumn)
-            val bucketNameIdx = cursor.getColumnIndexOrThrow(bucketNameColumn)
-            val relativePathIdx = cursor.getColumnIndexOrThrow(relativePathColumn)
+        )
 
-            while (cursor.moveToNext()) {
-                val bucketId = cursor.getLong(bucketIdIdx)
-                val bucketName = cursor.getString(bucketNameIdx) ?: "Unknown"
-                val relativePath = cursor.getString(relativePathIdx) ?: ""
+        if (cursor == null) {
+            Log.e(TAG, "scanMediaFolders($mediaType): ContentResolver.query returned NULL — this usually means missing permissions")
+            return
+        }
+
+        cursor.use { c ->
+            val totalRows = c.count
+            Log.i(TAG, "scanMediaFolders($mediaType): cursor has $totalRows rows for URI=$uri")
+
+            if (totalRows == 0) {
+                Log.w(TAG, "scanMediaFolders($mediaType): 0 rows returned — either no media or permissions restrict visibility")
+                return
+            }
+
+            val bucketIdIdx = c.getColumnIndexOrThrow(bucketIdColumn)
+            val bucketNameIdx = c.getColumnIndexOrThrow(bucketNameColumn)
+            val relativePathIdx = c.getColumnIndexOrThrow(relativePathColumn)
+
+            var rowCount = 0
+            while (c.moveToNext()) {
+                val bucketId = c.getLong(bucketIdIdx)
+                val bucketName = c.getString(bucketNameIdx) ?: "Unknown"
+                val relativePath = c.getString(relativePathIdx) ?: ""
+
+                // Log first 5 rows individually for debugging
+                if (rowCount < 5) {
+                    Log.d(TAG, "scanMediaFolders($mediaType): row[$rowCount] bucketId=$bucketId name='$bucketName' path='$relativePath'")
+                }
+                rowCount++
 
                 val existing = folders[bucketId]
                 if (existing != null) {
@@ -235,6 +320,7 @@ class BackupFolderRepository @Inject constructor(
                     )
                 }
             }
+            Log.i(TAG, "scanMediaFolders($mediaType): processed $rowCount rows → ${folders.size} unique folders so far")
         }
     }
 

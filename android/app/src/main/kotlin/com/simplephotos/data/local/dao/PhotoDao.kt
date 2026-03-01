@@ -7,7 +7,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PhotoDao {
-    @Query("SELECT * FROM photos ORDER BY takenAt DESC")
+    // Secondary sort by filename ensures deterministic order when takenAt ties
+    // (matches server's COALESCE(taken_at, created_at) DESC, filename ASC)
+    @Query("SELECT * FROM photos ORDER BY takenAt DESC, filename ASC")
     fun getAllPhotos(): Flow<List<PhotoEntity>>
 
     @Query("SELECT * FROM photos WHERE localId = :id")

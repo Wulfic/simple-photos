@@ -206,7 +206,7 @@ export default function Settings() {
         </p>
       )}
 
-      <AccountSection username={username} error={error} setError={setError} success={success} setSuccess={setSuccess} loading={loading} setLoading={setLoading} />
+      <AccountSection username={username ?? ""} error={error} setError={setError} success={success} setSuccess={setSuccess} loading={loading} setLoading={setLoading} />
 
       {/* ── Storage Usage ──────────────────────────────────────────────────── */}
       <StorageStatsSection stats={storageStats} loading={storageLoading} />
