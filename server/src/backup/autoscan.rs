@@ -117,6 +117,17 @@ async fn run_auto_scan(
         None => return 0, // No admin user yet
     };
 
+    // Check whether audio files should be included in scan
+    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|v| v == "true")
+    .unwrap_or(false);
+
     // Get already-registered file paths
     let existing: Vec<String> = sqlx::query_scalar(
         "SELECT file_path FROM photos",
@@ -176,6 +187,11 @@ async fn run_auto_scan(
                     } else {
                         "photo"
                     };
+
+                    // Skip audio files when audio backup is disabled
+                    if media_type == "audio" && !audio_backup_enabled {
+                        continue;
+                    }
 
                     let photo_id = Uuid::new_v4().to_string();
                     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);

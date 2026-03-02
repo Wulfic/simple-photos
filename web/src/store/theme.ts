@@ -10,10 +10,10 @@ interface ThemeState {
 
 /**
  * Zustand store for light/dark mode, persisted to localStorage.
- * Default is light mode.
+ * Default is dark mode.
  */
 export const useThemeStore = create<ThemeState>((set) => ({
-  theme: (localStorage.getItem("theme") as Theme) || "light",
+  theme: (localStorage.getItem("theme") as Theme) || "dark",
   toggle: () =>
     set((s) => {
       const next = s.theme === "light" ? "dark" : "light";

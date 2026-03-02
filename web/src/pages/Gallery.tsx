@@ -221,8 +221,8 @@ export default function Gallery() {
           </div>
         )}
 
-        {/* Plain photo tiles — shown in any mode when plain photos exist */}
-        {plainDayGroups.length > 0 && plainDayGroups.map((group) => {
+        {/* Plain photo tiles — shown in plain mode, or during active migration */}
+        {plainDayGroups.length > 0 && (mode === "plain" || migrationStatus === "encrypting" || migrationStatus === "decrypting") && plainDayGroups.map((group) => {
           // Compute global start index for this group (for photo viewer navigation)
           let groupStartIdx = 0;
           for (const g of plainDayGroups) {

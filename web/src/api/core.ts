@@ -109,6 +109,21 @@ export async function request<T>(
   // Handle empty response bodies (e.g. 200 OK with no content)
   const text = await res.text();
   if (!text) return undefined as T;
+
+  // Guard against SPA fallback returning HTML for unmatched API routes.
+  // This happens when the server binary is stale or a route isn't registered.
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("text/html") || text.trimStart().startsWith("<!")) {
+    console.error(
+      `[API] ${options.method || "GET"} ${path} returned HTML instead of JSON. ` +
+      `The server may need to be rebuilt, or this endpoint is not registered.`
+    );
+    throw new Error(
+      `Server returned HTML instead of JSON for ${path}. ` +
+      `Please rebuild the server or check that the endpoint exists.`
+    );
+  }
+
   return JSON.parse(text) as T;
 }
 

@@ -105,9 +105,10 @@ export function useGalleryData(): GalleryDataResult {
 
         // Fire auto-scan in the background — don't block photo loading.
         // When it completes, reload photos so newly scanned files appear.
+        const isMigrating = settings.migration_status === "encrypting" || settings.migration_status === "decrypting";
         const reloadAfterScan = async () => {
           if (detected === "encrypted") await loadEncryptedPhotos();
-          await loadPlainPhotos();
+          if (detected === "plain" || isMigrating) await loadPlainPhotos();
         };
         api.backup.triggerAutoScan()
           .then(() => reloadAfterScan())
@@ -121,19 +122,17 @@ export function useGalleryData(): GalleryDataResult {
             return;
           }
           await loadEncryptedPhotos();
+          // Only load plain photos during an active migration (to show progress)
+          if (isMigrating) {
+            await loadPlainPhotos();
+          }
+        } else {
+          // Plain mode — only load plain photos
+          await loadPlainPhotos();
         }
-
-        // Always load plain photos — they exist when the auto-scanner
-        // registered files on disk, or during plain → encrypted migration.
-        await loadPlainPhotos();
-      } catch {
-        // Fallback: if encryption settings endpoint doesn't exist yet, assume encrypted (legacy)
-        setMode("encrypted");
-        if (!hasCryptoKey()) {
-          navigate("/setup");
-          return;
-        }
-        await loadEncryptedPhotos();
+      } catch (err) {
+        console.error("Failed to load encryption settings:", err);
+        setError("Failed to load encryption settings. Please try again.");
       }
     }
     init();

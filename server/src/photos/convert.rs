@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 use sqlx::SqlitePool;
 
-use super::scan::{needs_web_preview, generate_web_preview_bg};
+use super::scan::{needs_web_preview, generate_web_preview_bg, generate_thumbnail_file};
 
 /// Run the background conversion loop.
 /// Checks for unconverted files every `interval_secs` seconds.
@@ -36,8 +36,8 @@ pub async fn background_convert_task(
         }
 
         // Find all photos that need a web preview but don't have one yet
-        let photos: Vec<(String, String, String)> = match sqlx::query_as(
-            "SELECT id, file_path, filename FROM photos WHERE encrypted_blob_id IS NULL",
+        let photos: Vec<(String, String, String, Option<String>, String)> = match sqlx::query_as(
+            "SELECT id, file_path, filename, thumb_path, mime_type FROM photos WHERE encrypted_blob_id IS NULL",
         )
         .fetch_all(&pool)
         .await
@@ -50,56 +50,70 @@ pub async fn background_convert_task(
         };
 
         let mut converted = 0u32;
-        for (photo_id, file_path, filename) in &photos {
-            // Check if this file needs a web preview
-            let ext = match needs_web_preview(filename) {
-                Some(e) => e,
-                None => continue,
-            };
-
-            // Check if the preview already exists on disk
-            let preview_path = storage_root.join(format!(
-                ".web_previews/{}.web.{}",
-                photo_id, ext
-            ));
-            if tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
-                continue; // Already converted
-            }
-
-            // Source file must exist
+        let mut thumbnails_generated = 0u32;
+        for (photo_id, file_path, filename, thumb_path, mime_type) in &photos {
+            // Source file must exist for any operation
             let source_path = storage_root.join(file_path);
             if !tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
                 continue;
             }
 
-            tracing::info!(
-                photo_id = %photo_id,
-                filename = %filename,
-                target_ext = ext,
-                "Background convert: starting conversion"
-            );
+            // Generate web preview if this format needs one and it doesn't exist yet
+            if let Some(ext) = needs_web_preview(filename) {
+                let preview_path = storage_root.join(format!(
+                    ".web_previews/{}.web.{}",
+                    photo_id, ext
+                ));
+                if !tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
+                    tracing::info!(
+                        photo_id = %photo_id,
+                        filename = %filename,
+                        target_ext = ext,
+                        "Background convert: starting conversion"
+                    );
 
-            if generate_web_preview_bg(&source_path, &preview_path, ext).await {
-                converted += 1;
-                tracing::info!(
-                    photo_id = %photo_id,
-                    filename = %filename,
-                    "Background convert: conversion complete"
-                );
-            } else {
-                tracing::warn!(
-                    photo_id = %photo_id,
-                    filename = %filename,
-                    "Background convert: conversion failed"
-                );
+                    if generate_web_preview_bg(&source_path, &preview_path, ext).await {
+                        converted += 1;
+                        tracing::info!(
+                            photo_id = %photo_id,
+                            filename = %filename,
+                            "Background convert: conversion complete"
+                        );
+                    } else {
+                        tracing::warn!(
+                            photo_id = %photo_id,
+                            filename = %filename,
+                            "Background convert: conversion failed"
+                        );
+                    }
+
+                    // Yield to other tasks between conversions
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
             }
 
-            // Yield to other tasks between conversions to keep the server responsive
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // Generate thumbnail if missing — thumbnails may not have been
+            // created during scan when FFmpeg was unavailable or the file format
+            // wasn't supported at that point.
+            if let Some(tp) = thumb_path {
+                let thumb_abs = storage_root.join(tp);
+                if !tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
+                    if generate_thumbnail_file(&source_path, &thumb_abs, mime_type).await {
+                        thumbnails_generated += 1;
+                        tracing::debug!(
+                            photo_id = %photo_id,
+                            "Background convert: generated missing thumbnail"
+                        );
+                    }
+                }
+            }
         }
 
-        if converted > 0 {
-            tracing::info!("Background convert: converted {} files this cycle", converted);
+        if converted > 0 || thumbnails_generated > 0 {
+            tracing::info!(
+                "Background convert: converted {} files, generated {} thumbnails this cycle",
+                converted, thumbnails_generated
+            );
         }
     }
 }

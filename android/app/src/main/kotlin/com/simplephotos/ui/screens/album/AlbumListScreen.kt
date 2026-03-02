@@ -77,6 +77,8 @@ class AlbumViewModel @Inject constructor(
         private set
     var videosCount by mutableStateOf(0)
         private set
+    var audioCount by mutableStateOf(0)
+        private set
 
     /** Cover photos for smart albums (keyed by smart album ID) */
     var smartAlbumCoverPhotos by mutableStateOf<Map<String, PhotoEntity>>(emptyMap())
@@ -113,6 +115,7 @@ class AlbumViewModel @Inject constructor(
                 photosCount = allPhotos.count { it.mediaType == "photo" || it.mediaType == "gif" }
                 gifsCount = allPhotos.count { it.mediaType == "gif" }
                 videosCount = allPhotos.count { it.mediaType == "video" }
+                audioCount = allPhotos.count { it.mediaType == "audio" }
 
                 // Load cover photos for smart albums (most recent photo matching each filter)
                 val sorted = allPhotos.sortedByDescending { it.takenAt }
@@ -121,6 +124,7 @@ class AlbumViewModel @Inject constructor(
                 sorted.firstOrNull { it.mediaType == "photo" || it.mediaType == "gif" }?.let { covers["smart-photos"] = it }
                 sorted.firstOrNull { it.mediaType == "gif" }?.let { covers["smart-gifs"] = it }
                 sorted.firstOrNull { it.mediaType == "video" }?.let { covers["smart-videos"] = it }
+                sorted.firstOrNull { it.mediaType == "audio" }?.let { covers["smart-audio"] = it }
                 smartAlbumCoverPhotos = covers
             } catch (_: Exception) {}
         }
@@ -262,6 +266,7 @@ fun AlbumListScreen(
                 add(Triple("smart-photos", "Photos", viewModel.photosCount))
                 add(Triple("smart-gifs", "GIFs", viewModel.gifsCount))
                 add(Triple("smart-videos", "Videos", viewModel.videosCount))
+                add(Triple("smart-audio", "Audio", viewModel.audioCount))
             }
 
             // Render all cards (smart + user) in 2-column rows

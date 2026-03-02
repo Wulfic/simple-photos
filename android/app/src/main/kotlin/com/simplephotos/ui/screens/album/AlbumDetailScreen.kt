@@ -61,6 +61,7 @@ class AlbumDetailViewModel @Inject constructor(
         "smart-photos" -> "Photos"
         "smart-gifs" -> "GIFs"
         "smart-videos" -> "Videos"
+        "smart-audio" -> "Audio"
         else -> "Album"
     }
 
@@ -105,6 +106,7 @@ class AlbumDetailViewModel @Inject constructor(
                     "smart-photos" -> all.filter { it.mediaType == "photo" || it.mediaType == "gif" }
                     "smart-gifs" -> all.filter { it.mediaType == "gif" }
                     "smart-videos" -> all.filter { it.mediaType == "video" }
+                    "smart-audio" -> all.filter { it.mediaType == "audio" }
                     else -> all
                 }
             } catch (e: Exception) {
