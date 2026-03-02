@@ -70,6 +70,10 @@ class FolderSelectionViewModel @Inject constructor(
         private set
     var showDiagnosticPanel by mutableStateOf(false)
         private set
+    /** True when the post-scan heuristic detects probable partial access
+     *  despite checkSelfPermission reporting full access (Android 14 bug). */
+    var likelyPartialAccess by mutableStateOf(false)
+        private set
 
     // Observe saved folders from the database
     val savedFolders = backupFolderRepository.getSelectedFolders()
@@ -107,7 +111,18 @@ class FolderSelectionViewModel @Inject constructor(
                 enabledBucketIds = backupFolderRepository.getEnabledBucketIds().toSet()
                 android.util.Log.i("FolderSelection", "scanFolders: ${enabledBucketIds.size} folders enabled, bucketIds=$enabledBucketIds")
 
-                if (deviceFolders.size <= 1) {
+                // Post-scan heuristic: detect the Android 14 platform bug
+                // where checkSelfPermission(READ_MEDIA_IMAGES) returns GRANTED
+                // even under partial ("Select photos") access (b/308531058).
+                likelyPartialAccess = BackupFolderRepository.likelyPartialAccessDespitePermissions(
+                    appContext, deviceFolders.size
+                )
+                if (likelyPartialAccess) {
+                    android.util.Log.w("FolderSelection",
+                        "scanFolders: HEURISTIC — only ${deviceFolders.size} folder(s) found " +
+                        "with VISUAL_USER_SELECTED granted on API 34+. " +
+                        "Probable partial access despite checkSelfPermission reporting full access.")
+                } else if (deviceFolders.size <= 1) {
                     android.util.Log.w("FolderSelection", "scanFolders: WARNING — only ${deviceFolders.size} folder(s) found. Likely a permission issue.")
                     // Auto-show diagnostic panel when results look wrong
                     showDiagnosticPanel = true
@@ -139,7 +154,13 @@ class FolderSelectionViewModel @Inject constructor(
 
                 android.util.Log.i("FolderSelection", "resetAndRescan: found ${deviceFolders.size} folders, ${enabledBucketIds.size} enabled")
 
-                if (deviceFolders.size <= 1) {
+                likelyPartialAccess = BackupFolderRepository.likelyPartialAccessDespitePermissions(
+                    appContext, deviceFolders.size
+                )
+                if (likelyPartialAccess) {
+                    android.util.Log.w("FolderSelection",
+                        "resetAndRescan: HEURISTIC — probable partial access despite permissions (${deviceFolders.size} folder(s))")
+                } else if (deviceFolders.size <= 1) {
                     showDiagnosticPanel = true
                 }
             } catch (e: Exception) {
@@ -215,10 +236,11 @@ fun FolderSelectionScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // When full permissions are confirmed, trigger the scan.
+    // When any media permissions are confirmed, trigger the scan.
     // Also re-scan if permCheckTrigger changes (user returned from Settings).
-    LaunchedEffect(hasFullAccess, permCheckTrigger) {
-        if (hasFullAccess) {
+    val hasAnyAccess = hasFullAccess || hasPartialAccess
+    LaunchedEffect(hasAnyAccess, permCheckTrigger) {
+        if (hasAnyAccess) {
             viewModel.scanFolders()
         }
     }
@@ -233,8 +255,8 @@ fun FolderSelectionScreen(
                     }
                 },
                 actions = {
-                    // Rescan button — always available when we have access
-                    if (hasFullAccess) {
+                    // Rescan button — available when we have any access
+                    if (hasFullAccess || hasPartialAccess) {
                         IconButton(onClick = { viewModel.resetAndRescan() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Rescan folders")
                         }
@@ -249,13 +271,10 @@ fun FolderSelectionScreen(
                 .fillMaxSize()
         ) {
             when {
-                hasFullAccess -> {
-                    // ── Full access — show folder list ─────────────────
+                hasFullAccess || hasPartialAccess -> {
+                    // ── Any access — show folder list with inline warning
+                    //    when results look incomplete ───────────────────
                     FolderListContent(viewModel, context)
-                }
-                hasPartialAccess -> {
-                    // ── Partial access — user chose "Select photos" ────
-                    PartialAccessBanner(context)
                 }
                 else -> {
                     // ── No access — shouldn't reach here (PermissionGate

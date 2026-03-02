@@ -69,14 +69,10 @@ class BackupFolderRepository @Inject constructor(
         /** Sentinel bucket ID used when no camera photos exist yet. */
         val PLACEHOLDER_BUCKET_ID = DEFAULT_CAMERA_PATH.hashCode().toLong()
 
-        /** Patterns for folders that should be auto-enabled on fresh install. */
+        /** Patterns for folders that should be auto-enabled on fresh install.
+         *  Only the camera roll — everything else the user opts into. */
         private val AUTO_ENABLE_PATTERNS = listOf(
-            "DCIM/Camera",
-            "DCIM",
-            "Pictures",
-            "Screenshots",
-            "Download",
-            "Movies"
+            "DCIM/Camera"
         )
 
         /**
@@ -86,7 +82,11 @@ class BackupFolderRepository @Inject constructor(
          * On Android 14+ with READ_MEDIA_VISUAL_USER_SELECTED declared in the
          * manifest, Accompanist can incorrectly report allPermissionsGranted=true
          * when only partial ("Select photos") access was granted.  This function
-         * always returns the ground truth.
+         * uses the system check, but note: on some Android 14 builds
+         * (b/308531058), checkSelfPermission itself can also return GRANTED
+         * for READ_MEDIA_IMAGES under partial access.  Use
+         * [likelyPartialAccessDespitePermissions] after scanning as a
+         * secondary heuristic.
          */
         fun hasFullMediaAccess(context: Context): Boolean {
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -114,6 +114,32 @@ class BackupFolderRepository @Inject constructor(
             return ContextCompat.checkSelfPermission(
                 context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
             ) == PackageManager.PERMISSION_GRANTED
+        }
+
+        /**
+         * Post-scan heuristic: on Android 14+ (API 34), there is a platform
+         * bug (b/308531058) where [checkSelfPermission] for READ_MEDIA_IMAGES
+         * can return GRANTED even when the user only chose "Select photos".
+         * In that case [hasFullMediaAccess] returns true, but MediaStore only
+         * exposes the user-selected subset — causing folder discovery to show
+         * very few folders.
+         *
+         * Call this AFTER [scanDeviceFolders]: if we're on API 34+,
+         * VISUAL_USER_SELECTED is granted, and the scan returned <= [threshold]
+         * folders, we almost certainly have partial access despite what the
+         * permission checks report.
+         */
+        fun likelyPartialAccessDespitePermissions(
+            context: Context,
+            discoveredFolderCount: Int,
+            threshold: Int = 1
+        ): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
+            val visualUserSelected = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!visualUserSelected) return false
+            return discoveredFolderCount <= threshold
         }
     }
 
@@ -247,7 +273,8 @@ class BackupFolderRepository @Inject constructor(
      * After a permission upgrade (e.g. from partial READ_MEDIA_VISUAL_USER_SELECTED
      * to full READ_MEDIA_IMAGES), the device may expose folders that were previously
      * invisible.  Insert any newly-discovered folders into Room so they appear on the
-     * folder-selection screen.  Well-known media folders are auto-enabled.
+     * folder-selection screen.  New folders are always disabled — the user must
+     * explicitly opt-in to back them up.
      */
     private suspend fun mergeNewDeviceFolders() {
         val allDeviceFolders = scanDeviceFolders()
@@ -258,16 +285,12 @@ class BackupFolderRepository @Inject constructor(
         if (newFolders.isEmpty()) return
 
         val entities = newFolders.map { folder ->
-            val shouldEnable = AUTO_ENABLE_PATTERNS.any { pattern ->
-                folder.relativePath.contains(pattern, ignoreCase = true) ||
-                folder.bucketName.equals(pattern, ignoreCase = true)
-            }
-            Log.i(TAG, "mergeNewDeviceFolders: new folder '${folder.bucketName}' path='${folder.relativePath}' bucketId=${folder.bucketId} count=${folder.mediaCount} autoEnable=$shouldEnable")
+            Log.i(TAG, "mergeNewDeviceFolders: new folder '${folder.bucketName}' path='${folder.relativePath}' bucketId=${folder.bucketId} count=${folder.mediaCount} enabled=false")
             BackupFolderEntity(
                 bucketId = folder.bucketId,
                 bucketName = folder.bucketName,
                 relativePath = folder.relativePath,
-                enabled = shouldEnable
+                enabled = false
             )
         }
         db.backupFolderDao().insertAll(entities)

@@ -105,7 +105,10 @@ export function useGalleryData(): GalleryDataResult {
 
         // Fire auto-scan in the background — don't block photo loading.
         // When it completes, reload photos so newly scanned files appear.
-        const reloadAfterScan = detected === "encrypted" ? loadEncryptedPhotos : loadPlainPhotos;
+        const reloadAfterScan = async () => {
+          if (detected === "encrypted") await loadEncryptedPhotos();
+          await loadPlainPhotos();
+        };
         api.backup.triggerAutoScan()
           .then(() => reloadAfterScan())
           .catch(() => {
@@ -118,9 +121,11 @@ export function useGalleryData(): GalleryDataResult {
             return;
           }
           await loadEncryptedPhotos();
-        } else {
-          await loadPlainPhotos();
         }
+
+        // Always load plain photos — they exist when the auto-scanner
+        // registered files on disk, or during plain → encrypted migration.
+        await loadPlainPhotos();
       } catch {
         // Fallback: if encryption settings endpoint doesn't exist yet, assume encrypted (legacy)
         setMode("encrypted");

@@ -4,11 +4,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
-    <!-- Declared so we can DETECT partial access on Android 14+.
-         When the user chooses "Select photos" instead of "Allow all",
-         this permission is granted while READ_MEDIA_IMAGES is not.
-         We use this to show a targeted "upgrade to full access" prompt. -->
-    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <!-- DO NOT add READ_MEDIA_VISUAL_USER_SELECTED here.
+         Declaring it causes Android 14+ to show a 3-option dialog
+         ("Allow all" / "Select photos" / "Don't allow").  When the user
+         picks "Select photos", a platform bug (b/308531058) makes
+         checkSelfPermission(READ_MEDIA_IMAGES) return GRANTED even
+         though only partial access was granted, and MediaStore only
+         returns the user-selected subset — breaking folder discovery. -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
