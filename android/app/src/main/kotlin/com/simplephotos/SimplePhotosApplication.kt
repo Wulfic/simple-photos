@@ -35,11 +35,13 @@ class SimplePhotosApplication : Application(), Configuration.Provider, ImageLoad
     }
 
     override fun newImageLoader(): ImageLoader {
-        val builder = ImageLoader.Builder(this)
+        // By the time Coil first requests this (on first image load in a
+        // Composable), Hilt has already injected okHttpClient in onCreate().
+        // Using the authenticated OkHttpClient is essential — without it,
+        // Coil makes unauthenticated requests and all images return 401.
+        return ImageLoader.Builder(this)
             .crossfade(true)
-        if (::okHttpClient.isInitialized) {
-            builder.okHttpClient(okHttpClient)
-        }
-        return builder.build()
+            .okHttpClient(okHttpClient)
+            .build()
     }
 }

@@ -97,8 +97,7 @@ desktop.ini
 # ── Docker ───────────────────────────────────────────────────────────────────
 # Docker volumes are managed outside git; don't accidentally commit runtime data
 docker-compose.override.yml
-docker-instances/*/data/
-docker-instances/*/config.toml
+docker-instances/
 
 # ── Logs & Runtime ───────────────────────────────────────────────────────────
 *.log

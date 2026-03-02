@@ -189,6 +189,16 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn background task for media format conversion (MKV, AVI, HEIC, etc. → browser-native)
+    // Runs with low CPU priority (nice -n 19) so it doesn't starve interactive requests.
+    {
+        let pool_clone = pool.clone();
+        let storage_root_clone = config.storage.root.clone();
+        tokio::spawn(async move {
+            photos::convert::background_convert_task(pool_clone, storage_root_clone, 60).await;
+        });
+    }
+
     let state = AppState {
         pool,
         config: Arc::new(config.clone()),
@@ -257,7 +267,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos", get(photos::handlers::list_photos))
         .route("/photos/encrypted-sync", get(photos::sync::encrypted_sync))
         .route("/photos/register", post(photos::handlers::register_photo))
-        .route("/photos/upload", post(photos::handlers::upload_photo))
+        .route("/photos/upload", post(photos::upload::upload_photo))
         .route("/photos/{id}/file", get(photos::handlers::serve_photo))
         .route("/photos/{id}/thumb", get(photos::handlers::serve_thumbnail))
         .route("/photos/{id}/web", get(photos::handlers::serve_web))
@@ -265,6 +275,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/{id}/favorite", put(photos::handlers::toggle_favorite))
         // Crop metadata
         .route("/photos/{id}/crop", put(photos::handlers::set_crop))
+        // Edit copies (Save Copy — metadata-only versions)
+        .route("/photos/{id}/copies", post(photos::copies::create_edit_copy))
+        .route("/photos/{id}/copies", get(photos::copies::list_edit_copies))
+        .route("/photos/{id}/copies/{copy_id}", delete(photos::copies::delete_edit_copy))
+        // Duplicate photo (Save Copy — creates a new photos row sharing the same file)
+        .route("/photos/{id}/duplicate", post(photos::copies::duplicate_photo))
         // Delete now soft-deletes to trash (30-day retention)
         .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Plain-mode scan & register all files on disk
@@ -308,6 +324,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/backup/discover", get(backup::handlers::discover_servers))
         .route("/admin/backup/mode", get(backup::handlers::get_backup_mode))
         .route("/admin/backup/mode", post(backup::handlers::set_backup_mode))
+        // Audio backup setting
+        .route("/settings/audio-backup", get(backup::handlers::get_audio_backup_setting))
+        .route("/admin/audio-backup", put(backup::handlers::set_audio_backup_setting))
         // Auto-scan trigger — called when web UI opens
         .route("/admin/photos/auto-scan", post(backup::autoscan::trigger_auto_scan))
         // Backup serve — API-key authenticated, for server-to-server recovery
@@ -337,7 +356,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/client-logs", get(client_logs::handlers::list_logs))
         // Diagnostics — admin-only server metrics & audit log viewer
         .route("/admin/diagnostics", get(diagnostics::handlers::get_diagnostics))
-        .route("/admin/audit-logs", get(diagnostics::handlers::list_audit_logs));
+        .route("/admin/diagnostics/config", get(diagnostics::handlers::get_diagnostics_config))
+        .route("/admin/diagnostics/config", put(diagnostics::handlers::update_diagnostics_config))
+        .route("/admin/audit-logs", get(diagnostics::handlers::list_audit_logs))
+        // External diagnostics — HTTP Basic Auth, for server-to-server integration
+        .route("/external/diagnostics", get(diagnostics::external::external_full))
+        .route("/external/diagnostics/health", get(diagnostics::external::external_health))
+        .route("/external/diagnostics/storage", get(diagnostics::external::external_storage))
+        .route("/external/diagnostics/audit", get(diagnostics::external::external_audit));
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))

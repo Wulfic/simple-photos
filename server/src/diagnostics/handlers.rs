@@ -1,5 +1,6 @@
 use axum::extract::{Query, State};
 use axum::Json;
+use axum::response::IntoResponse;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -12,7 +13,7 @@ use super::models::*;
 /// Lazily initialised server start time – set once on first diagnostics call.
 static SERVER_START: std::sync::OnceLock<(Instant, String)> = std::sync::OnceLock::new();
 
-fn server_start() -> &'static (Instant, String) {
+pub(crate) fn server_start() -> &'static (Instant, String) {
     SERVER_START.get_or_init(|| (Instant::now(), chrono::Utc::now().to_rfc3339()))
 }
 
@@ -32,7 +33,7 @@ async fn require_admin(auth: &AuthUser, state: &AppState) -> Result<(), AppError
 
 /// Read `/proc/self/status` on Linux to get VmRSS in bytes.
 #[cfg(target_os = "linux")]
-fn read_rss_bytes() -> u64 {
+pub(crate) fn read_rss_bytes() -> u64 {
     std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|s| {
@@ -49,13 +50,13 @@ fn read_rss_bytes() -> u64 {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn read_rss_bytes() -> u64 {
+pub(crate) fn read_rss_bytes() -> u64 {
     0
 }
 
 /// Read `/proc/self/stat` on Linux to get user+system CPU time in seconds.
 #[cfg(target_os = "linux")]
-fn read_cpu_seconds() -> f64 {
+pub(crate) fn read_cpu_seconds() -> f64 {
     let ticks_per_sec = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
     std::fs::read_to_string("/proc/self/stat")
         .ok()
@@ -73,13 +74,13 @@ fn read_cpu_seconds() -> f64 {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn read_cpu_seconds() -> f64 {
+pub(crate) fn read_cpu_seconds() -> f64 {
     0.0
 }
 
 /// Get disk usage via statvfs on Unix.
 #[cfg(unix)]
-fn disk_stats(path: &std::path::Path) -> (u64, u64) {
+pub(crate) fn disk_stats(path: &std::path::Path) -> (u64, u64) {
     use std::ffi::CString;
     let c_path = match CString::new(path.to_str().unwrap_or("/")) {
         Ok(p) => p,
@@ -98,12 +99,12 @@ fn disk_stats(path: &std::path::Path) -> (u64, u64) {
 }
 
 #[cfg(not(unix))]
-fn disk_stats(_path: &std::path::Path) -> (u64, u64) {
+pub(crate) fn disk_stats(_path: &std::path::Path) -> (u64, u64) {
     (0, 0)
 }
 
 /// Walk a directory tree and sum file sizes + count.
-async fn dir_usage(root: &std::path::Path) -> (u64, u64) {
+pub(crate) async fn dir_usage(root: &std::path::Path) -> (u64, u64) {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let mut total_bytes: u64 = 0;
@@ -149,17 +150,108 @@ fn walk_recursive(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// GET /api/admin/diagnostics/config — read diagnostics config
+// ═══════════════════════════════════════════════════════════════════════════
+
+pub async fn get_diagnostics_config(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Json<DiagnosticsConfig>, AppError> {
+    require_admin(&auth, &state).await?;
+
+    let config = read_diagnostics_config(&state.pool).await;
+    Ok(Json(config))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PUT /api/admin/diagnostics/config — update diagnostics config
+// ═══════════════════════════════════════════════════════════════════════════
+
+pub async fn update_diagnostics_config(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<UpdateDiagnosticsConfigRequest>,
+) -> Result<Json<DiagnosticsConfig>, AppError> {
+    require_admin(&auth, &state).await?;
+
+    if let Some(enabled) = req.diagnostics_enabled {
+        let val = if enabled { "true" } else { "false" };
+        sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES ('diagnostics_enabled', ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(val)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    if let Some(client_enabled) = req.client_diagnostics_enabled {
+        let val = if client_enabled { "true" } else { "false" };
+        sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES ('client_diagnostics_enabled', ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(val)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    let config = read_diagnostics_config(&state.pool).await;
+    Ok(Json(config))
+}
+
+/// Helper: read both diagnostics flags from server_settings.
+async fn read_diagnostics_config(pool: &sqlx::SqlitePool) -> DiagnosticsConfig {
+    let diag: Option<String> =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'diagnostics_enabled'")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    let client_diag: Option<String> = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'client_diagnostics_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    DiagnosticsConfig {
+        diagnostics_enabled: diag.as_deref() == Some("true"),
+        client_diagnostics_enabled: client_diag.as_deref() == Some("true"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // GET /api/admin/diagnostics — comprehensive server metrics
+// (returns lightweight stub when disabled to save performance)
 // ═══════════════════════════════════════════════════════════════════════════
 
 pub async fn get_diagnostics(
     auth: AuthUser,
     State(state): State<AppState>,
-) -> Result<Json<DiagnosticsResponse>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     require_admin(&auth, &state).await?;
 
     let (start_instant, started_at) = server_start();
     let uptime = start_instant.elapsed().as_secs();
+
+    // Check if diagnostics collection is enabled
+    let config = read_diagnostics_config(&state.pool).await;
+
+    if !config.diagnostics_enabled {
+        // Return lightweight response — no expensive disk walks or table scans
+        let resp = DisabledDiagnosticsResponse {
+            enabled: false,
+            server: BasicServerInfo {
+                version: "0.6.9".to_string(),
+                uptime_seconds: uptime,
+                started_at: started_at.clone(),
+            },
+            message: "Diagnostics collection is disabled. Enable it to view full metrics.".into(),
+        };
+        return Ok(Json(resp).into_response());
+    }
 
     // Parallelise independent DB queries
     let pool = &state.pool;
@@ -496,6 +588,7 @@ pub async fn get_diagnostics(
     };
 
     Ok(Json(DiagnosticsResponse {
+        enabled: true,
         server: server_info,
         database: database_stats,
         storage: storage_stats,
@@ -505,7 +598,7 @@ pub async fn get_diagnostics(
         client_logs: client_log_summary,
         backup: backup_summary,
         performance,
-    }))
+    }).into_response())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

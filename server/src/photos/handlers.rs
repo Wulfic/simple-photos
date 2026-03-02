@@ -1,62 +1,18 @@
-use axum::body::{Body, Bytes};
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
-use chrono::{SecondsFormat, Utc};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::media::mime_from_extension;
 use crate::sanitize;
 use crate::state::AppState;
 
-use super::metadata::extract_media_metadata_from_bytes;
 use super::models::*;
-
-/// Produce a UTC ISO-8601 timestamp with millisecond precision and Z suffix.
-/// Format: `2024-02-28T22:44:29.043Z`
-///
-/// This is critical for consistent text-based sorting in SQLite — all
-/// timestamps (taken_at, created_at) must use the same format so that
-/// `ORDER BY COALESCE(taken_at, created_at) DESC` works correctly.
-pub fn utc_now_iso() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-/// Normalize a timestamp string to consistent ISO-8601 Z-suffix format.
-/// Handles:
-/// - Naive "2024-01-15T14:30:00" → "2024-01-15T14:30:00.000Z" (treated as UTC)
-/// - Offset "+00:00" → "Z"
-/// - Already "Z" → passed through
-pub fn normalize_iso_timestamp(ts: &str) -> String {
-    // Try parsing as a full DateTime<Utc> or DateTime<FixedOffset>
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
-        return dt.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
-    }
-    // Try parsing as naive datetime (no timezone) — treat as UTC
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f") {
-        let dt = naive.and_utc();
-        return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
-    }
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S") {
-        let dt = naive.and_utc();
-        return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
-    }
-    // Fallback: return as-is
-    ts.to_string()
-}
-
-/// Compute a short content-based hash: first 12 hex chars of SHA-256.
-/// This deterministic fingerprint is the same regardless of which platform
-/// uploads the photo, guaranteeing cross-platform alignment.
-pub fn compute_photo_hash(data: &[u8]) -> String {
-    let digest = Sha256::digest(data);
-    hex::encode(&digest[..6]) // 6 bytes → 12 hex chars (48-bit)
-}
+use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 
 // ── Plain Photo Endpoints ─────────────────────────────────────────────────────
 
@@ -350,15 +306,9 @@ pub async fn serve_thumbnail(
 // Photos are soft-deleted to the trash with a 30-day retention period.
 
 /// Returns the web preview file extension if this filename's format is not browser-native.
+/// Re-exported from scan module for consistency.
 fn needs_web_preview(filename: &str) -> Option<&'static str> {
-    let ext = filename.rsplit('.').next()?.to_ascii_lowercase();
-    match ext.as_str() {
-        // Images that browsers cannot display natively
-        "heic" | "heif" | "tiff" | "tif" | "hdr" | "cr2" | "cur" | "cursor" => Some("jpg"),
-        // Audio that browsers cannot play natively
-        "wma" | "aiff" | "aif" => Some("mp3"),
-        _ => None,
-    }
+    super::scan::needs_web_preview(filename)
 }
 
 /// GET /api/photos/:id/web
@@ -392,7 +342,9 @@ pub async fn serve_web(
             })?;
             let content_type = match ext {
                 "jpg" => "image/jpeg",
+                "png" => "image/png",
                 "mp3" => "audio/mpeg",
+                "mp4" => "video/mp4",
                 _ => "application/octet-stream",
             };
             let stream = tokio_util::io::ReaderStream::new(file);
@@ -439,172 +391,6 @@ pub async fn serve_web(
         )
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
-}
-
-/// POST /api/photos/upload
-/// Upload a plain photo/video/GIF file from a mobile client.
-/// The file body is sent as raw bytes with metadata in headers:
-///   X-Filename: original filename
-///   X-Mime-Type: MIME type (e.g., image/jpeg)
-///   Content-Length: file size in bytes
-///
-/// The server stores the file in the storage root and registers it as a plain photo.
-pub async fn upload_photo(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    let filename = headers
-        .get("X-Filename")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("{}.jpg", Uuid::new_v4()));
-
-    let mime_type = headers
-        .get("X-Mime-Type")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| mime_from_extension(&filename).to_string());
-
-    let media_type = if mime_type.starts_with("video/") {
-        "video"
-    } else if mime_type.starts_with("audio/") {
-        "audio"
-    } else if mime_type == "image/gif" {
-        "gif"
-    } else {
-        "photo"
-    };
-
-    let size_bytes = body.len() as i64;
-
-    // Sanitize filename — strip path separators, traversal, and dangerous chars
-    let safe_filename = sanitize::sanitize_filename(&filename);
-
-    // ── Content hash for cross-platform alignment ───────────────────────
-    let photo_hash = compute_photo_hash(&body);
-
-    // ── Content-aware dedup (hash-based) ────────────────────────────────
-    // If a photo with the identical content hash already exists for this
-    // user, return it immediately — no duplicate stored.
-    let existing: Option<(String, String, String, i64, Option<String>)> = sqlx::query_as(
-        "SELECT id, filename, file_path, size_bytes, photo_hash FROM photos \
-         WHERE user_id = ? AND photo_hash = ? LIMIT 1",
-    )
-    .bind(&auth.user_id)
-    .bind(&photo_hash)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    if let Some((eid, efn, efp, esz, ehash)) = existing {
-        tracing::info!(
-            user_id = %auth.user_id,
-            filename = %efn,
-            photo_hash = %photo_hash,
-            "Duplicate upload detected (hash match) — returning existing record"
-        );
-        return Ok((
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "photo_id": eid,
-                "filename": efn,
-                "file_path": efp,
-                "size_bytes": esz,
-                "photo_hash": ehash,
-            })),
-        ));
-    }
-
-    // Ensure unique filename if it already exists on disk (different content)
-    let storage_root = state.storage_root.read().await.clone();
-    let uploads_dir = storage_root.join("uploads");
-    tokio::fs::create_dir_all(&uploads_dir).await.map_err(|e| {
-        AppError::Internal(format!("Failed to create uploads directory: {}", e))
-    })?;
-
-    let mut final_filename = safe_filename.clone();
-    let mut counter = 1u32;
-    while tokio::fs::try_exists(uploads_dir.join(&final_filename))
-        .await
-        .unwrap_or(false)
-    {
-        let stem = std::path::Path::new(&safe_filename)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("file");
-        let ext = std::path::Path::new(&safe_filename)
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("jpg");
-        final_filename = format!("{}-{}.{}", stem, counter, ext);
-        counter += 1;
-    }
-
-    // Write file to disk
-    let file_path = uploads_dir.join(&final_filename);
-    tokio::fs::write(&file_path, &body).await.map_err(|e| {
-        AppError::Internal(format!("Failed to write photo file: {}", e))
-    })?;
-
-    // Relative path for DB storage
-    let rel_path = format!("uploads/{}", final_filename);
-
-    // Register in database
-    let photo_id = Uuid::new_v4().to_string();
-    let now = utc_now_iso();
-    let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
-
-    // Extract metadata from the uploaded bytes
-    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
-        extract_media_metadata_from_bytes(&body, &final_filename);
-
-    let final_taken_at = exif_taken
-        .map(|t| normalize_iso_timestamp(&t))
-        .unwrap_or_else(|| now.clone());
-
-    sqlx::query(
-        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .bind(&final_filename)
-    .bind(&rel_path)
-    .bind(&mime_type)
-    .bind(media_type)
-    .bind(size_bytes)
-    .bind(img_w)
-    .bind(img_h)
-    .bind(&final_taken_at)
-    .bind(exif_lat)
-    .bind(exif_lon)
-    .bind(&cam_model)
-    .bind(&thumb_rel)
-    .bind(&now)
-    .bind(&photo_hash)
-    .execute(&state.pool)
-    .await?;
-
-    tracing::info!(
-        user_id = %auth.user_id,
-        filename = %final_filename,
-        size = size_bytes,
-        photo_hash = %photo_hash,
-        "Uploaded photo via mobile client"
-    );
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "photo_id": photo_id,
-            "filename": final_filename,
-            "file_path": rel_path,
-            "size_bytes": size_bytes,
-            "photo_hash": photo_hash,
-        })),
-    ))
 }
 
 // ── Favorite Toggle ─────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
 import org.json.JSONObject
 import javax.inject.Inject
 
@@ -30,6 +31,7 @@ class PhotoViewerViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
     private val albumRepository: AlbumRepository,
     private val api: ApiService,
+    val okHttpClient: OkHttpClient,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 

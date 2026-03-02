@@ -73,11 +73,27 @@ export interface CachedFullPhoto {
   cachedAt: number;
 }
 
+/** A metadata-only "copy" of a photo/video/audio (encrypted mode only).
+ *  Plain-mode copies are stored server-side in the edit_copies table. */
+export interface CachedEditCopy {
+  /** Unique ID for this copy */
+  copyId: string;
+  /** The photo/video/audio this copy belongs to */
+  photoBlobId: string;
+  /** Display name for the copy */
+  name: string;
+  /** JSON string with edit metadata (crop, brightness, trim, etc.) */
+  editMetadata: string;
+  /** When this copy was created */
+  createdAt: number;
+}
+
 class SimplePhotosDB extends Dexie {
   photos!: Table<CachedPhoto, string>;
   albums!: Table<CachedAlbum, string>;
   trash!: Table<CachedTrashItem, string>;
   fullPhotos!: Table<CachedFullPhoto, string>;
+  editCopies!: Table<CachedEditCopy, string>;
 
   constructor() {
     super("simple-photos");
@@ -142,6 +158,15 @@ class SimplePhotosDB extends Dexie {
       albums: "albumId, name",
       trash: "trashId, blobId, deletedAt",
       fullPhotos: "photoId, cachedAt",
+    });
+
+    // v7 — added editCopies table for metadata-only "Save Copy" feature
+    this.version(7).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+      fullPhotos: "photoId, cachedAt",
+      editCopies: "copyId, photoBlobId, createdAt",
     });
   }
 }

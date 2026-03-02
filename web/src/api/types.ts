@@ -24,7 +24,31 @@ export interface ChangePasswordResponse {
 
 // ── Diagnostics types ────────────────────────────────────────────────────
 
+/** Server-side diagnostics configuration (admin controls) */
+export interface DiagnosticsConfig {
+  diagnostics_enabled: boolean;
+  client_diagnostics_enabled: boolean;
+}
+
+/** Request body for updating diagnostics configuration */
+export interface UpdateDiagnosticsConfigRequest {
+  diagnostics_enabled?: boolean;
+  client_diagnostics_enabled?: boolean;
+}
+
+/** Lightweight response when diagnostics collection is disabled */
+export interface DisabledDiagnosticsResponse {
+  enabled: false;
+  server: {
+    version: string;
+    uptime_seconds: number;
+    started_at: string;
+  };
+  message: string;
+}
+
 export interface DiagnosticsResponse {
+  enabled: true;
   server: {
     version: string;
     uptime_seconds: number;
@@ -155,3 +179,6 @@ export interface ClientLogParams {
   after?: string;
   limit?: number;
 }
+
+/** Union type for the diagnostics endpoint response */
+export type DiagnosticsResponseUnion = DiagnosticsResponse | DisabledDiagnosticsResponse;

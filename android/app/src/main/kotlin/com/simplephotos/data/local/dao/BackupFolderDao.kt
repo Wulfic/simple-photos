@@ -38,4 +38,7 @@ interface BackupFolderDao {
 
     @Query("SELECT bucketId FROM backup_folders")
     suspend fun getAllBucketIds(): List<Long>
+
+    @Query("DELETE FROM backup_folders")
+    suspend fun deleteAll()
 }
