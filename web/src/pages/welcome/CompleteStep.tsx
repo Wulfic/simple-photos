@@ -167,13 +167,13 @@ export default function CompleteStep({
               }
 
               // ── Normal setup tasks ────────────────────────────────────
-              // Step 1: Scan for existing files in plain mode first.
-              setRestoreStatus(isRestore ? "Scanning storage for existing files\u2026" : "");
-              await api.admin.scanAndRegister().catch(() => {
+              // Fire scan in background — it's slow (hashes, thumbnails, metadata)
+              // and the gallery will trigger auto-scan on mount anyway.
+              api.admin.scanAndRegister().catch(() => {
                 // Non-critical: if scan fails, user can trigger manually from Settings
               });
 
-              // Step 2: Set the encryption mode on the server.
+              // Set the encryption mode on the server (fast operation).
               await api.encryption.setMode(encryptionMode);
             } catch (err: unknown) {
               // Non-fatal: mode may already be set or endpoint unavailable

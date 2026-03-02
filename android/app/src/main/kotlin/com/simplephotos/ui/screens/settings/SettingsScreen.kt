@@ -91,6 +91,9 @@ class SettingsViewModel @Inject constructor(
             username = prefs[KEY_USERNAME] ?: ""
             diagnosticLogging = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
             biometricEnabled = prefs[KEY_BIOMETRIC_ENABLED] ?: false
+
+            // Sync diagnostic logging toggle with server config (best-effort)
+            syncDiagnosticsFromServer()
         }
         loadStorageStats()
         loadEncryptionSettings()
@@ -154,6 +157,36 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             diagnosticLogging = !diagnosticLogging
             dataStore.edit { it[KEY_DIAGNOSTIC_LOGGING] = diagnosticLogging }
+
+            // Best-effort: notify server of the client diagnostics state change
+            try {
+                withContext(Dispatchers.IO) {
+                    api.updateDiagnosticsConfig(
+                        UpdateDiagnosticsConfigRequest(
+                            clientDiagnosticsEnabled = diagnosticLogging
+                        )
+                    )
+                }
+            } catch (_: Exception) {
+                // Non-critical — local toggle still works independently
+            }
+        }
+    }
+
+    /**
+     * Sync local diagnostic logging toggle with the server's
+     * `client_diagnostics_enabled` setting. Best-effort — if the server
+     * is unreachable or the user isn't admin, the local toggle is unaffected.
+     */
+    private fun syncDiagnosticsFromServer() {
+        viewModelScope.launch {
+            try {
+                val config = withContext(Dispatchers.IO) { api.getDiagnosticsConfig() }
+                diagnosticLogging = config.clientDiagnosticsEnabled
+                dataStore.edit { it[KEY_DIAGNOSTIC_LOGGING] = diagnosticLogging }
+            } catch (_: Exception) {
+                // Best-effort — keep local value if server call fails
+            }
         }
     }
 

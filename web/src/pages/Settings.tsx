@@ -48,6 +48,11 @@ export default function Settings() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
 
+  // ── Audio backup setting ────────────────────────────────────────────────
+  const [audioBackupEnabled, setAudioBackupEnabled] = useState(false);
+  const [audioBackupLoading, setAudioBackupLoading] = useState(true);
+  const [togglingAudioBackup, setTogglingAudioBackup] = useState(false);
+
   // ── Storage stats state ─────────────────────────────────────────────────
   type StorageStats = {
     photo_bytes: number; photo_count: number;
@@ -94,6 +99,7 @@ export default function Settings() {
     loadEncryptionSettings();
     loadBackupServers();
     loadStorageStats();
+    loadAudioBackupSetting();
   }, [loadEncryptionSettings, loadBackupServers]);
 
   async function loadStorageStats() {
@@ -105,6 +111,18 @@ export default function Settings() {
       // Endpoint may not be available — silently skip
     } finally {
       setStorageLoading(false);
+    }
+  }
+
+  async function loadAudioBackupSetting() {
+    setAudioBackupLoading(true);
+    try {
+      const res = await api.backup.getAudioBackupSetting();
+      setAudioBackupEnabled(res.audio_backup_enabled);
+    } catch {
+      // Setting may not exist yet — default to false
+    } finally {
+      setAudioBackupLoading(false);
     }
   }
 
@@ -246,8 +264,8 @@ export default function Settings() {
         </section>
       )}
 
-      {/* ── Scan for New Files (admin, plain mode) ───────────────────────── */}
-      {isAdmin && encryptionMode === "plain" && !encryptionLoading && (
+      {/* ── Scan for New Files (admin) ────────────────────────────────── */}
+      {isAdmin && !encryptionLoading && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Scan for New Files</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
@@ -311,7 +329,7 @@ export default function Settings() {
                   setShowEncryptionWarning(true);
                 }}
                 disabled={togglingEncryption || migrationStatus !== "idle"}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
                   encryptionMode === "encrypted" ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
                 }`}
                 role="switch"
@@ -583,6 +601,53 @@ export default function Settings() {
       </section>
 
 
+
+      {/* ── Audio Backup ───────────────────────────────────────────────────── */}
+      {isAdmin && !audioBackupLoading && (
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+          <h2 className="text-lg font-semibold mb-3">Audio Backup</h2>
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Include Audio in Backups
+              </h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {audioBackupEnabled
+                  ? "Audio files (MP3, FLAC, WAV, etc.) are included when syncing to backup servers."
+                  : "Audio files are excluded from backup sync. Only photos and videos will be backed up."}
+              </p>
+            </div>
+            <button
+              onClick={async () => {
+                setTogglingAudioBackup(true);
+                setError("");
+                try {
+                  const newVal = !audioBackupEnabled;
+                  const res = await api.backup.setAudioBackupSetting(newVal);
+                  setAudioBackupEnabled(res.audio_backup_enabled);
+                  setSuccess(res.message);
+                } catch (err: any) {
+                  setError(err.message || "Failed to update audio backup setting.");
+                } finally {
+                  setTogglingAudioBackup(false);
+                }
+              }}
+              disabled={togglingAudioBackup}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
+                audioBackupEnabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
+              }`}
+              role="switch"
+              aria-checked={audioBackupEnabled}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  audioBackupEnabled ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+        </section>
+      )}
 
       <SslSettings error={error} setError={setError} success={success} setSuccess={setSuccess} />
 

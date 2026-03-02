@@ -209,4 +209,11 @@ interface ApiService {
     // ── Client Diagnostic Logs ───────────────────────────────────────────
     @POST("api/client-logs")
     suspend fun submitClientLogs(@Body batch: ClientLogBatch): Map<String, Any>
+
+    // ── Diagnostics Config (admin) ───────────────────────────────────────
+    @GET("api/admin/diagnostics/config")
+    suspend fun getDiagnosticsConfig(): DiagnosticsConfigResponse
+
+    @PUT("api/admin/diagnostics/config")
+    suspend fun updateDiagnosticsConfig(@Body request: UpdateDiagnosticsConfigRequest): DiagnosticsConfigResponse
 }

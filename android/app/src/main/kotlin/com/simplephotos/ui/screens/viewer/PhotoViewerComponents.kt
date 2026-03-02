@@ -28,11 +28,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
+import okhttp3.OkHttpClient
 import org.json.JSONObject
 
 // Parsed crop metadata for zoom/brightness transforms
@@ -54,6 +58,7 @@ internal fun PhotoPageContent(
     encryptionMode: String,
     serverBaseUrl: String,
     viewModel: PhotoViewerViewModel,
+    okHttpClient: OkHttpClient,
     editMode: Boolean = false,
     editBrightness: Float = 0f
 ) {
@@ -253,14 +258,15 @@ internal fun PhotoPageContent(
                 Text(decryptError ?: "Error", color = Color.White, modifier = Modifier.padding(16.dp))
             }
 
-            // ── Video ──────────────────────────────────────────────────
-            photo.mediaType == "video" -> {
-                val videoUri = when {
+            // ── Video / Audio ───────────────────────────────────────────
+            photo.mediaType == "video" || photo.mediaType == "audio" -> {
+                val mediaUri = when {
                     isPlainMode -> Uri.parse("$serverBaseUrl/api/photos/${photo.serverPhotoId}/file")
                     hasLocalPath -> Uri.parse(photo.localPath)
                     decryptedData != null -> {
+                        val ext = if (photo.mediaType == "audio") ".mp3" else ".mp4"
                         val tempFile = remember(photo.localId, decryptedData) {
-                            java.io.File.createTempFile("video_", ".mp4", context.cacheDir).apply {
+                            java.io.File.createTempFile("media_", ext, context.cacheDir).apply {
                                 writeBytes(decryptedData!!)
                                 deleteOnExit()
                             }
@@ -269,10 +275,10 @@ internal fun PhotoPageContent(
                     }
                     else -> null
                 }
-                if (videoUri != null) {
-                    VideoPlayer(uri = videoUri)
+                if (mediaUri != null) {
+                    VideoPlayer(uri = mediaUri, okHttpClient = okHttpClient)
                 } else {
-                    Text("Video not available", color = Color.White)
+                    Text("Media not available", color = Color.White)
                 }
             }
 
@@ -332,17 +338,23 @@ internal fun PhotoPageContent(
 }
 
 // ---------------------------------------------------------------------------
-// Video player composable (ExoPlayer)
+// Video/Audio player composable (ExoPlayer + OkHttp for auth)
 // ---------------------------------------------------------------------------
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-internal fun VideoPlayer(uri: Uri) {
+internal fun VideoPlayer(uri: Uri, okHttpClient: OkHttpClient) {
     val context = LocalContext.current
     val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(uri))
-            prepare()
-        }
+        val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .build()
+            .apply {
+                setMediaItem(MediaItem.fromUri(uri))
+                prepare()
+            }
     }
 
     DisposableEffect(Unit) {

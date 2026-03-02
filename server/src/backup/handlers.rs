@@ -461,6 +461,60 @@ pub async fn get_sync_logs(
     Ok(Json(logs))
 }
 
+// ── Audio Backup Setting ─────────────────────────────────────────────────────
+
+/// GET /api/settings/audio-backup
+/// Returns whether audio files are included in backup sync.
+pub async fn get_audio_backup_setting(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let enabled: String = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .unwrap_or_else(|| "false".to_string());
+
+    Ok(Json(serde_json::json!({
+        "audio_backup_enabled": enabled == "true",
+    })))
+}
+
+/// PUT /api/admin/audio-backup
+/// Toggle whether audio files are included in backup sync (admin only).
+pub async fn set_audio_backup_setting(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let enabled = body
+        .get("audio_backup_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('audio_backup_enabled', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(if enabled { "true" } else { "false" })
+    .execute(&state.pool)
+    .await?;
+
+    tracing::info!("Audio backup setting updated: enabled={}", enabled);
+
+    Ok(Json(serde_json::json!({
+        "audio_backup_enabled": enabled,
+        "message": if enabled {
+            "Audio files will be included in backups."
+        } else {
+            "Audio files will be excluded from backups."
+        },
+    })))
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 pub(super) async fn require_admin(state: &AppState, auth: &AuthUser) -> Result<(), AppError> {

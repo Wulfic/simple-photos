@@ -33,6 +33,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import com.simplephotos.data.repository.BackupFolderRepository
 import com.simplephotos.ui.navigation.NavGraph
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_BIOMETRIC_ENABLED
 import com.simplephotos.ui.theme.SimplePhotosTheme
@@ -152,15 +153,50 @@ class MainActivity : FragmentActivity() {
  * chooses the former, READ_MEDIA_IMAGES is *not* granted — the app only sees
  * the manually-selected items, which breaks folder discovery for backup.
  *
- * This gate detects that partial-access state and directs the user to the
- * system Settings page where they can upgrade to "Allow all".
+ * IMPORTANT: We use ContextCompat.checkSelfPermission() directly for the
+ * full/partial access decision — NOT Accompanist's allPermissionsGranted.
+ * Accompanist 0.34.0 has a known issue on Android 14+ where it can report
+ * allPermissionsGranted=true when only partial ("Select photos") access was
+ * granted, because the runtime result callback receives PERMISSION_GRANTED
+ * for compat reasons.  Direct system checks are the ground truth.
+ *
+ * Accompanist is still used solely to launch the permission request dialog.
  */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 private fun PermissionGate(content: @Composable () -> Unit) {
     val context = LocalContext.current
 
-    // Core media permissions we need for full access
+    // ── Counter incremented on ON_RESUME to force permission re-check ──
+    // When the user returns from system Settings, this triggers recomposition
+    // and re-evaluation of the actual permission state.
+    var permCheckTrigger by remember { mutableIntStateOf(0) }
+
+    // Direct system permission checks (NOT Accompanist)
+    val actualFullAccess = remember(permCheckTrigger) {
+        BackupFolderRepository.hasFullMediaAccess(context)
+    }
+
+    val actualPartialAccess = remember(permCheckTrigger, actualFullAccess) {
+        BackupFolderRepository.hasPartialMediaAccess(context)
+    }
+
+    val hasAnyAccess = actualFullAccess || actualPartialAccess
+
+    // Re-check permissions every time the activity resumes (e.g. returning from Settings)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                permCheckTrigger++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Accompanist is used ONLY for launching the system permission dialog.
+    // We do NOT trust its allPermissionsGranted for the gate decision.
     val mediaPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         listOf(
             Manifest.permission.READ_MEDIA_IMAGES,
@@ -169,35 +205,14 @@ private fun PermissionGate(content: @Composable () -> Unit) {
     } else {
         listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
-    val permissionsState = rememberMultiplePermissionsState(mediaPermissions)
-
-    // Re-check permissions when returning from system settings
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                // Force Accompanist to re-evaluate permission status.
-                // Unfortunately there's no public refresh, but re-requesting
-                // with already-granted perms is a no-op and triggers recompose.
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    // Detect partial access on Android 14+:
-    // READ_MEDIA_VISUAL_USER_SELECTED is granted but READ_MEDIA_IMAGES is not.
-    val hasPartialAccess = remember(permissionsState.allPermissionsGranted) {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
-            !permissionsState.allPermissionsGranted &&
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-            ) == PackageManager.PERMISSION_GRANTED
+    val permissionsState = rememberMultiplePermissionsState(mediaPermissions) {
+        // Callback fires after the system permission dialog is dismissed.
+        // Force an immediate re-check so we don't depend on Accompanist's state.
+        permCheckTrigger++
     }
 
     // Log permission state for diagnostics
-    LaunchedEffect(permissionsState.allPermissionsGranted, hasPartialAccess) {
+    LaunchedEffect(permCheckTrigger) {
         val readImages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
         } else null
@@ -208,8 +223,10 @@ private fun PermissionGate(content: @Composable () -> Unit) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
         } else null
         android.util.Log.i("PermissionGate",
-            "Permission state: allGranted=${permissionsState.allPermissionsGranted} " +
-            "hasPartialAccess=$hasPartialAccess " +
+            "Permission check #$permCheckTrigger: " +
+            "actualFullAccess=$actualFullAccess " +
+            "actualPartialAccess=$actualPartialAccess " +
+            "accompanistAllGranted=${permissionsState.allPermissionsGranted} " +
             "READ_MEDIA_IMAGES=$readImages " +
             "READ_MEDIA_VIDEO=$readVideo " +
             "VISUAL_USER_SELECTED=$visualUserSelected " +
@@ -218,85 +235,98 @@ private fun PermissionGate(content: @Composable () -> Unit) {
         )
     }
 
-    if (permissionsState.allPermissionsGranted) {
-        content()
-    } else if (hasPartialAccess) {
-        // User chose "Select photos and videos" — partial access.
-        // We can't re-request via the runtime dialog; must direct to Settings.
-        PartialAccessScreen(context)
-    } else {
-        // No access at all — request for the first time
-        LaunchedEffect(Unit) {
-            permissionsState.launchMultiplePermissionRequest()
+    when {
+        actualFullAccess -> {
+            content()
         }
+        actualPartialAccess -> {
+            // User chose "Select photos and videos" — partial access.
+            // We can't re-request via the runtime dialog; must direct to Settings.
+            PartialAccessScreen(context)
+        }
+        else -> {
+            // No access at all — request for the first time.
+            // Use a flag to only auto-launch the dialog once.
+            var hasLaunched by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) {
+                if (!hasLaunched) {
+                    hasLaunched = true
+                    permissionsState.launchMultiplePermissionRequest()
+                }
+            }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .systemBarsPadding(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    .systemBarsPadding(),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_image),
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_image),
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
 
-                Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(24.dp))
 
-                Text(
-                    "Media Access Required",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-
-                Spacer(Modifier.height(12.dp))
-
-                Text(
-                    "Simple Photos needs full access to your photos and videos to discover all folders, back up, and manage your media library.\n\nWhen prompted, please choose \"Allow all\".",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(Modifier.height(32.dp))
-
-                if (permissionsState.shouldShowRationale) {
-                    Button(
-                        onClick = { permissionsState.launchMultiplePermissionRequest() },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Grant Full Access", modifier = Modifier.padding(vertical = 4.dp))
-                    }
-                } else {
                     Text(
-                        "Permissions were denied. Please grant full media access in app settings.",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.error,
+                        "Media Access Required",
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Text(
+                        "Simple Photos needs full access to your photos and videos to discover all folders, back up, and manage your media library.\n\nWhen prompted, please choose \"Allow all\".",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
-                    Spacer(Modifier.height(16.dp))
-                    Button(
-                        onClick = {
-                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = Uri.fromParts("package", context.packageName, null)
+
+                    Spacer(Modifier.height(32.dp))
+
+                    // After the dialog has been dismissed without granting,
+                    // check if we can re-request or need to go to Settings.
+                    if (hasLaunched && !hasAnyAccess) {
+                        if (permissionsState.shouldShowRationale) {
+                            Button(
+                                onClick = { permissionsState.launchMultiplePermissionRequest() },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Grant Full Access", modifier = Modifier.padding(vertical = 4.dp))
                             }
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Open Settings", modifier = Modifier.padding(vertical = 4.dp))
+                        } else {
+                            Text(
+                                "Permissions were denied. Please grant full media access in app settings.",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.fromParts("package", context.packageName, null)
+                                    }
+                                    context.startActivity(intent)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Open Settings", modifier = Modifier.padding(vertical = 4.dp))
+                            }
+                        }
                     }
                 }
             }

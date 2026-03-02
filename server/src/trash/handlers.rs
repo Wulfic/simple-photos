@@ -398,20 +398,43 @@ pub async fn permanent_delete(
 
     let (file_path, thumb_path) = item.ok_or(AppError::NotFound)?;
 
-    // Delete files from disk
+    // Only delete files from disk if no other photo row references the same
+    // file_path (which happens when the user duplicates a photo via "Save Copy").
     let storage_root = state.storage_root.read().await.clone();
-    let full_path = storage_root.join(&file_path);
-    if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
-        if let Err(e) = tokio::fs::remove_file(&full_path).await {
-            tracing::warn!("Failed to delete photo file {}: {}", file_path, e);
+
+    let other_refs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE file_path = ?",
+    )
+    .bind(&file_path)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+
+    if other_refs == 0 {
+        let full_path = storage_root.join(&file_path);
+        if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
+            if let Err(e) = tokio::fs::remove_file(&full_path).await {
+                tracing::warn!("Failed to delete photo file {}: {}", file_path, e);
+            }
         }
     }
 
     if let Some(ref tp) = thumb_path {
-        let thumb_full = storage_root.join(tp);
-        if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
-            if let Err(e) = tokio::fs::remove_file(&thumb_full).await {
-                tracing::warn!("Failed to delete thumbnail {}: {}", tp, e);
+        // Also check thumb_path references
+        let other_thumb_refs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
+        )
+        .bind(tp)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+
+        if other_thumb_refs == 0 {
+            let thumb_full = storage_root.join(tp);
+            if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
+                if let Err(e) = tokio::fs::remove_file(&thumb_full).await {
+                    tracing::warn!("Failed to delete thumbnail {}: {}", tp, e);
+                }
             }
         }
     }
@@ -446,14 +469,36 @@ pub async fn empty_trash(
     let mut deleted_count = 0i64;
 
     for (file_path, thumb_path) in &items {
-        let full_path = storage_root.join(file_path);
-        if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
-            let _ = tokio::fs::remove_file(&full_path).await;
+        // Only delete file if no other photo row references it (Save Copy shares files)
+        let other_refs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photos WHERE file_path = ?",
+        )
+        .bind(file_path)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+
+        if other_refs == 0 {
+            let full_path = storage_root.join(file_path);
+            if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
+                let _ = tokio::fs::remove_file(&full_path).await;
+            }
         }
+
         if let Some(tp) = thumb_path {
-            let thumb_full = storage_root.join(tp);
-            if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
-                let _ = tokio::fs::remove_file(&thumb_full).await;
+            let other_thumb_refs: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
+            )
+            .bind(tp)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(0);
+
+            if other_thumb_refs == 0 {
+                let thumb_full = storage_root.join(tp);
+                if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
+                    let _ = tokio::fs::remove_file(&thumb_full).await;
+                }
             }
         }
         deleted_count += 1;
@@ -551,15 +596,36 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
     let mut purged = 0i64;
 
     for (id, file_path, thumb_path) in &expired {
-        // Delete files from disk
-        let full_path = storage_root.join(file_path);
-        if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
-            let _ = tokio::fs::remove_file(&full_path).await;
+        // Only delete files if no other photo row still references them
+        let other_refs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photos WHERE file_path = ?",
+        )
+        .bind(file_path)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+
+        if other_refs == 0 {
+            let full_path = storage_root.join(file_path);
+            if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
+                let _ = tokio::fs::remove_file(&full_path).await;
+            }
         }
+
         if let Some(tp) = thumb_path {
-            let thumb_full = storage_root.join(tp);
-            if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
-                let _ = tokio::fs::remove_file(&thumb_full).await;
+            let other_thumb_refs: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
+            )
+            .bind(tp)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
+            if other_thumb_refs == 0 {
+                let thumb_full = storage_root.join(tp);
+                if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
+                    let _ = tokio::fs::remove_file(&thumb_full).await;
+                }
             }
         }
 

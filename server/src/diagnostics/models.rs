@@ -1,9 +1,20 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Diagnostics configuration — controls whether expensive metrics collection runs.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DiagnosticsConfig {
+    /// Master toggle for server-side diagnostics collection (disk walks, table counts, etc.)
+    pub diagnostics_enabled: bool,
+    /// Whether web and mobile clients should collect and send diagnostic logs
+    pub client_diagnostics_enabled: bool,
+}
 
 /// Top-level diagnostics response combining all server metrics.
 #[derive(Debug, Serialize)]
 pub struct DiagnosticsResponse {
+    /// Whether diagnostics collection is enabled
+    pub enabled: bool,
     pub server: ServerInfo,
     pub database: DatabaseStats,
     pub storage: StorageStats,
@@ -13,6 +24,23 @@ pub struct DiagnosticsResponse {
     pub client_logs: ClientLogSummary,
     pub backup: BackupSummary,
     pub performance: PerformanceStats,
+}
+
+/// Lightweight response returned when diagnostics collection is disabled.
+/// Still provides basic server identity info without expensive queries.
+#[derive(Debug, Serialize)]
+pub struct DisabledDiagnosticsResponse {
+    pub enabled: bool,
+    pub server: BasicServerInfo,
+    pub message: String,
+}
+
+/// Minimal server info returned when diagnostics are disabled.
+#[derive(Debug, Serialize)]
+pub struct BasicServerInfo {
+    pub version: String,
+    pub uptime_seconds: u64,
+    pub started_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -159,4 +187,58 @@ pub struct ServerLogEntry {
     pub timestamp: String,
     pub level: String,
     pub message: String,
+}
+
+/// Wrapper for the toggle request body
+#[derive(Debug, Deserialize)]
+pub struct UpdateDiagnosticsConfigRequest {
+    pub diagnostics_enabled: Option<bool>,
+    pub client_diagnostics_enabled: Option<bool>,
+}
+
+// ── External API response models ──────────────────────────────────────────
+
+/// Lightweight health check for external monitoring systems.
+#[derive(Debug, Serialize)]
+pub struct ExternalHealthResponse {
+    pub status: String,
+    pub version: String,
+    pub uptime_seconds: u64,
+    pub started_at: String,
+    pub memory_rss_bytes: u64,
+    pub cpu_seconds: f64,
+    pub db_ping_ms: f64,
+    pub disk_used_percent: f64,
+    pub total_photos: i64,
+    pub total_users: i64,
+}
+
+/// Storage-focused response for capacity monitoring.
+#[derive(Debug, Serialize)]
+pub struct ExternalStorageResponse {
+    pub storage: StorageStats,
+    pub photos: ExternalPhotoStorageStats,
+    pub database: ExternalDatabaseSize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExternalPhotoStorageStats {
+    pub total_photos: i64,
+    pub total_file_bytes: i64,
+    pub total_thumb_bytes: i64,
+    pub photos_by_media_type: HashMap<String, i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExternalDatabaseSize {
+    pub size_bytes: u64,
+    pub wal_size_bytes: u64,
+}
+
+/// Audit/security-focused response for SIEM integration.
+#[derive(Debug, Serialize)]
+pub struct ExternalAuditResponse {
+    pub audit: AuditSummary,
+    pub users: UserStats,
+    pub client_logs: ClientLogSummary,
 }

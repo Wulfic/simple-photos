@@ -6,32 +6,35 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Screenshot
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.MultiplePermissionsState
-import com.google.accompanist.permissions.isGranted
-import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.simplephotos.data.local.entities.BackupFolderEntity
 import com.simplephotos.data.repository.BackupFolderRepository
 import com.simplephotos.data.repository.DeviceFolder
+import com.simplephotos.data.repository.PermissionDiagnostics
 import com.simplephotos.data.repository.SyncRepository
 import com.simplephotos.sync.SyncScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -44,6 +47,9 @@ import androidx.compose.ui.res.painterResource
  * ViewModel for the folder selection screen.
  * Scans the device for folders containing media and shows which ones
  * are enabled for automatic backup.
+ *
+ * Uses direct ContextCompat.checkSelfPermission() instead of Accompanist
+ * to avoid the Android 14+ Accompanist permission-reporting bug.
  */
 @HiltViewModel
 class FolderSelectionViewModel @Inject constructor(
@@ -60,6 +66,10 @@ class FolderSelectionViewModel @Inject constructor(
         private set
     var error by mutableStateOf<String?>(null)
         private set
+    var diagnostics by mutableStateOf<PermissionDiagnostics?>(null)
+        private set
+    var showDiagnosticPanel by mutableStateOf(false)
+        private set
 
     // Observe saved folders from the database
     val savedFolders = backupFolderRepository.getSelectedFolders()
@@ -69,16 +79,22 @@ class FolderSelectionViewModel @Inject constructor(
         // The screen will call scanFolders() after permissions are confirmed.
     }
 
-    /** Called by the Screen once permissions have been granted. */
+    /** Refresh the diagnostic snapshot (call on resume). */
+    fun refreshDiagnostics() {
+        diagnostics = backupFolderRepository.getPermissionDiagnostics()
+        android.util.Log.i("FolderSelection", "refreshDiagnostics: ${diagnostics?.toLogString()}")
+    }
+
+    /** Called by the Screen once permissions have been confirmed via direct system check. */
     fun scanFolders() {
         if (loading) return           // already scanning
         viewModelScope.launch {
             loading = true
             error = null
             try {
-                // Log permission state at scan time
-                val permSnapshot = backupFolderRepository.getPermissionSnapshot()
-                android.util.Log.i("FolderSelection", "scanFolders: permissions=$permSnapshot, API=${android.os.Build.VERSION.SDK_INT}")
+                // Refresh diagnostics
+                diagnostics = backupFolderRepository.getPermissionDiagnostics()
+                android.util.Log.i("FolderSelection", "scanFolders: ${diagnostics?.toLogString()}")
 
                 // Initialize defaults if first launch
                 backupFolderRepository.initializeDefaultsIfNeeded()
@@ -92,7 +108,9 @@ class FolderSelectionViewModel @Inject constructor(
                 android.util.Log.i("FolderSelection", "scanFolders: ${enabledBucketIds.size} folders enabled, bucketIds=$enabledBucketIds")
 
                 if (deviceFolders.size <= 1) {
-                    android.util.Log.w("FolderSelection", "scanFolders: WARNING — only ${deviceFolders.size} folder(s) found. This likely indicates a permission issue on Android ${android.os.Build.VERSION.SDK_INT}.")
+                    android.util.Log.w("FolderSelection", "scanFolders: WARNING — only ${deviceFolders.size} folder(s) found. Likely a permission issue.")
+                    // Auto-show diagnostic panel when results look wrong
+                    showDiagnosticPanel = true
                 }
             } catch (e: Exception) {
                 android.util.Log.e("FolderSelection", "scanFolders failed", e)
@@ -101,6 +119,40 @@ class FolderSelectionViewModel @Inject constructor(
                 loading = false
             }
         }
+    }
+
+    /**
+     * Wipe the folder DB and rescan from scratch.
+     * Use when folder discovery appears broken (e.g. after permission changes).
+     */
+    fun resetAndRescan() {
+        viewModelScope.launch {
+            loading = true
+            error = null
+            showDiagnosticPanel = false
+            try {
+                diagnostics = backupFolderRepository.getPermissionDiagnostics()
+                android.util.Log.w("FolderSelection", "resetAndRescan: ${diagnostics?.toLogString()}")
+
+                deviceFolders = backupFolderRepository.resetAndRescan()
+                enabledBucketIds = backupFolderRepository.getEnabledBucketIds().toSet()
+
+                android.util.Log.i("FolderSelection", "resetAndRescan: found ${deviceFolders.size} folders, ${enabledBucketIds.size} enabled")
+
+                if (deviceFolders.size <= 1) {
+                    showDiagnosticPanel = true
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("FolderSelection", "resetAndRescan failed", e)
+                error = "Failed to reset & rescan: ${e.message}"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    fun toggleDiagnosticPanel() {
+        showDiagnosticPanel = !showDiagnosticPanel
     }
 
     fun toggleFolder(folder: DeviceFolder) {
@@ -129,7 +181,7 @@ class FolderSelectionViewModel @Inject constructor(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FolderSelectionScreen(
     onBack: () -> Unit,
@@ -137,32 +189,35 @@ fun FolderSelectionScreen(
 ) {
     val context = LocalContext.current
 
-    // Check for full media access (READ_MEDIA_IMAGES granted, not just partial)
-    val mediaPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        listOf(
-            Manifest.permission.READ_MEDIA_IMAGES,
-            Manifest.permission.READ_MEDIA_VIDEO
-        )
-    } else {
-        listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-    }
-    val permissionsState = rememberMultiplePermissionsState(mediaPermissions)
+    // ── Direct system permission checks (NOT Accompanist) ──────────────
+    // This avoids the Accompanist 0.34.0 bug on Android 14+ where
+    // allPermissionsGranted can be true with only partial access.
+    var permCheckTrigger by remember { mutableIntStateOf(0) }
 
-    val hasFullAccess = permissionsState.allPermissionsGranted
-
-    // Detect Android 14+ partial access: READ_MEDIA_VISUAL_USER_SELECTED is
-    // granted (user chose "Select photos") but READ_MEDIA_IMAGES is not.
-    val hasPartialAccess = remember(hasFullAccess) {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
-            !hasFullAccess &&
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-            ) == PackageManager.PERMISSION_GRANTED
+    val hasFullAccess = remember(permCheckTrigger) {
+        BackupFolderRepository.hasFullMediaAccess(context)
     }
 
-    // When full permissions are granted, trigger the scan exactly once
-    LaunchedEffect(hasFullAccess) {
+    val hasPartialAccess = remember(permCheckTrigger, hasFullAccess) {
+        BackupFolderRepository.hasPartialMediaAccess(context)
+    }
+
+    // Re-check permissions on resume (e.g. returning from system Settings)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                permCheckTrigger++
+                viewModel.refreshDiagnostics()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // When full permissions are confirmed, trigger the scan.
+    // Also re-scan if permCheckTrigger changes (user returned from Settings).
+    LaunchedEffect(hasFullAccess, permCheckTrigger) {
         if (hasFullAccess) {
             viewModel.scanFolders()
         }
@@ -176,6 +231,14 @@ fun FolderSelectionScreen(
                     IconButton(onClick = onBack) {
                         Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", modifier = Modifier.size(24.dp))
                     }
+                },
+                actions = {
+                    // Rescan button — always available when we have access
+                    if (hasFullAccess) {
+                        IconButton(onClick = { viewModel.resetAndRescan() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Rescan folders")
+                        }
+                    }
                 }
             )
         }
@@ -188,15 +251,16 @@ fun FolderSelectionScreen(
             when {
                 hasFullAccess -> {
                     // ── Full access — show folder list ─────────────────
-                    FolderListContent(viewModel)
+                    FolderListContent(viewModel, context)
                 }
                 hasPartialAccess -> {
                     // ── Partial access — user chose "Select photos" ────
                     PartialAccessBanner(context)
                 }
                 else -> {
-                    // ── No access — request permission ─────────────────
-                    PermissionRequest(permissionsState)
+                    // ── No access — shouldn't reach here (PermissionGate
+                    //    in MainActivity blocks), but handle gracefully ──
+                    NoAccessBanner(context)
                 }
             }
         }
@@ -204,16 +268,11 @@ fun FolderSelectionScreen(
 }
 
 // ---------------------------------------------------------------------------
-// Permission request UI
+// No-access fallback (shouldn't normally appear — PermissionGate blocks first)
 // ---------------------------------------------------------------------------
 
-@OptIn(ExperimentalPermissionsApi::class)
 @Composable
-private fun PermissionRequest(permissionsState: MultiplePermissionsState) {
-    val context = LocalContext.current
-    val permanentlyDenied = !permissionsState.shouldShowRationale &&
-        permissionsState.revokedPermissions.isNotEmpty()
-
+private fun NoAccessBanner(context: android.content.Context) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -244,34 +303,20 @@ private fun PermissionRequest(permissionsState: MultiplePermissionsState) {
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Simple Photos needs access to your photos and videos to discover folders available for backup.",
+                    "Simple Photos needs access to your photos and videos to discover folders available for backup.\n\n" +
+                        "Please grant full media access in system Settings.",
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(20.dp))
-
-                if (permanentlyDenied) {
-                    // User selected "Don't ask again" — direct them to system settings
-                    Text(
-                        "Permission was denied. Please enable it in system Settings.",
-                        style = MaterialTheme.typography.bodySmall,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = {
-                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = Uri.fromParts("package", context.packageName, null)
-                        }
-                        context.startActivity(intent)
-                    }) {
-                        Text("Open Settings")
+                Button(onClick = {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
                     }
-                } else {
-                    Button(onClick = { permissionsState.launchMultiplePermissionRequest() }) {
-                        Text("Grant Access")
-                    }
+                    context.startActivity(intent)
+                }) {
+                    Text("Open Settings")
                 }
             }
         }
@@ -317,7 +362,7 @@ private fun PartialAccessBanner(context: android.content.Context) {
                 Text(
                     "You've granted partial photo access (\"Select photos\"). " +
                         "Simple Photos needs full access to discover all folders on your device.\n\n" +
-                        "Open Settings → Permissions → Photos and Videos → choose \"Allow all\".",
+                        "Open Settings \u2192 Permissions \u2192 Photos and Videos \u2192 choose \"Allow all\".",
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
@@ -338,7 +383,7 @@ private fun PartialAccessBanner(context: android.content.Context) {
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "After changing the permission, return here.",
+                    "After changing the permission, return here and it will rescan automatically.",
                     style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
@@ -353,7 +398,10 @@ private fun PartialAccessBanner(context: android.content.Context) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun FolderListContent(viewModel: FolderSelectionViewModel) {
+private fun FolderListContent(
+    viewModel: FolderSelectionViewModel,
+    context: android.content.Context
+) {
     // Header info
     Card(
         modifier = Modifier
@@ -378,6 +426,38 @@ private fun FolderListContent(viewModel: FolderSelectionViewModel) {
         }
     }
 
+    // ── Diagnostic panel — auto-shown when few folders found ───────────
+    val diag = viewModel.diagnostics
+    AnimatedVisibility(visible = viewModel.showDiagnosticPanel && diag != null) {
+        if (diag != null) {
+            DiagnosticPanel(diag, viewModel, context)
+        }
+    }
+
+    // Toggle diagnostic panel link
+    if (diag != null && !viewModel.loading) {
+        TextButton(
+            onClick = { viewModel.toggleDiagnosticPanel() },
+            modifier = Modifier.padding(horizontal = 16.dp)
+        ) {
+            Icon(
+                Icons.Default.Warning,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = if (viewModel.deviceFolders.size <= 1) MaterialTheme.colorScheme.error
+                       else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (viewModel.showDiagnosticPanel) "Hide diagnostics"
+                else "Show diagnostics (${viewModel.deviceFolders.size} folders found)",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (viewModel.deviceFolders.size <= 1) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
     when {
         viewModel.loading -> {
             Box(
@@ -397,11 +477,17 @@ private fun FolderListContent(viewModel: FolderSelectionViewModel) {
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    viewModel.error ?: "Unknown error",
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(16.dp)
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        viewModel.error ?: "Unknown error",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { viewModel.resetAndRescan() }) {
+                        Text("Retry")
+                    }
+                }
             }
         }
 
@@ -410,10 +496,18 @@ private fun FolderListContent(viewModel: FolderSelectionViewModel) {
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    "No media folders found on this device.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "No media folders found on this device.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(onClick = { viewModel.resetAndRescan() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Reset & Rescan")
+                    }
+                }
             }
         }
 
@@ -440,6 +534,118 @@ private fun FolderListContent(viewModel: FolderSelectionViewModel) {
                         isEnabled = folder.bucketId in viewModel.enabledBucketIds,
                         onToggle = { viewModel.toggleFolder(folder) }
                     )
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic panel — shows raw permission state for debugging
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun DiagnosticPanel(
+    diag: PermissionDiagnostics,
+    viewModel: FolderSelectionViewModel,
+    context: android.content.Context
+) {
+    val isLikelyBroken = !diag.hasFullAccess || viewModel.deviceFolders.size <= 1
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isLikelyBroken) MaterialTheme.colorScheme.errorContainer
+                             else MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                "Permission Diagnostics",
+                style = MaterialTheme.typography.titleSmall,
+                color = if (isLikelyBroken) MaterialTheme.colorScheme.onErrorContainer
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+
+            val textColor = if (isLikelyBroken) MaterialTheme.colorScheme.onErrorContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+
+            Text("Android API: ${diag.apiLevel}", style = MaterialTheme.typography.bodySmall, color = textColor)
+            diag.readMediaImages?.let {
+                val status = if (it) "\u2705 GRANTED" else "\u274C DENIED"
+                Text("READ_MEDIA_IMAGES: $status", style = MaterialTheme.typography.bodySmall, color = textColor)
+            }
+            diag.readMediaVideo?.let {
+                val status = if (it) "\u2705 GRANTED" else "\u274C DENIED"
+                Text("READ_MEDIA_VIDEO: $status", style = MaterialTheme.typography.bodySmall, color = textColor)
+            }
+            diag.readMediaVisualUserSelected?.let {
+                val status = if (it) "\u2705 GRANTED" else "\u274C DENIED"
+                Text("VISUAL_USER_SELECTED: $status", style = MaterialTheme.typography.bodySmall, color = textColor)
+            }
+            diag.readExternalStorage?.let {
+                val status = if (it) "\u2705 GRANTED" else "\u274C DENIED"
+                Text("READ_EXTERNAL_STORAGE: $status", style = MaterialTheme.typography.bodySmall, color = textColor)
+            }
+
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Full access: ${if (diag.hasFullAccess) "YES" else "NO"}" +
+                    "  |  Partial access: ${if (diag.hasPartialAccess) "YES" else "NO"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = textColor
+            )
+            Text(
+                "Folders found: ${viewModel.deviceFolders.size}",
+                style = MaterialTheme.typography.bodySmall,
+                color = textColor
+            )
+
+            if (isLikelyBroken) {
+                Spacer(Modifier.height(8.dp))
+                if (diag.hasPartialAccess || diag.readMediaImages == false) {
+                    Text(
+                        "\u26A0 You likely have partial access (\"Select photos\"). " +
+                            "Go to Settings \u2192 Permissions \u2192 Photos & Videos \u2192 \"Allow all\".",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    Text(
+                        "\u26A0 Permissions look correct but few folders were found. " +
+                            "Try \"Reset & Rescan\" below.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.resetAndRescan() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Reset & Rescan", style = MaterialTheme.typography.labelSmall)
+                }
+                OutlinedButton(
+                    onClick = {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                        }
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Open Settings", style = MaterialTheme.typography.labelSmall)
                 }
             }
         }

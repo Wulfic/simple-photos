@@ -26,6 +26,29 @@ data class DeviceFolder(
 )
 
 /**
+ * Detailed permission diagnostics for debugging folder-discovery issues.
+ * Shown in the folder-selection screen's diagnostic panel.
+ */
+data class PermissionDiagnostics(
+    val apiLevel: Int,
+    val readMediaImages: Boolean?,
+    val readMediaVideo: Boolean?,
+    val readMediaVisualUserSelected: Boolean?,
+    val readExternalStorage: Boolean?,
+    val hasFullAccess: Boolean,
+    val hasPartialAccess: Boolean
+) {
+    fun toLogString(): String = buildString {
+        append("API=$apiLevel")
+        readMediaImages?.let { append(" READ_MEDIA_IMAGES=$it") }
+        readMediaVideo?.let { append(" READ_MEDIA_VIDEO=$it") }
+        readMediaVisualUserSelected?.let { append(" VISUAL_USER_SELECTED=$it") }
+        readExternalStorage?.let { append(" READ_EXTERNAL_STORAGE=$it") }
+        append(" fullAccess=$hasFullAccess partialAccess=$hasPartialAccess")
+    }
+}
+
+/**
  * Manages which device folders are selected for automatic backup.
  *
  * On first launch, the default selection is DCIM/Camera only.
@@ -55,6 +78,43 @@ class BackupFolderRepository @Inject constructor(
             "Download",
             "Movies"
         )
+
+        /**
+         * Direct system check for full media access.
+         * Does NOT rely on Accompanist — uses ContextCompat.checkSelfPermission().
+         *
+         * On Android 14+ with READ_MEDIA_VISUAL_USER_SELECTED declared in the
+         * manifest, Accompanist can incorrectly report allPermissionsGranted=true
+         * when only partial ("Select photos") access was granted.  This function
+         * always returns the ground truth.
+         */
+        fun hasFullMediaAccess(context: Context): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.READ_MEDIA_IMAGES
+                ) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.READ_MEDIA_VIDEO
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.READ_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+
+        /**
+         * Detect Android 14+ partial access: the user chose "Select photos"
+         * instead of "Allow all", so READ_MEDIA_VISUAL_USER_SELECTED is
+         * granted but READ_MEDIA_IMAGES is not.
+         */
+        fun hasPartialMediaAccess(context: Context): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
+            if (hasFullMediaAccess(context)) return false
+            return ContextCompat.checkSelfPermission(
+                context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            ) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     /**
@@ -82,6 +142,37 @@ class BackupFolderRepository @Inject constructor(
             ) == PackageManager.PERMISSION_GRANTED
         }
         return perms
+    }
+
+    /**
+     * Full permission diagnostics for the folder selection UI diagnostic panel.
+     */
+    fun getPermissionDiagnostics(): PermissionDiagnostics {
+        val readImages = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else null
+        val readVideo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        } else null
+        val visualUserSelected = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+        } else null
+        val readExternal = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        } else null
+
+        val fullAccess = hasFullMediaAccess(context)
+        val partialAccess = hasPartialMediaAccess(context)
+
+        return PermissionDiagnostics(
+            apiLevel = Build.VERSION.SDK_INT,
+            readMediaImages = readImages,
+            readMediaVideo = readVideo,
+            readMediaVisualUserSelected = visualUserSelected,
+            readExternalStorage = readExternal,
+            hasFullAccess = fullAccess,
+            hasPartialAccess = partialAccess
+        )
     }
 
     fun getSelectedFolders(): Flow<List<BackupFolderEntity>> =
@@ -343,5 +434,23 @@ class BackupFolderRepository @Inject constructor(
      */
     suspend fun toggleFolder(bucketId: Long, enabled: Boolean) {
         db.backupFolderDao().setEnabled(bucketId, enabled)
+    }
+
+    /**
+     * Wipe the folder database and reinitialize from a fresh device scan.
+     * Use after a permission change (e.g. partial → full access) or when
+     * folder discovery appears broken.
+     *
+     * Returns the freshly-discovered device folders.
+     */
+    suspend fun resetAndRescan(): List<DeviceFolder> {
+        val diag = getPermissionDiagnostics()
+        Log.w(TAG, "resetAndRescan: WIPING folder database — ${diag.toLogString()}")
+        db.backupFolderDao().deleteAll()
+        Log.i(TAG, "resetAndRescan: folder table cleared, running initializeDefaultsIfNeeded")
+        initializeDefaultsIfNeeded()
+        val folders = scanDeviceFolders()
+        Log.i(TAG, "resetAndRescan: complete — found ${folders.size} folders")
+        return folders
     }
 }

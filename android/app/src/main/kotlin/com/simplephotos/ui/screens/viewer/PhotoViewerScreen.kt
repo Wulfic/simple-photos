@@ -263,6 +263,7 @@ fun PhotoViewerScreen(
                     encryptionMode = viewModel.encryptionMode,
                     serverBaseUrl = viewModel.serverBaseUrl,
                     viewModel = viewModel,
+                    okHttpClient = viewModel.okHttpClient,
                     editMode = editMode,
                     editBrightness = brightnessValue
                 )
@@ -421,7 +422,8 @@ fun PhotoViewerScreen(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_star),
                                     contentDescription = if (viewModel.isFavorite) "Unfavorite" else "Favorite",
-                                    tint = if (viewModel.isFavorite) Color(0xFFFBBF24) else Color.White
+                                    tint = if (viewModel.isFavorite) Color(0xFFFBBF24) else Color.White,
+                                    modifier = Modifier.size(12.dp)
                                 )
                             }
                         }

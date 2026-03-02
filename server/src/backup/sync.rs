@@ -94,17 +94,31 @@ async fn run_sync(
     let mut photos_synced = 0i64;
     let mut bytes_synced = 0i64;
 
-    // 1. Sync photos from the photos table
-    let photos: Vec<(String, String, i64)> = match sqlx::query_as(
-        "SELECT id, file_path, size_bytes FROM photos",
+    // Check whether audio files should be included in sync
+    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
     )
-    .fetch_all(pool)
+    .fetch_optional(pool)
     .await
-    {
-        Ok(p) => p,
-        Err(e) => {
-            update_sync_log(pool, log_id, "error", 0, 0, Some(&e.to_string())).await;
-            return;
+    .ok()
+    .flatten()
+    .map(|v| v == "true")
+    .unwrap_or(false);
+
+    // 1. Sync photos from the photos table
+    // Conditionally exclude audio files based on the audio_backup_enabled setting
+    let photos: Vec<(String, String, i64)> = {
+        let query = if audio_backup_enabled {
+            "SELECT id, file_path, size_bytes FROM photos"
+        } else {
+            "SELECT id, file_path, size_bytes FROM photos WHERE media_type != 'audio'"
+        };
+        match sqlx::query_as(query).fetch_all(pool).await {
+            Ok(p) => p,
+            Err(e) => {
+                update_sync_log(pool, log_id, "error", 0, 0, Some(&e.to_string())).await;
+                return;
+            }
         }
     };
 

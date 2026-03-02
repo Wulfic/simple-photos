@@ -30,6 +30,11 @@ async fn compute_photo_hash_streaming(path: &Path) -> Option<String> {
     Some(hex::encode(&hasher.finalize()[..6]))
 }
 
+/// Check if FFmpeg is available on the system (public for background convert task).
+pub async fn ffmpeg_available_pub() -> bool {
+    ffmpeg_available().await
+}
+
 /// Check if FFmpeg is available on the system.
 async fn ffmpeg_available() -> bool {
     tokio::process::Command::new("ffmpeg")
@@ -137,20 +142,33 @@ async fn generate_thumbnail_file(input_path: &Path, output_path: &Path, mime: &s
 }
 
 /// Returns the web preview file extension if this format is not browser-native.
-/// Images → "jpg", Audio → "mp3", Videos → None (too expensive to pre-convert).
-fn needs_web_preview(filename: &str) -> Option<&'static str> {
+/// Images → "jpg", Audio → "mp3", Videos → "mp4".
+pub fn needs_web_preview(filename: &str) -> Option<&'static str> {
     let ext = filename.rsplit('.').next()?.to_ascii_lowercase();
     match ext.as_str() {
         // Images that browsers cannot display natively
-        "heic" | "heif" | "tiff" | "tif" | "hdr" | "cr2" | "cur" | "cursor" => Some("jpg"),
+        "heic" | "heif" | "tiff" | "tif" | "hdr" | "cr2" | "cur" | "cursor"
+        | "dng" | "nef" | "arw" | "raw" => Some("jpg"),
+        // SVG → rasterized PNG for consistent rendering
+        "svg" => Some("png"),
         // Audio that browsers cannot play natively
         "wma" | "aiff" | "aif" => Some("mp3"),
+        // Video containers that browsers cannot play natively
+        "mkv" | "avi" | "wmv" | "asf" | "hevc" | "h264" | "h265"
+        | "mpg" | "mpeg" | "3gp" | "mov" | "m4v" => Some("mp4"),
         _ => None,
     }
 }
 
+/// Public wrapper for background conversion task.
+pub async fn generate_web_preview_bg(input_path: &Path, output_path: &Path, preview_ext: &str) -> bool {
+    generate_web_preview(input_path, output_path, preview_ext).await
+}
+
 /// Generate a browser-compatible web preview file.
-/// Images → high-quality JPEG (FFmpeg, then ImageMagick fallback), Audio → MP3 (FFmpeg).
+/// Images → high-quality JPEG (FFmpeg, then ImageMagick fallback),
+/// SVG → rasterized PNG, Audio → MP3, Video → MP4 (H.264/AAC).
+/// Video conversion uses low-priority CPU settings to avoid starving other tasks.
 async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext: &str) -> bool {
     if let Some(parent) = output_path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
@@ -162,8 +180,18 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
     let ffmpeg_ok = match preview_ext {
         "jpg" => {
             // Convert image to high-quality JPEG via FFmpeg
-            let status = tokio::process::Command::new("ffmpeg")
-                .args(["-y", "-i", input_str, "-q:v", "2", output_str])
+            let status = tokio::process::Command::new("nice")
+                .args(["-n", "19", "ffmpeg", "-y", "-i", input_str, "-q:v", "2", output_str])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            matches!(status, Ok(s) if s.success())
+        }
+        "png" => {
+            // SVG → rasterized PNG via FFmpeg (or ImageMagick fallback below)
+            let status = tokio::process::Command::new("nice")
+                .args(["-n", "19", "ffmpeg", "-y", "-i", input_str, output_str])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -172,15 +200,35 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
         }
         "mp3" => {
             // Convert audio to MP3
-            let status = tokio::process::Command::new("ffmpeg")
+            let status = tokio::process::Command::new("nice")
                 .args([
+                    "-n", "19", "ffmpeg",
                     "-y",
-                    "-i",
-                    input_str,
-                    "-codec:a",
-                    "libmp3lame",
-                    "-b:a",
-                    "192k",
+                    "-i", input_str,
+                    "-codec:a", "libmp3lame",
+                    "-b:a", "192k",
+                    output_str,
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            matches!(status, Ok(s) if s.success())
+        }
+        "mp4" => {
+            // Transcode video to H.264/AAC MP4 — uses nice for low CPU priority.
+            // "fast" preset balances quality/speed well for web previews.
+            let status = tokio::process::Command::new("nice")
+                .args([
+                    "-n", "19", "ffmpeg",
+                    "-y",
+                    "-i", input_str,
+                    "-c:v", "libx264",
+                    "-preset", "fast",
+                    "-crf", "23",
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
                     output_str,
                 ])
                 .stdout(std::process::Stdio::null())
@@ -196,8 +244,8 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
         return true;
     }
 
-    // FFmpeg failed — try ImageMagick as fallback for image conversions
-    if preview_ext == "jpg" {
+    // FFmpeg failed — try ImageMagick as fallback for image/SVG conversions
+    if preview_ext == "jpg" || preview_ext == "png" {
         let magick_result = tokio::process::Command::new("convert")
             .args([input_str, "-quality", "92", output_str])
             .stdout(std::process::Stdio::null())
@@ -346,15 +394,20 @@ pub async fn scan_and_register(
                     }
 
                     // Generate web preview for non-browser-native formats
+                    // Skip video transcoding during scan (too slow) — background task handles it
                     if has_ffmpeg {
                         if let Some(ext) = needs_web_preview(&name) {
-                            let preview_rel =
-                                format!(".web_previews/{}.web.{}", photo_id, ext);
-                            let preview_abs = storage_root.join(&preview_rel);
-                            if generate_web_preview(&abs_path, &preview_abs, ext).await {
-                                tracing::debug!(file = %rel_path, "Generated web preview");
+                            if ext != "mp4" {
+                                let preview_rel =
+                                    format!(".web_previews/{}.web.{}", photo_id, ext);
+                                let preview_abs = storage_root.join(&preview_rel);
+                                if generate_web_preview(&abs_path, &preview_abs, ext).await {
+                                    tracing::debug!(file = %rel_path, "Generated web preview");
+                                } else {
+                                    tracing::warn!(file = %rel_path, "Failed to generate web preview");
+                                }
                             } else {
-                                tracing::warn!(file = %rel_path, "Failed to generate web preview");
+                                tracing::debug!(file = %rel_path, "Video conversion deferred to background task");
                             }
                         }
                     }
@@ -445,13 +498,16 @@ pub async fn scan_and_register(
             }
 
             // Generate web preview if needed and doesn't exist yet
+            // Skip video transcoding — background task handles those
             let filename = fpath.rsplit('/').next().unwrap_or(fpath);
             if let Some(ext) = needs_web_preview(filename) {
-                let preview_abs =
-                    storage_root.join(format!(".web_previews/{}.web.{}", pid, ext));
-                if !preview_abs.exists() {
-                    if generate_web_preview(&abs, &preview_abs, ext).await {
-                        preview_count += 1;
+                if ext != "mp4" {
+                    let preview_abs =
+                        storage_root.join(format!(".web_previews/{}.web.{}", pid, ext));
+                    if !preview_abs.exists() {
+                        if generate_web_preview(&abs, &preview_abs, ext).await {
+                            preview_count += 1;
+                        }
                     }
                 }
             }

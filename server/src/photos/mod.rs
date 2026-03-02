@@ -1,3 +1,5 @@
+pub mod convert;
+pub mod copies;
 pub mod encryption;
 pub mod galleries;
 pub mod handlers;
@@ -7,3 +9,5 @@ pub mod scan;
 pub mod server_migrate;
 pub mod storage_stats;
 pub mod sync;
+pub mod upload;
+pub mod utils;
