@@ -112,8 +112,6 @@ class SyncRepository @Inject constructor(
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
             MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.LATITUDE,
-            MediaStore.Images.Media.LONGITUDE,
             MediaStore.Images.Media.BUCKET_ID,
         )
 

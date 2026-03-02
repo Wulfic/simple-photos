@@ -287,20 +287,19 @@ pub async fn external_full(
     let total_photos: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
         .fetch_one(pool).await.unwrap_or(0);
     let encrypted_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted = 1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL")
             .fetch_one(pool).await.unwrap_or(0);
     let plain_count = total_photos - encrypted_count;
     let total_file_bytes: i64 =
-        sqlx::query_scalar("SELECT COALESCE(SUM(file_size), 0) FROM photos")
+        sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")
             .fetch_one(pool).await.unwrap_or(0);
-    let total_thumb_bytes: i64 =
-        sqlx::query_scalar("SELECT COALESCE(SUM(thumb_size), 0) FROM photos")
-            .fetch_one(pool).await.unwrap_or(0);
+    // No dedicated thumb_size column — not tracked in the schema
+    let total_thumb_bytes: i64 = 0;
     let photos_with_thumbs: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE thumb_path IS NOT NULL AND thumb_path != ''")
             .fetch_one(pool).await.unwrap_or(0);
     let favorited_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE favorited = 1")
+        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE is_favorite = 1")
             .fetch_one(pool).await.unwrap_or(0);
     let tagged_count: i64 =
         sqlx::query_scalar("SELECT COUNT(DISTINCT photo_id) FROM photo_tags")
@@ -454,11 +453,10 @@ pub async fn external_storage(
     let total_photos: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
         .fetch_one(pool).await.unwrap_or(0);
     let total_file_bytes: i64 =
-        sqlx::query_scalar("SELECT COALESCE(SUM(file_size), 0) FROM photos")
+        sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")
             .fetch_one(pool).await.unwrap_or(0);
-    let total_thumb_bytes: i64 =
-        sqlx::query_scalar("SELECT COALESCE(SUM(thumb_size), 0) FROM photos")
-            .fetch_one(pool).await.unwrap_or(0);
+    // No dedicated thumb_size column — not tracked in the schema
+    let total_thumb_bytes: i64 = 0;
     let media_rows: Vec<(String, i64)> = sqlx::query_as(
         "SELECT media_type, COUNT(*) as cnt FROM photos GROUP BY media_type",
     )

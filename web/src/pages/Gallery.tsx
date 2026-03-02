@@ -98,10 +98,11 @@ export default function Gallery() {
     return dateFormatter.format(d);
   }
 
-  // Group plain photos by day
+  // Group plain photos by day — always compute, regardless of mode.
+  // Plain photos may exist alongside encrypted mode (auto-scanned files, migration).
   type PlainDayGroup = { key: string; label: string; photos: PlainPhoto[] };
   const plainDayGroups: PlainDayGroup[] = (() => {
-    if (mode !== "plain" || filteredPlainPhotos.length === 0) return [];
+    if (filteredPlainPhotos.length === 0) return [];
     const groups = new Map<string, PlainDayGroup>();
     for (const photo of filteredPlainPhotos) {
       const ts = photo.taken_at || photo.created_at;
@@ -129,9 +130,9 @@ export default function Gallery() {
     return Array.from(groups.values());
   })();
 
-  const hasContent = mode === "plain"
-    ? filteredPlainPhotos.length > 0
-    : (filteredPhotos && filteredPhotos.length > 0);
+  const hasContent =
+    filteredPlainPhotos.length > 0 ||
+    (filteredPhotos && filteredPhotos.length > 0);
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -215,15 +216,13 @@ export default function Gallery() {
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
             <p className="text-gray-500 dark:text-gray-400 mb-2">No media yet</p>
             <p className="text-gray-400 text-sm">
-              {mode === "plain"
-                ? "Place photos in the storage directory, then click \"Scan for New Files\""
-                : "Drag and drop photos, GIFs, or videos here — or click Upload"}
+              Place photos in the storage directory or upload them to get started.
             </p>
           </div>
         )}
 
-        {/* Plain mode tiles — grouped by day */}
-        {mode === "plain" && plainDayGroups.map((group) => {
+        {/* Plain photo tiles — shown in any mode when plain photos exist */}
+        {plainDayGroups.length > 0 && plainDayGroups.map((group) => {
           // Compute global start index for this group (for photo viewer navigation)
           let groupStartIdx = 0;
           for (const g of plainDayGroups) {
