@@ -51,7 +51,7 @@ async fn ffmpeg_available() -> bool {
 /// For videos: extracts a frame at ~1 second.
 /// For images: converts to JPEG and resizes.
 /// For audio: generates a black placeholder.
-async fn generate_thumbnail_file(input_path: &Path, output_path: &Path, mime: &str) -> bool {
+pub async fn generate_thumbnail_file(input_path: &Path, output_path: &Path, mime: &str) -> bool {
     if let Some(parent) = output_path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }

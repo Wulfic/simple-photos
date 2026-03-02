@@ -1,13 +1,22 @@
 <!doctype html>
-<html lang="en" class="overflow-x-hidden">
+<html lang="en" class="overflow-x-hidden dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
     <title>Simple Photos</title>
+    <script>
+      // Apply theme before first paint to prevent flash of wrong theme.
+      // Default is "dark" when no preference has been saved.
+      (function() {
+        var t = localStorage.getItem('theme') || 'dark';
+        if (t === 'dark') document.documentElement.classList.add('dark');
+        else document.documentElement.classList.remove('dark');
+      })();
+    </script>
   </head>
-  <body class="bg-gray-50 min-h-screen overflow-x-hidden">
+  <body class="bg-gray-50 dark:bg-gray-900 min-h-screen overflow-x-hidden">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

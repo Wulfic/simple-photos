@@ -45,13 +45,18 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import com.simplephotos.R
 import androidx.compose.ui.res.painterResource
+import android.content.Context
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import dagger.hilt.android.qualifiers.ApplicationContext
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val authRepo: AuthRepository,
     private val api: ApiService,
     private val db: AppDatabase,
-    val dataStore: DataStore<Preferences>
+    val dataStore: DataStore<Preferences>,
+    @ApplicationContext private val appContext: Context
 ) : ViewModel() {
     var serverUrl by mutableStateOf("")
     var username by mutableStateOf("")
@@ -199,7 +204,8 @@ class SettingsViewModel @Inject constructor(
 
     /**
      * Verify password with the server, then enable biometric lock.
-     * Only used when ENABLING biometrics — disabling doesn't require verification.
+     * Also stores the password in EncryptedSharedPreferences so that
+     * Secure Albums can auto-unlock via biometric without re-entering it.
      */
     fun enableBiometricWithPassword(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
@@ -210,6 +216,22 @@ class SettingsViewModel @Inject constructor(
                 if (response.isSuccessful) {
                     biometricEnabled = true
                     dataStore.edit { it[KEY_BIOMETRIC_ENABLED] = true }
+                    // Persist password for Secure Gallery biometric auto-unlock
+                    try {
+                        val masterKey = MasterKey.Builder(appContext)
+                            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                            .build()
+                        val encPrefs = EncryptedSharedPreferences.create(
+                            appContext,
+                            "secure_gallery_prefs",
+                            masterKey,
+                            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                        )
+                        encPrefs.edit().putString("gallery_password", password).apply()
+                    } catch (_: Exception) {
+                        // Non-fatal: biometric is enabled but gallery auto-unlock may not work
+                    }
                     onSuccess()
                 } else {
                     onError("Incorrect password")
@@ -226,6 +248,22 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             biometricEnabled = false
             dataStore.edit { it[KEY_BIOMETRIC_ENABLED] = false }
+            // Clear stored Secure Gallery password when biometric is disabled
+            try {
+                val masterKey = MasterKey.Builder(appContext)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                val encPrefs = EncryptedSharedPreferences.create(
+                    appContext,
+                    "secure_gallery_prefs",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+                encPrefs.edit().remove("gallery_password").apply()
+            } catch (_: Exception) {
+                // Non-fatal
+            }
         }
     }
 
