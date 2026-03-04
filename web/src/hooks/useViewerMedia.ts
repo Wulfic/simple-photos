@@ -80,6 +80,8 @@ interface UseViewerMediaResult {
   setError: React.Dispatch<React.SetStateAction<string>>;
   videoError: boolean;
   setVideoError: React.Dispatch<React.SetStateAction<boolean>>;
+  isConverting: boolean;
+  setIsConverting: React.Dispatch<React.SetStateAction<boolean>>;
   loadPlainMedia: (photoId: string) => Promise<void>;
   loadEncryptedMedia: (blobId: string) => Promise<void>;
   preloadCacheRef: React.MutableRefObject<Map<string, PreloadEntry>>;
@@ -97,6 +99,7 @@ export default function useViewerMedia(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [videoError, setVideoError] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
 
   /** Load a plain-mode photo — check IndexedDB cache first, then fetch */
   const loadPlainMedia = useCallback(async (photoId: string) => {
@@ -147,6 +150,14 @@ export default function useViewerMedia(
       const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
       if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
       const fileRes = await fetch(api.photos.webUrl(photoId), { headers });
+
+      // 202 = conversion in progress (non-browser-native format being processed)
+      if (fileRes.status === 202) {
+        setIsConverting(true);
+        setLoading(false);
+        return;
+      }
+
       if (!fileRes.ok) throw new Error(`Failed to load photo: ${fileRes.status}`);
       const blob = await fileRes.blob();
       const url = URL.createObjectURL(blob);
@@ -286,6 +297,7 @@ export default function useViewerMedia(
     loading, setLoading,
     error, setError,
     videoError, setVideoError,
+    isConverting, setIsConverting,
     loadPlainMedia,
     loadEncryptedMedia,
     preloadCacheRef: preloadCache,

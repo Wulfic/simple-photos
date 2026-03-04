@@ -191,11 +191,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn background task for media format conversion (MKV, AVI, HEIC, etc. → browser-native)
     // Runs with low CPU priority (nice -n 19) so it doesn't starve interactive requests.
+    let convert_notify = Arc::new(tokio::sync::Notify::new());
+    let conversion_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
         let pool_clone = pool.clone();
         let storage_root_clone = config.storage.root.clone();
+        let notify_clone = convert_notify.clone();
+        let active_clone = conversion_active.clone();
         tokio::spawn(async move {
-            photos::convert::background_convert_task(pool_clone, storage_root_clone, 60).await;
+            photos::convert::background_convert_task(pool_clone, storage_root_clone, 60, notify_clone, active_clone).await;
         });
     }
 
@@ -204,6 +208,8 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         rate_limiters,
         storage_root: Arc::new(tokio::sync::RwLock::new(config.storage.root.clone())),
+        convert_notify,
+        conversion_active,
     };
 
     let api_routes = Router::new()
@@ -285,6 +291,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Plain-mode scan & register all files on disk
         .route("/admin/photos/scan", post(photos::scan::scan_and_register))
+        // Trigger immediate background conversion pass
+        .route("/admin/photos/convert", post(photos::convert::trigger_convert))
+        // Check conversion progress (pending items count) — available to any authenticated user
+        .route("/photos/conversion-status", get(photos::convert::conversion_status))
+        // Cleanup: remove original plain files after successful encryption
+        .route("/photos/cleanup-status", get(photos::cleanup::cleanup_status))
+        .route("/photos/cleanup", post(photos::cleanup::cleanup_plain_files))
         // Encryption settings
         .route("/settings/encryption", get(photos::encryption::get_encryption_settings))
         .route("/admin/encryption", put(photos::encryption::set_encryption_mode))

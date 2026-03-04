@@ -169,7 +169,10 @@ export default function CompleteStep({
               // ── Normal setup tasks ────────────────────────────────────
               // Fire scan in background — it's slow (hashes, thumbnails, metadata)
               // and the gallery will trigger auto-scan on mount anyway.
-              api.admin.scanAndRegister().catch(() => {
+              api.admin.scanAndRegister().then(() => {
+                // After scan, trigger immediate conversion for thumbnails/previews
+                api.admin.triggerConvert().catch(() => {});
+              }).catch(() => {
                 // Non-critical: if scan fails, user can trigger manually from Settings
               });
 
@@ -181,6 +184,12 @@ export default function CompleteStep({
             }
 
             setRestoreStatus("");
+
+            // Clear wizard persistence — setup is complete
+            try {
+              sessionStorage.removeItem("sp_wizard_step");
+              sessionStorage.removeItem("sp_wizard_active");
+            } catch { /* ignore */ }
 
             // Navigate to /gallery — the Gallery page handles migration
             // progress and restore sync status.

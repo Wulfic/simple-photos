@@ -218,19 +218,33 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
         "mp4" => {
             // Transcode video to H.264/AAC MP4 — uses nice for low CPU priority.
             // "fast" preset balances quality/speed well for web previews.
+            let mut args = vec!["-n", "19", "ffmpeg", "-y"];
+
+            // For raw video streams (.hevc, .h264, .h265), force the demuxer
+            // since they lack a container with timing info
+            let ext_lower = input_path.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            match ext_lower.as_str() {
+                "hevc" | "h265" => args.extend_from_slice(&["-f", "hevc"]),
+                "h264" => args.extend_from_slice(&["-f", "h264"]),
+                _ => {}
+            }
+
+            args.extend_from_slice(&[
+                "-i", input_str,
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                output_str,
+            ]);
+
             let status = tokio::process::Command::new("nice")
-                .args([
-                    "-n", "19", "ffmpeg",
-                    "-y",
-                    "-i", input_str,
-                    "-c:v", "libx264",
-                    "-preset", "fast",
-                    "-crf", "23",
-                    "-c:a", "aac",
-                    "-b:a", "128k",
-                    "-movflags", "+faststart",
-                    output_str,
-                ])
+                .args(&args)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -519,6 +533,26 @@ pub async fn scan_and_register(
         if preview_count > 0 {
             tracing::info!("Generated {} missing web previews", preview_count);
         }
+    }
+
+    // Trigger background conversion task — but only if no encryption
+    // migration is in progress.  During encryption, conversion would waste
+    // work on files that are about to be encrypted (and thus served via
+    // blobs, not disk previews).  The migration-done handler will trigger
+    // conversion once encryption finishes.
+    let mig_status: String = sqlx::query_scalar(
+        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "idle".to_string());
+
+    if mig_status == "idle" {
+        state.convert_notify.notify_one();
+    } else {
+        tracing::info!("Scan complete — skipping conversion trigger (encryption migration is '{}')", mig_status);
     }
 
     Ok(Json(serde_json::json!({

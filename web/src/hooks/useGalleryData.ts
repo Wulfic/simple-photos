@@ -105,10 +105,34 @@ export function useGalleryData(): GalleryDataResult {
 
         // Fire auto-scan in the background — don't block photo loading.
         // When it completes, reload photos so newly scanned files appear.
-        const isMigrating = settings.migration_status === "encrypting" || settings.migration_status === "decrypting";
+        // On fresh setup the auto-scan may register plain files *after* the
+        // encryption mode was already set, so the server auto-triggers
+        // migration.  Re-fetch settings to pick up the new migration status.
         const reloadAfterScan = async () => {
-          if (detected === "encrypted") await loadEncryptedPhotos();
-          if (detected === "plain" || isMigrating) await loadPlainPhotos();
+          try {
+            const freshSettings = await api.encryption.getSettings();
+            const freshMigrating =
+              freshSettings.migration_status === "encrypting" ||
+              freshSettings.migration_status === "decrypting";
+
+            // Update migration state in case the server auto-started it
+            if (freshMigrating) {
+              setMigrationStatus(freshSettings.migration_status);
+              setMigrationTotal(freshSettings.migration_total);
+              setMigrationCompleted(freshSettings.migration_completed);
+            }
+
+            if (detected === "encrypted") {
+              await loadEncryptedPhotos();
+              // Also load plain photos if migration is now active
+              if (freshMigrating) await loadPlainPhotos();
+            } else {
+              await loadPlainPhotos();
+            }
+          } catch {
+            // Fallback: just reload what we can
+            if (detected === "plain") await loadPlainPhotos();
+          }
         };
         api.backup.triggerAutoScan()
           .then(() => reloadAfterScan())
@@ -122,10 +146,10 @@ export function useGalleryData(): GalleryDataResult {
             return;
           }
           await loadEncryptedPhotos();
-          // Only load plain photos during an active migration (to show progress)
-          if (isMigrating) {
-            await loadPlainPhotos();
-          }
+          // Always load plain photos too — auto-scanned files on disk appear as
+          // plain photos even in encrypted mode, and the conversion-status banner
+          // needs them to be loaded for tile display.
+          await loadPlainPhotos();
         } else {
           // Plain mode — only load plain photos
           await loadPlainPhotos();

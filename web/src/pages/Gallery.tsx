@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { type CachedPhoto, ACCEPTED_MIME_TYPES } from "../db";
@@ -10,6 +10,7 @@ import PlainMediaTile from "../components/gallery/PlainMediaTile";
 import { useGalleryData } from "../hooks/useGalleryData";
 import { useGalleryMigration } from "../hooks/useGalleryMigration";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
+import { useActivityStore, setConversionDoneCallback } from "../store/activity";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,30 @@ export default function Gallery() {
   const {
     uploading, uploadProgress, inputRef, handleDrop, handleFileInput,
   } = useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, setError });
+
+  // ── Read global activity store (banners rendered by GlobalProgressBanners) ──
+  const { migrationStatus: globalMigStatus } = useActivityStore();
+
+  // When conversion finishes, refresh the gallery to pick up new thumbnails
+  useEffect(() => {
+    setConversionDoneCallback(() => loadPlainPhotos());
+    return () => setConversionDoneCallback(null);
+  }, []);
+
+  // When migration finishes (transitions from encrypting/decrypting → idle),
+  // reload encrypted photos. Use a ref to track previous status so we don't
+  // fire on the initial "idle" before polling even starts.
+  const prevMigStatusRef = useRef(globalMigStatus);
+  useEffect(() => {
+    const prev = prevMigStatusRef.current;
+    prevMigStatusRef.current = globalMigStatus;
+    if (
+      globalMigStatus === "idle" &&
+      (prev === "encrypting" || prev === "decrypting")
+    ) {
+      loadEncryptedPhotos();
+    }
+  }, [globalMigStatus]);
 
   // ── Multi-select state (mobile long-press) ─────────────────────────────
   const [selectionMode, setSelectionMode] = useState(false);
@@ -183,27 +208,6 @@ export default function Gallery() {
           </div>
         )}
 
-        {/* Migration progress banner */}
-        {migrationStatus === "encrypting" && migrationTotal > 0 && (
-          <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-4">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-              <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
-                Encrypting photos… {migrationCompleted} / {migrationTotal}
-              </p>
-            </div>
-            <div className="w-full bg-blue-200 dark:bg-blue-800 rounded-full h-2">
-              <div
-                className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${migrationTotal > 0 ? (migrationCompleted / migrationTotal) * 100 : 0}%` }}
-              />
-            </div>
-            <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-              Your existing photos are being encrypted. This happens automatically in the background.
-            </p>
-          </div>
-        )}
-
         <div
           onDragOver={(e) => e.preventDefault()}
           onDrop={handleDrop}
@@ -221,8 +225,9 @@ export default function Gallery() {
           </div>
         )}
 
-        {/* Plain photo tiles — shown in plain mode, or during active migration */}
-        {plainDayGroups.length > 0 && (mode === "plain" || migrationStatus === "encrypting" || migrationStatus === "decrypting") && plainDayGroups.map((group) => {
+        {/* Plain photo tiles — shown in plain mode, during migration, or when
+             auto-scanned files exist in encrypted mode */}
+        {plainDayGroups.length > 0 && plainDayGroups.map((group) => {
           // Compute global start index for this group (for photo viewer navigation)
           let groupStartIdx = 0;
           for (const g of plainDayGroups) {

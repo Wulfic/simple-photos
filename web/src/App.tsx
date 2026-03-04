@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
 import { hasCryptoKey, loadKeyFromSession } from "./crypto/crypto";
+import { startActivityPolling, stopActivityPolling } from "./store/activity";
+import GlobalProgressBanners from "./components/GlobalProgressBanners";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
 import Gallery from "./pages/Gallery";
@@ -18,14 +20,15 @@ import Search from "./pages/Search";
 import Diagnostics from "./pages/Diagnostics";
 
 /**
- * Protected route guard.
+ * Layout route for authenticated pages.
  *
- * Checks setup status first:
- * - If no users exist yet, redirect to /welcome (first-time setup)
- * - If not authenticated, redirect to /login
- * - Otherwise, render children
+ * Checks setup status + auth, starts the global activity poller, and renders
+ * persistent progress banners above child pages via `<Outlet />`.
+ *
+ * Because this is a layout route, it does NOT remount when navigating between
+ * child routes — the poller and banners stay alive across page changes.
  */
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function ProtectedLayout() {
   const { isAuthenticated } = useAuthStore();
   const [setupChecked, setSetupChecked] = useState(false);
   const [setupComplete, setSetupComplete] = useState(true);
@@ -43,6 +46,12 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       });
   }, []);
 
+  // Start global activity polling once (persists across child route changes)
+  useEffect(() => {
+    startActivityPolling();
+    return () => stopActivityPolling();
+  }, []);
+
   if (!setupChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -57,7 +66,13 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   // Not logged in — must authenticate
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  return <>{children}</>;
+  return (
+    <>
+      <Outlet />
+      {/* Fixed overlay — doesn't participate in document flow, won't push nav */}
+      <GlobalProgressBanners />
+    </>
+  );
 }
 
 /**
@@ -153,6 +168,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public routes — no auth required */}
         <Route path="/welcome" element={<Welcome />} />
         <Route
           path="/login"
@@ -162,102 +178,27 @@ export default function App() {
             </LoginGuard>
           }
         />
-        <Route
-          path="/setup"
-          element={
-            <ProtectedRoute>
-              <Setup />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/gallery"
-          element={
-            <ProtectedRoute>
-              <Gallery />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/albums"
-          element={
-            <ProtectedRoute>
-              <Albums />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/albums/:albumId"
-          element={
-            <ProtectedRoute>
-              <AlbumDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/photo/plain/:id"
-          element={
-            <ProtectedRoute>
-              <Viewer />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/photo/:id"
-          element={
-            <ProtectedRoute>
-              <Viewer />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/settings"
-          element={
-            <ProtectedRoute>
-              <Settings />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/trash"
-          element={
-            <ProtectedRoute>
-              <Trash />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/shared/:albumId"
-          element={
-            <ProtectedRoute>
-              <SharedAlbumDetail />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/search"
-          element={
-            <ProtectedRoute>
-              <Search />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/secure-gallery"
-          element={
-            <ProtectedRoute>
-              <SecureGallery />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/diagnostics"
-          element={
-            <ProtectedRoute>
-              <Diagnostics />
-            </ProtectedRoute>
-          }
-        />
+
+        {/*
+         * Protected layout route — auth check + activity poller + banners.
+         * This element persists across child route navigation, so the poller
+         * never stops and the banners never unmount during page changes.
+         */}
+        <Route element={<ProtectedLayout />}>
+          <Route path="/setup" element={<Setup />} />
+          <Route path="/gallery" element={<Gallery />} />
+          <Route path="/albums" element={<Albums />} />
+          <Route path="/albums/:albumId" element={<AlbumDetail />} />
+          <Route path="/photo/plain/:id" element={<Viewer />} />
+          <Route path="/photo/:id" element={<Viewer />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/trash" element={<Trash />} />
+          <Route path="/shared/:albumId" element={<SharedAlbumDetail />} />
+          <Route path="/search" element={<Search />} />
+          <Route path="/secure-gallery" element={<SecureGallery />} />
+          <Route path="/diagnostics" element={<Diagnostics />} />
+        </Route>
+
         <Route path="*" element={<RootRedirect />} />
       </Routes>
     </BrowserRouter>

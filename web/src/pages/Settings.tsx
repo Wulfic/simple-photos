@@ -11,6 +11,7 @@ import UserManagement from "../components/settings/UserManagement";
 import SslSettings from "../components/settings/SslSettings";
 import AccountSection from "../components/settings/AccountSection";
 import { useMigrationWorker } from "../hooks/useMigrationWorker";
+import { formatBytes } from "../utils/formatters";
 
 export default function Settings() {
   const { username } = useAuthStore();
@@ -47,6 +48,12 @@ export default function Settings() {
   // ── Scan state (admin, plain mode) ──────────────────────────────────────
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+
+  // ── Cleanup backed-up photos ────────────────────────────────────────────
+  const [cleanableCount, setCleanableCount] = useState(0);
+  const [cleanableBytes, setCleanableBytes] = useState(0);
+  const [cleaningUp, setCleaningUp] = useState(false);
+  const [showCleanupWarning, setShowCleanupWarning] = useState(false);
 
   // ── Audio backup setting ────────────────────────────────────────────────
   const [audioBackupEnabled, setAudioBackupEnabled] = useState(false);
@@ -100,6 +107,7 @@ export default function Settings() {
     loadBackupServers();
     loadStorageStats();
     loadAudioBackupSetting();
+    loadCleanupStatus();
   }, [loadEncryptionSettings, loadBackupServers]);
 
   async function loadStorageStats() {
@@ -126,16 +134,24 @@ export default function Settings() {
     }
   }
 
-  // Poll migration progress when a migration is active
+  async function loadCleanupStatus() {
+    try {
+      const res = await api.photos.cleanupStatus();
+      setCleanableCount(res.cleanable_count);
+      setCleanableBytes(res.cleanable_bytes);
+    } catch {
+      // Endpoint may not exist yet
+    }
+  }
+
+  // Poll migration progress when a migration is active (drives the toggle state)
   useEffect(() => {
     if (migrationStatus !== "encrypting" && migrationStatus !== "decrypting") return;
-    startTask("encryption");
     const interval = setInterval(loadEncryptionSettings, 3000);
     return () => {
       clearInterval(interval);
-      endTask("encryption");
     };
-  }, [migrationStatus, loadEncryptionSettings, startTask, endTask]);
+  }, [migrationStatus, loadEncryptionSettings]);
 
   useMigrationWorker(migrationStatus, loadEncryptionSettings);
 
@@ -343,36 +359,7 @@ export default function Settings() {
               </button>
             </div>
 
-            {/* Migration progress */}
-            {(migrationStatus === "encrypting" || migrationStatus === "decrypting") && (() => {
-              const pct = migrationTotal > 0 ? Math.min(Math.round((migrationCompleted / migrationTotal) * 100), 100) : 0;
-              const action = migrationStatus === "encrypting" ? "Encrypting" : "Decrypting";
-              return (
-              <div className="bg-blue-50 dark:bg-blue-900/30 rounded-lg p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <div
-                    className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin cursor-help"
-                    title={`${action} photos — ${pct}% complete (${migrationCompleted}/${migrationTotal})`}
-                  />
-                  <span
-                    className="text-sm font-medium text-blue-700 dark:text-blue-300 cursor-help"
-                    title={`${action} photos — ${pct}% complete (${migrationCompleted}/${migrationTotal})`}
-                  >
-                    {action} photos… {pct}%
-                  </span>
-                </div>
-                <div className="w-full h-2 bg-blue-200 dark:bg-blue-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-600 rounded-full transition-all duration-500"
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-                <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                  {migrationCompleted} / {migrationTotal} items processed ({pct}%)
-                </p>
-              </div>
-              );
-            })()}
+            {/* Migration progress is shown via GlobalProgressBanners at the top of the page */}
 
             {/* Migration error */}
             {migrationError && (
@@ -417,6 +404,79 @@ export default function Settings() {
           </div>
         )}
       </section>
+
+      {/* ── Cleanup Backed-Up Photos (encrypted mode only, when there are files) ── */}
+      {encryptionMode === "encrypted" && !encryptionLoading && cleanableCount > 0 && (
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+          <h2 className="text-lg font-semibold mb-2">Clean Up Original Files</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+            {cleanableCount} file{cleanableCount !== 1 ? "s" : ""}{" "}
+            ({formatBytes(cleanableBytes)}) still exist on disk after being encrypted.
+            You can safely remove the originals to free up space.
+          </p>
+
+          {!showCleanupWarning ? (
+            <button
+              onClick={() => {
+                setShowCleanupWarning(true);
+                setError("");
+                setSuccess("");
+              }}
+              disabled={cleaningUp}
+              className="inline-flex items-center gap-1.5 bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-500 text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {cleaningUp ? (
+                <span className="flex items-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Cleaning up…
+                </span>
+              ) : (
+                "Remove Original Files"
+              )}
+            </button>
+          ) : (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+              <h4 className="text-sm font-semibold text-red-800 dark:text-red-300 mb-2">
+                ⚠️ This action cannot be undone
+              </h4>
+              <p className="text-sm text-red-700 dark:text-red-400 mb-3">
+                This will permanently delete <strong>{cleanableCount}</strong> original file{cleanableCount !== 1 ? "s" : ""}{" "}
+                ({formatBytes(cleanableBytes)}) from disk. Your encrypted copies will remain safe.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={async () => {
+                    setShowCleanupWarning(false);
+                    setCleaningUp(true);
+                    setError("");
+                    try {
+                      const res = await api.photos.cleanupPlainFiles();
+                      setSuccess(res.message);
+                      setCleanableCount(0);
+                      setCleanableBytes(0);
+                      await loadStorageStats();
+                    } catch (err: any) {
+                      setError(err.message || "Cleanup failed");
+                    } finally {
+                      setCleaningUp(false);
+                    }
+                  }}
+                  disabled={cleaningUp}
+                  className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 text-sm"
+                >
+                  {cleaningUp ? "Deleting…" : "Confirm Delete"}
+                </button>
+                <button
+                  onClick={() => setShowCleanupWarning(false)}
+                  className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ── Backup Recovery ─────────────────────────────────────────────────── */}
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">

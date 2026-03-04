@@ -149,6 +149,18 @@ export const adminApi = {
       method: "POST",
     }),
 
+  /** Trigger an immediate background conversion pass (thumbnails + web previews) */
+  triggerConvert: () =>
+    request<{ message: string }>("/admin/photos/convert", {
+      method: "POST",
+    }),
+
+  /** Check how many files still need conversion or thumbnails */
+  conversionStatus: () =>
+    request<{ pending_conversions: number; missing_thumbnails: number; converting: boolean }>(
+      "/photos/conversion-status"
+    ),
+
   // ── SSL / TLS ──────────────────────────────────────────────────────────
 
   /** Get current TLS configuration */
