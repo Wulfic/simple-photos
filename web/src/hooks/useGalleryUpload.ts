@@ -63,6 +63,8 @@ export function useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, s
         } else {
           setError("No new files found. Place files in the storage directory first.");
         }
+        // Trigger immediate conversion for any files needing web previews/thumbnails
+        api.admin.triggerConvert().catch(() => {});
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Scan failed");
       } finally {
@@ -92,6 +94,8 @@ export function useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, s
       }
       setUploadProgress({ done: fileArray.length, total: fileArray.length });
       await loadEncryptedPhotos();
+      // Trigger immediate conversion pass in case any uploads need web previews
+      api.admin.triggerConvert().catch(() => {});
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {

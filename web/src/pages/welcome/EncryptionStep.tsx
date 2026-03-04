@@ -30,6 +30,35 @@ export default function EncryptionStep({
       </p>
 
       <div className="space-y-4">
+        {/* Encrypted mode — recommended, shown first */}
+        <button
+          onClick={() => setEncryptionMode("encrypted")}
+          className={`w-full text-left p-4 rounded-lg border-2 transition-colors ${
+            encryptionMode === "encrypted"
+              ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
+              : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+          }`}
+        >
+          <div className="flex items-center gap-3 mb-2">
+            <span className="inline-block w-5 h-5 min-w-[1.25rem] min-h-[1.25rem] rounded-full border-2 shrink-0" style={{ aspectRatio: '1/1', display: 'flex', alignItems: 'center', justifyContent: 'center', borderColor: encryptionMode === 'encrypted' ? '#3b82f6' : '#9ca3af' }}>
+              {encryptionMode === "encrypted" && (
+                <span className="inline-block w-2.5 h-2.5 min-w-[0.625rem] min-h-[0.625rem] rounded-full bg-blue-500" style={{ aspectRatio: '1/1' }} />
+              )}
+            </span>
+            <h3 className="font-semibold text-gray-900 dark:text-gray-100">
+              Encrypt All Photos
+            </h3>
+            <span className="text-xs bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 px-2 py-0.5 rounded-full">
+              Recommended
+            </span>
+          </div>
+          <p className="text-sm text-gray-600 dark:text-gray-400 ml-8">
+            All photos are encrypted client-side before being stored as opaque blobs.
+            Nobody — including the server administrator — can view them without your password.
+            Photos cannot be browsed via the file system.
+          </p>
+        </button>
+
         {/* Plain mode */}
         <button
           onClick={() => setEncryptionMode("plain")}
@@ -40,13 +69,11 @@ export default function EncryptionStep({
           }`}
         >
           <div className="flex items-center gap-3 mb-2">
-            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-              encryptionMode === "plain" ? "border-blue-500" : "border-gray-400"
-            }`}>
+            <span className="inline-block w-5 h-5 min-w-[1.25rem] min-h-[1.25rem] rounded-full border-2 shrink-0" style={{ aspectRatio: '1/1', display: 'flex', alignItems: 'center', justifyContent: 'center', borderColor: encryptionMode === 'plain' ? '#3b82f6' : '#9ca3af' }}>
               {encryptionMode === "plain" && (
-                <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                <span className="inline-block w-2.5 h-2.5 min-w-[0.625rem] min-h-[0.625rem] rounded-full bg-blue-500" style={{ aspectRatio: '1/1' }} />
               )}
-            </div>
+            </span>
             <h3 className="font-semibold text-gray-900 dark:text-gray-100">
               Standard Storage
             </h3>
@@ -61,37 +88,6 @@ export default function EncryptionStep({
               <span>Photos will <strong>not</strong> be encrypted. Anyone with access to the server's file system can view them. Only choose this if you trust your hosting environment.</span>
             </div>
           )}
-        </button>
-
-        {/* Encrypted mode */}
-        <button
-          onClick={() => setEncryptionMode("encrypted")}
-          className={`w-full text-left p-4 rounded-lg border-2 transition-colors ${
-            encryptionMode === "encrypted"
-              ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
-              : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
-          }`}
-        >
-          <div className="flex items-center gap-3 mb-2">
-            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-              encryptionMode === "encrypted" ? "border-blue-500" : "border-gray-400"
-            }`}>
-              {encryptionMode === "encrypted" && (
-                <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
-              )}
-            </div>
-            <h3 className="font-semibold text-gray-900 dark:text-gray-100">
-              Encrypt All Photos
-            </h3>
-            <span className="text-xs bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 px-2 py-0.5 rounded-full">
-              Recommended
-            </span>
-          </div>
-          <p className="text-sm text-gray-600 dark:text-gray-400 ml-8">
-            All photos are encrypted client-side before being stored as opaque blobs.
-            Nobody — including the server administrator — can view them without your password.
-            Photos cannot be browsed via the file system.
-          </p>
         </button>
       </div>
 

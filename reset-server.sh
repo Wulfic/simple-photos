@@ -39,6 +39,7 @@ if [[ -n "$STORAGE_ROOT" && -d "$STORAGE_ROOT" ]]; then
             rm -rf "$STORAGE_ROOT/$subdir"
         fi
     done
+    echo "Original photos preserved."
 else
     echo "Warning: Could not determine storage root from config — skipping external cleanup"
 fi

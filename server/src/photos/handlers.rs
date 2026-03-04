@@ -252,34 +252,14 @@ pub async fn serve_thumbnail(
     let storage_root = state.storage_root.read().await.clone();
     let full_path = storage_root.join(&thumb_path);
 
-    // If thumbnail doesn't exist yet, try to generate it on-the-fly
+    // If thumbnail doesn't exist yet, return 202 Accepted to signal "pending"
+    // instead of falling back to the original file (which may be a raw format
+    // like CR2/HEVC that the browser cannot render).
     if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
-        // Fall back to serving the original photo (client can resize)
-        let (file_path, mime_type): (String, String) = sqlx::query_as(
-            "SELECT file_path, mime_type FROM photos WHERE id = ? AND user_id = ?",
-        )
-        .bind(&photo_id)
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-
-        let orig_path = storage_root.join(&file_path);
-        let file = tokio::fs::File::open(&orig_path).await.map_err(|e| {
-            AppError::Internal(format!("Failed to open photo for thumbnail: {}", e))
-        })?;
-
-        let stream = tokio_util::io::ReaderStream::new(file);
-        let body = Body::from_stream(stream);
-
         return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(
-                "Content-Type",
-                HeaderValue::from_str(&mime_type)
-                    .unwrap_or(HeaderValue::from_static("image/jpeg")),
-            )
-            .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
-            .body(body)
+            .status(StatusCode::ACCEPTED)
+            .header("Content-Type", HeaderValue::from_static("application/json"))
+            .body(Body::from(r#"{"status":"pending"}"#))
             .map_err(|e| AppError::Internal(e.to_string()))?);
     }
 
@@ -362,10 +342,19 @@ pub async fn serve_web(
             return builder
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()));
+        } else {
+            // Web preview needed but not generated yet — return 202 to signal
+            // "conversion in progress" instead of falling back to the raw file
+            // (which the browser likely cannot render).
+            return Ok(Response::builder()
+                .status(StatusCode::ACCEPTED)
+                .header("Content-Type", HeaderValue::from_static("application/json"))
+                .body(Body::from(r#"{"status":"converting"}"#))
+                .map_err(|e| AppError::Internal(e.to_string()))?);
         }
     }
 
-    // No web preview needed or available — serve the original file
+    // Format is browser-native — serve the original file
     let full_path = storage_root.join(&file_path);
     let file = tokio::fs::File::open(&full_path).await.map_err(|e| {
         match e.kind() {

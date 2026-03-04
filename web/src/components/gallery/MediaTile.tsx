@@ -56,8 +56,15 @@ export default function MediaTile({ photo, onClick, onLongPress, selectionMode, 
       {src ? (
         <img src={src} alt={photo.filename} className="w-full h-full object-cover" loading="lazy" />
       ) : (
-        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center">
-          {photo.filename}
+        <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 px-1 text-center">
+          {!photo.thumbnailData ? (
+            <>
+              <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-blue-500 dark:border-t-blue-400 rounded-full animate-spin" />
+              <span className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">Queued</span>
+            </>
+          ) : (
+            <span className="text-gray-400 text-xs">{photo.filename}</span>
+          )}
         </div>
       )}
 

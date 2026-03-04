@@ -104,6 +104,7 @@ export default function Viewer() {
     loading, setLoading,
     error, setError,
     videoError, setVideoError,
+    isConverting,
     loadPlainMedia, loadEncryptedMedia,
   } = useViewerMedia(getCachedPhotoList, preloadCache);
 
@@ -620,6 +621,16 @@ export default function Viewer() {
                 onCornerPointerDown={handleCornerPointerDown}
               />
             )}
+          </div>
+        )}
+
+        {/* Conversion in progress — file not yet available in browser-compatible format */}
+        {isConverting && !mediaUrl && !loading && (
+          <div className="w-full h-full flex flex-col items-center justify-center" style={{ background: "black" }}>
+            <div className="w-10 h-10 border-3 border-gray-600 border-t-blue-500 rounded-full animate-spin mb-4" />
+            <p className="text-gray-300 text-sm mb-1">Converting to browser-compatible format...</p>
+            <p className="text-gray-500 text-xs mb-4 px-4 text-center truncate max-w-[80%]">{filename}</p>
+            <p className="text-gray-600 text-xs">This file will be viewable once conversion completes.</p>
           </div>
         )}
 

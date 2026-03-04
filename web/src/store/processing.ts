@@ -9,6 +9,7 @@ const TASK_LABELS: Record<string, string> = {
   backup: "Backing up",
   download: "Downloading",
   scan: "Scanning",
+  conversion: "Converting",
 };
 
 interface ProcessingState {

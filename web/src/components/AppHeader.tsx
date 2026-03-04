@@ -126,7 +126,7 @@ export default function AppHeader({
         </button>
 
         {/* ── Navigation ──────────────────────────────────────────────── */}
-        <nav className="flex items-center gap-1 ml-2">
+        <nav className="flex items-center gap-0.5 sm:gap-1 ml-1 sm:ml-2">
           {NAV_ITEMS.map((item) => {
             const isActive =
               pathname === item.path ||
@@ -137,7 +137,7 @@ export default function AppHeader({
                 key={item.path}
                 onClick={() => navigate(item.path)}
                 className={`
-                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium
+                  flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-md text-sm font-medium
                   transition-all duration-200
                   ${
                     isActive
@@ -163,12 +163,6 @@ export default function AppHeader({
         {/* ── Activity indicator + User dropdown ──────────────────────── */}
         {username && (
           <div className="flex items-center gap-2 border-l border-gray-200 dark:border-white/10 pl-2 sm:pl-4 ml-1 sm:ml-2 mr-1 shrink-0">
-            {/* Activity label when processing */}
-            {isProcessing && activeLabel && (
-              <span className="text-xs text-blue-600 dark:text-blue-300 font-medium animate-pulse whitespace-nowrap hidden sm:inline">
-                {activeLabel}…
-              </span>
-            )}
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen((v) => !v)}

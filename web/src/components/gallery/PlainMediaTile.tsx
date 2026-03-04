@@ -15,7 +15,9 @@ export interface PlainMediaTileProps {
 export default function PlainMediaTile({ photo, onClick, onLongPress, selectionMode, isSelected }: PlainMediaTileProps) {
   const [visible, setVisible] = useState(false);
   const [thumbSrc, setThumbSrc] = useState<string | null>(null);
+  const [isQueued, setIsQueued] = useState(false);
   const tileRef = useRef<HTMLDivElement>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const el = tileRef.current;
@@ -33,16 +35,18 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
     return () => observer.disconnect();
   }, []);
 
-  // Fetch thumbnail with cache-first strategy
+  // Fetch thumbnail with cache-first strategy, retries on 202 (pending)
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
-    (async () => {
+
+    async function fetchThumb() {
       try {
         // Try cache first
         const cached = await getCachedThumbnail(photo.id);
         if (cached && !cancelled) {
           setThumbSrc(cached);
+          setIsQueued(false);
           return;
         }
 
@@ -51,18 +55,45 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
         const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
         if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
         const res = await fetch(api.photos.thumbUrl(photo.id), { headers });
-        if (!res.ok || cancelled) return;
+
+        if (cancelled) return;
+
+        // 202 = thumbnail pending (conversion/generation in progress)
+        if (res.status === 202) {
+          setIsQueued(true);
+          // Retry after 10 seconds
+          retryTimerRef.current = setTimeout(() => {
+            if (!cancelled) fetchThumb();
+          }, 10_000);
+          return;
+        }
+
+        if (!res.ok) return;
         const blob = await res.blob();
         if (cancelled) return;
 
         // Cache and display
         const url = await cacheThumbnail(photo.id, blob);
-        if (!cancelled) setThumbSrc(url);
+        if (!cancelled) {
+          setThumbSrc(url);
+          setIsQueued(false);
+        }
       } catch {
-        // Thumbnail load failed — show filename instead
+        // Thumbnail load failed — treat as queued if we don't have one yet
+        if (!cancelled && !thumbSrc) {
+          setIsQueued(true);
+          retryTimerRef.current = setTimeout(() => {
+            if (!cancelled) fetchThumb();
+          }, 10_000);
+        }
       }
-    })();
-    return () => { cancelled = true; };
+    }
+
+    fetchThumb();
+    return () => {
+      cancelled = true;
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
   }, [visible, photo.id]);
 
   const longPress = useLongPress(() => onLongPress?.(), 500);
@@ -85,8 +116,15 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
           loading="lazy"
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center">
-          {photo.filename}
+        <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 px-1 text-center">
+          {isQueued ? (
+            <>
+              <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-blue-500 dark:border-t-blue-400 rounded-full animate-spin" />
+              <span className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">Queued</span>
+            </>
+          ) : (
+            <span className="text-gray-400 text-xs">{photo.filename}</span>
+          )}
         </div>
       )}
 

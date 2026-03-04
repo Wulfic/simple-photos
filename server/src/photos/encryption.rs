@@ -210,6 +210,11 @@ pub async fn report_migration_progress(
             .execute(&state.pool)
             .await?;
         }
+
+        // Now that encryption is done, kick the background converter so
+        // any remaining plain-mode photos get their web previews/thumbnails.
+        state.convert_notify.notify_one();
+        tracing::info!("Encryption migration done — triggering deferred conversion pass");
     } else if let Some(ref err) = error {
         sqlx::query(
             "UPDATE encryption_migration SET error = ?, completed = ? WHERE id = 'singleton'",

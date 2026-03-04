@@ -45,6 +45,7 @@ pub async fn background_auto_scan_task(
     let count = run_auto_scan(&pool, &storage_root).await;
     if count > 0 {
         tracing::info!("Startup auto-scan: registered {} new files", count);
+        auto_start_migration_if_needed(&pool).await;
     }
     update_last_scan_time(&pool).await;
 
@@ -58,6 +59,7 @@ pub async fn background_auto_scan_task(
         let count = run_auto_scan(&pool, &storage_root).await;
         if count > 0 {
             tracing::info!("Auto-scan: registered {} new files", count);
+            auto_start_migration_if_needed(&pool).await;
         }
         update_last_scan_time(&pool).await;
     }
@@ -87,6 +89,13 @@ pub async fn trigger_auto_scan(
     let count = run_auto_scan(&pool, &storage_root).await;
     if count > 0 {
         tracing::info!("On-demand scan: registered {} new files", count);
+
+        // After registering new files, check if an encryption migration needs
+        // to start. This handles the fresh-setup race where setMode("encrypted")
+        // runs before the initial scan finishes — at that point the migration
+        // count was 0, so no migration was triggered. Now that photos exist,
+        // we can kick it off automatically.
+        auto_start_migration_if_needed(&pool).await;
     }
 
     // Update last scan time
@@ -96,6 +105,68 @@ pub async fn trigger_auto_scan(
         "message": "Scan complete",
         "new_count": count,
     })))
+}
+
+/// If the server is in "encrypted" mode with an idle migration and there are
+/// unencrypted plain photos, automatically start the encryption migration.
+/// This resolves a race condition on fresh setup where the mode is set before
+/// the initial scan registers any files.
+async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
+    // Only relevant when mode is already "encrypted"
+    let mode: String = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "plain".to_string());
+
+    if mode != "encrypted" {
+        return;
+    }
+
+    // Only act if no migration is already in progress
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "idle".to_string());
+
+    if status != "idle" {
+        return;
+    }
+
+    // Count plain photos that need encryption
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    if count == 0 {
+        return;
+    }
+
+    // Start the migration
+    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let _ = sqlx::query(
+        "UPDATE encryption_migration SET status = 'encrypting', total = ?, completed = 0, \
+         started_at = ?, error = NULL WHERE id = 'singleton'",
+    )
+    .bind(count)
+    .bind(&now)
+    .execute(pool)
+    .await;
+
+    tracing::info!(
+        "Auto-triggered encryption migration for {} unencrypted photos after scan",
+        count
+    );
 }
 
 /// Scan storage directory and register any unregistered media files for ALL users.

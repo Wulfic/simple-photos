@@ -23,11 +23,43 @@ import AndroidStep from "./welcome/AndroidStep";
 import CompleteStep from "./welcome/CompleteStep";
 // BackupStep removed from primary flow — server role is now handled by ServerRoleStep
 
+// ── Session persistence helpers ──────────────────────────────────────────────
+const WIZARD_STEP_KEY = "sp_wizard_step";
+const WIZARD_ACTIVE_KEY = "sp_wizard_active";
+
+function saveWizardStep(step: WizardStep) {
+  try {
+    sessionStorage.setItem(WIZARD_STEP_KEY, step);
+    sessionStorage.setItem(WIZARD_ACTIVE_KEY, "1");
+  } catch { /* quota / private mode — non-critical */ }
+}
+
+function loadWizardStep(): WizardStep | null {
+  try {
+    const active = sessionStorage.getItem(WIZARD_ACTIVE_KEY);
+    if (active !== "1") return null;
+    return (sessionStorage.getItem(WIZARD_STEP_KEY) as WizardStep) || null;
+  } catch { return null; }
+}
+
+function clearWizardStep() {
+  try {
+    sessionStorage.removeItem(WIZARD_STEP_KEY);
+    sessionStorage.removeItem(WIZARD_ACTIVE_KEY);
+  } catch { /* ignore */ }
+}
+
 export default function Welcome() {
-  const [step, setStep] = useState<WizardStep>("loading");
+  const [step, setStepRaw] = useState<WizardStep>("loading");
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Wrap setStep to persist to sessionStorage
+  function setStep(next: WizardStep) {
+    setStepRaw(next);
+    if (next !== "loading") saveWizardStep(next);
+  }
 
   // ── Server role (primary vs backup) ─────────────────────────────────
   const [serverRole, setServerRole] = useState<ServerRole>(null);
@@ -90,7 +122,16 @@ export default function Welcome() {
       setStatus(data);
 
       if (data.setup_complete) {
-        navigate("/login", { replace: true });
+        // Check if the wizard was still in progress (page refresh mid-setup)
+        const savedStep = loadWizardStep();
+        if (savedStep && savedStep !== "loading" && savedStep !== "complete") {
+          // Resume the wizard where the user left off
+          setStepRaw(savedStep);
+        } else {
+          // Wizard truly finished — go to login
+          clearWizardStep();
+          navigate("/login", { replace: true });
+        }
       } else {
         setStep("welcome");
       }

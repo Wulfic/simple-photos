@@ -160,4 +160,19 @@ export const photosApi = {
       next_cursor: string | null;
     }>(`/photos/encrypted-sync${qs ? `?${qs}` : ""}`);
   },
+
+  // ── Cleanup: remove plain originals after encryption ──────────────────
+
+  /** Get count/bytes of plain files eligible for cleanup */
+  cleanupStatus: () =>
+    request<{ cleanable_count: number; cleanable_bytes: number }>(
+      "/photos/cleanup-status"
+    ),
+
+  /** Delete all plain originals that have been encrypted */
+  cleanupPlainFiles: () =>
+    request<{ cleaned: number; errors: number; message: string }>(
+      "/photos/cleanup",
+      { method: "POST" }
+    ),
 };
