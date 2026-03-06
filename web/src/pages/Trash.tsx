@@ -4,6 +4,7 @@ import { useAuthStore } from "../store/auth";
 import { db, type CachedTrashItem } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ function timeSince(isoDate: string): string {
 
 export default function Trash() {
   const { accessToken } = useAuthStore();
+  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
   const [items, setItems] = useState<TrashItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -383,7 +385,7 @@ export default function Trash() {
 
         {/* ── Photo Grid ────────────────────────────────────────────── */}
         {!loading && items.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+          <div className={gridClasses}>
             {items.map((item) => {
               const isSelected = selectedIds.has(item.id);
               const thumbUrl = item._localThumbUrl

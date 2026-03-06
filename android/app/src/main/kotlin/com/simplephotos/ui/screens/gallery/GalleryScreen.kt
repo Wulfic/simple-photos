@@ -87,6 +87,7 @@ fun GalleryScreen(
     val albums by viewModel.albums.collectAsState(initial = emptyList())
     val context = LocalContext.current
     var showAlbumPicker by remember { mutableStateOf(false) }
+    val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
     // Build day-grouped grid items
     val gridItems = remember(photos) { buildGridItems(groupPhotosByDay(photos)) }
@@ -167,7 +168,7 @@ fun GalleryScreen(
                         onSettingsClick = onSettingsClick,
                         onSecureGalleryClick = onSecureGalleryClick,
                         onLogout = { viewModel.logout(onLogout) },
-                        onToggleTheme = { ThemeState.toggle(viewModel.dataStore) }
+                        onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
                     ),
                     isSyncing = viewModel.isSyncing,
                     syncLabel = if (viewModel.isSyncing) "Syncing" else null
@@ -231,8 +232,10 @@ fun GalleryScreen(
                     }
                 } else {
                     // Day-grouped photo grid
+                    // "large" = fewer columns (bigger thumbnails), "normal" = more columns
+                    val gridMinSize = if (viewModel.thumbnailSize == "large") 160.dp else 100.dp
                     LazyVerticalGrid(
-                        columns = GridCells.Adaptive(100.dp),
+                        columns = GridCells.Adaptive(gridMinSize),
                         contentPadding = PaddingValues(2.dp),
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp)

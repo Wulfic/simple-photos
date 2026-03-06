@@ -155,9 +155,27 @@ export const adminApi = {
       method: "POST",
     }),
 
+  /** Supply encryption key and trigger re-conversion of encrypted blobs
+   *  that still contain raw (non-web-compatible) media data. */
+  triggerReconvert: (keyHex: string) =>
+    request<{ message: string; needs_conversion: number }>(
+      "/admin/photos/reconvert",
+      {
+        method: "POST",
+        body: JSON.stringify({ key_hex: keyHex }),
+      }
+    ),
+
   /** Check how many files still need conversion or thumbnails */
   conversionStatus: () =>
-    request<{ pending_conversions: number; missing_thumbnails: number; converting: boolean }>(
+    request<{
+      pending_conversions: number;
+      pending_awaiting_key: number;
+      missing_thumbnails: number;
+      converting: boolean;
+      key_available?: boolean;
+      migration_running?: boolean;
+    }>(
       "/photos/conversion-status"
     ),
 
@@ -188,19 +206,4 @@ export const adminApi = {
       body: JSON.stringify(data),
     }),
 
-  /** Generate a Let's Encrypt certificate via ACME HTTP-01 */
-  generateLetsEncrypt: (data: {
-    domain: string;
-    email: string;
-    staging?: boolean;
-  }) =>
-    request<{
-      success: boolean;
-      cert_path: string;
-      key_path: string;
-      message: string;
-    }>("/admin/ssl/letsencrypt", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
 };

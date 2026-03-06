@@ -289,6 +289,13 @@ pub async fn download(
     .await?
     .ok_or(AppError::NotFound)?;
 
+    tracing::info!(
+        blob_id = %blob_id,
+        blob_type = %_blob_type,
+        size_bytes = size_bytes,
+        "[DIAG:BLOB_DL] Blob download requested"
+    );
+
     // Prevent path traversal: storage_path must not contain ".." or absolute paths
     if storage_path.contains("..") || std::path::Path::new(&storage_path).is_absolute() {
         tracing::error!(

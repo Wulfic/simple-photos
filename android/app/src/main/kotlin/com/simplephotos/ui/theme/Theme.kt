@@ -32,8 +32,12 @@ object ThemeState {
         }
     }
 
-    fun toggle(dataStore: DataStore<Preferences>) {
-        mode = if (mode == "dark") "light" else "dark"
+    fun toggle(dataStore: DataStore<Preferences>, isCurrentlyDark: Boolean? = null) {
+        // When in "system" mode, the simple mode == "dark" check is wrong
+        // because mode is "system" even though the visual theme may be dark.
+        // Accept the resolved dark state so the first toggle always flips visually.
+        val effectivelyDark = isCurrentlyDark ?: (mode == "dark")
+        mode = if (effectivelyDark) "light" else "dark"
         CoroutineScope(Dispatchers.IO).launch {
             dataStore.edit { it[KEY_THEME_MODE] = mode }
         }

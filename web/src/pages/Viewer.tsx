@@ -100,7 +100,9 @@ export default function Viewer() {
   const {
     mediaUrl, setMediaUrl,
     previewUrl, setPreviewUrl,
-    filename, mimeType, mediaType,
+    filename, setFilename,
+    mimeType, setMimeType,
+    mediaType, setMediaType,
     loading, setLoading,
     error, setError,
     videoError, setVideoError,
@@ -291,6 +293,16 @@ export default function Viewer() {
   // ── Load media on id change (with preload cache) ───────────────────────
   useEffect(() => {
     if (!id) return;
+
+    // Reset all edit / playback state so nothing leaks across photos
+    setEditMode(false);
+    setTrimStart(0);
+    setTrimEnd(0);
+    setMediaDuration(0);
+    setBrightness(0);
+    setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
+    setEditTab("crop");
+
     const cached = preloadCache.current.get(id);
     if (cached) {
       setMediaUrl((prev) => {
@@ -298,6 +310,11 @@ export default function Viewer() {
         return cached.url;
       });
       setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+      setFilename(cached.filename);
+      setMimeType(cached.mimeType);
+      setMediaType(cached.mediaType);
+      setCropData(cached.cropData ?? null);
+      setIsFavorite(cached.isFavorite);
       setLoading(false);
       setError("");
       setVideoError(false);
@@ -307,6 +324,8 @@ export default function Viewer() {
         return null;
       });
       setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+      setCropData(null);
+      setFilename("");
       setLoading(true);
       setError("");
       setVideoError(false);

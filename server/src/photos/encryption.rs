@@ -33,6 +33,12 @@ pub async fn get_encryption_settings(
         .await?
         .unwrap_or_else(|| ("idle".to_string(), 0, 0, None));
 
+    tracing::info!(
+        "[DIAG:ENCRYPT_SETTINGS] mode={}, status={}, progress={}/{}, error={}",
+        mode, status, completed, total,
+        error.as_deref().unwrap_or("none")
+    );
+
     Ok(Json(EncryptionSettingsResponse {
         encryption_mode: mode,
         migration_status: status,
@@ -195,6 +201,7 @@ pub async fn report_migration_progress(
     }
 
     if req.done.unwrap_or(false) {
+        tracing::info!("[DIAG:ENCRYPT] report_migration_progress: done=true, setting migration to idle");
         // Migration finished — preserve error message if one was sent with done flag
         if let Some(ref err) = error {
             sqlx::query(
@@ -211,10 +218,15 @@ pub async fn report_migration_progress(
             .await?;
         }
 
-        // Now that encryption is done, kick the background converter so
-        // any remaining plain-mode photos get their web previews/thumbnails.
-        state.convert_notify.notify_one();
-        tracing::info!("Encryption migration done — triggering deferred conversion pass");
+        // 5-second delay before triggering the converter — ensures all DB
+        // writes from the migration have fully settled.
+        let notify = state.convert_notify.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            notify.notify_one();
+            tracing::info!("[DIAG:ENCRYPT] migration done — sent convert notify after 5s delay");
+        });
+        tracing::info!("[DIAG:ENCRYPT] migration done — scheduled convert notify in 5s");
     } else if let Some(ref err) = error {
         sqlx::query(
             "UPDATE encryption_migration SET error = ?, completed = ? WHERE id = 'singleton'",
@@ -237,9 +249,16 @@ pub async fn report_migration_progress(
 
 /// POST /api/photos/{id}/mark-encrypted
 /// Link a plain photo to its encrypted blob so it won't be re-migrated.
+/// Also accepts an optional `thumb_blob_id` so the client-side migration
+/// worker can set `encrypted_thumb_blob_id` in the same request.
 #[derive(Debug, Deserialize)]
 pub struct MarkEncryptedRequest {
     pub blob_id: String,
+    /// Optional: the encrypted thumbnail blob ID. When provided, the server
+    /// sets `encrypted_thumb_blob_id` on the photos row alongside
+    /// `encrypted_blob_id`. This allows the client-side migration worker
+    /// to fully populate both fields in a single call.
+    pub thumb_blob_id: Option<String>,
 }
 
 pub async fn mark_photo_encrypted(
@@ -274,10 +293,36 @@ pub async fn mark_photo_encrypted(
         return Err(AppError::NotFound);
     }
 
+    // If a thumb_blob_id is provided, verify it belongs to this user too
+    if let Some(ref thumb_id) = req.thumb_blob_id {
+        if !thumb_id.is_empty() {
+            let thumb_exists: bool = sqlx::query_scalar(
+                "SELECT COUNT(*) > 0 FROM blobs WHERE id = ? AND user_id = ?",
+            )
+            .bind(thumb_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
+
+            if !thumb_exists {
+                return Err(AppError::BadRequest(
+                    "thumb_blob_id does not exist or does not belong to this user".into(),
+                ));
+            }
+        }
+    }
+
+    // Determine the effective thumb_blob_id (None if empty or absent)
+    let effective_thumb: Option<&str> = req
+        .thumb_blob_id
+        .as_deref()
+        .filter(|s| !s.is_empty());
+
     sqlx::query(
-        "UPDATE photos SET encrypted_blob_id = ? WHERE id = ? AND user_id = ?",
+        "UPDATE photos SET encrypted_blob_id = ?, encrypted_thumb_blob_id = ? WHERE id = ? AND user_id = ?",
     )
     .bind(&req.blob_id)
+    .bind(effective_thumb)
     .bind(&photo_id)
     .bind(&auth.user_id)
     .execute(&state.pool)
@@ -286,6 +331,7 @@ pub async fn mark_photo_encrypted(
     tracing::info!(
         photo_id = %photo_id,
         blob_id = %req.blob_id,
+        thumb_blob_id = effective_thumb.unwrap_or("none"),
         user_id = %auth.user_id,
         "Photo marked as encrypted"
     );

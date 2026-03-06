@@ -40,8 +40,7 @@ export function getConvertedFormat(filename: string): string | null {
     case "avi":
     case "wmv":
     case "asf":
-    case "hevc":
-    case "h264":
+        case "h264":
     case "h265":
     case "mpg":
     case "mpeg":

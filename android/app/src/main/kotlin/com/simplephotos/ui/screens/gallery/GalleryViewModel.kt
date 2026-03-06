@@ -20,6 +20,7 @@ import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.sync.DiagnosticLogger
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_THUMBNAIL_SIZE
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -87,6 +88,10 @@ class GalleryViewModel @Inject constructor(
     var username by mutableStateOf("")
         private set
 
+    // Thumbnail size preference ("normal" or "large")
+    var thumbnailSize by mutableStateOf("normal")
+        private set
+
     // ── Multi-select state ────────────────────────────────────────
     var selectedIds by mutableStateOf(emptySet<String>())
         private set
@@ -105,6 +110,7 @@ class GalleryViewModel @Inject constructor(
                 serverBaseUrl = url
                 encryptionMode = mode
                 username = prefs[KEY_USERNAME] ?: ""
+                thumbnailSize = prefs[KEY_THUMBNAIL_SIZE] ?: "normal"
             } catch (e: Exception) {
                 error = "Init failed: ${e.message}"
             }

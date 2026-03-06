@@ -158,3 +158,82 @@ data class CropResponse(
     val id: String,
     @SerializedName("crop_metadata") val cropMetadata: String?
 )
+
+// ── 2FA Status ───────────────────────────────────────────────────────────────
+
+data class TwoFactorStatusResponse(
+    @SerializedName("totp_enabled") val totpEnabled: Boolean
+)
+
+// ── Encryption mode ──────────────────────────────────────────────────────────
+
+data class SetEncryptionModeRequest(val mode: String)
+data class SetEncryptionModeResponse(val message: String)
+
+// ── Cleanup plain files ──────────────────────────────────────────────────────
+
+data class CleanupStatusResponse(
+    @SerializedName("cleanable_count") val cleanableCount: Int,
+    @SerializedName("cleanable_bytes") val cleanableBytes: Long
+)
+
+data class CleanupResponse(
+    val cleaned: Int,
+    val errors: Int,
+    val message: String
+)
+
+// ── Backup servers ───────────────────────────────────────────────────────────
+
+data class BackupServer(
+    val id: String,
+    val name: String,
+    val address: String,
+    @SerializedName("api_key") val apiKey: String,
+    val enabled: Boolean,
+    @SerializedName("sync_frequency_hours") val syncFrequencyHours: Int
+)
+
+data class BackupServerListResponse(
+    val servers: List<BackupServer>
+)
+
+data class AddBackupServerRequest(
+    val name: String,
+    val address: String,
+    @SerializedName("api_key") val apiKey: String,
+    @SerializedName("sync_frequency_hours") val syncFrequencyHours: Int
+)
+
+data class RecoverResponse(val message: String)
+
+// ── Audio backup setting ─────────────────────────────────────────────────────
+
+data class AudioBackupResponse(
+    @SerializedName("audio_backup_enabled") val audioBackupEnabled: Boolean,
+    val message: String? = null
+)
+
+data class SetAudioBackupRequest(
+    @SerializedName("audio_backup_enabled") val audioBackupEnabled: Boolean
+)
+
+// ── Re-convert encrypted media ───────────────────────────────────────────────
+
+data class ReconvertRequest(
+    @SerializedName("key_hex") val keyHex: String
+)
+
+data class ReconvertResponse(
+    val message: String,
+    @SerializedName("needs_conversion") val needsConversion: Int
+)
+
+// ── SSL/TLS settings ─────────────────────────────────────────────────────────
+
+data class SslStatusResponse(
+    val enabled: Boolean,
+    @SerializedName("cert_path") val certPath: String? = null,
+    @SerializedName("key_path") val keyPath: String? = null,
+    val message: String? = null
+)

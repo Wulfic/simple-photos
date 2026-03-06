@@ -370,17 +370,19 @@ private fun UserMenu(
             HorizontalDivider()
             DropdownMenuItem(
                 text = {
-                    val isDark = ThemeState.mode == "dark"
-                    Text(if (isDark) "Light Mode" else "Dark Mode")
+                    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+                    val isDark = ThemeState.isDark(systemDark)
+                    Text(if (isDark) "Dark Mode" else "Light Mode")
                 },
                 onClick = {
                     expanded = false
                     onToggleTheme()
                 },
                 leadingIcon = {
-                    val isDark = ThemeState.mode == "dark"
+                    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+                    val isDark = ThemeState.isDark(systemDark)
                     Icon(
-                        painter = painterResource(if (isDark) R.drawable.ic_sun else R.drawable.ic_night),
+                        painter = painterResource(if (isDark) R.drawable.ic_night else R.drawable.ic_sun),
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )

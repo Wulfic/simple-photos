@@ -5,6 +5,7 @@ import { useAuthStore } from "../store/auth";
 import { db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export default function Search() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   // Load all user tags on mount
   useEffect(() => {
@@ -271,7 +273,7 @@ export default function Search() {
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
               {results.length} result{results.length !== 1 ? "s" : ""}
             </p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+            <div className={gridClasses}>
               {results.map((result, idx) => {
                 const isEncrypted = !!(result as any)._isEncrypted;
                 const path = isEncrypted

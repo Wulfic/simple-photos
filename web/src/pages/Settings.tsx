@@ -12,11 +12,13 @@ import SslSettings from "../components/settings/SslSettings";
 import AccountSection from "../components/settings/AccountSection";
 import { useMigrationWorker } from "../hooks/useMigrationWorker";
 import { formatBytes } from "../utils/formatters";
+import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 export default function Settings() {
   const { username } = useAuthStore();
   const isAdmin = useIsAdmin();
   const { startTask, endTask } = useProcessingStore();
+  const { thumbnailSize, toggle: toggleThumbnailSize } = useThumbnailSizeStore();
 
   // ── General state ────────────────────────────────────────────────────────
   const [error, setError] = useState("");
@@ -59,6 +61,10 @@ export default function Settings() {
   const [audioBackupEnabled, setAudioBackupEnabled] = useState(false);
   const [audioBackupLoading, setAudioBackupLoading] = useState(true);
   const [togglingAudioBackup, setTogglingAudioBackup] = useState(false);
+
+  // ── Re-convert encrypted media state ──────────────────────────────────
+  const [reconverting, setReconverting] = useState(false);
+  const [reconvertResult, setReconvertResult] = useState<string | null>(null);
 
   // ── Storage stats state ─────────────────────────────────────────────────
   type StorageStats = {
@@ -280,6 +286,53 @@ export default function Settings() {
         </section>
       )}
 
+      {/* ── Display ──────────────────────────────────────────────────── */}
+      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <h2 className="text-lg font-semibold mb-3">Display</h2>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Thumbnail Size
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {thumbnailSize === "large"
+                ? "Large — 2 photos per row for bigger previews."
+                : "Normal — 3 photos per row (default)."}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className={`text-xs font-medium ${
+              thumbnailSize === "normal"
+                ? "text-blue-600 dark:text-blue-400"
+                : "text-gray-400 dark:text-gray-500"
+            }`}>Normal</span>
+            <button
+              onClick={toggleThumbnailSize}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                thumbnailSize === "large"
+                  ? "bg-blue-600"
+                  : "bg-gray-300 dark:bg-gray-600"
+              }`}
+              role="switch"
+              aria-checked={thumbnailSize === "large"}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  thumbnailSize === "large"
+                    ? "translate-x-6"
+                    : "translate-x-1"
+                }`}
+              />
+            </button>
+            <span className={`text-xs font-medium ${
+              thumbnailSize === "large"
+                ? "text-blue-600 dark:text-blue-400"
+                : "text-gray-400 dark:text-gray-500"
+            }`}>Large</span>
+          </div>
+        </div>
+      </section>
+
       {/* ── Scan for New Files (admin) ────────────────────────────────── */}
       {isAdmin && !encryptionLoading && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
@@ -475,6 +528,54 @@ export default function Settings() {
               </div>
             </div>
           )}
+        </section>
+      )}
+
+      {/* ── Re-convert Encrypted Media (encrypted mode, migration idle) ───── */}
+      {isAdmin && encryptionMode === "encrypted" && !encryptionLoading && migrationStatus === "idle" && (
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+          <h2 className="text-lg font-semibold mb-2">Re-convert Encrypted Media</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+            Convert encrypted videos and images to web-compatible formats (MP4, JPEG).
+            This decrypts each file temporarily, converts it, and re-encrypts the result.
+            Required for video playback on mobile devices.
+          </p>
+          {reconvertResult && (
+            <p className="text-sm text-green-600 dark:text-green-400 mb-3 p-2 bg-green-50 dark:bg-green-900/30 rounded">
+              {reconvertResult}
+            </p>
+          )}
+          <button
+            onClick={async () => {
+              setReconverting(true);
+              setReconvertResult(null);
+              setError("");
+              try {
+                const keyHex = sessionStorage.getItem("sp_key");
+                if (!keyHex) {
+                  setError("Encryption key not available. Please log out and log back in to derive the key.");
+                  return;
+                }
+                const res = await api.admin.triggerReconvert(keyHex);
+                setReconvertResult(res.message);
+              } catch (err: any) {
+                setError(err.message || "Re-conversion failed");
+              } finally {
+                setReconverting(false);
+              }
+            }}
+            disabled={reconverting}
+            className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {reconverting ? (
+              <span className="flex items-center gap-2">
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Starting…
+              </span>
+            ) : (
+              "Re-convert Encrypted Media"
+            )}
+          </button>
         </section>
       )}
 

@@ -193,13 +193,15 @@ async fn main() -> anyhow::Result<()> {
     // Runs with low CPU priority (nice -n 19) so it doesn't starve interactive requests.
     let convert_notify = Arc::new(tokio::sync::Notify::new());
     let conversion_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let encryption_key: Arc<tokio::sync::RwLock<Option<[u8; 32]>>> = Arc::new(tokio::sync::RwLock::new(None));
     {
         let pool_clone = pool.clone();
         let storage_root_clone = config.storage.root.clone();
         let notify_clone = convert_notify.clone();
         let active_clone = conversion_active.clone();
+        let key_clone = encryption_key.clone();
         tokio::spawn(async move {
-            photos::convert::background_convert_task(pool_clone, storage_root_clone, 60, notify_clone, active_clone).await;
+            photos::convert::background_convert_task(pool_clone, storage_root_clone, 60, notify_clone, active_clone, key_clone).await;
         });
     }
 
@@ -210,6 +212,7 @@ async fn main() -> anyhow::Result<()> {
         storage_root: Arc::new(tokio::sync::RwLock::new(config.storage.root.clone())),
         convert_notify,
         conversion_active,
+        encryption_key,
     };
 
     let api_routes = Router::new()
@@ -228,6 +231,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/password", put(auth::handlers::change_password))
         .route("/auth/verify-password", post(auth::handlers::verify_password))
         // 2FA
+        .route("/auth/2fa/status", get(auth::handlers::get_2fa_status))
         .route("/auth/2fa/setup", post(auth::handlers::setup_2fa))
         .route("/auth/2fa/confirm", post(auth::handlers::confirm_2fa))
         .route("/auth/2fa/disable", post(auth::handlers::disable_2fa))
@@ -257,7 +261,6 @@ async fn main() -> anyhow::Result<()> {
         // SSL/TLS configuration (admin only)
         .route("/admin/ssl", get(setup::ssl::get_ssl))
         .route("/admin/ssl", put(setup::ssl::update_ssl))
-        .route("/admin/ssl/letsencrypt", post(setup::ssl::generate_letsencrypt))
         // Server-side import — scan directories and serve raw files for client-side encryption
         .route("/admin/import/scan", get(setup::import::import_scan))
         .route("/admin/import/file", get(setup::import::import_file))
@@ -293,6 +296,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/photos/scan", post(photos::scan::scan_and_register))
         // Trigger immediate background conversion pass
         .route("/admin/photos/convert", post(photos::convert::trigger_convert))
+        // Supply encryption key and trigger re-conversion of encrypted blobs
+        .route("/admin/photos/reconvert", post(photos::convert::trigger_reconvert))
         // Check conversion progress (pending items count) — available to any authenticated user
         .route("/photos/conversion-status", get(photos::convert::conversion_status))
         // Cleanup: remove original plain files after successful encryption

@@ -74,6 +74,39 @@ pub async fn generate_thumbnail_file(input_path: &Path, output_path: &Path, mime
     let input_str = input_path.to_str().unwrap_or("");
     let output_str = output_path.to_str().unwrap_or("");
 
+    // ── Non-video images: try ImageMagick first ─────────────────────────
+    // ImageMagick handles SVG, CR2 RAW, HEIC, and other exotic formats
+    // much better than FFmpeg (which often produces near-black output for
+    // vector/RAW formats).
+    if !mime.starts_with("video/") {
+        let magick_result = tokio::process::Command::new("convert")
+            .args([
+                // Read only the first frame/layer (for ICO, multi-page TIFF, etc.)
+                &format!("{}[0]", input_str),
+                "-thumbnail",
+                "256x256>",
+                "-background",
+                "black",
+                "-gravity",
+                "center",
+                "-extent",
+                "256x256",
+                "-quality",
+                "85",
+                output_str,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        if matches!(magick_result, Ok(s) if s.success()) {
+            return true;
+        }
+
+        // ImageMagick failed — fall through to FFmpeg for images too
+    }
+
+    // ── Video and image FFmpeg path ─────────────────────────────────────
     let mut cmd = tokio::process::Command::new("ffmpeg");
     cmd.arg("-y");
 
@@ -112,11 +145,11 @@ pub async fn generate_thumbnail_file(input_path: &Path, output_path: &Path, mime
         return true;
     }
 
-    // FFmpeg failed — try ImageMagick as fallback (better for HEIC, CR2 RAW, etc.)
-    if !mime.starts_with("video/") {
+    // FFmpeg also failed — last resort ImageMagick for video stills (unlikely)
+    if mime.starts_with("video/") {
         let magick_result = tokio::process::Command::new("convert")
             .args([
-                input_str,
+                &format!("{}[0]", input_str),
                 "-thumbnail",
                 "256x256>",
                 "-background",
@@ -154,7 +187,7 @@ pub fn needs_web_preview(filename: &str) -> Option<&'static str> {
         // Audio that browsers cannot play natively
         "wma" | "aiff" | "aif" => Some("mp3"),
         // Video containers that browsers cannot play natively
-        "mkv" | "avi" | "wmv" | "asf" | "hevc" | "h264" | "h265"
+        "mkv" | "avi" | "wmv" | "asf" | "h264"
         | "mpg" | "mpeg" | "3gp" | "mov" | "m4v" => Some("mp4"),
         _ => None,
     }
@@ -550,9 +583,10 @@ pub async fn scan_and_register(
     .unwrap_or_else(|| "idle".to_string());
 
     if mig_status == "idle" {
+        tracing::info!("[DIAG:SCAN] post-scan: mig_status=idle, sending convert notify");
         state.convert_notify.notify_one();
     } else {
-        tracing::info!("Scan complete — skipping conversion trigger (encryption migration is '{}')", mig_status);
+        tracing::info!("[DIAG:SCAN] post-scan: mig_status='{}', skipping conversion trigger", mig_status);
     }
 
     Ok(Json(serde_json::json!({

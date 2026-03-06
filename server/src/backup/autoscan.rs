@@ -41,10 +41,10 @@ pub async fn background_auto_scan_task(
 
     // Run an initial scan shortly after startup
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-    tracing::info!("Running startup auto-scan...");
+    tracing::info!("[DIAG:AUTOSCAN] Running startup auto-scan...");
     let count = run_auto_scan(&pool, &storage_root).await;
+    tracing::info!("[DIAG:AUTOSCAN] Startup auto-scan complete: registered {} new files", count);
     if count > 0 {
-        tracing::info!("Startup auto-scan: registered {} new files", count);
         auto_start_migration_if_needed(&pool).await;
     }
     update_last_scan_time(&pool).await;
@@ -57,8 +57,8 @@ pub async fn background_auto_scan_task(
         interval.tick().await;
 
         let count = run_auto_scan(&pool, &storage_root).await;
+        tracing::info!("[DIAG:AUTOSCAN] Interval auto-scan complete: registered {} new files", count);
         if count > 0 {
-            tracing::info!("Auto-scan: registered {} new files", count);
             auto_start_migration_if_needed(&pool).await;
         }
         update_last_scan_time(&pool).await;
@@ -87,14 +87,8 @@ pub async fn trigger_auto_scan(
     let storage_root = state.storage_root.read().await.clone();
 
     let count = run_auto_scan(&pool, &storage_root).await;
+    tracing::info!("[DIAG:AUTOSCAN] On-demand scan complete: registered {} new files", count);
     if count > 0 {
-        tracing::info!("On-demand scan: registered {} new files", count);
-
-        // After registering new files, check if an encryption migration needs
-        // to start. This handles the fresh-setup race where setMode("encrypted")
-        // runs before the initial scan finishes — at that point the migration
-        // count was 0, so no migration was triggered. Now that photos exist,
-        // we can kick it off automatically.
         auto_start_migration_if_needed(&pool).await;
     }
 
@@ -123,6 +117,7 @@ async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
     .unwrap_or_else(|| "plain".to_string());
 
     if mode != "encrypted" {
+        tracing::info!("[DIAG:AUTOSCAN] auto_start_migration: mode='{}', skipping (not encrypted)", mode);
         return;
     }
 
@@ -137,6 +132,7 @@ async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
     .unwrap_or_else(|| "idle".to_string());
 
     if status != "idle" {
+        tracing::info!("[DIAG:AUTOSCAN] auto_start_migration: status='{}', skipping (not idle)", status);
         return;
     }
 
@@ -149,6 +145,7 @@ async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
     .unwrap_or(0);
 
     if count == 0 {
+        tracing::info!("[DIAG:AUTOSCAN] auto_start_migration: 0 plain photos, nothing to do");
         return;
     }
 
@@ -164,7 +161,7 @@ async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
     .await;
 
     tracing::info!(
-        "Auto-triggered encryption migration for {} unencrypted photos after scan",
+        "[DIAG:AUTOSCAN] Auto-triggered encryption migration for {} unencrypted photos after scan",
         count
     );
 }
@@ -184,8 +181,14 @@ async fn run_auto_scan(
     .flatten();
 
     let admin_id = match admin_id {
-        Some(id) => id,
-        None => return 0, // No admin user yet
+        Some(id) => {
+            tracing::info!("[DIAG:AUTOSCAN] run_auto_scan: admin_id={}", id);
+            id
+        }
+        None => {
+            tracing::info!("[DIAG:AUTOSCAN] run_auto_scan: no admin user yet, skipping");
+            return 0;
+        }
     };
 
     // Check whether audio files should be included in scan
@@ -207,6 +210,7 @@ async fn run_auto_scan(
     .await
     .unwrap_or_default();
     let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
+    tracing::info!("[DIAG:AUTOSCAN] run_auto_scan: {} existing photos in DB, scanning {:?}", existing_set.len(), storage_root);
 
     let mut new_count = 0i64;
     let mut queue = vec![storage_root.to_path_buf()];
@@ -291,6 +295,10 @@ async fn run_auto_scan(
                     .await;
 
                     new_count += 1;
+                    tracing::info!(
+                        "[DIAG:AUTOSCAN] Registered: {} (type={}, mime={}, size={})",
+                        name, media_type, mime, size
+                    );
                 }
             }
         }

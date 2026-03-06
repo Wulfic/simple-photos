@@ -13,6 +13,7 @@ export interface MigrationDeps {
   setMigrationTotal: (n: number) => void;
   setMigrationCompleted: (n: number) => void;
   loadEncryptedPhotos: () => Promise<void>;
+  loadPlainPhotos: () => Promise<void>;
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ export function useGalleryMigration({
   setMigrationTotal,
   setMigrationCompleted,
   loadEncryptedPhotos,
+  loadPlainPhotos,
 }: MigrationDeps) {
   const { startTask, endTask } = useProcessingStore();
   const migrationRunningRef = useRef(false);
@@ -65,6 +67,7 @@ export function useGalleryMigration({
           endTask("encryption");
           // Reload the gallery since photos are now encrypted
           if (settings.encryption_mode === "encrypted") {
+            await loadPlainPhotos();
             await loadEncryptedPhotos();
           }
         }
@@ -123,6 +126,7 @@ export function useGalleryMigration({
           migrationWorkerRef.current = null;
           worker.terminate();
           endTask("encryption");
+          await loadPlainPhotos();
           await loadEncryptedPhotos();
         } else if (msg.type === "error") {
           console.error("[Gallery Migration] Worker error:", msg.message);

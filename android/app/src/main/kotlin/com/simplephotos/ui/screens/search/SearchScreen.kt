@@ -148,6 +148,7 @@ fun SearchScreen(
     viewModel: SearchViewModel = hiltViewModel()
 ) {
     val focusRequester = remember { FocusRequester() }
+    val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -166,7 +167,7 @@ fun SearchScreen(
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
                     onLogout = { viewModel.logout(onLogout) },
-                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore) }
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
                 )
             )
         }

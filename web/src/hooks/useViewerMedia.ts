@@ -105,6 +105,7 @@ export default function useViewerMedia(
   const loadPlainMedia = useCallback(async (photoId: string) => {
     setLoading(true);
     setError("");
+    setIsConverting(false);
     try {
       // Fetch photo metadata to get filename and media type (uses cached list)
       const photos = await getCachedPhotoList();
@@ -195,6 +196,7 @@ export default function useViewerMedia(
   const loadEncryptedMedia = useCallback(async (blobId: string) => {
     setLoading(true);
     setError("");
+    setIsConverting(false);
     try {
       // Check IndexedDB full-photo cache for instant display
       const idbCached = await db.fullPhotos?.get(blobId);
@@ -226,9 +228,13 @@ export default function useViewerMedia(
       }
 
       // Cache miss — download, decrypt, display
+      console.log(`[DIAG:VIEWER] Downloading blob ${blobId}...`);
       const encrypted = await api.blobs.download(blobId);
+      console.log(`[DIAG:VIEWER] Downloaded ${encrypted.byteLength} bytes, decrypting...`);
       const decrypted = await decrypt(encrypted);
+      console.log(`[DIAG:VIEWER] Decrypted ${decrypted.byteLength} bytes, parsing JSON...`);
       const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
+      console.log(`[DIAG:VIEWER] Payload: mime_type=${payload.mime_type}, media_type=${payload.media_type}, filename=${payload.filename}, data_length=${payload.data?.length ?? 0}`);
 
       setFilename(payload.filename);
       setMimeType(payload.mime_type);
@@ -244,11 +250,13 @@ export default function useViewerMedia(
           ? "audio"
           : "photo");
       setMediaType(resolvedType);
+      console.log(`[DIAG:VIEWER] Resolved mediaType=${resolvedType}`);
 
       // Decode base64 → Blob → Object URL
       const bytes = base64ToUint8Array(payload.data).buffer as ArrayBuffer;
       const blob = new Blob([bytes], { type: payload.mime_type });
       const url = URL.createObjectURL(blob);
+      console.log(`[DIAG:VIEWER] Created blob URL: type=${payload.mime_type}, size=${blob.size}`);
       setMediaUrl(url);
 
       // Load crop data from IndexedDB for cache entry

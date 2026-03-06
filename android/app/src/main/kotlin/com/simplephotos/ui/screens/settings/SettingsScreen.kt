@@ -37,6 +37,7 @@ import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_BIOMETRIC_ENABL
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_THUMBNAIL_SIZE
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -56,7 +57,8 @@ class SettingsViewModel @Inject constructor(
     private val api: ApiService,
     private val db: AppDatabase,
     val dataStore: DataStore<Preferences>,
-    @ApplicationContext private val appContext: Context
+    @ApplicationContext private val appContext: Context,
+    private val keyManager: com.simplephotos.crypto.KeyManager
 ) : ViewModel() {
     var serverUrl by mutableStateOf("")
     var username by mutableStateOf("")
@@ -87,7 +89,46 @@ class SettingsViewModel @Inject constructor(
     var freeableCount by mutableStateOf(0)
     var freeUpLoading by mutableStateOf(false)
 
+    // Thumbnail size ("normal" or "large")
+    var thumbnailSize by mutableStateOf("normal")
+        private set
 
+    // 2FA status
+    var totpEnabled by mutableStateOf(false)
+        private set
+    var totpLoading by mutableStateOf(true)
+        private set
+
+    // Encryption toggle
+    var togglingEncryption by mutableStateOf(false)
+        private set
+
+    // Cleanup
+    var cleanableCount by mutableStateOf(0)
+    var cleanableBytes by mutableStateOf(0L)
+    var cleaningUp by mutableStateOf(false)
+
+    // Audio backup
+    var audioBackupEnabled by mutableStateOf(false)
+    var audioBackupLoading by mutableStateOf(true)
+    var togglingAudioBackup by mutableStateOf(false)
+
+    // Backup servers
+    var backupServers by mutableStateOf<List<com.simplephotos.data.remote.dto.BackupServer>>(emptyList())
+    var backupServersLoaded by mutableStateOf(false)
+    var recovering by mutableStateOf(false)
+
+    // SSL status
+    var sslEnabled by mutableStateOf(false)
+    var sslLoading by mutableStateOf(true)
+
+    // Scan
+    var scanning by mutableStateOf(false)
+    var scanResult by mutableStateOf<String?>(null)
+
+    // Re-convert encrypted media
+    var reconverting by mutableStateOf(false)
+    var reconvertResult by mutableStateOf<String?>(null)
 
     init {
         viewModelScope.launch {
@@ -96,6 +137,7 @@ class SettingsViewModel @Inject constructor(
             username = prefs[KEY_USERNAME] ?: ""
             diagnosticLogging = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
             biometricEnabled = prefs[KEY_BIOMETRIC_ENABLED] ?: false
+            thumbnailSize = prefs[KEY_THUMBNAIL_SIZE] ?: "normal"
 
             // Sync diagnostic logging toggle with server config (best-effort)
             syncDiagnosticsFromServer()
@@ -103,6 +145,11 @@ class SettingsViewModel @Inject constructor(
         loadStorageStats()
         loadEncryptionSettings()
         calculateFreeableSpace()
+        load2faStatus()
+        loadAudioBackupSetting()
+        loadCleanupStatus()
+        loadBackupServers()
+        loadSslStatus()
     }
 
     fun loadStorageStats() {
@@ -267,6 +314,212 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun toggleThumbnailSize() {
+        val next = if (thumbnailSize == "normal") "large" else "normal"
+        thumbnailSize = next
+        viewModelScope.launch {
+            dataStore.edit { it[KEY_THUMBNAIL_SIZE] = next }
+        }
+    }
+
+    // ── 2FA Status ───────────────────────────────────────────────────────
+
+    private fun load2faStatus() {
+        viewModelScope.launch {
+            totpLoading = true
+            try {
+                val status = withContext(Dispatchers.IO) { api.get2faStatus() }
+                totpEnabled = status.totpEnabled
+            } catch (_: Exception) {
+                // Endpoint may not be available — leave default
+            }
+            totpLoading = false
+        }
+    }
+
+    fun disable2fa(code: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    api.disable2fa(com.simplephotos.data.remote.dto.TotpDisableRequest(code))
+                }
+                if (response.isSuccessful) {
+                    totpEnabled = false
+                    onSuccess()
+                } else {
+                    onError("Invalid code")
+                }
+            } catch (e: retrofit2.HttpException) {
+                onError("Invalid code")
+            } catch (e: Exception) {
+                onError("Failed: ${e.message}")
+            }
+        }
+    }
+
+    // ── Encryption mode toggle ───────────────────────────────────────────
+
+    fun toggleEncryptionMode() {
+        viewModelScope.launch {
+            togglingEncryption = true
+            error = null
+            try {
+                val newMode = if (encryptionMode == "plain") "encrypted" else "plain"
+                val res = withContext(Dispatchers.IO) {
+                    api.setEncryptionMode(com.simplephotos.data.remote.dto.SetEncryptionModeRequest(newMode))
+                }
+                encryptionMode = newMode
+                message = res.message
+                loadEncryptionSettings()
+            } catch (e: Exception) {
+                error = "Failed to change encryption: ${e.message}"
+            }
+            togglingEncryption = false
+        }
+    }
+
+    // ── Cleanup ──────────────────────────────────────────────────────────
+
+    private fun loadCleanupStatus() {
+        viewModelScope.launch {
+            try {
+                val res = withContext(Dispatchers.IO) { api.getCleanupStatus() }
+                cleanableCount = res.cleanableCount
+                cleanableBytes = res.cleanableBytes
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun cleanupPlainFiles(onDone: () -> Unit) {
+        viewModelScope.launch {
+            cleaningUp = true
+            try {
+                val res = withContext(Dispatchers.IO) { api.cleanupPlainFiles() }
+                message = res.message
+                cleanableCount = 0
+                cleanableBytes = 0
+                loadStorageStats()
+            } catch (e: Exception) {
+                error = "Cleanup failed: ${e.message}"
+            }
+            cleaningUp = false
+            onDone()
+        }
+    }
+
+    // ── Backup servers ───────────────────────────────────────────────────
+
+    private fun loadBackupServers() {
+        viewModelScope.launch {
+            try {
+                val res = withContext(Dispatchers.IO) { api.listBackupServers() }
+                backupServers = res.servers
+            } catch (_: Exception) {}
+            backupServersLoaded = true
+        }
+    }
+
+    fun recoverFromBackup(serverId: String) {
+        viewModelScope.launch {
+            recovering = true
+            error = null
+            try {
+                val res = withContext(Dispatchers.IO) { api.recoverFromBackup(serverId) }
+                message = res.message
+            } catch (e: Exception) {
+                error = "Recovery failed: ${e.message}"
+            }
+            recovering = false
+        }
+    }
+
+    // ── Audio backup ─────────────────────────────────────────────────────
+
+    private fun loadAudioBackupSetting() {
+        viewModelScope.launch {
+            audioBackupLoading = true
+            try {
+                val res = withContext(Dispatchers.IO) { api.getAudioBackupSetting() }
+                audioBackupEnabled = res.audioBackupEnabled
+            } catch (_: Exception) {}
+            audioBackupLoading = false
+        }
+    }
+
+    fun toggleAudioBackup() {
+        viewModelScope.launch {
+            togglingAudioBackup = true
+            try {
+                val newVal = !audioBackupEnabled
+                val res = withContext(Dispatchers.IO) {
+                    api.setAudioBackupSetting(com.simplephotos.data.remote.dto.SetAudioBackupRequest(newVal))
+                }
+                audioBackupEnabled = res.audioBackupEnabled
+                message = res.message
+            } catch (e: Exception) {
+                error = "Failed to update audio backup: ${e.message}"
+            }
+            togglingAudioBackup = false
+        }
+    }
+
+    // ── SSL/TLS ──────────────────────────────────────────────────────────
+
+    private fun loadSslStatus() {
+        viewModelScope.launch {
+            sslLoading = true
+            try {
+                val res = withContext(Dispatchers.IO) { api.getSslStatus() }
+                sslEnabled = res.enabled
+            } catch (_: Exception) {}
+            sslLoading = false
+        }
+    }
+
+    // ── Scan for new files ───────────────────────────────────────────────
+
+    fun scanForNewFiles() {
+        viewModelScope.launch {
+            scanning = true
+            scanResult = null
+            error = null
+            try {
+                val res = withContext(Dispatchers.IO) { api.scanAndRegister() }
+                scanResult = if (res.registered > 0)
+                    "Found and registered ${res.registered} new file${if (res.registered > 1) "s" else ""}."
+                else "No new files found."
+            } catch (e: Exception) {
+                error = "Scan failed: ${e.message}"
+            }
+            scanning = false
+        }
+    }
+
+    // ── Re-convert encrypted media ───────────────────────────────────────
+
+    fun triggerReconvert() {
+        viewModelScope.launch {
+            reconverting = true
+            reconvertResult = null
+            error = null
+            try {
+                val keyHex = withContext(Dispatchers.IO) { keyManager.getKeyHex() }
+                if (keyHex == null) {
+                    error = "Encryption key not available. Please log out and log back in."
+                    reconverting = false
+                    return@launch
+                }
+                val res = withContext(Dispatchers.IO) {
+                    api.triggerReconvert(com.simplephotos.data.remote.dto.ReconvertRequest(keyHex))
+                }
+                reconvertResult = res.message
+            } catch (e: Exception) {
+                error = "Re-conversion failed: ${e.message}"
+            }
+            reconverting = false
+        }
+    }
+
     fun calculateFreeableSpace() {
         viewModelScope.launch {
             try {
@@ -385,8 +638,82 @@ fun SettingsScreen(
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                 Text("Two-Factor Authentication", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = onSetup2fa, modifier = Modifier.fillMaxWidth()) {
-                    Text("Two-Factor Authentication")
+
+                if (viewModel.totpLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else if (viewModel.totpEnabled) {
+                    // 2FA is enabled — show status and disable option
+                    var showDisableDialog by remember { mutableStateOf(false) }
+                    var disableCode by remember { mutableStateOf("") }
+                    var disableError by remember { mutableStateOf<String?>(null) }
+                    var disabling by remember { mutableStateOf(false) }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF22C55E))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Enabled", color = Color(0xFF22C55E))
+                        }
+                        OutlinedButton(
+                            onClick = { showDisableDialog = true },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) { Text("Disable") }
+                    }
+
+                    if (showDisableDialog) {
+                        AlertDialog(
+                            onDismissRequest = { if (!disabling) showDisableDialog = false },
+                            title = { Text("Disable 2FA") },
+                            text = {
+                                Column {
+                                    Text("Enter your current TOTP code to disable two-factor authentication.")
+                                    Spacer(Modifier.height(12.dp))
+                                    OutlinedTextField(
+                                        value = disableCode,
+                                        onValueChange = { disableCode = it.filter { c -> c.isDigit() }.take(6); disableError = null },
+                                        label = { Text("6-digit code") },
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        isError = disableError != null,
+                                        supportingText = disableError?.let { e -> { Text(e) } },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !disabling
+                                    )
+                                }
+                            },
+                            confirmButton = {
+                                Button(
+                                    onClick = {
+                                        disabling = true
+                                        viewModel.disable2fa(disableCode,
+                                            onSuccess = { disabling = false; showDisableDialog = false; disableCode = "" },
+                                            onError = { disabling = false; disableError = it }
+                                        )
+                                    },
+                                    enabled = disableCode.length == 6 && !disabling,
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    if (disabling) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
+                                    Text("Disable 2FA")
+                                }
+                            },
+                            dismissButton = { TextButton(onClick = { showDisableDialog = false; disableCode = "" }, enabled = !disabling) { Text("Cancel") } }
+                        )
+                    }
+                } else {
+                    // 2FA is disabled — show setup button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Not enabled", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        OutlinedButton(onClick = onSetup2fa) { Text("Enable 2FA") }
+                    }
                 }
             }
 
@@ -508,6 +835,49 @@ fun SettingsScreen(
                             }
                         }
                     )
+                }
+            }
+
+            // ── Display ──────────────────────────────────────────────────
+            SettingsCard(title = "Display", icon = Icons.Default.GridView) {
+                Text(
+                    "Choose how large thumbnails appear in the photo grid.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Thumbnail Size")
+                        Text(
+                            if (viewModel.thumbnailSize == "large") "Large — fewer, bigger thumbnails"
+                            else "Normal — more thumbnails per row",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "Normal",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (viewModel.thumbnailSize == "normal") MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Switch(
+                            checked = viewModel.thumbnailSize == "large",
+                            onCheckedChange = { viewModel.toggleThumbnailSize() }
+                        )
+                        Text(
+                            "Large",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (viewModel.thumbnailSize == "large") MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -640,6 +1010,248 @@ fun SettingsScreen(
             }
 
 
+            // ── Active Server ────────────────────────────────────────────
+            SettingsCard(title = "Active Server", icon = Icons.Default.Dns) {
+                SettingsRow("URL", viewModel.serverUrl)
+                SettingsRow("Status", "Connected")
+            }
+
+            // ── Scan for New Files (admin) ───────────────────────────────
+            if (viewModel.isAdmin) {
+                SettingsCard(title = "Scan for New Files", icon = Icons.Default.Radar) {
+                    Text(
+                        "Scan the server storage directory for files that were placed there manually and register them in the database.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.scanForNewFiles() },
+                        enabled = !viewModel.scanning,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (viewModel.scanning) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Icon(Icons.Default.Radar, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Scan Now")
+                    }
+                    viewModel.scanResult?.let { result ->
+                        Spacer(Modifier.height(8.dp))
+                        Text(result, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+
+            // ── Privacy & Encryption (admin) ────────────────────────────
+            if (viewModel.isAdmin) {
+                SettingsCard(title = "Privacy & Encryption", iconPainter = painterResource(R.drawable.ic_lock)) {
+                    Text(
+                        if (viewModel.encryptionMode == "encrypted")
+                            "Photos are encrypted on the server. File contents cannot be read without your key."
+                        else
+                            "Photos are stored as plain files on the server. Consider enabling encryption for added privacy.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Encryption")
+                        if (viewModel.togglingEncryption) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Switch(
+                                checked = viewModel.encryptionMode == "encrypted",
+                                onCheckedChange = { viewModel.toggleEncryptionMode() }
+                            )
+                        }
+                    }
+                    Text(
+                        "Mode: ${viewModel.encryptionMode.replaceFirstChar { it.uppercase() }}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // ── Cleanup (admin, encrypted mode) ─────────────────────────
+            if (viewModel.isAdmin && viewModel.encryptionMode == "encrypted") {
+                SettingsCard(title = "Cleanup", icon = Icons.Default.CleaningServices) {
+                    if (viewModel.cleanableCount > 0) {
+                        Text(
+                            "${viewModel.cleanableCount} leftover plain files (${formatBytes(viewModel.cleanableBytes)}) can be removed now that encryption is enabled.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { viewModel.cleanupPlainFiles {} },
+                            enabled = !viewModel.cleaningUp,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            if (viewModel.cleaningUp) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text("Clean Up ${formatBytes(viewModel.cleanableBytes)}")
+                        }
+                    } else {
+                        Text(
+                            "No leftover plain files to clean up.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // ── Re-convert Encrypted Media (admin, encrypted mode) ──────
+            if (viewModel.isAdmin && viewModel.encryptionMode == "encrypted") {
+                SettingsCard(title = "Re-convert Media", icon = Icons.Default.Sync) {
+                    Text(
+                        "Convert encrypted videos and images to web-compatible formats (MP4, JPEG). " +
+                        "Required for video playback on mobile devices.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (viewModel.reconvertResult != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            viewModel.reconvertResult!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.triggerReconvert() },
+                        enabled = !viewModel.reconverting,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (viewModel.reconverting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text(if (viewModel.reconverting) "Starting…" else "Re-convert Encrypted Media")
+                    }
+                }
+            }
+
+            // ── Backup Recovery (admin) ──────────────────────────────────
+            if (viewModel.isAdmin && viewModel.backupServersLoaded && viewModel.backupServers.isNotEmpty()) {
+                SettingsCard(title = "Backup Recovery", icon = Icons.Default.Restore) {
+                    Text(
+                        "Recover photos from a backup server instance.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    viewModel.backupServers.forEach { server ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(server.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(server.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.recoverFromBackup(server.id) },
+                                enabled = !viewModel.recovering
+                            ) {
+                                if (viewModel.recovering) {
+                                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(4.dp))
+                                }
+                                Text("Recover")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Audio Backup (admin) ─────────────────────────────────────
+            if (viewModel.isAdmin) {
+                SettingsCard(title = "Audio Backup", icon = Icons.Default.MusicNote) {
+                    Text(
+                        "When enabled, audio files on the device will also be backed up to the server.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Audio Backup")
+                        if (viewModel.audioBackupLoading || viewModel.togglingAudioBackup) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Switch(
+                                checked = viewModel.audioBackupEnabled,
+                                onCheckedChange = { viewModel.toggleAudioBackup() }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── SSL/TLS (admin) ──────────────────────────────────────────
+            if (viewModel.isAdmin) {
+                SettingsCard(title = "SSL / TLS", iconPainter = painterResource(R.drawable.ic_lock)) {
+                    if (viewModel.sslLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (viewModel.sslEnabled) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = if (viewModel.sslEnabled) Color(0xFF22C55E) else Color(0xFFF59E0B)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                if (viewModel.sslEnabled) "SSL/TLS is enabled"
+                                else "SSL/TLS is not enabled — connections are unencrypted",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (viewModel.sslEnabled) Color(0xFF22C55E) else Color(0xFFF59E0B)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── Manage Users (admin) ─────────────────────────────────────
+            if (viewModel.isAdmin) {
+                SettingsCard(title = "Manage Users", icon = Icons.Default.Group) {
+                    Text(
+                        "User management is available in the web interface.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Open ${viewModel.serverUrl} in a browser to manage users.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
 
 
             // ── About ────────────────────────────────────────────────────

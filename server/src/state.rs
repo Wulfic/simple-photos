@@ -23,4 +23,9 @@ pub struct AppState {
     /// visible even when the DB-driven pending count drops to 0 mid-pass
     /// (e.g. because encryption set encrypted_blob_id on those rows).
     pub conversion_active: Arc<AtomicBool>,
+    /// Temporarily holds the AES-256 encryption key during and shortly after
+    /// migration, so the background converter can decrypt encrypted blobs,
+    /// convert media to web-compatible formats, and re-encrypt with the
+    /// converted data. Cleared automatically after a grace period.
+    pub encryption_key: Arc<RwLock<Option<[u8; 32]>>>,
 }

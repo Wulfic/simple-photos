@@ -8,6 +8,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { type PlainPhoto } from "../utils/gallery";
 import PlainMediaTile from "../components/gallery/PlainMediaTile";
+import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
@@ -62,6 +63,7 @@ export default function AlbumDetail() {
 function SmartAlbumView({ albumId }: { albumId: string }) {
   const navigate = useNavigate();
   const def = SMART_ALBUM_DEFS[albumId];
+  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
   const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted" | null>(null);
   const [plainPhotos, setPlainPhotos] = useState<PlainPhoto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -148,7 +150,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
             <p className="text-gray-500 dark:text-gray-400">No {def.label.toLowerCase()} found</p>
           </div>
         ) : encryptionMode === "encrypted" ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+          <div className={gridClasses}>
             {filteredEncrypted.map((photo, idx) => (
               <AlbumTile
                 key={photo.blobId}
@@ -169,7 +171,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
             ))}
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+          <div className={gridClasses}>
             {filteredPlain.map((photo, idx) => (
               <PlainMediaTile
                 key={photo.id}
@@ -195,6 +197,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
 
 function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   const navigate = useNavigate();
+  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
   const [error, setError] = useState("");
   const [showAddPhotos, setShowAddPhotos] = useState(false);
   const [showSharePicker, setShowSharePicker] = useState(false);
@@ -522,7 +525,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           </button>
         </div>
       )}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+      <div className={gridClasses}>
         {albumPhotos.length === 0 && (
           <div className="col-span-full text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
             <p className="text-gray-500 dark:text-gray-400 mb-2">This album is empty</p>

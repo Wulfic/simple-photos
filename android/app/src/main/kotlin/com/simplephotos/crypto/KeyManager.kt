@@ -113,6 +113,15 @@ class KeyManager(private val context: Context) {
         return dek
     }
 
+    /**
+     * Return the raw DEK as a lowercase hex string (64 chars for AES-256).
+     * Returns null if the key has not been derived / loaded yet.
+     */
+    fun getKeyHex(): String? {
+        val key = loadKey() ?: return null
+        return key.encoded.joinToString("") { "%02x".format(it) }
+    }
+
     fun clearKey() {
         dek = null
         prefs.edit()

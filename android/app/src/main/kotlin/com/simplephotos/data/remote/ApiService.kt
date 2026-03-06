@@ -30,6 +30,9 @@ interface ApiService {
     suspend fun verifyPassword(@Body request: VerifyPasswordRequest): Response<Unit>
 
     // ── 2FA ──────────────────────────────────────────────────────────────
+    @GET("api/auth/2fa/status")
+    suspend fun get2faStatus(): TwoFactorStatusResponse
+
     @POST("api/auth/2fa/setup")
     suspend fun setup2fa(): TotpSetupResponse
 
@@ -101,6 +104,42 @@ interface ApiService {
 
     @GET("api/settings/storage-stats")
     suspend fun getStorageStats(): StorageStatsResponse
+
+    // ── Encryption mode (admin) ──────────────────────────────────────────
+    @PUT("api/admin/encryption")
+    suspend fun setEncryptionMode(@Body request: SetEncryptionModeRequest): SetEncryptionModeResponse
+
+    // ── Cleanup (encrypted mode) ─────────────────────────────────────────
+    @GET("api/photos/cleanup-status")
+    suspend fun getCleanupStatus(): CleanupStatusResponse
+
+    @POST("api/photos/cleanup")
+    suspend fun cleanupPlainFiles(): CleanupResponse
+
+    // ── Backup servers (admin) ───────────────────────────────────────────
+    @GET("api/admin/backup/servers")
+    suspend fun listBackupServers(): BackupServerListResponse
+
+    @POST("api/admin/backup/servers")
+    suspend fun addBackupServer(@Body request: AddBackupServerRequest): BackupServer
+
+    @POST("api/admin/backup/servers/{id}/recover")
+    suspend fun recoverFromBackup(@Path("id") serverId: String): RecoverResponse
+
+    // ── Audio Backup (admin) ─────────────────────────────────────────────
+    @GET("api/settings/audio-backup")
+    suspend fun getAudioBackupSetting(): AudioBackupResponse
+
+    @PUT("api/admin/audio-backup")
+    suspend fun setAudioBackupSetting(@Body request: SetAudioBackupRequest): AudioBackupResponse
+
+    // ── SSL/TLS (admin) ──────────────────────────────────────────────────
+    @GET("api/admin/ssl")
+    suspend fun getSslStatus(): SslStatusResponse
+
+    // ── Re-convert encrypted media (admin) ──────────────────────────────
+    @POST("api/admin/photos/reconvert")
+    suspend fun triggerReconvert(@Body request: ReconvertRequest): ReconvertResponse
 
     // ── Admin ────────────────────────────────────────────────────────────
     @POST("api/admin/photos/scan")
