@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 type SharedPhoto = {
   id: string;
@@ -23,6 +24,7 @@ type ShareUser = { id: string; username: string };
 export default function SharedAlbumDetail() {
   const { albumId } = useParams<{ albumId: string }>();
   const navigate = useNavigate();
+  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   const [albumName, setAlbumName] = useState("");
   const [isOwner, setIsOwner] = useState(false);
@@ -195,7 +197,7 @@ export default function SharedAlbumDetail() {
         )}
 
         {/* Photo grid */}
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+        <div className={gridClasses}>
           {loading && photos.length === 0 && (
             <p className="col-span-full text-gray-500 dark:text-gray-400 text-center py-12">
               Loading...

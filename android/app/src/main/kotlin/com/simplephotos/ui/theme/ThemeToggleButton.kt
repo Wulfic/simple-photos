@@ -17,10 +17,11 @@ fun ThemeToggleButton(
     dataStore: DataStore<Preferences>,
     modifier: Modifier = Modifier
 ) {
-    val isDark = ThemeState.mode == "dark"
+    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val isDark = ThemeState.isDark(systemDark)
 
     IconButton(
-        onClick = { ThemeState.toggle(dataStore) },
+        onClick = { ThemeState.toggle(dataStore, isDark) },
         modifier = modifier
     ) {
         Icon(

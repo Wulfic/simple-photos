@@ -6,6 +6,7 @@ import { db, type CachedPhoto } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 interface Gallery {
   id: string;
@@ -28,6 +29,7 @@ interface GalleryItem {
  */
 export default function SecureGallery() {
   const navigate = useNavigate();
+  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   // Auth gate state
   const [authenticated, setAuthenticated] = useState(false);
@@ -464,7 +466,7 @@ export default function SecureGallery() {
               </button>
             </div>
           ) : !showAddPhotos ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+            <div className={gridClasses}>
               {items.map((item, idx) => (
                 <ItemTile
                   key={item.id}

@@ -299,17 +299,40 @@ export default function useViewerActions({
     }
   }, [id, filename]);
 
-  const handleDownloadConverted = useCallback(() => {
+  const handleDownloadConverted = useCallback(async () => {
     setShowDownloadDialog(false);
-    if (!mediaUrl) return;
+    if (!id) return;
     const convertedExt = getConvertedFormat(filename);
     const baseName = filename.replace(/\.[^.]+$/, "");
     const downloadName = convertedExt ? `${baseName}.${convertedExt}` : filename;
-    const a = document.createElement("a");
-    a.href = mediaUrl;
-    a.download = downloadName;
-    a.click();
-  }, [mediaUrl, filename]);
+    try {
+      if (isPlainMode) {
+        // Fetch the converted file fresh from the /web endpoint for a reliable download.
+        // Using the in-memory blob URL with <a>.click() is unreliable for large
+        // video files in some browsers.
+        const { accessToken } = useAuthStore.getState();
+        const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
+        if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+        const res = await fetch(api.photos.webUrl(id), { headers });
+        if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = downloadName;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else if (mediaUrl) {
+        // Encrypted mode: use the already-decrypted blob URL
+        const a = document.createElement("a");
+        a.href = mediaUrl;
+        a.download = downloadName;
+        a.click();
+      }
+    } catch (err) {
+      console.error("[Viewer] Download converted failed:", err);
+    }
+  }, [id, isPlainMode, mediaUrl, filename]);
 
   const handleToggleFavorite = useCallback(async () => {
     if (!id || !isPlainMode) return;

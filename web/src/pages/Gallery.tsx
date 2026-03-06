@@ -11,6 +11,7 @@ import { useGalleryData } from "../hooks/useGalleryData";
 import { useGalleryMigration } from "../hooks/useGalleryMigration";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
 import { useActivityStore, setConversionDoneCallback } from "../store/activity";
+import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,7 @@ export default function Gallery() {
     setMigrationTotal,
     setMigrationCompleted,
     loadEncryptedPhotos,
+    loadPlainPhotos,
   });
 
   // ── Upload ──────────────────────────────────────────────────────────────
@@ -41,6 +43,7 @@ export default function Gallery() {
 
   // ── Read global activity store (banners rendered by GlobalProgressBanners) ──
   const { migrationStatus: globalMigStatus } = useActivityStore();
+  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   // When conversion finishes, refresh the gallery to pick up new thumbnails
   useEffect(() => {
@@ -245,7 +248,7 @@ export default function Gallery() {
                   {group.photos.length}
                 </span>
               </div>
-              <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+              <div className={gridClasses}>
                 {group.photos.map((photo, localIdx) => {
                   const globalIdx = groupStartIdx + localIdx;
                   return (
@@ -289,7 +292,7 @@ export default function Gallery() {
                   {group.photos.length}
                 </span>
               </div>
-              <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
+              <div className={gridClasses}>
                 {group.photos.map((photo, localIdx) => {
                   const globalIdx = groupStartIdx + localIdx;
                   return (

@@ -7,7 +7,7 @@ export interface SslStepProps {
   error: string;
 }
 
-type SslMode = "skip" | "manual" | "letsencrypt";
+type SslMode = "skip" | "manual";
 
 export default function SslStep({ setStep, setError, error }: SslStepProps) {
   const [mode, setMode] = useState<SslMode>("skip");
@@ -17,17 +17,6 @@ export default function SslStep({ setStep, setError, error }: SslStepProps) {
   const [keyPath, setKeyPath] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-
-  // Let's Encrypt fields
-  const [domain, setDomain] = useState("");
-  const [email, setEmail] = useState("");
-  const [staging, setStaging] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [generated, setGenerated] = useState(false);
-  const [generatedPaths, setGeneratedPaths] = useState<{
-    cert: string;
-    key: string;
-  } | null>(null);
 
   async function handleSaveManual() {
     if (!certPath.trim() || !keyPath.trim()) {
@@ -50,33 +39,7 @@ export default function SslStep({ setStep, setError, error }: SslStepProps) {
     }
   }
 
-  async function handleGenerateLe() {
-    if (!domain.trim()) {
-      setError("Domain name is required (e.g. photos.example.com).");
-      return;
-    }
-    if (!email.trim() || !email.includes("@")) {
-      setError("A valid contact e-mail is required.");
-      return;
-    }
-    setGenerating(true);
-    setError("");
-    try {
-      const res = await api.admin.generateLetsEncrypt({
-        domain: domain.trim(),
-        email: email.trim(),
-        staging,
-      });
-      setGenerated(true);
-      setGeneratedPaths({ cert: res.cert_path, key: res.key_path });
-    } catch (err: any) {
-      setError(err.message || "Let's Encrypt certificate generation failed");
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  const isDone = saved || generated || mode === "skip";
+  const isDone = saved || mode === "skip";
 
   return (
     <>
@@ -97,7 +60,6 @@ export default function SslStep({ setStep, setError, error }: SslStepProps) {
         {(
           [
             ["skip", "Skip for now",    "Run on plain HTTP (can be configured later)."],
-            ["letsencrypt", "Let\u2019s Encrypt", "Automatically obtain a free certificate."],
             ["manual", "Manual certificate", "I already have a certificate and key file."],
           ] as const
         ).map(([value, label, desc]) => (
@@ -118,7 +80,6 @@ export default function SslStep({ setStep, setError, error }: SslStepProps) {
                 setMode(value);
                 setError("");
                 setSaved(false);
-                setGenerated(false);
               }}
               className="mt-1 accent-blue-600"
             />
@@ -129,92 +90,6 @@ export default function SslStep({ setStep, setError, error }: SslStepProps) {
           </label>
         ))}
       </div>
-
-      {/* ── Let's Encrypt form ─────────────────────────────────────── */}
-      {mode === "letsencrypt" && !generated && (
-        <div className="space-y-3 mb-5 bg-gray-50 dark:bg-gray-700/40 rounded-lg p-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Domain Name
-            </label>
-            <input
-              type="text"
-              value={domain}
-              onChange={(e) => setDomain(e.target.value)}
-              placeholder="photos.example.com"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Contact E-mail
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-            <input
-              type="checkbox"
-              checked={staging}
-              onChange={(e) => setStaging(e.target.checked)}
-              className="accent-blue-600"
-            />
-            Use staging environment (for testing — cert won't be trusted by browsers)
-          </label>
-
-          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs text-amber-700 dark:text-amber-400">
-            <strong>Requirements:</strong>
-            <ul className="list-disc list-inside mt-1 space-y-0.5">
-              <li>Port 80 must be available on this machine.</li>
-              <li>The domain must point to this server's public IP.</li>
-              <li>This process may take up to 60 seconds.</li>
-            </ul>
-          </div>
-
-          <button
-            onClick={handleGenerateLe}
-            disabled={generating}
-            className="w-full bg-green-600 text-white py-2 rounded-md hover:bg-green-700 disabled:opacity-50 text-sm font-medium"
-          >
-            {generating ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Generating certificate…
-              </span>
-            ) : (
-              "Generate Certificate"
-            )}
-          </button>
-        </div>
-      )}
-
-      {/* ── Let's Encrypt success ──────────────────────────────────── */}
-      {mode === "letsencrypt" && generated && generatedPaths && (
-        <div className="mb-5 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <svg className="w-5 h-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span className="text-sm font-semibold text-green-700 dark:text-green-300">
-              Certificate generated!
-            </span>
-          </div>
-          <p className="text-xs text-green-600 dark:text-green-400 mb-1">
-            Certificate: <code className="bg-green-100 dark:bg-green-800 px-1 rounded">{generatedPaths.cert}</code>
-          </p>
-          <p className="text-xs text-green-600 dark:text-green-400">
-            Key: <code className="bg-green-100 dark:bg-green-800 px-1 rounded">{generatedPaths.key}</code>
-          </p>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-            TLS has been enabled. Restart the server to serve HTTPS.
-          </p>
-        </div>
-      )}
 
       {/* ── Manual cert form ───────────────────────────────────────── */}
       {mode === "manual" && !saved && (

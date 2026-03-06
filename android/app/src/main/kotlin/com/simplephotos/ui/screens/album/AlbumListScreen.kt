@@ -193,6 +193,7 @@ fun AlbumListScreen(
     viewModel: AlbumViewModel = hiltViewModel()
 ) {
     val albums by viewModel.albums.collectAsState(initial = emptyList())
+    val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
     // Load cover photos whenever the albums list changes
     LaunchedEffect(albums) {
@@ -212,7 +213,7 @@ fun AlbumListScreen(
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
                     onLogout = { viewModel.logout(onLogout) },
-                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore) }
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
                 )
             )
         }

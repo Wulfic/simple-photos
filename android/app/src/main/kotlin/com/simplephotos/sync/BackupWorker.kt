@@ -95,16 +95,40 @@ class BackupWorker @AssistedInject constructor(
             val pending = db.photoDao().getByStatus(SyncStatus.PENDING) +
                           db.photoDao().getByStatus(SyncStatus.FAILED)
 
-            diag.info(TAG, "Found ${pending.size} photos to process", mapOf(
+            // Pre-filter: skip photos that already have a server ID from a
+            // previous successful upload (shouldn't normally happen, but guards
+            // against edge cases where status was reset despite a completed upload)
+            val genuinelyPending = pending.filter { photo ->
+                val alreadyUploaded = when (mode) {
+                    "plain" -> photo.serverPhotoId != null
+                    else -> photo.serverBlobId != null
+                }
+                if (alreadyUploaded) {
+                    diag.debug(TAG, "Skipping ${photo.filename} — already has server ID", mapOf(
+                        "localId" to photo.localId,
+                        "serverPhotoId" to (photo.serverPhotoId ?: ""),
+                        "serverBlobId" to (photo.serverBlobId ?: "")
+                    ))
+                    // Fix status back to SYNCED
+                    db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                    false
+                } else true
+            }
+
+            diag.info(TAG, "Found ${genuinelyPending.size} photos to process", mapOf(
                 "pendingCount" to db.photoDao().getByStatus(SyncStatus.PENDING).size.toString(),
                 "failedCount" to db.photoDao().getByStatus(SyncStatus.FAILED).size.toString()
             ))
+
+            // Track content hashes uploaded in this session to prevent
+            // re-uploading the same content under different filenames.
+            val uploadedHashes = mutableSetOf<String>()
 
             var uploaded = 0
             var skipped = 0
             var failed = 0
 
-            for (photo in pending) {
+            for (photo in genuinelyPending) {
                 // ── Server-side dedup ──────────────────────────────────
                 // If the server already has a photo with this exact filename,
                 // mark it SYNCED locally and skip the upload entirely.
@@ -141,6 +165,43 @@ class BackupWorker @AssistedInject constructor(
                         continue
                     }
                     val photoData = inputStream.use { it.readBytes() }
+
+                    // ── Content hash dedup (both modes) ─────────────────────
+                    // Compute a short content hash and check if we've already
+                    // uploaded identical content in this session or a previous one.
+                    val contentHash = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(photoData)
+                        .take(6)
+                        .joinToString("") { "%02x".format(it) }
+
+                    if (contentHash in uploadedHashes) {
+                        diag.debug(TAG, "Skipping ${photo.filename} — duplicate content hash in session", mapOf(
+                            "localId" to photo.localId,
+                            "contentHash" to contentHash
+                        ))
+                        db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                        skipped++
+                        continue
+                    }
+
+                    // Check against previously synced photos with the same hash
+                    val existingSynced = db.photoDao().getSyncedByHash(contentHash)
+                    if (existingSynced != null) {
+                        diag.debug(TAG, "Skipping ${photo.filename} — matches synced photo ${existingSynced.filename}", mapOf(
+                            "localId" to photo.localId,
+                            "matchedId" to existingSynced.localId,
+                            "contentHash" to contentHash
+                        ))
+                        db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                        skipped++
+                        continue
+                    }
+
+                    // Store hash in entity for future dedup
+                    if (photo.photoHash == null) {
+                        db.photoDao().update(photo.copy(photoHash = contentHash))
+                    }
+
                     diag.debug(TAG, "Read ${photoData.size} bytes from content URI", mapOf(
                         "localId" to photo.localId,
                         "filename" to photo.filename,
@@ -195,6 +256,7 @@ class BackupWorker @AssistedInject constructor(
                             "sizeBytes" to photoData.size.toString()
                         ))
                         photoRepository.uploadPhotoPlain(photo, photoData)
+                        uploadedHashes.add(contentHash)
                         diag.info(TAG, "Upload succeeded (plain mode)", mapOf(
                             "localId" to photo.localId,
                             "filename" to photo.filename
@@ -210,6 +272,7 @@ class BackupWorker @AssistedInject constructor(
                                 "sizeBytes" to photoData.size.toString()
                             ))
                             photoRepository.uploadPhoto(photo, photoData, thumbnailData)
+                            uploadedHashes.add(contentHash)
                             diag.info(TAG, "Upload succeeded (encrypted mode)", mapOf(
                                 "localId" to photo.localId,
                                 "filename" to photo.filename
@@ -239,7 +302,7 @@ class BackupWorker @AssistedInject constructor(
                 "uploaded" to uploaded.toString(),
                 "skipped" to skipped.toString(),
                 "failed" to failed.toString(),
-                "totalProcessed" to pending.size.toString()
+                "totalProcessed" to genuinelyPending.size.toString()
             ))
 
             // Re-register the reactive content-URI observer so the next

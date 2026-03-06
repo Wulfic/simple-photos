@@ -203,6 +203,7 @@ fun TrashScreen(
 ) {
     var showEmptyConfirm by remember { mutableStateOf(false) }
     val totalSize = viewModel.items.sumOf { it.sizeBytes }
+    val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
     Scaffold(
         topBar = {
@@ -217,7 +218,7 @@ fun TrashScreen(
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
                     onLogout = { viewModel.logout(onLogout) },
-                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore) }
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
                 )
             )
         }

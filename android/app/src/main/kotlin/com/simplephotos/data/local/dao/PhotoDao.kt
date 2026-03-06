@@ -30,9 +30,17 @@ interface PhotoDao {
     @Query("UPDATE photos SET syncStatus = :status WHERE localId = :id")
     suspend fun updateSyncStatus(id: String, status: SyncStatus)
 
-    /** Reset photos stuck at UPLOADING (from a crash) back to PENDING so they get retried. */
-    @Query("UPDATE photos SET syncStatus = 'PENDING' WHERE syncStatus = 'UPLOADING'")
+    /**
+     * Reset photos stuck at UPLOADING (from a crash) back to PENDING so they get retried.
+     * Only resets photos that haven't already been successfully uploaded
+     * (no serverBlobId and no serverPhotoId) — prevents re-uploading duplicates.
+     */
+    @Query("UPDATE photos SET syncStatus = 'PENDING' WHERE syncStatus = 'UPLOADING' AND serverBlobId IS NULL AND serverPhotoId IS NULL")
     suspend fun resetStuckUploading()
+
+    /** Find a photo with the given photoHash that is already SYNCED. */
+    @Query("SELECT * FROM photos WHERE photoHash = :hash AND syncStatus = 'SYNCED' LIMIT 1")
+    suspend fun getSyncedByHash(hash: String): PhotoEntity?
 
     @Query("UPDATE photos SET serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, syncStatus = 'SYNCED' WHERE localId = :localId")
     suspend fun markSynced(localId: String, blobId: String, thumbBlobId: String?)

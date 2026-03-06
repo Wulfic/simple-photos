@@ -225,11 +225,15 @@ async function uploadBlob(
 
 async function markEncrypted(
   photoId: string,
-  blobId: string
+  blobId: string,
+  thumbBlobId?: string
 ): Promise<void> {
   const res = await apiFetch(`/photos/${photoId}/mark-encrypted`, {
     method: "POST",
-    body: JSON.stringify({ blob_id: blobId }),
+    body: JSON.stringify({
+      blob_id: blobId,
+      thumb_blob_id: thumbBlobId || null,
+    }),
   });
   if (!res.ok) throw new Error(`markEncrypted failed: ${res.status}`);
 }
@@ -378,8 +382,8 @@ async function runMigration(
           contentHash
         );
 
-        // Step 5: Link blob to the plain photo
-        await markEncrypted(photo.id, uploadResult.blob_id);
+        // Step 5: Link blob to the plain photo (including thumbnail blob)
+        await markEncrypted(photo.id, uploadResult.blob_id, thumbBlobId);
 
         itemSuccess = true;
         succeeded++;

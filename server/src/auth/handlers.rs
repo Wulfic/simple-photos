@@ -371,6 +371,21 @@ pub async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// GET /api/auth/2fa/status — check if 2FA is enabled for the current user.
+pub async fn get_2fa_status(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let enabled: bool = sqlx::query_scalar(
+        "SELECT totp_enabled != 0 FROM users WHERE id = ?",
+    )
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({ "totp_enabled": enabled })))
+}
+
 pub async fn setup_2fa(
     State(state): State<AppState>,
     headers: HeaderMap,

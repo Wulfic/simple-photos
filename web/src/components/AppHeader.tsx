@@ -190,26 +190,24 @@ export default function AppHeader({
                     <AppIcon name="gear" />
                     Settings
                   </button>
-                  {isAdmin && (
-                    <button
-                      onClick={() => { navigate("/diagnostics"); setDropdownOpen(false); }}
-                      className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
-                    >
-                      <AppIcon name="shield" />
-                      Diagnostics
-                    </button>
-                  )}
+                  <button
+                    onClick={() => { navigate("/diagnostics"); setDropdownOpen(false); }}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                  >
+                    <AppIcon name="shield" />
+                    Diagnostics
+                  </button>
                   <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                   <button
                     onClick={() => { toggleTheme(); setDropdownOpen(false); }}
                     className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
                   >
-                    {theme === "light" ? (
+                    {theme === "dark" ? (
                       <AppIcon name="night" />
                     ) : (
                       <AppIcon name="sun" />
                     )}
-                    {theme === "light" ? "Dark Mode" : "Light Mode"}
+                    {theme === "dark" ? "Dark Mode" : "Light Mode"}
                   </button>
                   <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                   <button

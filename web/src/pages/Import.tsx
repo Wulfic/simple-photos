@@ -214,7 +214,7 @@ export default function Import() {
         file.type.startsWith("image/") ||
         file.type.startsWith("video/") ||
         file.type.startsWith("audio/") ||
-        /\.(heic|heif|avif|webp|dng|cr2|nef|arw|raw|jpg|jpeg|png|gif|mp4|mov|mkv|webm|wmv|asf|hevc|h264|h265|mpg|mpeg|ico|cur|hdr|svg|bmp|tiff?|mp3|aiff|flac|ogg|wav|wma)$/i.test(
+        /\.(heic|heif|avif|webp|dng|cr2|nef|arw|raw|jpg|jpeg|png|gif|mp4|mov|mkv|webm|wmv|asf|h264|mpg|mpeg|ico|cur|hdr|svg|bmp|tiff?|mp3|aiff|flac|ogg|wav|wma)$/i.test(
           file.name
         )
       ) {
@@ -559,7 +559,7 @@ export default function Import() {
                   ref={inputRef}
                   type="file"
                   multiple
-                  accept="image/*,video/*,audio/*,.json,.heic,.heif,.avif,.dng,.cr2,.nef,.arw,.ico,.cur,.hdr,.wmv,.asf,.hevc,.h264,.h265,.mpg,.mpeg,.aiff,.flac,.wma"
+                  accept="image/*,video/*,audio/*,.json,.heic,.heif,.avif,.dng,.cr2,.nef,.arw,.ico,.cur,.hdr,.wmv,.asf,.h264,.mpg,.mpeg,.aiff,.flac,.wma"
                   className="hidden"
                   onChange={(e) => {
                     if (e.target.files && e.target.files.length > 0) processFiles(e.target.files);

@@ -106,7 +106,8 @@ export default function usePhotoPreload(
       const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
       if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
       const fileRes = await fetch(api.photos.webUrl(photoId), { headers });
-      if (!fileRes.ok) return;
+      // 202 = conversion in progress — don't cache the JSON placeholder
+      if (!fileRes.ok || fileRes.status === 202) return;
       const blob = await fileRes.blob();
       const url = URL.createObjectURL(blob);
 
