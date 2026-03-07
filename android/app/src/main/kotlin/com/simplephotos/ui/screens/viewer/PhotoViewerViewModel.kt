@@ -127,6 +127,18 @@ class PhotoViewerViewModel @Inject constructor(
         android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
     }
 
+    /**
+     * Download, decrypt, and write media directly to a temp file.
+     * Used for video/audio to avoid OOM — the decoded bytes never live
+     * entirely in the Java heap (only the encrypted blob + decrypted JSON
+     * are in memory; base64 is decoded in chunks to disk).
+     *
+     * Peak heap: ~1× blob size (vs ~4× with downloadAndDecrypt).
+     */
+    suspend fun downloadAndDecryptToFile(blobId: String, outputFile: java.io.File) = withContext(Dispatchers.IO) {
+        photoRepository.downloadAndDecryptBlobToFile(blobId, outputFile)
+    }
+
     fun deletePhoto(photo: PhotoEntity, onDeleted: () -> Unit) {
         viewModelScope.launch {
             try {
