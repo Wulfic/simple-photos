@@ -162,7 +162,7 @@ async fn generate_thumbnail_for_migration(
         Uuid::new_v4()
     ));
 
-    if generate_thumbnail_file(source_path, &tmp_output, mime_type).await {
+    if generate_thumbnail_file(source_path, &tmp_output, mime_type, None).await {
         let result = tokio::fs::read(&tmp_output).await.ok();
         let _ = tokio::fs::remove_file(&tmp_output).await;
         if result.as_ref().map(|d| d.len()).unwrap_or(0) > 0 {

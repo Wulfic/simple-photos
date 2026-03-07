@@ -279,6 +279,7 @@ export function useGalleryData(): GalleryDataResult {
           albumIds: [],
           thumbnailData,
           contentHash: photo.photo_hash ?? undefined,
+          cropData: (photo as any).crop_metadata ?? undefined,
         });
       }
 

@@ -62,6 +62,7 @@ data class EncryptedSyncRecord(
     @SerializedName("encrypted_blob_id") val encryptedBlobId: String? = null,
     @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
     @SerializedName("is_favorite") val isFavorite: Boolean = false,
+    @SerializedName("crop_metadata") val cropMetadata: String? = null,
     @SerializedName("photo_hash") val photoHash: String? = null
 )
 

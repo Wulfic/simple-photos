@@ -64,6 +64,21 @@ pub async fn duplicate_photo(
         format!("Copy of {}", original.filename)
     };
 
+    let mut new_thumb_path = original.thumb_path.clone();
+
+    // If plain mode (not encrypted), we need a new thumbnail file because edits diverge
+    if original.encrypted_blob_id.is_none() && new_thumb_path.is_some() {
+        let new_thumb_filename = format!("thumb_{}.jpg", Uuid::new_v4());
+        let new_thumb_rel = format!(".thumbnails/{}", new_thumb_filename);
+        new_thumb_path = Some(new_thumb_rel.clone());
+
+        let storage_root = std::path::Path::new(&state.config.storage.path);
+        let abs_file = storage_root.join(&original.file_path);
+        let abs_new_thumb = storage_root.join(&new_thumb_rel);
+        let crop_meta = meta.as_deref();
+        crate::photos::scan::generate_thumbnail_file(&abs_file, &abs_new_thumb, &original.mime_type, crop_meta).await;
+    }
+
     sqlx::query(
         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
          size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
@@ -84,7 +99,7 @@ pub async fn duplicate_photo(
     .bind(&original.taken_at)
     .bind(original.latitude)
     .bind(original.longitude)
-    .bind(&original.thumb_path)
+    .bind(&new_thumb_path)
     .bind(&now)
     .bind(&original.encrypted_blob_id)
     .bind(&original.encrypted_thumb_blob_id)

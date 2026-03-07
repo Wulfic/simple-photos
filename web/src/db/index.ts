@@ -24,6 +24,8 @@ export interface CachedPhoto {
   cropData?: string;
   /** Short content-based hash (12 hex chars of SHA-256) for cross-platform alignment */
   contentHash?: string;
+  /** Actual server storage blob ID (defaults to blobId if undefined) */
+  storageBlobId?: string;
 }
 
 export interface CachedAlbum {

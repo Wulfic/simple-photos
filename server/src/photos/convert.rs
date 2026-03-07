@@ -123,7 +123,7 @@ async fn run_conversion_pass(
                         if !tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
                             let source_path = storage_root.join(file_path);
                             if tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
-                                if generate_thumbnail_file(&source_path, &thumb_abs, mime_type).await {
+                                if generate_thumbnail_file(&source_path, &thumb_abs, mime_type, None).await {
                                     thumbnails_generated += 1;
                                     tracing::debug!(
                                         photo_id = %photo_id,
@@ -202,7 +202,7 @@ async fn run_conversion_pass(
                 if let Some(tp) = thumb_path {
                     let thumb_abs = storage_root.join(tp);
                     if !tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
-                        if generate_thumbnail_file(&source_path, &thumb_abs, mime_type).await {
+                        if generate_thumbnail_file(&source_path, &thumb_abs, mime_type, None).await {
                             thumbnails_generated += 1;
                             tracing::debug!(
                                 photo_id = %photo_id,
