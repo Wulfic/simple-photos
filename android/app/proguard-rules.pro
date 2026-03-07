@@ -29,5 +29,13 @@
 # Coroutines
 -dontwarn kotlinx.coroutines.**
 
+# Coil image decoders (GIF, SVG)
+-keep class coil.decode.** { *; }
+-dontwarn coil.**
+
+# Media3 / ExoPlayer
+-keep class androidx.media3.** { *; }
+-dontwarn androidx.media3.**
+
 # Keep Compose
 -dontwarn androidx.compose.**

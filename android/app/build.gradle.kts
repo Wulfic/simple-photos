@@ -74,11 +74,14 @@ dependencies {
     // Image loading
     implementation(libs.coil.compose)
     implementation(libs.coil.video)
+    implementation(libs.coil.gif)
+    implementation(libs.coil.svg)
 
     // Media3 / ExoPlayer
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
+    implementation(libs.media3.datasource)
     implementation(libs.media3.datasource.okhttp)
 
     // Navigation

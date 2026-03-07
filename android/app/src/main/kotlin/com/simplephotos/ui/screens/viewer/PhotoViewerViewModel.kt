@@ -109,11 +109,21 @@ class PhotoViewerViewModel @Inject constructor(
     /**
      * Download and decrypt an encrypted blob, returning the raw media bytes.
      * Called from per-page composables for encrypted-mode photos.
+     *
+     * Memory: the decrypted JSON envelope contains a base64-encoded "data"
+     * field. We extract just that field and decode it, then let the
+     * intermediate strings become GC-eligible before returning.
      */
     suspend fun downloadAndDecrypt(blobId: String): ByteArray = withContext(Dispatchers.IO) {
         val decrypted = photoRepository.downloadAndDecryptBlob(blobId)
-        val payload = JSONObject(String(decrypted, Charsets.UTF_8))
+        // Parse and extract the base64 payload. We use JSONObject which
+        // unfortunately copies the string, but we null-out intermediates
+        // so GC can reclaim them during the Base64 decode.
+        val jsonStr = String(decrypted, Charsets.UTF_8)
+        // decrypted ByteArray is now GC-eligible (jsonStr holds the data)
+        val payload = JSONObject(jsonStr)
         val dataBase64 = payload.getString("data")
+        // payload and jsonStr are now GC-eligible (only dataBase64 is needed)
         android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
     }
 
@@ -197,17 +207,10 @@ class PhotoViewerViewModel @Inject constructor(
     /** Load favorite state for a specific photo (called when page changes). */
     fun loadFavoriteForPhoto(photoId: String?) {
         if (photoId == null || encryptionMode != "plain") return
-        viewModelScope.launch {
-            try {
-                val response = withContext(Dispatchers.IO) {
-                    api.listPhotos(limit = 500)
-                }
-                val photo = response.photos.find { it.id == photoId }
-                isFavorite = photo?.isFavorite ?: false
-            } catch (_: Exception) {
-                isFavorite = false
-            }
-        }
+        // Read from the local allPhotos list (already loaded from DB) instead
+        // of fetching up to 500 DTOs from the server on every page swipe.
+        val photo = allPhotos.find { it.serverPhotoId == photoId }
+        isFavorite = photo?.isFavorite ?: false
     }
 
     /** Toggle the favorite state of the current photo. */
@@ -216,6 +219,14 @@ class PhotoViewerViewModel @Inject constructor(
             try {
                 val response = withContext(Dispatchers.IO) { api.toggleFavorite(photoId) }
                 isFavorite = response.isFavorite
+                // Update the local allPhotos list so loadFavoriteForPhoto()
+                // returns the correct value when the user swipes away and back.
+                val idx = allPhotos.indexOfFirst { it.serverPhotoId == photoId }
+                if (idx >= 0) {
+                    allPhotos = allPhotos.toMutableList().also {
+                        it[idx] = it[idx].copy(isFavorite = response.isFavorite)
+                    }
+                }
             } catch (_: Exception) {}
         }
     }

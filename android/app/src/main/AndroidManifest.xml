@@ -21,6 +21,7 @@
     <application
         android:name=".SimplePhotosApplication"
         android:allowBackup="false"
+        android:largeHeap="true"
         android:icon="@mipmap/ic_launcher"
         android:label="Simple Photos"
         android:supportsRtl="true"
