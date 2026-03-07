@@ -1,0 +1,1504 @@
+diff --git a/android/app/src/main/kotlin/com/simplephotos/data/remote/ApiService.kt b/android/app/src/main/kotlin/com/simplephotos/data/remote/ApiService.kt
+index 6206d76..ec6f89b 100644
+--- a/android/app/src/main/kotlin/com/simplephotos/data/remote/ApiService.kt
++++ b/android/app/src/main/kotlin/com/simplephotos/data/remote/ApiService.kt
+@@ -217,6 +217,13 @@ interface ApiService {
+     @PUT("api/photos/{id}/crop")
+     suspend fun setCrop(@Path("id") photoId: String, @Body request: SetCropRequest): CropResponse
+ 
++    // ── Duplicate (Save Copy) ─────────────────────────────────────────────
++    @POST("api/photos/{id}/duplicate")
++    suspend fun duplicatePhoto(
++        @Path("id") photoId: String,
++        @Body request: DuplicatePhotoRequest
++    ): DuplicatePhotoResponse
++
+     // ── Secure Galleries ──────────────────────────────────────────────────
+     @GET("api/galleries/secure")
+     suspend fun listSecureGalleries(): SecureGalleryListResponse
+diff --git a/android/app/src/main/kotlin/com/simplephotos/data/remote/dto/PhotoDto.kt b/android/app/src/main/kotlin/com/simplephotos/data/remote/dto/PhotoDto.kt
+index 7846228..47aeae5 100644
+--- a/android/app/src/main/kotlin/com/simplephotos/data/remote/dto/PhotoDto.kt
++++ b/android/app/src/main/kotlin/com/simplephotos/data/remote/dto/PhotoDto.kt
+@@ -159,6 +159,19 @@ data class CropResponse(
+     @SerializedName("crop_metadata") val cropMetadata: String?
+ )
+ 
++// ── Duplicate (Save Copy) ────────────────────────────────────────────────────
++
++data class DuplicatePhotoRequest(
++    @SerializedName("crop_metadata") val cropMetadata: String?
++)
++
++data class DuplicatePhotoResponse(
++    val id: String,
++    @SerializedName("source_photo_id") val sourcePhotoId: String,
++    val filename: String,
++    @SerializedName("crop_metadata") val cropMetadata: String?
++)
++
+ // ── 2FA Status ───────────────────────────────────────────────────────────────
+ 
+ data class TwoFactorStatusResponse(
+diff --git a/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerComponents.kt b/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerComponents.kt
+index c114f06..5bfb6e8 100644
+--- a/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerComponents.kt
++++ b/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerComponents.kt
+@@ -38,13 +38,14 @@ import okhttp3.OkHttpClient
+ import okhttp3.Request
+ import org.json.JSONObject
+ 
+-// Parsed crop metadata for zoom/brightness transforms
++// Parsed crop metadata for zoom/brightness/rotation transforms
+ internal data class CropInfo(
+     val x: Float,
+     val y: Float,
+     val width: Float,
+     val height: Float,
+-    val brightness: Float
++    val brightness: Float,
++    val rotate: Int = 0
+ )
+ 
+ /**
+@@ -86,10 +87,15 @@ internal fun PhotoPageContent(
+     isActivePage: Boolean = true,
+     editMode: Boolean = false,
+     editBrightness: Float = 0f,
++    editRotation: Int = 0,
++    // Trim boundaries (seconds) — applied during playback
++    trimStart: Float = 0f,
++    trimEnd: Float = 0f,
+     // Shared ExoPlayer — owned by PhotoViewerScreen, one instance for all pages
+     sharedPlayer: ExoPlayer? = null,
+     activeVideoUri: Uri? = null,
+     onVideoUriReady: ((Uri, String) -> Unit)? = null,
++    onDurationKnown: ((Float) -> Unit)? = null,
+     playerError: String? = null,
+     isConverting: Boolean = false
+ ) {
+@@ -211,7 +217,7 @@ internal fun PhotoPageContent(
+         }
+     }
+ 
+-    // Parse crop metadata for zoom/brightness display
++    // Parse crop metadata for zoom/brightness/rotation display
+     val cropInfo = remember(photo.cropMetadata) {
+         photo.cropMetadata?.let {
+             try {
+@@ -221,7 +227,8 @@ internal fun PhotoPageContent(
+                     y = json.optDouble("y", 0.0).toFloat(),
+                     width = json.optDouble("width", 1.0).toFloat(),
+                     height = json.optDouble("height", 1.0).toFloat(),
+-                    brightness = json.optDouble("brightness", 0.0).toFloat()
++                    brightness = json.optDouble("brightness", 0.0).toFloat(),
++                    rotate = json.optInt("rotate", 0)
+                 )
+             } catch (_: Exception) { null }
+         }
+@@ -238,6 +245,9 @@ internal fun PhotoPageContent(
+         } else null
+     }
+ 
++    // Rotation — use live edit value during edit mode, stored value otherwise
++    val rotationDegrees = if (editMode) editRotation.toFloat() else (cropInfo?.rotate ?: 0).toFloat()
++
+     // ── Zoom state (double-tap / pinch-to-zoom) ──────────────────────
+     var zoomScale by remember { mutableStateOf(1f) }
+     var zoomOffsetX by remember { mutableStateOf(0f) }
+@@ -326,11 +336,17 @@ internal fun PhotoPageContent(
+         // Compute crop zoom modifier — disabled in edit mode so overlay aligns correctly
+         val containerW = constraints.maxWidth.toFloat()
+         val containerH = constraints.maxHeight.toFloat()
++
+         val cropModifier = if (
+             !editMode && cropInfo != null && photo.width > 0 && photo.height > 0 &&
+             containerW > 0 && containerH > 0
+         ) {
+-            val imgAspect = photo.width.toFloat() / photo.height.toFloat()
++            // When rotated 90/270, the image's effective dimensions are swapped
++            val rot = cropInfo.rotate % 360
++            val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
++            val effW = if (isSwapped) photo.height.toFloat() else photo.width.toFloat()
++            val effH = if (isSwapped) photo.width.toFloat() else photo.height.toFloat()
++            val imgAspect = effW / effH
+             val containerAspect = containerW / containerH
+             val rendW: Float
+             val rendH: Float
+@@ -350,12 +366,76 @@ internal fun PhotoPageContent(
+             val scale = minOf(containerW / cropPixW, containerH / cropPixH)
+             val tx = containerW * (0.5f - containerCX)
+             val ty = containerH * (0.5f - containerCY)
++
++            // Extra scale needed to shrink the original (un-rotated) image so
++            // that after rotation it fits within the container
++            val rotScale = if (isSwapped && photo.width > 0 && photo.height > 0) {
++                val origAspect = photo.width.toFloat() / photo.height.toFloat()
++                val origRendW: Float; val origRendH: Float
++                if (origAspect > containerAspect) {
++                    origRendW = containerW; origRendH = containerW / origAspect
++                } else {
++                    origRendH = containerH; origRendW = containerH * origAspect
++                }
++                // After rotating the original rendered rect, its bounding box is swapped
++                val rotatedBoundsW = origRendH
++                val rotatedBoundsH = origRendW
++                minOf(containerW / rotatedBoundsW, containerH / rotatedBoundsH)
++            } else 1f
++
+             Modifier.graphicsLayer {
+-                scaleX = scale
+-                scaleY = scale
++                scaleX = scale * rotScale
++                scaleY = scale * rotScale
+                 transformOrigin = TransformOrigin(containerCX, containerCY)
+                 translationX = tx
+                 translationY = ty
++                rotationZ = cropInfo.rotate.toFloat()
++            }
++        } else if (!editMode && rotationDegrees != 0f) {
++            // No crop but has saved rotation — scale so rotated image fits container
++            val rot = rotationDegrees.toInt() % 360
++            val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
++            if (isSwapped && photo.width > 0 && photo.height > 0 && containerW > 0 && containerH > 0) {
++                val origAspect = photo.width.toFloat() / photo.height.toFloat()
++                val containerAspect = containerW / containerH
++                val origRendW: Float; val origRendH: Float
++                if (origAspect > containerAspect) {
++                    origRendW = containerW; origRendH = containerW / origAspect
++                } else {
++                    origRendH = containerH; origRendW = containerH * origAspect
++                }
++                val rotScale = minOf(containerW / origRendH, containerH / origRendW)
++                Modifier.graphicsLayer {
++                    scaleX = rotScale; scaleY = rotScale
++                    rotationZ = rotationDegrees
++                }
++            } else {
++                Modifier.graphicsLayer { rotationZ = rotationDegrees }
++            }
++        } else Modifier
++
++        // Live rotation modifier for edit mode preview — includes scale so
++        // a 90°/270° rotated image fits within the container bounds
++        val editRotationModifier = if (editMode && rotationDegrees != 0f) {
++            val rot = rotationDegrees.toInt() % 360
++            val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
++            if (isSwapped && photo.width > 0 && photo.height > 0 && containerW > 0 && containerH > 0) {
++                val origAspect = photo.width.toFloat() / photo.height.toFloat()
++                val containerAspect = containerW / containerH
++                val origRendW: Float; val origRendH: Float
++                if (origAspect > containerAspect) {
++                    origRendW = containerW; origRendH = containerW / origAspect
++                } else {
++                    origRendH = containerH; origRendW = containerH * origAspect
++                }
++                // Scale so the rotated bounding box (swapped W↔H) fits the container
++                val rotScale = minOf(containerW / origRendH, containerH / origRendW)
++                Modifier.graphicsLayer {
++                    scaleX = rotScale; scaleY = rotScale
++                    rotationZ = rotationDegrees
++                }
++            } else {
++                Modifier.graphicsLayer { rotationZ = rotationDegrees }
+             }
+         } else Modifier
+ 
+@@ -369,8 +449,8 @@ internal fun PhotoPageContent(
+             }
+         } else Modifier
+ 
+-        // Combined: crop first, then zoom
+-        val combinedModifier = cropModifier.then(zoomModifier)
++        // Combined: crop first, then edit rotation, then zoom
++        val combinedModifier = cropModifier.then(editRotationModifier).then(zoomModifier)
+ 
+         when {
+             // Loading encrypted content
+@@ -404,6 +484,16 @@ internal fun PhotoPageContent(
+                         isActivePage = isActivePage,
+                         filename = photo.filename,
+                         onVideoUriReady = onVideoUriReady,
++                        onDurationKnown = onDurationKnown,
++                        trimStart = trimStart,
++                        trimEnd = trimEnd,
++                        editMode = editMode,
++                        editBrightness = editBrightness,
++                        editRotation = editRotation,
++                        savedBrightness = cropInfo?.brightness ?: 0f,
++                        savedRotation = cropInfo?.rotate ?: 0,
++                        photoWidth = photo.width,
++                        photoHeight = photo.height,
+                         playerError = playerError,
+                         isConverting = isConverting
+                     )
+@@ -536,6 +626,17 @@ internal fun VideoPlayerPage(
+     isActivePage: Boolean,
+     filename: String,
+     onVideoUriReady: (Uri, String) -> Unit,
++    onDurationKnown: ((Float) -> Unit)? = null,
++    // Trim boundaries (seconds) — applied during playback
++    trimStart: Float = 0f,
++    trimEnd: Float = 0f,
++    editMode: Boolean = false,
++    editBrightness: Float = 0f,
++    editRotation: Int = 0,
++    savedBrightness: Float = 0f,
++    savedRotation: Int = 0,
++    photoWidth: Int = 0,
++    photoHeight: Int = 0,
+     playerError: String?,
+     isConverting: Boolean
+ ) {
+@@ -547,6 +648,63 @@ internal fun VideoPlayerPage(
+         }
+     }
+ 
++    // Report duration when the player reports it
++    LaunchedEffect(isActivePage, uri) {
++        if (!isActivePage || onDurationKnown == null) return@LaunchedEffect
++        val listener = object : androidx.media3.common.Player.Listener {
++            override fun onPlaybackStateChanged(state: Int) {
++                if (state == androidx.media3.common.Player.STATE_READY) {
++                    val dur = sharedPlayer.duration
++                    if (dur > 0) {
++                        onDurationKnown(dur / 1000f)
++                    }
++                }
++            }
++        }
++        sharedPlayer.addListener(listener)
++        // Also check current state in case already ready
++        if (sharedPlayer.playbackState == androidx.media3.common.Player.STATE_READY && sharedPlayer.duration > 0) {
++            onDurationKnown(sharedPlayer.duration / 1000f)
++        }
++        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
++            cont.invokeOnCancellation { sharedPlayer.removeListener(listener) }
++        }
++    }
++
++    // Enforce trim boundaries during playback — seek to trimStart when
++    // playback begins, pause when trimEnd is reached.
++    LaunchedEffect(isActivePage, trimStart, trimEnd) {
++        if (!isActivePage) return@LaunchedEffect
++        val listener = object : androidx.media3.common.Player.Listener {
++            override fun onPlaybackStateChanged(state: Int) {
++                if (state == androidx.media3.common.Player.STATE_READY) {
++                    // Seek to trimStart if set and we're before it
++                    if (trimStart > 0.01f) {
++                        val currentMs = sharedPlayer.currentPosition
++                        if (currentMs < (trimStart * 1000).toLong() - 500) {
++                            sharedPlayer.seekTo((trimStart * 1000).toLong())
++                        }
++                    }
++                }
++            }
++
++            override fun onEvents(player: androidx.media3.common.Player, events: androidx.media3.common.Player.Events) {
++                // Check trim end boundary
++                if (trimEnd > 0.01f) {
++                    val currentMs = sharedPlayer.currentPosition
++                    if (currentMs >= (trimEnd * 1000).toLong()) {
++                        sharedPlayer.playWhenReady = false
++                        sharedPlayer.seekTo((trimEnd * 1000).toLong())
++                    }
++                }
++            }
++        }
++        sharedPlayer.addListener(listener)
++        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
++            cont.invokeOnCancellation { sharedPlayer.removeListener(listener) }
++        }
++    }
++
+     // Pause the shared player when swiping away from a video page.
+     // (The next video page will call onVideoUriReady which re-prepares.)
+     LaunchedEffect(isActivePage) {
+@@ -593,21 +751,67 @@ internal fun VideoPlayerPage(
+         }
+     } else if (isActivePage && activeVideoUri == uri) {
+         // This is the active video page and the shared player has our URI loaded.
+-        // Show the PlayerView. Default rendering uses SurfaceView which sends
+-        // decoded frames directly to the display compositor in native memory,
+-        // avoiding the Java-heap Bitmap copy that TextureView would require.
+-        AndroidView(
+-            factory = { ctx ->
+-                PlayerView(ctx).apply {
+-                    this.player = sharedPlayer
+-                    useController = true
++        // Apply brightness and rotation transforms.
++        val activeBrightness = if (editMode) editBrightness else savedBrightness
++        val activeRotation = if (editMode) editRotation else savedRotation
++
++        // For 90/270 rotation, scale down so the rotated video fits the container.
++        // PlayerView fills its parent 1:1, so a rotated Box needs shrinking.
++        val rot = activeRotation % 360
++        val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
++        val videoRotationModifier = if (activeRotation != 0) {
++            if (isSwapped && photoWidth > 0 && photoHeight > 0) {
++                // Compute the scale needed: the video fills its box at the original
++                // aspect ratio. After rotating, width↔height swap, so we scale
++                // to fit the swapped bounding box inside the original container.
++                val aspect = photoWidth.toFloat() / photoHeight.toFloat()
++                // The rotated bounding box: if original is W×H, rotated is H×W
++                // We need min(containerW/H_orig_rendered, containerH/W_orig_rendered)
++                // but since the PlayerView fills its Box (fillMaxSize), the
++                // "container" IS the box. The scale is simply min(aspect, 1/aspect)
++                // when aspect != 1.
++                val rotScale = if (aspect > 1f) 1f / aspect else aspect
++                Modifier.graphicsLayer {
++                    scaleX = rotScale; scaleY = rotScale
++                    rotationZ = activeRotation.toFloat()
+                 }
+-            },
+-            update = { playerView ->
+-                playerView.player = sharedPlayer
+-            },
+-            modifier = Modifier.fillMaxSize()
+-        )
++            } else {
++                Modifier.graphicsLayer { rotationZ = activeRotation.toFloat() }
++            }
++        } else Modifier
++
++        Box(
++            modifier = Modifier
++                .fillMaxSize()
++                .then(videoRotationModifier)
++        ) {
++            AndroidView(
++                factory = { ctx ->
++                    PlayerView(ctx).apply {
++                        this.player = sharedPlayer
++                        useController = true
++                    }
++                },
++                update = { playerView ->
++                    playerView.player = sharedPlayer
++                },
++                modifier = Modifier.fillMaxSize()
++            )
++            // Brightness overlay: positive = brighten (white overlay),
++            // negative = darken (black overlay). Matches CSS brightness() filter.
++            if (activeBrightness != 0f) {
++                val overlayColor = if (activeBrightness > 0f) {
++                    Color.White.copy(alpha = (activeBrightness / 200f).coerceIn(0f, 0.5f))
++                } else {
++                    Color.Black.copy(alpha = (-activeBrightness / 150f).coerceIn(0f, 0.7f))
++                }
++                Box(
++                    modifier = Modifier
++                        .fillMaxSize()
++                        .background(overlayColor)
++                )
++            }
++        }
+     } else {
+         // Not active or player showing a different video — black placeholder
+         Box(
+diff --git a/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerScreen.kt b/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerScreen.kt
+index b8c02c0..6f9cfbc 100644
+--- a/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerScreen.kt
++++ b/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerScreen.kt
+@@ -27,9 +27,11 @@ import androidx.compose.runtime.*
+ import androidx.compose.ui.Alignment
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
++import androidx.compose.ui.draw.drawBehind
+ import androidx.compose.ui.geometry.Offset
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.graphics.drawscope.Stroke
++import androidx.compose.ui.graphics.graphicsLayer
+ import androidx.compose.ui.input.pointer.pointerInput
+ import androidx.compose.ui.input.pointer.positionChange
+ import androidx.compose.ui.platform.LocalContext
+@@ -223,14 +225,43 @@ fun PhotoViewerScreen(
+ 
+     // ── Edit mode state ──────────────────────────────────────────────
+     var editMode by remember { mutableStateOf(false) }
+-    var editTab by remember { mutableStateOf("brightness") } // "crop" | "brightness"
++    var editTab by remember { mutableStateOf("crop") } // "crop" | "brightness" | "rotate" | "trim"
+     var cropCorners by remember { mutableStateOf(CropCorners(0f, 0f, 1f, 1f)) }
+     var brightnessValue by remember { mutableStateOf(0f) }
++    var rotateValue by remember { mutableStateOf(0) } // 0, 90, 180, 270
++    var trimStart by remember { mutableStateOf(0f) }
++    var trimEnd by remember { mutableStateOf(0f) }
++    var mediaDuration by remember { mutableStateOf(0f) }
++
++
++    // Load saved trim values when page changes (for non-edit mode playback)
++    LaunchedEffect(pagerState.currentPage) {
++        val photo = viewModel.allPhotos.getOrNull(pagerState.currentPage)
++        val cm = photo?.cropMetadata
++        if (cm != null) {
++            try {
++                val json = JSONObject(cm)
++                trimStart = json.optDouble("trimStart", 0.0).toFloat()
++                trimEnd = json.optDouble("trimEnd", 0.0).toFloat()
++            } catch (_: Exception) {
++                trimStart = 0f
++                trimEnd = 0f
++            }
++        } else {
++            trimStart = 0f
++            trimEnd = 0f
++        }
++        mediaDuration = photo?.durationSecs ?: 0f
++    }
+ 
+     // Initialize edit mode from existing crop metadata
+     fun enterEditMode() {
+         val photo = currentPhoto ?: return
+         val cm = photo.cropMetadata
++        // Use photo duration as fallback for trim end
++        val dur = photo.durationSecs ?: 0f
++        if (dur > 0f && mediaDuration <= 0f) mediaDuration = dur
++
+         if (cm != null) {
+             try {
+                 val json = JSONObject(cm)
+@@ -241,15 +272,27 @@ fun PhotoViewerScreen(
+                     h = json.optDouble("height", 1.0).toFloat()
+                 )
+                 brightnessValue = json.optDouble("brightness", 0.0).toFloat()
++                rotateValue = json.optInt("rotate", 0)
++                trimStart = json.optDouble("trimStart", 0.0).toFloat()
++                val savedEnd = json.optDouble("trimEnd", 0.0).toFloat()
++                trimEnd = if (savedEnd > 0f) savedEnd else mediaDuration
+             } catch (_: Exception) {
+                 cropCorners = CropCorners(0f, 0f, 1f, 1f)
+                 brightnessValue = 0f
++                rotateValue = 0
++                trimStart = 0f
++                trimEnd = mediaDuration
+             }
+         } else {
+             cropCorners = CropCorners(0f, 0f, 1f, 1f)
+             brightnessValue = 0f
++            rotateValue = 0
++            trimStart = 0f
++            trimEnd = mediaDuration
+         }
+-        editTab = "brightness"
++        // Select default tab based on media type (match web behavior)
++        val isMedia = photo.mediaType == "video" || photo.mediaType == "audio"
++        editTab = if (isMedia) "trim" else "crop"
+         editMode = true
+     }
+ 
+@@ -258,8 +301,12 @@ fun PhotoViewerScreen(
+         val c = cropCorners
+         val isDefaultCrop = c.x <= 0.01f && c.y <= 0.01f && c.w >= 0.99f && c.h >= 0.99f
+         val isDefaultBrightness = kotlin.math.abs(brightnessValue) < 1f
++        val isDefaultRotate = rotateValue == 0
++        val isDefaultTrim = trimStart <= 0.01f &&
++            (mediaDuration <= 0f || kotlin.math.abs(trimEnd - mediaDuration) < 0.5f)
++        val allDefault = isDefaultCrop && isDefaultBrightness && isDefaultRotate && isDefaultTrim
+ 
+-        if (isDefaultCrop && isDefaultBrightness) {
++        if (allDefault) {
+             viewModel.saveCropMetadata(photo, null)
+         } else {
+             val meta = JSONObject().apply {
+@@ -267,19 +314,53 @@ fun PhotoViewerScreen(
+                 put("y", c.y.toDouble().coerceIn(0.0, 1.0))
+                 put("width", c.w.toDouble().coerceIn(0.05, 1.0))
+                 put("height", c.h.toDouble().coerceIn(0.05, 1.0))
+-                put("rotate", 0)
++                put("rotate", rotateValue)
+                 put("brightness", brightnessValue.toDouble())
++                if (!isDefaultTrim) {
++                    put("trimStart", trimStart.toDouble())
++                    put("trimEnd", trimEnd.toDouble())
++                }
+             }.toString()
+             viewModel.saveCropMetadata(photo, meta)
+         }
+         editMode = false
+     }
+ 
++    fun saveCopy() {
++        val photo = currentPhoto ?: return
++        val c = cropCorners
++        val isDefaultCrop = c.x <= 0.01f && c.y <= 0.01f && c.w >= 0.99f && c.h >= 0.99f
++        val isDefaultBrightness = kotlin.math.abs(brightnessValue) < 1f
++        val isDefaultRotate = rotateValue == 0
++        val isDefaultTrim = trimStart <= 0.01f &&
++            (mediaDuration <= 0f || kotlin.math.abs(trimEnd - mediaDuration) < 0.5f)
++        val allDefault = isDefaultCrop && isDefaultBrightness && isDefaultRotate && isDefaultTrim
++
++        val meta = if (allDefault) null else JSONObject().apply {
++            put("x", c.x.toDouble().coerceIn(0.0, 1.0))
++            put("y", c.y.toDouble().coerceIn(0.0, 1.0))
++            put("width", c.w.toDouble().coerceIn(0.05, 1.0))
++            put("height", c.h.toDouble().coerceIn(0.05, 1.0))
++            put("rotate", rotateValue)
++            put("brightness", brightnessValue.toDouble())
++            if (!isDefaultTrim) {
++                put("trimStart", trimStart.toDouble())
++                put("trimEnd", trimEnd.toDouble())
++            }
++        }.toString()
++        viewModel.duplicatePhoto(photo, meta) {
++            editMode = false
++        }
++    }
++
+     fun clearCrop() {
+         val photo = currentPhoto ?: return
+         viewModel.saveCropMetadata(photo, null)
+         cropCorners = CropCorners(0f, 0f, 1f, 1f)
+         brightnessValue = 0f
++        rotateValue = 0
++        trimStart = 0f
++        trimEnd = mediaDuration
+     }
+ 
+     // Immersive full-screen: hide system bars when viewer is open
+@@ -380,6 +461,9 @@ fun PhotoViewerScreen(
+                     isActivePage = pagerState.currentPage == page,
+                     editMode = editMode,
+                     editBrightness = brightnessValue,
++                    editRotation = rotateValue,
++                    trimStart = trimStart,
++                    trimEnd = trimEnd,
+                     sharedPlayer = sharedPlayer,
+                     activeVideoUri = activeVideoUri,
+                     onVideoUriReady = { uri, filename ->
+@@ -413,28 +497,70 @@ fun PhotoViewerScreen(
+                             sharedPlayer.playWhenReady = true
+                         }
+                     },
++                    onDurationKnown = { dur ->
++                        if (dur > 0f) {
++                            mediaDuration = dur
++                            // Initialize trimEnd to full duration if not yet set
++                            if (trimEnd <= 0f) trimEnd = dur
++                        }
++                    },
+                     playerError = sharedPlayerError,
+                     isConverting = sharedPlayerConverting
+                 )
+             }
+         }
+ 
+-        // ── Crop overlay drawn on top of the full-screen photo ─────────
++        // ── Crop overlay drawn on top of the photo/video ─────────────────
++        // Uses actual media bounds computed from photo dimensions + container
++        // constraints so the crop handles align with the rendered image edges
++        // (like getBoundingClientRect() in the web version).
++        // When rotated 90/270°, the effective aspect ratio is swapped.
+         if (editMode && editTab == "crop") {
+             BoxWithConstraints(
+                 modifier = Modifier.fillMaxSize()
+             ) {
+-                val bw = constraints.maxWidth.toFloat()
+-                val bh = constraints.maxHeight.toFloat()
+                 val cc = cropCorners
+-                val handleRadius = 10.dp
+ 
+-                // Darkened overlay (semi-transparent) outside crop region
++                // Container dimensions in pixels (same coordinate space as Canvas)
++                val cW = constraints.maxWidth.toFloat()
++                val cH = constraints.maxHeight.toFloat()
++
++                // Account for rotation: 90/270 swaps effective width↔height
++                val rot = rotateValue % 360
++                val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
++                val rawW = (currentPhoto?.width ?: 0).toFloat()
++                val rawH = (currentPhoto?.height ?: 0).toFloat()
++                val photoW = if (isSwapped) rawH else rawW
++                val photoH = if (isSwapped) rawW else rawH
++
++                val mL: Float   // media left offset in pixels
++                val mT: Float   // media top offset in pixels
++                val mW: Float   // media rendered width in pixels
++                val mH: Float   // media rendered height in pixels
++                if (photoW > 0f && photoH > 0f && cW > 0f && cH > 0f) {
++                    val imgAspect = photoW / photoH
++                    val containerAspect = cW / cH
++                    if (imgAspect > containerAspect) {
++                        mW = cW; mH = cW / imgAspect
++                    } else {
++                        mH = cH; mW = cH * imgAspect
++                    }
++                    mL = (cW - mW) / 2f
++                    mT = (cH - mH) / 2f
++                } else {
++                    mL = 0f; mT = 0f; mW = cW; mH = cH
++                }
++
++                // Visual dot = 16dp, touch target = 40dp (easy to grab on mobile)
++                val dotRadius = 8.dp
++                val touchRadius = 20.dp
++
++                // Darkened overlay outside crop + white border lines + corner dots
+                 Canvas(modifier = Modifier.fillMaxSize()) {
+-                    val left = cc.x * size.width
+-                    val top = cc.y * size.height
+-                    val right = (cc.x + cc.w) * size.width
+-                    val bottom = (cc.y + cc.h) * size.height
++                    val left = mL + cc.x * mW
++                    val top = mT + cc.y * mH
++                    val right = mL + (cc.x + cc.w) * mW
++                    val bottom = mT + (cc.y + cc.h) * mH
+ 
+                     val dimColor = Color.Black.copy(alpha = 0.5f)
+                     // Top
+@@ -446,46 +572,52 @@ fun PhotoViewerScreen(
+                     // Right
+                     drawRect(dimColor, topLeft = Offset(right, top), size = androidx.compose.ui.geometry.Size(size.width - right, bottom - top))
+ 
+-                    // Crop border
+-                    drawRect(
+-                        Color.White,
+-                        topLeft = Offset(left, top),
+-                        size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+-                        style = Stroke(width = 2f)
+-                    )
++                    // White border lines
++                    val strokeW = 2f
++                    drawLine(Color.White, Offset(left, top), Offset(right, top), strokeWidth = strokeW)
++                    drawLine(Color.White, Offset(right, top), Offset(right, bottom), strokeWidth = strokeW)
++                    drawLine(Color.White, Offset(right, bottom), Offset(left, bottom), strokeWidth = strokeW)
++                    drawLine(Color.White, Offset(left, bottom), Offset(left, top), strokeWidth = strokeW)
++
++                    // 4 white corner dots
++                    val dotRadiusPx = dotRadius.toPx()
++                    for (center in listOf(
++                        Offset(left, top), Offset(right, top),
++                        Offset(left, bottom), Offset(right, bottom)
++                    )) {
++                        drawCircle(Color.Black.copy(alpha = 0.4f), radius = dotRadiusPx + 2f, center = center)
++                        drawCircle(Color.White, radius = dotRadiusPx, center = center)
++                    }
+                 }
+ 
+-                // Corner handles
+-                val corners = listOf(
+-                    "tl" to Offset(cc.x * bw, cc.y * bh),
+-                    "tr" to Offset((cc.x + cc.w) * bw, cc.y * bh),
+-                    "bl" to Offset(cc.x * bw, (cc.y + cc.h) * bh),
+-                    "br" to Offset((cc.x + cc.w) * bw, (cc.y + cc.h) * bh)
++                // Invisible touch targets for the 4 corners
++                val cornerDefs = listOf(
++                    "tl" to Offset(mL + cc.x * mW, mT + cc.y * mH),
++                    "tr" to Offset(mL + (cc.x + cc.w) * mW, mT + cc.y * mH),
++                    "bl" to Offset(mL + cc.x * mW, mT + (cc.y + cc.h) * mH),
++                    "br" to Offset(mL + (cc.x + cc.w) * mW, mT + (cc.y + cc.h) * mH)
+                 )
+ 
+-                for ((corner, pos) in corners) {
++                for ((corner, pos) in cornerDefs) {
+                     Box(
+                         modifier = Modifier
+                             .offset(
+-                                x = with(androidx.compose.ui.platform.LocalDensity.current) { (pos.x).toDp() } - handleRadius,
+-                                y = with(androidx.compose.ui.platform.LocalDensity.current) { (pos.y).toDp() } - handleRadius
++                                x = with(androidx.compose.ui.platform.LocalDensity.current) { pos.x.toDp() } - touchRadius,
++                                y = with(androidx.compose.ui.platform.LocalDensity.current) { pos.y.toDp() } - touchRadius
+                             )
+-                            .size(handleRadius * 2)
+-                            .clip(CircleShape)
+-                            .background(Color.White)
+-                            .pointerInput(corner) {
++                            .size(touchRadius * 2)
++                            .pointerInput(corner, mW, mH) {
+                                 detectDragGestures { change, dragAmount ->
+                                     change.consume()
+                                     val minSize = 0.05f
+-                                    val dx = dragAmount.x / bw
+-                                    val dy = dragAmount.y / bh
++                                    val dx = dragAmount.x / mW
++                                    val dy = dragAmount.y / mH
+                                     cropCorners = when (corner) {
+                                         "tl" -> {
+                                             val newX = (cropCorners.x + dx).coerceIn(0f, cropCorners.x + cropCorners.w - minSize)
+                                             val newY = (cropCorners.y + dy).coerceIn(0f, cropCorners.y + cropCorners.h - minSize)
+                                             CropCorners(
+-                                                x = newX,
+-                                                y = newY,
++                                                x = newX, y = newY,
+                                                 w = cropCorners.w + (cropCorners.x - newX),
+                                                 h = cropCorners.h + (cropCorners.y - newY)
+                                             )
+@@ -494,8 +626,7 @@ fun PhotoViewerScreen(
+                                             val newR = (cropCorners.x + cropCorners.w + dx).coerceIn(cropCorners.x + minSize, 1f)
+                                             val newY = (cropCorners.y + dy).coerceIn(0f, cropCorners.y + cropCorners.h - minSize)
+                                             CropCorners(
+-                                                x = cropCorners.x,
+-                                                y = newY,
++                                                x = cropCorners.x, y = newY,
+                                                 w = newR - cropCorners.x,
+                                                 h = cropCorners.h + (cropCorners.y - newY)
+                                             )
+@@ -504,8 +635,7 @@ fun PhotoViewerScreen(
+                                             val newX = (cropCorners.x + dx).coerceIn(0f, cropCorners.x + cropCorners.w - minSize)
+                                             val newB = (cropCorners.y + cropCorners.h + dy).coerceIn(cropCorners.y + minSize, 1f)
+                                             CropCorners(
+-                                                x = newX,
+-                                                y = cropCorners.y,
++                                                x = newX, y = cropCorners.y,
+                                                 w = cropCorners.w + (cropCorners.x - newX),
+                                                 h = newB - cropCorners.y
+                                             )
+@@ -514,8 +644,7 @@ fun PhotoViewerScreen(
+                                             val newR = (cropCorners.x + cropCorners.w + dx).coerceIn(cropCorners.x + minSize, 1f)
+                                             val newB = (cropCorners.y + cropCorners.h + dy).coerceIn(cropCorners.y + minSize, 1f)
+                                             CropCorners(
+-                                                x = cropCorners.x,
+-                                                y = cropCorners.y,
++                                                x = cropCorners.x, y = cropCorners.y,
+                                                 w = newR - cropCorners.x,
+                                                 h = newB - cropCorners.y
+                                             )
+@@ -585,8 +714,8 @@ fun PhotoViewerScreen(
+                                 modifier = Modifier.size(18.dp)
+                             )
+                         }
+-                        // Edit button — only for photos (not videos/gifs)
+-                        if (currentPhoto.mediaType != "video") {
++                        // Edit button — available for photos, videos, and audio
++                        if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
+                             TextButton(onClick = {
+                                 if (editMode) {
+                                     editMode = false
+@@ -851,6 +980,15 @@ fun PhotoViewerScreen(
+             exit = androidx.compose.animation.slideOutVertically { it },
+             modifier = Modifier.align(Alignment.BottomCenter)
+         ) {
++            val currentMediaType = currentPhoto?.mediaType ?: "photo"
++            val isPhoto = currentMediaType == "photo"
++            val isVideo = currentMediaType == "video"
++            val isAudio = currentMediaType == "audio"
++            val showCrop = isPhoto || isVideo
++            val showBrightness = isPhoto || isVideo
++            val showRotate = isPhoto || isVideo
++            val showTrim = isVideo || isAudio
++
+             Surface(
+                 color = Color(0xE6111827),
+                 modifier = Modifier.fillMaxWidth()
+@@ -861,16 +999,43 @@ fun PhotoViewerScreen(
+                         .navigationBarsPadding()
+                         .padding(horizontal = 16.dp, vertical = 12.dp)
+                 ) {
+-                    // Tab selector
++                    // Tab selector — only show tabs available for this media type
+                     Row(
+                         modifier = Modifier.fillMaxWidth(),
+                         horizontalArrangement = Arrangement.Center
+                     ) {
+-                        listOf("crop" to "Crop", "brightness" to "Brightness").forEach { (key, label) ->
+-                            TextButton(onClick = { editTab = key }) {
++                        if (showCrop) {
++                            TextButton(onClick = { editTab = "crop" }) {
++                                Text(
++                                    "Crop",
++                                    color = if (editTab == "crop") Color(0xFF60A5FA) else Color.Gray,
++                                    fontSize = 14.sp
++                                )
++                            }
++                        }
++                        if (showBrightness) {
++                            TextButton(onClick = { editTab = "brightness" }) {
++                                Text(
++                                    "Brightness",
++                                    color = if (editTab == "brightness") Color(0xFF60A5FA) else Color.Gray,
++                                    fontSize = 14.sp
++                                )
++                            }
++                        }
++                        if (showRotate) {
++                            TextButton(onClick = { editTab = "rotate" }) {
++                                Text(
++                                    "Rotate",
++                                    color = if (editTab == "rotate") Color(0xFF60A5FA) else Color.Gray,
++                                    fontSize = 14.sp
++                                )
++                            }
++                        }
++                        if (showTrim) {
++                            TextButton(onClick = { editTab = "trim" }) {
+                                 Text(
+-                                    label,
+-                                    color = if (editTab == key) Color(0xFF60A5FA) else Color.Gray,
++                                    "Trim",
++                                    color = if (editTab == "trim") Color(0xFF60A5FA) else Color.Gray,
+                                     fontSize = 14.sp
+                                 )
+                             }
+@@ -897,27 +1062,212 @@ fun PhotoViewerScreen(
+                             // Crop overlay is drawn on the main photo above; just show instructions here
+                             Text("Drag the corner handles on the photo to adjust crop", color = Color.Gray, fontSize = 12.sp)
+                         }
++                        "rotate" -> {
++                            Row(
++                                modifier = Modifier.fillMaxWidth(),
++                                horizontalArrangement = Arrangement.Center,
++                                verticalAlignment = Alignment.CenterVertically
++                            ) {
++                                // Rotate left button
++                                IconButton(onClick = { rotateValue = (rotateValue + 270) % 360 }) {
++                                    Icon(
++                                        painter = painterResource(R.drawable.ic_back_arrow),
++                                        contentDescription = "Rotate left",
++                                        tint = Color.White,
++                                        modifier = Modifier.size(20.dp)
++                                    )
++                                }
++                                Spacer(Modifier.width(16.dp))
++                                Text(
++                                    "${rotateValue}°",
++                                    color = Color.White,
++                                    fontSize = 14.sp,
++                                    fontWeight = FontWeight.Medium
++                                )
++                                Spacer(Modifier.width(16.dp))
++                                // Rotate right button
++                                IconButton(onClick = { rotateValue = (rotateValue + 90) % 360 }) {
++                                    Icon(
++                                        painter = painterResource(R.drawable.ic_back_arrow),
++                                        contentDescription = "Rotate right",
++                                        tint = Color.White,
++                                        modifier = Modifier
++                                            .size(20.dp)
++                                            .graphicsLayer(scaleX = -1f)
++                                    )
++                                }
++                            }
++                        }
++                        "trim" -> {
++                            if (mediaDuration > 0f) {
++                                // Time labels
++                                Row(
++                                    modifier = Modifier.fillMaxWidth(),
++                                    horizontalArrangement = Arrangement.SpaceBetween
++                                ) {
++                                    Text(formatTrimTime(trimStart), color = Color.Gray, fontSize = 12.sp)
++                                    Text(
++                                        "${formatTrimTime(trimEnd - trimStart)} selected",
++                                        color = Color.White,
++                                        fontSize = 12.sp,
++                                        fontWeight = FontWeight.Medium
++                                    )
++                                    Text(formatTrimTime(trimEnd), color = Color.Gray, fontSize = 12.sp)
++                                }
++                                Spacer(Modifier.height(4.dp))
++
++                                // ── Single-bar dual-thumb trim slider (matches web) ──
++                                val thumbRadiusDp = 8.dp
++                                val trackHeightDp = 6.dp
++
++                                BoxWithConstraints(
++                                    modifier = Modifier
++                                        .fillMaxWidth()
++                                        .height(40.dp)
++                                ) {
++                                    val trackW = constraints.maxWidth.toFloat()
++                                    val density = androidx.compose.ui.platform.LocalDensity.current
++
++                                    // Background track
++                                    Box(
++                                        modifier = Modifier
++                                            .fillMaxWidth()
++                                            .height(trackHeightDp)
++                                            .align(Alignment.Center)
++                                            .clip(RoundedCornerShape(50))
++                                            .background(Color.White.copy(alpha = 0.1f))
++                                    )
++
++                                    // Selected range highlight (blue bar between start and end)
++                                    val startFrac = (trimStart / mediaDuration).coerceIn(0f, 1f)
++                                    val endFrac = (trimEnd / mediaDuration).coerceIn(0f, 1f)
++                                    Box(
++                                        modifier = Modifier
++                                            .height(trackHeightDp)
++                                            .align(Alignment.CenterStart)
++                                            .offset(x = with(density) { (startFrac * trackW).toDp() })
++                                            .width(with(density) { ((endFrac - startFrac) * trackW).toDp() })
++                                            .clip(RoundedCornerShape(50))
++                                            .background(Color(0xFF3B82F6).copy(alpha = 0.6f))
++                                    )
++
++                                    // Start thumb
++                                    val startThumbX = with(density) { (startFrac * trackW).toDp() }
++                                    Box(
++                                        modifier = Modifier
++                                            .offset(x = startThumbX - thumbRadiusDp, y = 0.dp)
++                                            .size(thumbRadiusDp * 2)
++                                            .align(Alignment.CenterStart)
++                                            .clip(CircleShape)
++                                            .background(Color.White)
++                                            .then(
++                                                Modifier.drawBehind {
++                                                    drawCircle(
++                                                        color = Color(0xFF3B82F6),
++                                                        radius = size.minDimension / 2f,
++                                                        style = Stroke(width = 2.dp.toPx())
++                                                    )
++                                                }
++                                            )
++                                            .pointerInput(mediaDuration) {
++                                                detectDragGestures { change, dragAmount ->
++                                                    change.consume()
++                                                    val dx = dragAmount.x / trackW
++                                                    trimStart = (trimStart + dx * mediaDuration)
++                                                        .coerceIn(0f, trimEnd - 0.5f)
++                                                }
++                                            }
++                                    )
++
++                                    // End thumb
++                                    val endThumbX = with(density) { (endFrac * trackW).toDp() }
++                                    Box(
++                                        modifier = Modifier
++                                            .offset(x = endThumbX - thumbRadiusDp, y = 0.dp)
++                                            .size(thumbRadiusDp * 2)
++                                            .align(Alignment.CenterStart)
++                                            .clip(CircleShape)
++                                            .background(Color.White)
++                                            .then(
++                                                Modifier.drawBehind {
++                                                    drawCircle(
++                                                        color = Color(0xFF3B82F6),
++                                                        radius = size.minDimension / 2f,
++                                                        style = Stroke(width = 2.dp.toPx())
++                                                    )
++                                                }
++                                            )
++                                            .pointerInput(mediaDuration) {
++                                                detectDragGestures { change, dragAmount ->
++                                                    change.consume()
++                                                    val dx = dragAmount.x / trackW
++                                                    trimEnd = (trimEnd + dx * mediaDuration)
++                                                        .coerceIn(trimStart + 0.5f, mediaDuration)
++                                                }
++                                            }
++                                    )
++                                }
++
++                                Spacer(Modifier.height(4.dp))
++                                Text(
++                                    "Full duration: ${formatTrimTime(mediaDuration)}",
++                                    color = Color.Gray.copy(alpha = 0.6f),
++                                    fontSize = 11.sp,
++                                    modifier = Modifier.fillMaxWidth(),
++                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
++                                )
++                            } else {
++                                // Duration not yet known
++                                Row(
++                                    modifier = Modifier.fillMaxWidth(),
++                                    horizontalArrangement = Arrangement.Center,
++                                    verticalAlignment = Alignment.CenterVertically
++                                ) {
++                                    CircularProgressIndicator(
++                                        color = Color.Gray,
++                                        modifier = Modifier.size(16.dp),
++                                        strokeWidth = 2.dp
++                                    )
++                                    Spacer(Modifier.width(8.dp))
++                                    Text("Loading duration…", color = Color.Gray, fontSize = 12.sp)
++                                }
++                                Spacer(Modifier.height(4.dp))
++                                Text(
++                                    "Play the media briefly if the duration doesn't appear.",
++                                    color = Color.Gray.copy(alpha = 0.5f),
++                                    fontSize = 11.sp,
++                                    modifier = Modifier.fillMaxWidth(),
++                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
++                                )
++                            }
++                        }
+                     }
+ 
+                     Spacer(Modifier.height(8.dp))
+ 
+-                    // Action buttons
++                    // Action buttons — matches web: Save, Save Copy, Reset, Cancel
+                     Row(
+                         modifier = Modifier.fillMaxWidth(),
+                         horizontalArrangement = Arrangement.SpaceEvenly
+                     ) {
+-                        TextButton(onClick = { clearCrop() }) {
+-                            Text("Reset", color = Color(0xFFF87171), fontSize = 14.sp)
+-                        }
+-                        TextButton(onClick = { editMode = false }) {
+-                            Text("Cancel", color = Color.Gray, fontSize = 14.sp)
+-                        }
+                         Button(
+                             onClick = { saveEdit() },
+                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                         ) {
+                             Text("Save", color = Color.White, fontSize = 14.sp)
+                         }
++                        Button(
++                            onClick = { saveCopy() },
++                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A))
++                        ) {
++                            Text("Save Copy", color = Color.White, fontSize = 14.sp)
++                        }
++                        TextButton(onClick = { clearCrop() }) {
++                            Text("Reset", color = Color(0xFFF87171), fontSize = 14.sp)
++                        }
++                        TextButton(onClick = { editMode = false }) {
++                            Text("Cancel", color = Color.Gray, fontSize = 14.sp)
++                        }
+                     }
+                 }
+             }
+@@ -939,3 +1289,15 @@ fun PhotoViewerScreen(
+         }
+     }
+ }
++
++// ── Helpers ──────────────────────────────────────────────────────────────────
++
++/** Format seconds as MM:SS or HH:MM:SS */
++private fun formatTrimTime(secs: Float): String {
++    val s = secs.coerceAtLeast(0f).toInt()
++    val h = s / 3600
++    val m = (s % 3600) / 60
++    val sec = s % 60
++    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
++}
++
+diff --git a/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerViewModel.kt b/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerViewModel.kt
+index b9b0568..7bd73f4 100644
+--- a/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerViewModel.kt
++++ b/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoViewerViewModel.kt
+@@ -7,8 +7,10 @@ import androidx.lifecycle.SavedStateHandle
+ import androidx.lifecycle.ViewModel
+ import androidx.lifecycle.viewModelScope
+ import com.simplephotos.data.local.entities.PhotoEntity
++import com.simplephotos.data.local.entities.SyncStatus
+ import com.simplephotos.data.remote.ApiService
+ import com.simplephotos.data.remote.dto.AddTagRequest
++import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
+ import com.simplephotos.data.remote.dto.RemoveTagRequest
+ import com.simplephotos.data.remote.dto.SetCropRequest
+ import com.simplephotos.data.repository.AlbumRepository
+@@ -243,7 +245,7 @@ class PhotoViewerViewModel @Inject constructor(
+         }
+     }
+ 
+-    /** Save crop/brightness metadata for a photo. */
++    /** Save crop/brightness/trim metadata for a photo. */
+     fun saveCropMetadata(photo: PhotoEntity, metadata: String?) {
+         viewModelScope.launch {
+             try {
+@@ -268,6 +270,36 @@ class PhotoViewerViewModel @Inject constructor(
+         }
+     }
+ 
++    /** Duplicate a photo with optional crop/edit metadata (Save Copy). */
++    fun duplicatePhoto(photo: PhotoEntity, metadata: String?, onDone: () -> Unit = {}) {
++        viewModelScope.launch {
++            try {
++                if (encryptionMode == "plain" && photo.serverPhotoId != null) {
++                    withContext(Dispatchers.IO) {
++                        api.duplicatePhoto(photo.serverPhotoId!!, DuplicatePhotoRequest(metadata))
++                    }
++                }
++                // Encrypted mode: duplicate the local DB entry with new ID + metadata
++                else {
++                    val copyId = java.util.UUID.randomUUID().toString()
++                    val copyEntity = photo.copy(
++                        localId = copyId,
++                        serverPhotoId = null,
++                        filename = if (photo.filename.startsWith("Copy of ")) photo.filename
++                                   else "Copy of ${photo.filename}",
++                        cropMetadata = metadata,
++                        createdAt = System.currentTimeMillis(),
++                        syncStatus = SyncStatus.SYNCED
++                    )
++                    withContext(Dispatchers.IO) {
++                        photoRepository.insertPhoto(copyEntity)
++                    }
++                }
++                onDone()
++            } catch (_: Exception) {}
++        }
++    }
++
+     /** Download the photo's full-resolution file bytes (for saving to device). */
+     suspend fun downloadPhotoBytes(photo: PhotoEntity): ByteArray? = withContext(Dispatchers.IO) {
+         try {
+diff --git a/web/src/components/viewer/ViewerEditPanel.tsx b/web/src/components/viewer/ViewerEditPanel.tsx
+index 715e0c0..fb60c80 100644
+--- a/web/src/components/viewer/ViewerEditPanel.tsx
++++ b/web/src/components/viewer/ViewerEditPanel.tsx
+@@ -4,7 +4,7 @@ import type { MediaType } from "../../db";
+ // ── Types ────────────────────────────────────────────────────────────────────
+ 
+ /** Which editing tab is active */
+-export type EditTab = "crop" | "brightness" | "trim";
++export type EditTab = "crop" | "brightness" | "rotate" | "trim";
+ 
+ interface ViewerEditPanelProps {
+   /** Which tab is currently active */
+@@ -18,6 +18,10 @@ interface ViewerEditPanelProps {
+   brightness: number;
+   setBrightness: (v: number) => void;
+ 
++  /** Rotation in degrees (0, 90, 180, 270) */
++  rotate: number;
++  setRotate: (v: number) => void;
++
+   /** Existing crop/edit data (used to show Reset button) */
+   cropData: {
+     x: number;
+@@ -69,6 +73,8 @@ export default function ViewerEditPanel({
+   mediaType,
+   brightness,
+   setBrightness,
++  rotate,
++  setRotate,
+   cropData,
+   trimStart,
+   trimEnd,
+@@ -86,6 +92,7 @@ export default function ViewerEditPanel({
+   const isAudio = mediaType === "audio";
+   const showCrop = isPhoto || isVideo;
+   const showBrightness = isPhoto || isVideo;
++  const showRotate = isPhoto || isVideo;
+   const showTrim = isVideo || isAudio;
+ 
+   // ── Trim range slider refs for dual-thumb control ──────────────────────
+@@ -153,14 +160,14 @@ export default function ViewerEditPanel({
+   return (
+     <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 py-3 space-y-3">
+       {/* Tab switcher */}
+-      <div className="flex items-center justify-center gap-2">
++      <div className="flex items-center justify-center gap-4">
+         {showCrop && (
+           <button
+             onClick={() => setEditTab("crop")}
+-            className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
++            className={`px-2 py-1 text-sm font-medium transition-colors ${
+               editTab === "crop"
+-                ? "bg-white text-black"
+-                : "bg-white/10 text-white hover:bg-white/20"
++                ? "text-blue-400"
++                : "text-gray-400 hover:text-gray-300"
+             }`}
+           >
+             Crop
+@@ -169,22 +176,34 @@ export default function ViewerEditPanel({
+         {showBrightness && (
+           <button
+             onClick={() => setEditTab("brightness")}
+-            className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
++            className={`px-2 py-1 text-sm font-medium transition-colors ${
+               editTab === "brightness"
+-                ? "bg-white text-black"
+-                : "bg-white/10 text-white hover:bg-white/20"
++                ? "text-blue-400"
++                : "text-gray-400 hover:text-gray-300"
+             }`}
+           >
+             Brightness
+           </button>
+         )}
++        {showRotate && (
++          <button
++            onClick={() => setEditTab("rotate")}
++            className={`px-2 py-1 text-sm font-medium transition-colors ${
++              editTab === "rotate"
++                ? "text-blue-400"
++                : "text-gray-400 hover:text-gray-300"
++            }`}
++          >
++            Rotate
++          </button>
++        )}
+         {showTrim && (
+           <button
+             onClick={() => setEditTab("trim")}
+-            className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
++            className={`px-2 py-1 text-sm font-medium transition-colors ${
+               editTab === "trim"
+-                ? "bg-white text-black"
+-                : "bg-white/10 text-white hover:bg-white/20"
++                ? "text-blue-400"
++                : "text-gray-400 hover:text-gray-300"
+             }`}
+           >
+             Trim
+@@ -192,6 +211,40 @@ export default function ViewerEditPanel({
+         )}
+       </div>
+ 
++      {/* ── Crop helper text ────────────────────────────────────────── */}
++      {editTab === "crop" && (
++        <p className="text-center text-xs text-gray-400">
++          Drag the corner handles on the photo to adjust crop
++        </p>
++      )}
++
++      {/* ── Rotate controls ────────────────────────────────────────── */}
++      {editTab === "rotate" && (
++        <div className="flex flex-col items-center gap-3">
++          <div className="flex items-center gap-4">
++            <button
++              onClick={() => setRotate((rotate + 270) % 360)}
++              className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"
++              title="Rotate left 90°"
++            >
++              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
++                <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
++              </svg>
++            </button>
++            <span className="text-white text-sm font-medium tabular-nums w-12 text-center">{rotate}°</span>
++            <button
++              onClick={() => setRotate((rotate + 90) % 360)}
++              className="w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition-colors"
++              title="Rotate right 90°"
++            >
++              <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
++                <path strokeLinecap="round" strokeLinejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 000 12h3" />
++              </svg>
++            </button>
++          </div>
++        </div>
++      )}
++
+       {/* ── Brightness slider ────────────────────────────────────────── */}
+       {editTab === "brightness" && (
+         <div className="flex items-center gap-3 max-w-sm mx-auto">
+@@ -274,7 +327,7 @@ export default function ViewerEditPanel({
+       )}
+ 
+       {/* ── Action buttons ───────────────────────────────────────────── */}
+-      <div className="flex items-center justify-center gap-2">
++      <div className="flex items-center justify-center gap-3">
+         <button
+           onClick={onSave}
+           className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+@@ -288,17 +341,15 @@ export default function ViewerEditPanel({
+         >
+           Save Copy
+         </button>
+-        {cropData && (
+-          <button
+-            onClick={onClear}
+-            className="px-4 py-2 bg-gray-600 text-white rounded-lg text-sm font-medium hover:bg-gray-500 transition-colors"
+-          >
+-            Reset
+-          </button>
+-        )}
++        <button
++          onClick={onClear}
++          className="px-3 py-2 text-blue-400 text-sm font-medium hover:text-blue-300 transition-colors"
++        >
++          Reset
++        </button>
+         <button
+           onClick={onCancel}
+-          className="px-4 py-2 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-600 transition-colors"
++          className="px-3 py-2 text-gray-400 text-sm font-medium hover:text-gray-300 transition-colors"
+         >
+           Cancel
+         </button>
+diff --git a/web/src/hooks/useViewerActions.ts b/web/src/hooks/useViewerActions.ts
+index cc9cd9d..44187dc 100644
+--- a/web/src/hooks/useViewerActions.ts
++++ b/web/src/hooks/useViewerActions.ts
+@@ -29,12 +29,14 @@ interface UseViewerActionsParams {
+   currentIndex: number;
+   cropCorners: { x: number; y: number; w: number; h: number };
+   brightness: number;
++  rotate: number;
+   trimStart: number;
+   trimEnd: number;
+   mediaDuration: number;
+   setCropData: (data: CropMetadata | null) => void;
+   setCropCorners: (data: { x: number; y: number; w: number; h: number }) => void;
+   setBrightness: (v: number) => void;
++  setRotate: (v: number) => void;
+   setTrimStart: (v: number) => void;
+   setTrimEnd: (v: number) => void;
+   setEditMode: (v: boolean) => void;
+@@ -53,12 +55,14 @@ export default function useViewerActions({
+   currentIndex,
+   cropCorners,
+   brightness,
++  rotate,
+   trimStart,
+   trimEnd,
+   mediaDuration,
+   setCropData,
+   setCropCorners,
+   setBrightness,
++  setRotate,
+   setTrimStart,
+   setTrimEnd,
+   setEditMode,
+@@ -75,19 +79,20 @@ export default function useViewerActions({
+     const c = cropCorners;
+     const isDefaultCrop = c.x <= 0.01 && c.y <= 0.01 && c.w >= 0.99 && c.h >= 0.99;
+     const isDefaultBrightness = Math.abs(brightness) < 1;
++    const isDefaultRotate = rotate === 0;
+     const isDefaultTrim = trimStart <= 0.01 && (mediaDuration <= 0 || Math.abs(trimEnd - mediaDuration) < 0.5);
+-    const allDefault = isDefaultCrop && isDefaultBrightness && isDefaultTrim;
++    const allDefault = isDefaultCrop && isDefaultBrightness && isDefaultRotate && isDefaultTrim;
+     if (allDefault) return null;
+     return {
+       x: Math.max(0, Math.min(1, c.x)),
+       y: Math.max(0, Math.min(1, c.y)),
+       width: Math.max(0.05, Math.min(1, c.w)),
+       height: Math.max(0.05, Math.min(1, c.h)),
+-      rotate: 0,
++      rotate,
+       brightness,
+       ...((!isDefaultTrim) ? { trimStart, trimEnd } : {}),
+     };
+-  }, [cropCorners, brightness, trimStart, trimEnd, mediaDuration]);
++  }, [cropCorners, brightness, rotate, trimStart, trimEnd, mediaDuration]);
+ 
+   const handleSaveEdit = useCallback(async () => {
+     if (!id) return;
+@@ -155,10 +160,11 @@ export default function useViewerActions({
+       setCropData(null);
+       setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
+       setBrightness(0);
++      setRotate(0);
+       setTrimStart(0);
+       setTrimEnd(mediaDuration);
+     } catch { /* ignore */ }
+-  }, [id, isPlainMode, setCropData, setCropCorners, setBrightness, setTrimStart, setTrimEnd, mediaDuration]);
++  }, [id, isPlainMode, setCropData, setCropCorners, setBrightness, setRotate, setTrimStart, setTrimEnd, mediaDuration]);
+ 
+   const handleLeaveAndSave = useCallback(async () => {
+     await handleSaveEdit();
+diff --git a/web/src/pages/Viewer.tsx b/web/src/pages/Viewer.tsx
+index 790f643..af900f3 100644
+--- a/web/src/pages/Viewer.tsx
++++ b/web/src/pages/Viewer.tsx
+@@ -67,6 +67,7 @@ export default function Viewer() {
+   const [cropCorners, setCropCorners] = useState<{ x: number; y: number; w: number; h: number }>({ x: 0, y: 0, w: 1, h: 1 });
+   const [draggingCorner, setDraggingCorner] = useState<string | null>(null);
+   const [brightness, setBrightness] = useState(0);
++  const [rotate, setRotate] = useState(0);
+   const [trimStart, setTrimStart] = useState(0);
+   const [trimEnd, setTrimEnd] = useState(0);
+   const [mediaDuration, setMediaDuration] = useState(0);
+@@ -122,8 +123,8 @@ export default function Viewer() {
+   } = useViewerActions({
+     id, isPlainMode, mediaUrl, filename, mediaType,
+     albumId, photoIds, currentIndex,
+-    cropCorners, brightness, trimStart, trimEnd, mediaDuration,
+-    setCropData, setCropCorners, setBrightness, setTrimStart, setTrimEnd,
++    cropCorners, brightness, rotate, trimStart, trimEnd, mediaDuration,
++    setCropData, setCropCorners, setBrightness, setRotate, setTrimStart, setTrimEnd,
+     setEditMode, setError,
+     preloadCache,
+   });
+@@ -151,7 +152,7 @@ export default function Viewer() {
+     const cy = cropData.y + cropData.height / 2;
+ 
+     setCropZoomStyle({
+-      transform: `translate(${(0.5 - cx) * 100}%, ${(0.5 - cy) * 100}%) scale(${scale})`,
++      transform: `translate(${(0.5 - cx) * 100}%, ${(0.5 - cy) * 100}%) scale(${scale})${cropData.rotate ? ` rotate(${cropData.rotate}deg)` : ""}`,
+       transformOrigin: `${cx * 100}% ${cy * 100}%`,
+       filter: cropData.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
+     });
+@@ -251,15 +252,17 @@ export default function Viewer() {
+     if (cropData) {
+       setCropCorners({ x: cropData.x, y: cropData.y, w: cropData.width, h: cropData.height });
+       setBrightness(cropData.brightness ?? 0);
++      setRotate(cropData.rotate ?? 0);
+       setTrimStart(cropData.trimStart ?? 0);
+       setTrimEnd(cropData.trimEnd ?? dur);
+     } else {
+       setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
+       setBrightness(0);
++      setRotate(0);
+       setTrimStart(0);
+       setTrimEnd(dur);
+     }
+-    setEditTab(mediaType === "audio" || mediaType === "video" ? "trim" : "brightness");
++    setEditTab(mediaType === "audio" ? "trim" : "crop");
+     setEditMode(true);
+   }
+ 
+@@ -300,6 +303,7 @@ export default function Viewer() {
+     setTrimEnd(0);
+     setMediaDuration(0);
+     setBrightness(0);
++    setRotate(0);
+     setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
+     setEditTab("crop");
+ 
+@@ -411,15 +415,21 @@ export default function Viewer() {
+       <div className={`absolute top-0 left-0 right-0 z-30 transition-opacity duration-300 ${
+         showOverlay || editMode ? "opacity-100" : "opacity-0 pointer-events-none"
+       }`}>
+-      <div className="flex items-center justify-between px-4 py-3 bg-black/80">
++      <div className="flex items-center px-4 py-3 bg-black/80 gap-3">
+         <button
+           onClick={() => { if (editMode) setShowLeavePrompt(true); else navigate("/gallery"); }}
+-          className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
++          className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors flex-shrink-0"
+           title="Back"
+         >
+           <AppIcon name="back-arrow" size="w-5 h-5" themed={false} className="invert" />
+         </button>
+-        <div className="flex gap-3 items-center">
++        <div className="flex-1 min-w-0">
++          <div className="text-white text-sm font-medium truncate">{filename || "Viewer"}</div>
++          {photoIds && (
++            <div className="text-white/60 text-xs">{currentIndex + 1} / {photoIds.length}</div>
++          )}
++        </div>
++        <div className="flex gap-3 items-center flex-shrink-0">
+           <button
+             onClick={() => setShowInfoPanel((v) => !v)}
+             className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
+@@ -435,10 +445,10 @@ export default function Viewer() {
+             <button
+               onClick={() => { if (editMode) setEditMode(false); else enterEditMode(); }}
+               className={`flex items-center gap-1 px-2 py-1 rounded text-sm font-medium transition-colors ${
+-                editMode ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
++                editMode ? "text-blue-400 hover:text-blue-300" : "text-white hover:bg-white/20"
+               }`}
+-              title="Edit"
+-            >Edit</button>
++              title={editMode ? "Done" : "Edit"}
++            >{editMode ? "Done" : "Edit"}</button>
+           )}
+           {isPlainMode && (
+             <button
+@@ -561,6 +571,7 @@ export default function Viewer() {
+               draggable={false}
+               style={{
+                 filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
++                transform: rotate !== 0 ? `rotate(${rotate}deg)` : undefined,
+                 ...(mimeType === "image/svg+xml" ? { backgroundColor: "white" } : {}),
+               }}
+             />
+@@ -585,6 +596,7 @@ export default function Viewer() {
+             style={{
+               background: "black",
+               filter: cropData?.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
++              transform: cropData?.rotate ? `rotate(${cropData.rotate}deg)` : undefined,
+             }}
+             onLoadedMetadata={(e) => {
+               const v = e.currentTarget;
+@@ -617,6 +629,7 @@ export default function Viewer() {
+               style={{
+                 background: "black",
+                 filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
++                transform: rotate !== 0 ? `rotate(${rotate}deg)` : undefined,
+               }}
+               onLoadedMetadata={(e) => {
+                 const v = e.currentTarget;
+@@ -741,6 +754,7 @@ export default function Viewer() {
+         <ViewerEditPanel
+           editTab={editTab} setEditTab={setEditTab}
+           mediaType={mediaType} brightness={brightness} setBrightness={setBrightness}
++          rotate={rotate} setRotate={setRotate}
+           cropData={cropData} trimStart={trimStart} trimEnd={trimEnd}
+           setTrimStart={setTrimStart} setTrimEnd={setTrimEnd} duration={mediaDuration}
+           onSave={handleSaveEdit} onSaveCopy={handleSaveCopy}

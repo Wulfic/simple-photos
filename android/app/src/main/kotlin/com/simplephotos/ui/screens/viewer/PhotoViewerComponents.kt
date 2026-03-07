@@ -38,13 +38,14 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 
-// Parsed crop metadata for zoom/brightness transforms
+// Parsed crop metadata for zoom/brightness/rotation transforms
 internal data class CropInfo(
     val x: Float,
     val y: Float,
     val width: Float,
     val height: Float,
-    val brightness: Float
+    val brightness: Float,
+    val rotate: Int = 0
 )
 
 /**
@@ -86,12 +87,20 @@ internal fun PhotoPageContent(
     isActivePage: Boolean = true,
     editMode: Boolean = false,
     editBrightness: Float = 0f,
+    editRotation: Int = 0,
+    // Trim boundaries (seconds) — applied during playback
+    trimStart: Float = 0f,
+    trimEnd: Float = 0f,
     // Shared ExoPlayer — owned by PhotoViewerScreen, one instance for all pages
     sharedPlayer: ExoPlayer? = null,
     activeVideoUri: Uri? = null,
     onVideoUriReady: ((Uri, String) -> Unit)? = null,
+    onDurationKnown: ((Float) -> Unit)? = null,
     playerError: String? = null,
-    isConverting: Boolean = false
+    isConverting: Boolean = false,
+    onMediaSizeLoaded: ((Float, Float) -> Unit)? = null,
+    intrinsicWidth: Float = -1f,
+    intrinsicHeight: Float = -1f
 ) {
     val context = LocalContext.current
 
@@ -211,7 +220,7 @@ internal fun PhotoPageContent(
         }
     }
 
-    // Parse crop metadata for zoom/brightness display
+    // Parse crop metadata for zoom/brightness/rotation display
     val cropInfo = remember(photo.cropMetadata) {
         photo.cropMetadata?.let {
             try {
@@ -221,7 +230,8 @@ internal fun PhotoPageContent(
                     y = json.optDouble("y", 0.0).toFloat(),
                     width = json.optDouble("width", 1.0).toFloat(),
                     height = json.optDouble("height", 1.0).toFloat(),
-                    brightness = json.optDouble("brightness", 0.0).toFloat()
+                    brightness = json.optDouble("brightness", 0.0).toFloat(),
+                    rotate = json.optInt("rotate", 0)
                 )
             } catch (_: Exception) { null }
         }
@@ -237,6 +247,9 @@ internal fun PhotoPageContent(
             })
         } else null
     }
+
+    // Rotation — use live edit value during edit mode, stored value otherwise
+    val rotationDegrees = if (editMode) editRotation.toFloat() else (cropInfo?.rotate ?: 0).toFloat()
 
     // ── Zoom state (double-tap / pinch-to-zoom) ──────────────────────
     var zoomScale by remember { mutableStateOf(1f) }
@@ -326,11 +339,21 @@ internal fun PhotoPageContent(
         // Compute crop zoom modifier — disabled in edit mode so overlay aligns correctly
         val containerW = constraints.maxWidth.toFloat()
         val containerH = constraints.maxHeight.toFloat()
+
+        // Use dynamically loaded size if available, otherwise fall back to DB values
+        val baseW = if (intrinsicWidth > 0f) intrinsicWidth else (photo.width ?: 0).toFloat()
+        val baseH = if (intrinsicHeight > 0f) intrinsicHeight else (photo.height ?: 0).toFloat()
+
         val cropModifier = if (
-            !editMode && cropInfo != null && photo.width > 0 && photo.height > 0 &&
+            !editMode && cropInfo != null && baseW > 0 && baseH > 0 &&
             containerW > 0 && containerH > 0
         ) {
-            val imgAspect = photo.width.toFloat() / photo.height.toFloat()
+            // When rotated 90/270, the image's effective dimensions are swapped
+            val rot = cropInfo.rotate % 360
+            val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
+            val effW = if (isSwapped) baseH else baseW
+            val effH = if (isSwapped) baseW else baseH
+            val imgAspect = effW / effH
             val containerAspect = containerW / containerH
             val rendW: Float
             val rendH: Float
@@ -350,12 +373,76 @@ internal fun PhotoPageContent(
             val scale = minOf(containerW / cropPixW, containerH / cropPixH)
             val tx = containerW * (0.5f - containerCX)
             val ty = containerH * (0.5f - containerCY)
+
+            // Extra scale needed to shrink the original (un-rotated) image so
+            // that after rotation it fits within the container
+            val rotScale = if (isSwapped && baseW > 0 && baseH > 0) {
+                val origAspect = baseW / baseH
+                val origRendW: Float; val origRendH: Float
+                if (origAspect > containerAspect) {
+                    origRendW = containerW; origRendH = containerW / origAspect
+                } else {
+                    origRendH = containerH; origRendW = containerH * origAspect
+                }
+                // After rotating the original rendered rect, its bounding box is swapped
+                val rotatedBoundsW = origRendH
+                val rotatedBoundsH = origRendW
+                minOf(containerW / rotatedBoundsW, containerH / rotatedBoundsH)
+            } else 1f
+
             Modifier.graphicsLayer {
-                scaleX = scale
-                scaleY = scale
+                scaleX = scale * rotScale
+                scaleY = scale * rotScale
                 transformOrigin = TransformOrigin(containerCX, containerCY)
                 translationX = tx
                 translationY = ty
+                rotationZ = cropInfo.rotate.toFloat()
+            }
+        } else if (!editMode && rotationDegrees != 0f) {
+            // No crop but has saved rotation — scale so rotated image fits container
+            val rot = rotationDegrees.toInt() % 360
+            val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
+            if (isSwapped && baseW > 0 && baseH > 0 && containerW > 0 && containerH > 0) {
+                val origAspect = baseW / baseH
+                val containerAspect = containerW / containerH
+                val origRendW: Float; val origRendH: Float
+                if (origAspect > containerAspect) {
+                    origRendW = containerW; origRendH = containerW / origAspect
+                } else {
+                    origRendH = containerH; origRendW = containerH * origAspect
+                }
+                val rotScale = minOf(containerW / origRendH, containerH / origRendW)
+                Modifier.graphicsLayer {
+                    scaleX = rotScale; scaleY = rotScale
+                    rotationZ = rotationDegrees
+                }
+            } else {
+                Modifier.graphicsLayer { rotationZ = rotationDegrees }
+            }
+        } else Modifier
+
+        // Live rotation modifier for edit mode preview — includes scale so
+        // a 90°/270° rotated image fits within the container bounds
+        val editRotationModifier = if (editMode && rotationDegrees != 0f) {
+            val rot = rotationDegrees.toInt() % 360
+            val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
+            if (isSwapped && baseW > 0 && baseH > 0 && containerW > 0 && containerH > 0) {
+                val origAspect = baseW / baseH
+                val containerAspect = containerW / containerH
+                val origRendW: Float; val origRendH: Float
+                if (origAspect > containerAspect) {
+                    origRendW = containerW; origRendH = containerW / origAspect
+                } else {
+                    origRendH = containerH; origRendW = containerH * origAspect
+                }
+                // Scale so the rotated bounding box (swapped W↔H) fits the container
+                val rotScale = minOf(containerW / origRendH, containerH / origRendW)
+                Modifier.graphicsLayer {
+                    scaleX = rotScale; scaleY = rotScale
+                    rotationZ = rotationDegrees
+                }
+            } else {
+                Modifier.graphicsLayer { rotationZ = rotationDegrees }
             }
         } else Modifier
 
@@ -369,8 +456,8 @@ internal fun PhotoPageContent(
             }
         } else Modifier
 
-        // Combined: crop first, then zoom
-        val combinedModifier = cropModifier.then(zoomModifier)
+        // Combined: crop first, then edit rotation, then zoom
+        val combinedModifier = cropModifier.then(editRotationModifier).then(zoomModifier)
 
         when {
             // Loading encrypted content
@@ -404,8 +491,19 @@ internal fun PhotoPageContent(
                         isActivePage = isActivePage,
                         filename = photo.filename,
                         onVideoUriReady = onVideoUriReady,
+                        onDurationKnown = onDurationKnown,
+                        trimStart = trimStart,
+                        trimEnd = trimEnd,
+                        editMode = editMode,
+                        editBrightness = editBrightness,
+                        editRotation = editRotation,
+                        savedBrightness = cropInfo?.brightness ?: 0f,
+                        savedRotation = cropInfo?.rotate ?: 0,
+                        photoWidth = if (intrinsicWidth > 0f) intrinsicWidth.toInt() else photo.width,
+                        photoHeight = if (intrinsicHeight > 0f) intrinsicHeight.toInt() else photo.height,
                         playerError = playerError,
-                        isConverting = isConverting
+                        isConverting = isConverting,
+                        onMediaSizeLoaded = onMediaSizeLoaded
                     )
                 } else if (mediaUri == null) {
                     Text("Media not available", color = Color.White)
@@ -462,6 +560,12 @@ internal fun PhotoPageContent(
                             contentScale = ContentScale.Fit,
                             colorFilter = brightnessFilter,
                             onState = { state ->
+                                if (state is AsyncImagePainter.State.Success) {
+                                    val size = state.painter.intrinsicSize
+                                    if (size.width > 0 && size.height > 0) {
+                                        onMediaSizeLoaded?.invoke(size.width, size.height)
+                                    }
+                                }
                                 if (state is AsyncImagePainter.State.Error) {
                                     Log.w("PhotoViewer", "Coil failed for ${photo.filename}: ${state.result.throwable.message}")
                                     // If format needs conversion, server may still be converting (202)
@@ -486,6 +590,12 @@ internal fun PhotoPageContent(
                             contentScale = ContentScale.Fit,
                             colorFilter = brightnessFilter,
                             onState = { state ->
+                                if (state is AsyncImagePainter.State.Success) {
+                                    val size = state.painter.intrinsicSize
+                                    if (size.width > 0 && size.height > 0) {
+                                        onMediaSizeLoaded?.invoke(size.width, size.height)
+                                    }
+                                }
                                 if (state is AsyncImagePainter.State.Error) {
                                     Log.w("PhotoViewer", "Coil failed for local ${photo.filename}: ${state.result.throwable.message}")
                                     imageError = "Cannot decode ${photo.filename.substringAfterLast('.').uppercase()} format"
@@ -508,6 +618,12 @@ internal fun PhotoPageContent(
                             contentScale = ContentScale.Fit,
                             colorFilter = brightnessFilter,
                             onState = { state ->
+                                if (state is AsyncImagePainter.State.Success) {
+                                    val size = state.painter.intrinsicSize
+                                    if (size.width > 0 && size.height > 0) {
+                                        onMediaSizeLoaded?.invoke(size.width, size.height)
+                                    }
+                                }
                                 if (state is AsyncImagePainter.State.Error) {
                                     Log.w("PhotoViewer", "Coil failed for decrypted ${photo.filename}: ${state.result.throwable.message}")
                                     imageError = "Cannot display this format"
@@ -536,14 +652,96 @@ internal fun VideoPlayerPage(
     isActivePage: Boolean,
     filename: String,
     onVideoUriReady: (Uri, String) -> Unit,
+    onDurationKnown: ((Float) -> Unit)? = null,
+    // Trim boundaries (seconds) — applied during playback
+    trimStart: Float = 0f,
+    trimEnd: Float = 0f,
+    editMode: Boolean = false,
+    editBrightness: Float = 0f,
+    editRotation: Int = 0,
+    savedBrightness: Float = 0f,
+    savedRotation: Int = 0,
+    photoWidth: Int = 0,
+    photoHeight: Int = 0,
     playerError: String?,
-    isConverting: Boolean
+    isConverting: Boolean,
+    onMediaSizeLoaded: ((Float, Float) -> Unit)? = null
 ) {
     // When this page becomes active, notify the screen to load our URI
     // into the shared player.
     LaunchedEffect(isActivePage, uri) {
         if (isActivePage) {
             onVideoUriReady(uri, filename)
+        }
+    }
+
+    // Report duration when the player reports it
+    LaunchedEffect(isActivePage, uri) {
+        if (!isActivePage) return@LaunchedEffect
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == androidx.media3.common.Player.STATE_READY) {
+                    val dur = sharedPlayer.duration
+                    if (dur > 0 && onDurationKnown != null) {
+                        onDurationKnown(dur / 1000f)
+                    }
+                }
+            }
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    // videoSize doesn't account for display rotation directly in all players,
+                    // but ExoPlayer often returns the rotated intrinsic dimensions or provides unappliedRotationDegrees.
+                    // For now, return what ExoPlayer says is the video size.
+                    onMediaSizeLoaded?.invoke(videoSize.width.toFloat(), videoSize.height.toFloat())
+                }
+            }
+        }
+        sharedPlayer.addListener(listener)
+        // Also check current state in case already ready
+        if (sharedPlayer.playbackState == androidx.media3.common.Player.STATE_READY) {
+            if (sharedPlayer.duration > 0 && onDurationKnown != null) {
+                onDurationKnown(sharedPlayer.duration / 1000f)
+            }
+            if (sharedPlayer.videoSize.width > 0 && sharedPlayer.videoSize.height > 0) {
+                onMediaSizeLoaded?.invoke(sharedPlayer.videoSize.width.toFloat(), sharedPlayer.videoSize.height.toFloat())
+            }
+        }
+        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+            cont.invokeOnCancellation { sharedPlayer.removeListener(listener) }
+        }
+    }
+
+    // Enforce trim boundaries during playback — seek to trimStart when
+    // playback begins, pause when trimEnd is reached.
+    LaunchedEffect(isActivePage, trimStart, trimEnd) {
+        if (!isActivePage) return@LaunchedEffect
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == androidx.media3.common.Player.STATE_READY) {
+                    // Seek to trimStart if set and we're before it
+                    if (trimStart > 0.01f) {
+                        val currentMs = sharedPlayer.currentPosition
+                        if (currentMs < (trimStart * 1000).toLong() - 500) {
+                            sharedPlayer.seekTo((trimStart * 1000).toLong())
+                        }
+                    }
+                }
+            }
+
+            override fun onEvents(player: androidx.media3.common.Player, events: androidx.media3.common.Player.Events) {
+                // Check trim end boundary
+                if (trimEnd > 0.01f) {
+                    val currentMs = sharedPlayer.currentPosition
+                    if (currentMs >= (trimEnd * 1000).toLong()) {
+                        sharedPlayer.playWhenReady = false
+                        sharedPlayer.seekTo((trimEnd * 1000).toLong())
+                    }
+                }
+            }
+        }
+        sharedPlayer.addListener(listener)
+        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+            cont.invokeOnCancellation { sharedPlayer.removeListener(listener) }
         }
     }
 
@@ -593,21 +791,70 @@ internal fun VideoPlayerPage(
         }
     } else if (isActivePage && activeVideoUri == uri) {
         // This is the active video page and the shared player has our URI loaded.
-        // Show the PlayerView. Default rendering uses SurfaceView which sends
-        // decoded frames directly to the display compositor in native memory,
-        // avoiding the Java-heap Bitmap copy that TextureView would require.
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = sharedPlayer
-                    useController = true
+        // Apply brightness and rotation transforms.
+        val activeBrightness = if (editMode) editBrightness else savedBrightness
+        val activeRotation = if (editMode) editRotation else savedRotation
+
+        // For 90/270 rotation, scale down so the rotated video fits the container.
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val containerW = constraints.maxWidth.toFloat()
+            val containerH = constraints.maxHeight.toFloat()
+            val rot = activeRotation % 360
+            val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
+            val videoRotationModifier = if (activeRotation != 0) {
+                if (isSwapped && photoWidth > 0 && photoHeight > 0 && containerW > 0 && containerH > 0) {
+                    val origAspect = photoWidth.toFloat() / photoHeight.toFloat()
+                    val containerAspect = containerW / containerH
+                    val origRendW: Float
+                    val origRendH: Float
+                    if (origAspect > containerAspect) {
+                        origRendW = containerW; origRendH = containerW / origAspect
+                    } else {
+                        origRendH = containerH; origRendW = containerH * origAspect
+                    }
+                    val rotScale = minOf(containerW / origRendH, containerH / origRendW)
+                    Modifier.graphicsLayer {
+                        scaleX = rotScale; scaleY = rotScale
+                        rotationZ = activeRotation.toFloat()
+                    }
+                } else {
+                    Modifier.graphicsLayer { rotationZ = activeRotation.toFloat() }
                 }
-            },
-            update = { playerView ->
-                playerView.player = sharedPlayer
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+            } else Modifier
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(videoRotationModifier)
+            ) {
+                AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        this.player = sharedPlayer
+                        useController = true
+                    }
+                },
+                update = { playerView ->
+                    playerView.player = sharedPlayer
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+            // Brightness overlay: positive = brighten (white overlay),
+            // negative = darken (black overlay). Matches CSS brightness() filter.
+            if (activeBrightness != 0f) {
+                val overlayColor = if (activeBrightness > 0f) {
+                    Color.White.copy(alpha = (activeBrightness / 200f).coerceIn(0f, 0.5f))
+                } else {
+                    Color.Black.copy(alpha = (-activeBrightness / 150f).coerceIn(0f, 0.7f))
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(overlayColor)
+                )
+            }
+        }
+        }
     } else {
         // Not active or player showing a different video — black placeholder
         Box(
