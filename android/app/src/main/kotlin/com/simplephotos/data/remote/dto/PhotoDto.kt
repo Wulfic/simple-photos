@@ -159,6 +159,19 @@ data class CropResponse(
     @SerializedName("crop_metadata") val cropMetadata: String?
 )
 
+// ── Duplicate (Save Copy) ────────────────────────────────────────────────────
+
+data class DuplicatePhotoRequest(
+    @SerializedName("crop_metadata") val cropMetadata: String?
+)
+
+data class DuplicatePhotoResponse(
+    val id: String,
+    @SerializedName("source_photo_id") val sourcePhotoId: String,
+    val filename: String,
+    @SerializedName("crop_metadata") val cropMetadata: String?
+)
+
 // ── 2FA Status ───────────────────────────────────────────────────────────────
 
 data class TwoFactorStatusResponse(

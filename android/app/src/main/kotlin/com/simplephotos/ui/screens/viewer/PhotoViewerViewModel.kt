@@ -7,8 +7,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simplephotos.data.local.entities.PhotoEntity
+import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.AddTagRequest
+import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
 import com.simplephotos.data.remote.dto.RemoveTagRequest
 import com.simplephotos.data.remote.dto.SetCropRequest
 import com.simplephotos.data.repository.AlbumRepository
@@ -243,7 +245,7 @@ class PhotoViewerViewModel @Inject constructor(
         }
     }
 
-    /** Save crop/brightness metadata for a photo. */
+    /** Save crop/brightness/trim metadata for a photo. */
     fun saveCropMetadata(photo: PhotoEntity, metadata: String?) {
         viewModelScope.launch {
             try {
@@ -264,6 +266,36 @@ class PhotoViewerViewModel @Inject constructor(
                         it[idx] = it[idx].copy(cropMetadata = metadata)
                     }
                 }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** Duplicate a photo with optional crop/edit metadata (Save Copy). */
+    fun duplicatePhoto(photo: PhotoEntity, metadata: String?, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            try {
+                if (encryptionMode == "plain" && photo.serverPhotoId != null) {
+                    withContext(Dispatchers.IO) {
+                        api.duplicatePhoto(photo.serverPhotoId!!, DuplicatePhotoRequest(metadata))
+                    }
+                }
+                // Encrypted mode: duplicate the local DB entry with new ID + metadata
+                else {
+                    val copyId = java.util.UUID.randomUUID().toString()
+                    val copyEntity = photo.copy(
+                        localId = copyId,
+                        serverPhotoId = null,
+                        filename = if (photo.filename.startsWith("Copy of ")) photo.filename
+                                   else "Copy of ${photo.filename}",
+                        cropMetadata = metadata,
+                        createdAt = System.currentTimeMillis(),
+                        syncStatus = SyncStatus.SYNCED
+                    )
+                    withContext(Dispatchers.IO) {
+                        photoRepository.insertPhoto(copyEntity)
+                    }
+                }
+                onDone()
             } catch (_: Exception) {}
         }
     }

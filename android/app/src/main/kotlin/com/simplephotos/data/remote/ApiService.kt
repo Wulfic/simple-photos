@@ -217,6 +217,13 @@ interface ApiService {
     @PUT("api/photos/{id}/crop")
     suspend fun setCrop(@Path("id") photoId: String, @Body request: SetCropRequest): CropResponse
 
+    // ── Duplicate (Save Copy) ─────────────────────────────────────────────
+    @POST("api/photos/{id}/duplicate")
+    suspend fun duplicatePhoto(
+        @Path("id") photoId: String,
+        @Body request: DuplicatePhotoRequest
+    ): DuplicatePhotoResponse
+
     // ── Secure Galleries ──────────────────────────────────────────────────
     @GET("api/galleries/secure")
     suspend fun listSecureGalleries(): SecureGalleryListResponse
