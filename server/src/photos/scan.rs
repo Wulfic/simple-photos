@@ -51,7 +51,12 @@ async fn ffmpeg_available() -> bool {
 /// For videos: extracts a frame at ~1 second.
 /// For images: converts to JPEG and resizes.
 /// For audio: generates a black placeholder.
-pub async fn generate_thumbnail_file(input_path: &Path, output_path: &Path, mime: &str) -> bool {
+pub async fn generate_thumbnail_file(
+    input_path: &Path,
+    output_path: &Path,
+    mime: &str,
+    crop_metadata: Option<&str>,
+) -> bool {
     if let Some(parent) = output_path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
@@ -128,10 +133,38 @@ pub async fn generate_thumbnail_file(input_path: &Path, output_path: &Path, mime
         cmd.args(["-ss", "1"]);
     }
 
+    let mut vf_filters = String::new();
+
+    // If crop_metadata is provided, parse it and prepend crop/brightness filters
+    // Expected JSON: { "x": 0.1, "y": 0.2, "width": 0.8, "height": 0.7, "brightness": 0, "rotate": 0 }
+    if let Some(crop_str) = crop_metadata {
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(crop_str) {
+            let cx = meta.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let cy = meta.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let cw = meta.get("width").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            let ch = meta.get("height").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            let brightness = meta.get("brightness").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+            // Apply brightness if non-zero (ffmpeg eq=brightness expects -1.0 to 1.0)
+            if brightness != 0.0 {
+                // frontend sends brightness in range -100 to 100, ffmpeg uses -1.0 to 1.0
+                let b = brightness / 100.0;
+                vf_filters.push_str(&format!("eq=brightness={},", b));
+            }
+            
+            // Apply crop if not default (using relative inputs iw/ih)
+            if cx > 0.0 || cy > 0.0 || cw < 1.0 || ch < 1.0 {
+                vf_filters.push_str(&format!("crop=iw*{}:ih*{}:iw*{}:ih*{},", cw, ch, cx, cy));
+            }
+        }
+    }
+
+    vf_filters.push_str("scale=256:256:force_original_aspect_ratio=decrease,pad=256:256:(ow-iw)/2:(oh-ih)/2:black");
+
     cmd.args(["-i", input_str])
         .args([
             "-vf",
-            "scale=256:256:force_original_aspect_ratio=decrease,pad=256:256:(ow-iw)/2:(oh-ih)/2:black",
+            &vf_filters,
             "-frames:v",
             "1",
             "-q:v",
@@ -434,7 +467,7 @@ pub async fn scan_and_register(
                     // Generate thumbnail using FFmpeg (or image crate for audio)
                     if has_ffmpeg || mime.starts_with("audio/") {
                         let thumb_abs = storage_root.join(&thumb_rel);
-                        if generate_thumbnail_file(&abs_path, &thumb_abs, &mime).await {
+                        if generate_thumbnail_file(&abs_path, &thumb_abs, &mime, None).await {
                             tracing::debug!(file = %rel_path, "Generated thumbnail");
                         } else {
                             tracing::warn!(file = %rel_path, "Failed to generate thumbnail");
@@ -540,7 +573,7 @@ pub async fn scan_and_register(
             // Generate thumbnail if file doesn't exist yet
             let thumb_abs = storage_root.join(tpath);
             if !thumb_abs.exists() {
-                if generate_thumbnail_file(&abs, &thumb_abs, mime).await {
+                if generate_thumbnail_file(&abs, &thumb_abs, mime, None).await {
                     thumb_count += 1;
                 }
             }

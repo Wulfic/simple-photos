@@ -275,13 +275,35 @@ class PhotoViewerViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 if (encryptionMode == "plain" && photo.serverPhotoId != null) {
-                    withContext(Dispatchers.IO) {
+                    val response = withContext(Dispatchers.IO) {
                         api.duplicatePhoto(photo.serverPhotoId!!, DuplicatePhotoRequest(metadata))
+                    }
+                    val copyEntity = photo.copy(
+                        localId = response.id,
+                        serverPhotoId = response.id,
+                        filename = response.filename,
+                        cropMetadata = response.cropMetadata,
+                        createdAt = System.currentTimeMillis(),
+                        syncStatus = SyncStatus.SYNCED
+                    )
+                    withContext(Dispatchers.IO) {
+                        photoRepository.insertPhoto(copyEntity)
                     }
                 }
                 // Encrypted mode: duplicate the local DB entry with new ID + metadata
                 else {
                     val copyId = java.util.UUID.randomUUID().toString()
+                    
+                    var newLocalPath: String? = null
+                    photo.localPath?.let { oldPath ->
+                        val oldFile = java.io.File(oldPath)
+                        if (oldFile.exists()) {
+                            val newFile = java.io.File(oldFile.parentFile, "copy_${copyId}_${oldFile.name}")
+                            oldFile.copyTo(newFile, overwrite = true)
+                            newLocalPath = newFile.absolutePath
+                        }
+                    }
+
                     val copyEntity = photo.copy(
                         localId = copyId,
                         serverPhotoId = null,
@@ -289,7 +311,8 @@ class PhotoViewerViewModel @Inject constructor(
                                    else "Copy of ${photo.filename}",
                         cropMetadata = metadata,
                         createdAt = System.currentTimeMillis(),
-                        syncStatus = SyncStatus.SYNCED
+                        localPath = newLocalPath,
+                        syncStatus = SyncStatus.PENDING
                     )
                     withContext(Dispatchers.IO) {
                         photoRepository.insertPhoto(copyEntity)

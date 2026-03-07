@@ -36,6 +36,7 @@ pub struct EncryptedSyncRecord {
     pub encrypted_blob_id: Option<String>,
     pub encrypted_thumb_blob_id: Option<String>,
     pub is_favorite: bool,
+    pub crop_metadata: Option<String>,
     pub photo_hash: Option<String>,
 }
 
@@ -58,7 +59,7 @@ pub async fn encrypted_sync(
         sqlx::query_as::<_, EncryptedSyncRecord>(
             "SELECT id, filename, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
-             is_favorite, photo_hash \
+             is_favorite, crop_metadata, photo_hash \
              FROM photos \
              WHERE user_id = ? AND encrypted_blob_id IS NOT NULL \
              AND COALESCE(taken_at, created_at) < ? \
@@ -74,7 +75,7 @@ pub async fn encrypted_sync(
         sqlx::query_as::<_, EncryptedSyncRecord>(
             "SELECT id, filename, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
-             is_favorite, photo_hash \
+             is_favorite, crop_metadata, photo_hash \
              FROM photos \
              WHERE user_id = ? AND encrypted_blob_id IS NOT NULL \
              ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \

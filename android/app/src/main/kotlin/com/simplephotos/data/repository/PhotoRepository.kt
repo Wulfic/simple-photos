@@ -509,7 +509,9 @@ class PhotoRepository @Inject constructor(
                     thumbnailPath = thumbPath,
                     syncStatus = SyncStatus.SYNCED,
                     isFavorite = photo.isFavorite,
-                    photoHash = photo.photoHash
+                    cropMetadata = photo.cropMetadata,
+                    photoHash = photo.photoHash,
+                    serverPhotoId = photo.id
                 )
                 db.photoDao().insert(entity)
                 imported++

@@ -460,6 +460,25 @@ pub async fn set_crop(
         return Err(AppError::NotFound);
     }
 
+    // Regenerate thumbnail for plain mode
+    let photo: Option<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT file_path, mime_type, thumb_path FROM photos WHERE id = ? AND user_id = ?"
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    if let Some((file_path, mime_type, thumb_path)) = photo {
+        if let Some(thumb) = thumb_path {
+            let storage_root = std::path::Path::new(&state.config.storage.path);
+            let abs_file = storage_root.join(file_path);
+            let abs_thumb = storage_root.join(&thumb);
+            let crop_meta = req.crop_metadata.as_deref();
+            crate::photos::scan::generate_thumbnail_file(&abs_file, &abs_thumb, &mime_type, crop_meta).await;
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "id": photo_id,
         "crop_metadata": req.crop_metadata,
