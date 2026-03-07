@@ -49,15 +49,10 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
-import androidx.media3.datasource.cache.SimpleCache
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import java.io.File
 import coil.imageLoader
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.R
@@ -112,66 +107,36 @@ fun PhotoViewerScreen(
     val currentPhoto = viewModel.allPhotos.getOrNull(pagerState.currentPage)
     val context = LocalContext.current
 
-    // ── Disk-based media cache ────────────────────────────────────────
-    // ExoPlayer's in-memory buffer lives in the Java heap (capped at
-    // ~512 MB by Android).  Instead of trying to fit large videos in
-    // that heap, we use a 512 MB **disk** cache (via SimpleCache +
-    // CacheDataSource).  The heap now only holds a tiny 2–5 MB decode
-    // window while the disk cache absorbs the full stream — exactly
-    // how YouTube / Netflix handle 4K and 8K.
-    // This lets us effectively use GBs of storage as RAM, bypassing
-    // the Java heap limit entirely for buffered video data.
-    val diskCache = remember {
-        val cacheDir = File(context.cacheDir, "exo_media_cache")
-        if (!cacheDir.exists()) cacheDir.mkdirs()
-        // 512 MB disk cache — evicts least-recently-used segments.
-        // Storage is plentiful; this is the "more RAM" the user is
-        // looking for, just stored on flash instead of DRAM.
-        val evictor = LeastRecentlyUsedCacheEvictor(512L * 1024 * 1024)
-        SimpleCache(cacheDir, evictor)
-    }
-
     // ── Single shared ExoPlayer ──────────────────────────────────────
-    // One ExoPlayer lives for the entire viewer screen. When the user
-    // swipes to a different video, we swap the MediaItem instead of
-    // creating a second player. This guarantees only ONE MediaCodec
-    // instance ever exists, preventing the 128 MB frame-buffer OOM.
+    // One ExoPlayer for the entire viewer. All videos are downloaded to
+    // temp files BEFORE playback starts (see PhotoPageContent), so the
+    // player only ever reads local file:// URIs.  This means:
+    //   • No OkHttp / HTTP buffering in the Java heap during playback
+    //   • No CacheDataSource / SimpleCache complexity
+    //   • The heap is free for the MediaCodec output buffers
+    // This mirrors how the web browser works: download first, play local.
     val sharedPlayer = remember {
         run {
-            val httpFactory = OkHttpDataSource.Factory(viewModel.okHttpClient)
-            val upstreamFactory = DefaultDataSource.Factory(context, httpFactory)
+            // Local-only data source — handles file:// and content:// URIs.
+            // No network data source needed; download is handled separately.
+            val mediaSourceFactory = DefaultMediaSourceFactory(
+                DefaultDataSource.Factory(context)
+            )
 
-            // Wrap the network data source with a disk cache.
-            // Reads: cache-hit → serve from disk; cache-miss → fetch
-            // from network, write-through to disk, then serve.
-            // This means the Java heap never holds the full video.
-            val cacheDataSourceFactory = CacheDataSource.Factory()
-                .setCache(diskCache)
-                .setUpstreamDataSourceFactory(upstreamFactory)
-                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-
-            val mediaSourceFactory = DefaultMediaSourceFactory(cacheDataSourceFactory)
-
-            // ── Tiny in-memory buffer ────────────────────────────────
-            // Since the disk cache handles buffering, the in-memory
-            // buffer only needs to hold a few seconds of decode-ready
-            // data.  We keep it intentionally small (2.5 MB) so the
-            // Java heap has maximum room for the codec output buffers,
-            // Coil, and Compose.
+            // ── Minimal in-memory buffer ─────────────────────────────
+            // Reading from local storage is fast (100+ MB/s), so we only
+            // need a tiny buffer.  This leaves maximum heap for the
+            // MediaCodec output frame buffers (~50–100 MB for 4K).
             val heapBytes = Runtime.getRuntime().maxMemory()
-            Log.d("VideoPlayer", "Heap=${heapBytes/1024/1024}MB — using disk cache (512 MB), heap buffer=2.5 MB")
+            Log.d("VideoPlayer", "Heap=${heapBytes/1024/1024}MB — local-only playback, heap buffer=2.5 MB")
 
             val loadControl = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                    /* minBufferMs */        2_500,   // 2.5 s — just enough to start
-                    /* maxBufferMs */       30_000,   // 30 s — the disk backs this up
+                    /* minBufferMs */        2_500,
+                    /* maxBufferMs */       30_000,
                     /* bufferForPlaybackMs */  1_000,
                     /* bufferForPlaybackAfterRebufferMs */ 2_000
                 )
-                // 2.5 MB heap-resident buffer — the rest lives on disk.
-                // Even 4K/70 Mbps only uses ~9 MB/s ≈ 0.3 s in 2.5 MB.
-                // The player will briefly re-read from disk cache, which
-                // is fast enough (100+ MB/s on modern flash).
                 .setTargetBufferBytes(2_500_000)
                 .setPrioritizeTimeOverSizeThresholds(false)
                 .build()
@@ -195,12 +160,11 @@ fun PhotoViewerScreen(
                 }
         }
     }
-    // Release the shared player AND disk cache when the viewer leaves
+    // Release the shared player when the viewer leaves composition
     DisposableEffect(Unit) {
         onDispose {
             sharedPlayer.stop()
             sharedPlayer.release()
-            diskCache.release()
         }
     }
     // Track the URI currently loaded into the shared player so we only

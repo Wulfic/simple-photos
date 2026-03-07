@@ -35,6 +35,7 @@ import com.simplephotos.data.local.entities.PhotoEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONObject
 
 // Parsed crop metadata for zoom/brightness transforms
@@ -105,7 +106,10 @@ internal fun PhotoPageContent(
     val isMedia = photo.mediaType == "video" || photo.mediaType == "audio"
     var decryptedData by remember(photo.localId) { mutableStateOf<ByteArray?>(null) }
     var tempMediaUri by remember(photo.localId) { mutableStateOf<Uri?>(null) }
-    var decryptLoading by remember(photo.localId) { mutableStateOf(hasEncryptedBlob && !isPlainMode && !hasLocalPath) }
+    // Show loading spinner when media needs download (encrypted OR plain video)
+    val needsMediaLoad = (!isPlainMode && !hasLocalPath && hasEncryptedBlob) ||
+        (isPlainMode && isMedia && !hasLocalPath)
+    var decryptLoading by remember(photo.localId) { mutableStateOf(needsMediaLoad) }
     var decryptError by remember(photo.localId) { mutableStateOf<String?>(null) }
 
     // For videos, gate on isActivePage so we don't download a 50 MB video
@@ -140,6 +144,45 @@ internal fun PhotoPageContent(
             } catch (e: Throwable) {
                 // Catch Throwable (not Exception) so OutOfMemoryError is handled
                 decryptError = e.message ?: "Failed to load media"
+            } finally {
+                decryptLoading = false
+            }
+        }
+    }
+
+    // ── Plain-mode video: stream-download to temp file ────────────────
+    // Instead of letting ExoPlayer stream over HTTP (which pulls data
+    // into the Java heap via OkHttp buffers), we download the video to
+    // a temp file first using a tiny 8 KB streaming copy.  ExoPlayer
+    // then reads from local storage with near-zero heap usage.
+    // This is why the web browser doesn't OOM: it downloads, then plays.
+    val shouldDownloadPlainVideo = isPlainMode && isMedia && !hasLocalPath && isActivePage
+    LaunchedEffect(photo.localId, shouldDownloadPlainVideo) {
+        if (shouldDownloadPlainVideo && tempMediaUri == null) {
+            decryptLoading = true
+            try {
+                val url = "$serverBaseUrl/api/photos/${photo.serverPhotoId}/web"
+                val ext = "." + photo.filename.substringAfterLast('.', "mp4").lowercase()
+                val uri = withContext(Dispatchers.IO) {
+                    val request = Request.Builder().url(url).build()
+                    okHttpClient.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) {
+                            throw Exception("Server error: ${response.code}")
+                        }
+                        val tempFile = java.io.File.createTempFile("media_", ext, context.cacheDir)
+                        // Stream directly to disk — only 8 KB in heap at a time.
+                        // A 200 MB video file never touches the Java heap.
+                        response.body?.byteStream()?.use { input ->
+                            tempFile.outputStream().buffered().use { output ->
+                                input.copyTo(output, bufferSize = 8192)
+                            }
+                        } ?: throw Exception("Empty response body")
+                        Uri.fromFile(tempFile)
+                    }
+                }
+                tempMediaUri = uri
+            } catch (e: Throwable) {
+                decryptError = e.message ?: "Failed to download video"
             } finally {
                 decryptLoading = false
             }
@@ -335,11 +378,14 @@ internal fun PhotoPageContent(
                 // Plain mode: /web endpoint serves FFmpeg-converted MP4.
                 // Encrypted mode: temp file written during LaunchedEffect above.
                 // Local mode: direct content URI.
+                // All video playback now uses local files:
+                //   • Plain mode: downloaded to temp file via LaunchedEffect above
+                //   • Encrypted mode: decrypted to temp file via LaunchedEffect above
+                //   • Local mode: original file path
                 val mediaUri = when {
-                    isPlainMode -> Uri.parse("$serverBaseUrl/api/photos/${photo.serverPhotoId}/web")
                     hasLocalPath -> Uri.parse(photo.localPath)
                     tempMediaUri != null -> tempMediaUri
-                    else -> null
+                    else -> null  // Still downloading — spinner shown by decryptLoading
                 }
                 if (mediaUri != null && sharedPlayer != null && onVideoUriReady != null) {
                     VideoPlayerPage(
