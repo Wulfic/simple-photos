@@ -25,8 +25,9 @@ export function getConvertedFormat(filename: string): string | null {
     case "raw":
       return "jpg";
 
-    // SVG → rasterized PNG
+    // SVG / ICO → rasterized PNG
     case "svg":
+    case "ico":
       return "png";
 
     // Audio that browsers cannot play natively

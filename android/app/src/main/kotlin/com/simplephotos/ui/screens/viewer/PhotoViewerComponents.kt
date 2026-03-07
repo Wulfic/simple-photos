@@ -1,8 +1,7 @@
 package com.simplephotos.ui.screens.viewer
 
-import android.graphics.BitmapFactory
 import android.net.Uri
-import androidx.compose.foundation.Image
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -19,7 +18,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -27,15 +25,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONObject
 
@@ -48,6 +46,31 @@ internal data class CropInfo(
     val brightness: Float
 )
 
+/**
+ * Mirrors the server's `needs_web_preview()` logic. Returns the target
+ * extension if this filename's format requires conversion for native
+ * Android playback, or null if Android can handle it directly.
+ */
+internal fun needsWebPreview(filename: String): String? {
+    val ext = filename.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        // Images not decodable by Android BitmapFactory / Coil natively
+        "heic", "heif", "tiff", "tif", "hdr", "cr2", "cur", "cursor",
+        "dng", "nef", "arw", "raw" -> "jpg"
+        // ICO — not natively supported by BitmapFactory
+        "ico" -> "png"
+        // SVG — Coil can handle if coil-svg is present, but the /web
+        // endpoint provides a rasterised PNG for consistent rendering
+        "svg" -> "png"
+        // Video containers not reliably playable by ExoPlayer
+        "mkv", "avi", "wmv", "asf", "h264",
+        "mpg", "mpeg", "3gp", "mov", "m4v" -> "mp4"
+        // Audio formats not natively supported
+        "wma", "aiff", "aif" -> "mp3"
+        else -> null
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-page content — each page independently loads and renders its photo
 // ---------------------------------------------------------------------------
@@ -59,8 +82,15 @@ internal fun PhotoPageContent(
     serverBaseUrl: String,
     viewModel: PhotoViewerViewModel,
     okHttpClient: OkHttpClient,
+    isActivePage: Boolean = true,
     editMode: Boolean = false,
-    editBrightness: Float = 0f
+    editBrightness: Float = 0f,
+    // Shared ExoPlayer — owned by PhotoViewerScreen, one instance for all pages
+    sharedPlayer: ExoPlayer? = null,
+    activeVideoUri: Uri? = null,
+    onVideoUriReady: ((Uri, String) -> Unit)? = null,
+    playerError: String? = null,
+    isConverting: Boolean = false
 ) {
     val context = LocalContext.current
 
@@ -69,21 +99,63 @@ internal fun PhotoPageContent(
     val hasLocalPath = photo.localPath != null
     val hasEncryptedBlob = photo.serverBlobId != null
 
-    // For encrypted mode, lazily download & decrypt
+    // For encrypted mode, lazily download & decrypt.
+    // Photos: store ByteArray for Coil.
+    // Videos: write to temp file and store URI to avoid holding large blobs in memory.
+    val isMedia = photo.mediaType == "video" || photo.mediaType == "audio"
     var decryptedData by remember(photo.localId) { mutableStateOf<ByteArray?>(null) }
+    var tempMediaUri by remember(photo.localId) { mutableStateOf<Uri?>(null) }
     var decryptLoading by remember(photo.localId) { mutableStateOf(hasEncryptedBlob && !isPlainMode && !hasLocalPath) }
     var decryptError by remember(photo.localId) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(photo.localId) {
-        if (!isPlainMode && !hasLocalPath && hasEncryptedBlob) {
+    // For videos, gate on isActivePage so we don't download a 50 MB video
+    // for the next page while the current page's ExoPlayer is still alive.
+    // For photos, download eagerly so Coil can display them during swipe.
+    val shouldDecrypt = !isPlainMode && !hasLocalPath && hasEncryptedBlob &&
+        (!isMedia || isActivePage)
+
+    LaunchedEffect(photo.localId, shouldDecrypt) {
+        if (shouldDecrypt && decryptedData == null && tempMediaUri == null) {
             decryptLoading = true
             try {
-                decryptedData = viewModel.downloadAndDecrypt(photo.serverBlobId!!)
-            } catch (e: Exception) {
-                decryptError = e.message
+                val rawBytes = viewModel.downloadAndDecrypt(photo.serverBlobId!!)
+                if (isMedia) {
+                    // Write decrypted media to temp file on IO thread.
+                    // The encrypted blob already contains the web-compatible
+                    // format (e.g. MKV→MP4) so ExoPlayer can play directly.
+                    val ext = if (photo.mediaType == "audio") ".mp3"
+                        else if (needsWebPreview(photo.filename) == "mp4") ".mp4"
+                        else "." + photo.filename.substringAfterLast('.', "mp4").lowercase()
+                    val uri = withContext(Dispatchers.IO) {
+                        val tempFile = java.io.File.createTempFile("media_", ext, context.cacheDir)
+                        tempFile.outputStream().use { it.write(rawBytes) }
+                        Uri.fromFile(tempFile)
+                    }
+                    // rawBytes is now eligible for GC — only the temp file holds the data
+                    tempMediaUri = uri
+                } else {
+                    // For photos: store ByteArray for Coil to decode
+                    decryptedData = rawBytes
+                }
+            } catch (e: Throwable) {
+                // Catch Throwable (not Exception) so OutOfMemoryError is handled
+                decryptError = e.message ?: "Failed to load media"
             } finally {
                 decryptLoading = false
             }
+        }
+    }
+
+    // Clean up temp media files when the page leaves composition to prevent
+    // accumulating dozens of large video files in the cache directory.
+    DisposableEffect(photo.localId) {
+        onDispose {
+            tempMediaUri?.path?.let { path ->
+                try { java.io.File(path).delete() } catch (_: Exception) {}
+            }
+            // Release decryptedData so GC can reclaim it when page is disposed
+            decryptedData = null
+            tempMediaUri = null
         }
     }
 
@@ -260,76 +332,133 @@ internal fun PhotoPageContent(
 
             // ── Video / Audio ───────────────────────────────────────────
             photo.mediaType == "video" || photo.mediaType == "audio" -> {
+                // Plain mode: /web endpoint serves FFmpeg-converted MP4.
+                // Encrypted mode: temp file written during LaunchedEffect above.
+                // Local mode: direct content URI.
                 val mediaUri = when {
-                    isPlainMode -> Uri.parse("$serverBaseUrl/api/photos/${photo.serverPhotoId}/file")
+                    isPlainMode -> Uri.parse("$serverBaseUrl/api/photos/${photo.serverPhotoId}/web")
                     hasLocalPath -> Uri.parse(photo.localPath)
-                    decryptedData != null -> {
-                        val ext = if (photo.mediaType == "audio") ".mp3" else ".mp4"
-                        val tempFile = remember(photo.localId, decryptedData) {
-                            java.io.File.createTempFile("media_", ext, context.cacheDir).apply {
-                                writeBytes(decryptedData!!)
-                                deleteOnExit()
-                            }
-                        }
-                        Uri.fromFile(tempFile)
-                    }
+                    tempMediaUri != null -> tempMediaUri
                     else -> null
                 }
-                if (mediaUri != null) {
-                    VideoPlayer(uri = mediaUri, okHttpClient = okHttpClient)
-                } else {
+                if (mediaUri != null && sharedPlayer != null && onVideoUriReady != null) {
+                    VideoPlayerPage(
+                        uri = mediaUri,
+                        sharedPlayer = sharedPlayer,
+                        activeVideoUri = activeVideoUri,
+                        isActivePage = isActivePage,
+                        filename = photo.filename,
+                        onVideoUriReady = onVideoUriReady,
+                        playerError = playerError,
+                        isConverting = isConverting
+                    )
+                } else if (mediaUri == null) {
                     Text("Media not available", color = Color.White)
                 }
             }
 
             // ── Photo / GIF ────────────────────────────────────────────
             else -> {
+                // Track image load errors for graceful fallback
+                var imageError by remember(photo.localId) { mutableStateOf<String?>(null) }
+                var isConverting by remember(photo.localId) { mutableStateOf(false) }
+
                 when {
-                    // Plain mode: Coil loads via authenticated URL
+                    imageError != null -> {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(32.dp)
+                        ) {
+                            if (isConverting) {
+                                CircularProgressIndicator(color = Color.White)
+                                Spacer(Modifier.height(16.dp))
+                                Text(
+                                    "Converting to compatible format…",
+                                    color = Color.Gray,
+                                    fontSize = 14.sp
+                                )
+                            } else {
+                                Text(
+                                    "Unable to display this format",
+                                    color = Color.White,
+                                    fontSize = 14.sp
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    photo.filename,
+                                    color = Color.Gray,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Plain mode: Coil loads via authenticated /web endpoint
+                    // Server converts non-native formats (CR2, TIFF, SVG, ICO, etc.)
                     isPlainMode -> {
+                        val webUrl = "$serverBaseUrl/api/photos/${photo.serverPhotoId}/web"
                         AsyncImage(
                             model = ImageRequest.Builder(context)
-                                .data("$serverBaseUrl/api/photos/${photo.serverPhotoId}/file")
+                                .data(webUrl)
                                 .crossfade(true)
                                 .build(),
                             contentDescription = photo.filename,
                             modifier = Modifier.fillMaxSize().then(combinedModifier),
                             contentScale = ContentScale.Fit,
-                            colorFilter = brightnessFilter
+                            colorFilter = brightnessFilter,
+                            onState = { state ->
+                                if (state is AsyncImagePainter.State.Error) {
+                                    Log.w("PhotoViewer", "Coil failed for ${photo.filename}: ${state.result.throwable.message}")
+                                    // If format needs conversion, server may still be converting (202)
+                                    if (needsWebPreview(photo.filename) != null) {
+                                        isConverting = true
+                                    }
+                                    imageError = state.result.throwable.message ?: "Failed to load"
+                                }
+                            }
                         )
                     }
-                    // Local file
+
+                    // Local file — use Coil with content URI for memory-safe loading
                     hasLocalPath -> {
-                        val bitmap = remember(photo.localPath) {
-                            try {
-                                val stream = context.contentResolver.openInputStream(Uri.parse(photo.localPath))
-                                BitmapFactory.decodeStream(stream)
-                            } catch (_: Exception) { null }
-                        }
-                        bitmap?.let {
-                            Image(
-                                bitmap = it.asImageBitmap(),
-                                contentDescription = photo.filename,
-                                modifier = Modifier.fillMaxSize().then(combinedModifier),
-                                contentScale = ContentScale.Fit,
-                                colorFilter = brightnessFilter
-                            )
-                        }
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(Uri.parse(photo.localPath))
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = photo.filename,
+                            modifier = Modifier.fillMaxSize().then(combinedModifier),
+                            contentScale = ContentScale.Fit,
+                            colorFilter = brightnessFilter,
+                            onState = { state ->
+                                if (state is AsyncImagePainter.State.Error) {
+                                    Log.w("PhotoViewer", "Coil failed for local ${photo.filename}: ${state.result.throwable.message}")
+                                    imageError = "Cannot decode ${photo.filename.substringAfterLast('.').uppercase()} format"
+                                }
+                            }
+                        )
                     }
-                    // Decrypted blob
+
+                    // Decrypted blob — use Coil with ByteArray for memory-safe decoding
+                    // Coil handles GIF (via GifDecoder), SVG (via SvgDecoder), and
+                    // standard formats while managing memory/downsampling automatically
                     decryptedData != null -> {
-                        val bitmap = remember(decryptedData) {
-                            BitmapFactory.decodeByteArray(decryptedData, 0, decryptedData!!.size)
-                        }
-                        bitmap?.let {
-                            Image(
-                                bitmap = it.asImageBitmap(),
-                                contentDescription = photo.filename,
-                                modifier = Modifier.fillMaxSize().then(combinedModifier),
-                                contentScale = ContentScale.Fit,
-                                colorFilter = brightnessFilter
-                            )
-                        }
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(decryptedData)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = photo.filename,
+                            modifier = Modifier.fillMaxSize().then(combinedModifier),
+                            contentScale = ContentScale.Fit,
+                            colorFilter = brightnessFilter,
+                            onState = { state ->
+                                if (state is AsyncImagePainter.State.Error) {
+                                    Log.w("PhotoViewer", "Coil failed for decrypted ${photo.filename}: ${state.result.throwable.message}")
+                                    imageError = "Cannot display this format"
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -338,38 +467,101 @@ internal fun PhotoPageContent(
 }
 
 // ---------------------------------------------------------------------------
-// Video/Audio player composable (ExoPlayer + OkHttp for auth)
+// Video/Audio page — renders the shared ExoPlayer's PlayerView when this
+// is the active page.  No per-page ExoPlayer creation; the single shared
+// instance is owned by PhotoViewerScreen.
 // ---------------------------------------------------------------------------
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-internal fun VideoPlayer(uri: Uri, okHttpClient: OkHttpClient) {
-    val context = LocalContext.current
-    val player = remember {
-        val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .build()
-            .apply {
-                setMediaItem(MediaItem.fromUri(uri))
-                prepare()
-            }
+internal fun VideoPlayerPage(
+    uri: Uri,
+    sharedPlayer: ExoPlayer,
+    activeVideoUri: Uri?,
+    isActivePage: Boolean,
+    filename: String,
+    onVideoUriReady: (Uri, String) -> Unit,
+    playerError: String?,
+    isConverting: Boolean
+) {
+    // When this page becomes active, notify the screen to load our URI
+    // into the shared player.
+    LaunchedEffect(isActivePage, uri) {
+        if (isActivePage) {
+            onVideoUriReady(uri, filename)
+        }
     }
 
-    DisposableEffect(Unit) {
-        onDispose { player.release() }
+    // Pause the shared player when swiping away from a video page.
+    // (The next video page will call onVideoUriReady which re-prepares.)
+    LaunchedEffect(isActivePage) {
+        if (!isActivePage && activeVideoUri == uri) {
+            sharedPlayer.playWhenReady = false
+        }
     }
 
-    AndroidView(
-        factory = {
-            PlayerView(it).apply {
-                this.player = player
-                useController = true
+    if (playerError != null && isActivePage) {
+        // Fallback UI for unsupported formats or conversion-in-progress
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (isConverting) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Converting to compatible format\u2026",
+                        color = Color.Gray,
+                        fontSize = 14.sp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "This may take a moment",
+                        color = Color.Gray,
+                        fontSize = 12.sp
+                    )
+                } else {
+                    Text(
+                        "Unable to play this video format",
+                        color = Color.White,
+                        fontSize = 14.sp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        filename,
+                        color = Color.Gray,
+                        fontSize = 12.sp
+                    )
+                }
             }
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+        }
+    } else if (isActivePage && activeVideoUri == uri) {
+        // This is the active video page and the shared player has our URI loaded.
+        // Show the PlayerView. Default rendering uses SurfaceView which sends
+        // decoded frames directly to the display compositor in native memory,
+        // avoiding the Java-heap Bitmap copy that TextureView would require.
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    this.player = sharedPlayer
+                    useController = true
+                }
+            },
+            update = { playerView ->
+                playerView.player = sharedPlayer
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+    } else {
+        // Not active or player showing a different video — black placeholder
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            // Intentionally blank
+        }
+    }
 }
 
 // ── Info detail helpers ──────────────────────────────────────────────────────

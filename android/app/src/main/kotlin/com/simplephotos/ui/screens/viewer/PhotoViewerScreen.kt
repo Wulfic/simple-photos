@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -42,6 +43,22 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import java.io.File
+import coil.imageLoader
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.R
 import kotlinx.coroutines.launch
@@ -60,6 +77,7 @@ private data class CropCorners(
 // ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun PhotoViewerScreen(
     onBack: () -> Unit,
@@ -93,6 +111,127 @@ fun PhotoViewerScreen(
 
     val currentPhoto = viewModel.allPhotos.getOrNull(pagerState.currentPage)
     val context = LocalContext.current
+
+    // ── Disk-based media cache ────────────────────────────────────────
+    // ExoPlayer's in-memory buffer lives in the Java heap (capped at
+    // ~512 MB by Android).  Instead of trying to fit large videos in
+    // that heap, we use a 512 MB **disk** cache (via SimpleCache +
+    // CacheDataSource).  The heap now only holds a tiny 2–5 MB decode
+    // window while the disk cache absorbs the full stream — exactly
+    // how YouTube / Netflix handle 4K and 8K.
+    // This lets us effectively use GBs of storage as RAM, bypassing
+    // the Java heap limit entirely for buffered video data.
+    val diskCache = remember {
+        val cacheDir = File(context.cacheDir, "exo_media_cache")
+        if (!cacheDir.exists()) cacheDir.mkdirs()
+        // 512 MB disk cache — evicts least-recently-used segments.
+        // Storage is plentiful; this is the "more RAM" the user is
+        // looking for, just stored on flash instead of DRAM.
+        val evictor = LeastRecentlyUsedCacheEvictor(512L * 1024 * 1024)
+        SimpleCache(cacheDir, evictor)
+    }
+
+    // ── Single shared ExoPlayer ──────────────────────────────────────
+    // One ExoPlayer lives for the entire viewer screen. When the user
+    // swipes to a different video, we swap the MediaItem instead of
+    // creating a second player. This guarantees only ONE MediaCodec
+    // instance ever exists, preventing the 128 MB frame-buffer OOM.
+    val sharedPlayer = remember {
+        run {
+            val httpFactory = OkHttpDataSource.Factory(viewModel.okHttpClient)
+            val upstreamFactory = DefaultDataSource.Factory(context, httpFactory)
+
+            // Wrap the network data source with a disk cache.
+            // Reads: cache-hit → serve from disk; cache-miss → fetch
+            // from network, write-through to disk, then serve.
+            // This means the Java heap never holds the full video.
+            val cacheDataSourceFactory = CacheDataSource.Factory()
+                .setCache(diskCache)
+                .setUpstreamDataSourceFactory(upstreamFactory)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+
+            val mediaSourceFactory = DefaultMediaSourceFactory(cacheDataSourceFactory)
+
+            // ── Tiny in-memory buffer ────────────────────────────────
+            // Since the disk cache handles buffering, the in-memory
+            // buffer only needs to hold a few seconds of decode-ready
+            // data.  We keep it intentionally small (2.5 MB) so the
+            // Java heap has maximum room for the codec output buffers,
+            // Coil, and Compose.
+            val heapBytes = Runtime.getRuntime().maxMemory()
+            Log.d("VideoPlayer", "Heap=${heapBytes/1024/1024}MB — using disk cache (512 MB), heap buffer=2.5 MB")
+
+            val loadControl = DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    /* minBufferMs */        2_500,   // 2.5 s — just enough to start
+                    /* maxBufferMs */       30_000,   // 30 s — the disk backs this up
+                    /* bufferForPlaybackMs */  1_000,
+                    /* bufferForPlaybackAfterRebufferMs */ 2_000
+                )
+                // 2.5 MB heap-resident buffer — the rest lives on disk.
+                // Even 4K/70 Mbps only uses ~9 MB/s ≈ 0.3 s in 2.5 MB.
+                // The player will briefly re-read from disk cache, which
+                // is fast enough (100+ MB/s on modern flash).
+                .setTargetBufferBytes(2_500_000)
+                .setPrioritizeTimeOverSizeThresholds(false)
+                .build()
+
+            // ── Renderer config ──────────────────────────────────────
+            val renderersFactory = DefaultRenderersFactory(context)
+                .setEnableDecoderFallback(true)
+                .setExtensionRendererMode(
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
+                )
+
+            ExoPlayer.Builder(context)
+                .setMediaSourceFactory(mediaSourceFactory)
+                .setLoadControl(loadControl)
+                .setRenderersFactory(renderersFactory)
+                .build()
+                .apply {
+                    playWhenReady = false
+                    videoChangeFrameRateStrategy =
+                        C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF
+                }
+        }
+    }
+    // Release the shared player AND disk cache when the viewer leaves
+    DisposableEffect(Unit) {
+        onDispose {
+            sharedPlayer.stop()
+            sharedPlayer.release()
+            diskCache.release()
+        }
+    }
+    // Track the URI currently loaded into the shared player so we only
+    // call setMediaItem when it actually changes.
+    var activeVideoUri by remember { mutableStateOf<Uri?>(null) }
+    // Track player errors at this level so the page can display them
+    var sharedPlayerError by remember { mutableStateOf<String?>(null) }
+    var sharedPlayerConverting by remember { mutableStateOf(false) }
+    DisposableEffect(sharedPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                Log.w("VideoPlayer", "ExoPlayer error: ${error.message}")
+                sharedPlayerError = error.message ?: "Cannot play this video"
+            }
+        }
+        sharedPlayer.addListener(listener)
+        onDispose { sharedPlayer.removeListener(listener) }
+    }
+
+    // Stop the player when the user swipes from a video to a photo page.
+    // Without this, audio continues playing in the background.
+    LaunchedEffect(pagerState.currentPage) {
+        val photo = viewModel.allPhotos.getOrNull(pagerState.currentPage)
+        val isVideo = photo?.mediaType == "video" || photo?.mediaType == "audio"
+        if (!isVideo) {
+            sharedPlayer.playWhenReady = false
+            sharedPlayer.stop()
+            activeVideoUri = null
+            sharedPlayerError = null
+        }
+    }
 
     // Load tags and favorite when page changes (plain mode only)
     val isPlainMode = viewModel.encryptionMode == "plain"
@@ -246,10 +385,20 @@ fun PhotoViewerScreen(
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
+            beyondBoundsPageCount = 0,
             userScrollEnabled = !editMode,
-            key = { viewModel.allPhotos[it].localId }
+            key = { viewModel.allPhotos.getOrNull(it)?.localId ?: it }
         ) { page ->
-            val photo = viewModel.allPhotos[page]
+            val photo = viewModel.allPhotos.getOrNull(page)
+            if (photo == null) {
+                Box(
+                    modifier = Modifier.fillMaxSize().background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Photo not available", color = Color.White)
+                }
+                return@HorizontalPager
+            }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -264,8 +413,44 @@ fun PhotoViewerScreen(
                     serverBaseUrl = viewModel.serverBaseUrl,
                     viewModel = viewModel,
                     okHttpClient = viewModel.okHttpClient,
+                    isActivePage = pagerState.currentPage == page,
                     editMode = editMode,
-                    editBrightness = brightnessValue
+                    editBrightness = brightnessValue,
+                    sharedPlayer = sharedPlayer,
+                    activeVideoUri = activeVideoUri,
+                    onVideoUriReady = { uri, filename ->
+                        // Load the new media item into the shared player.
+                        // Only swap if the URI actually changed (avoids re-prepare
+                        // on every recomposition).
+                        if (uri != activeVideoUri) {
+                            sharedPlayerError = null
+                            sharedPlayerConverting = needsWebPreview(filename) != null
+                            activeVideoUri = uri
+
+                            // Free Coil's in-memory bitmap cache — the cached
+                            // photo bitmaps are invisible while a video plays
+                            // and just waste heap that the codec needs.
+                            context.imageLoader.memoryCache?.clear()
+
+                            // Hint the GC to reclaim soft references / finalizer
+                            // -queued bitmaps before the codec allocates its
+                            // output buffers.
+                            @Suppress("ExplicitGarbageCollection")
+                            System.gc()
+
+                            // Don't call stop() first — it releases the MediaCodec,
+                            // then prepare() allocates a new one.  The old native
+                            // buffers (~128 MB for 4K) may not be freed yet,
+                            // causing a transient peak that triggers OOM.
+                            // setMediaItem + prepare reuses the codec if the format
+                            // is compatible (e.g., both H.264 MP4).
+                            sharedPlayer.setMediaItem(MediaItem.fromUri(uri))
+                            sharedPlayer.prepare()
+                            sharedPlayer.playWhenReady = true
+                        }
+                    },
+                    playerError = sharedPlayerError,
+                    isConverting = sharedPlayerConverting
                 )
             }
         }
@@ -454,42 +639,40 @@ fun PhotoViewerScreen(
                         }
                         // Download button
                         IconButton(onClick = {
-                            val photo = currentPhoto
-                            if (photo != null) {
-                                scope.launch {
-                                    try {
-                                        // For local files, use content resolver; for server files, download
-                                        val bytes: ByteArray? = when {
-                                            photo.localPath != null -> {
-                                                try {
-                                                    context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.readBytes()
-                                                } catch (_: Exception) { null }
-                                            }
-                                            else -> viewModel.downloadPhotoBytes(photo)
+                            val photo = currentPhoto ?: return@IconButton
+                            scope.launch {
+                                try {
+                                    // For local files, use content resolver; for server files, download
+                                    val bytes: ByteArray? = when {
+                                        photo.localPath != null -> {
+                                            try {
+                                                context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.readBytes()
+                                            } catch (_: Exception) { null }
                                         }
-                                        if (bytes != null) {
-                                            val values = ContentValues().apply {
-                                                put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
-                                                put(MediaStore.MediaColumns.MIME_TYPE, when {
-                                                    photo.filename.endsWith(".png", true) -> "image/png"
-                                                    photo.filename.endsWith(".gif", true) -> "image/gif"
-                                                    photo.filename.endsWith(".mp4", true) -> "video/mp4"
-                                                    photo.filename.endsWith(".webm", true) -> "video/webm"
-                                                    else -> "image/jpeg"
-                                                })
-                                                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                                            }
-                                            val uri = context.contentResolver.insert(
-                                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                                            )
-                                            uri?.let { context.contentResolver.openOutputStream(it)?.use { os -> os.write(bytes) } }
-                                            downloadMessage = "Saved to Downloads"
-                                        } else {
-                                            downloadMessage = "Download failed"
-                                        }
-                                    } catch (e: Exception) {
-                                        downloadMessage = "Download failed: ${e.message}"
+                                        else -> viewModel.downloadPhotoBytes(photo)
                                     }
+                                    if (bytes != null) {
+                                        val values = ContentValues().apply {
+                                            put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
+                                            put(MediaStore.MediaColumns.MIME_TYPE, when {
+                                                photo.filename.endsWith(".png", true) -> "image/png"
+                                                photo.filename.endsWith(".gif", true) -> "image/gif"
+                                                photo.filename.endsWith(".mp4", true) -> "video/mp4"
+                                                photo.filename.endsWith(".webm", true) -> "video/webm"
+                                                else -> "image/jpeg"
+                                            })
+                                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                        }
+                                        val uri = context.contentResolver.insert(
+                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                                        )
+                                        uri?.let { context.contentResolver.openOutputStream(it)?.use { os -> os.write(bytes) } }
+                                        downloadMessage = "Saved to Downloads"
+                                    } else {
+                                        downloadMessage = "Download failed"
+                                    }
+                                } catch (e: Exception) {
+                                    downloadMessage = "Download failed: ${e.message}"
                                 }
                             }
                         }) {

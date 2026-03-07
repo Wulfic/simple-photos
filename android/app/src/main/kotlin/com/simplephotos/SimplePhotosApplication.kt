@@ -7,6 +7,8 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import coil.decode.GifDecoder
+import coil.decode.SvgDecoder
 import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.HiltAndroidApp
 import okhttp3.OkHttpClient
@@ -42,6 +44,20 @@ class SimplePhotosApplication : Application(), Configuration.Provider, ImageLoad
         return ImageLoader.Builder(this)
             .crossfade(true)
             .okHttpClient(okHttpClient)
+            // Cap the in-memory bitmap cache at 16 MB. We clear this
+            // cache whenever a video starts playing (see onVideoUriReady)
+            // so the heap freed here is immediately available for the
+            // video decoder's output buffers.
+            .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+            .memoryCache {
+                coil.memory.MemoryCache.Builder(this)
+                    .maxSizeBytes(16 * 1024 * 1024) // 16 MB
+                    .build()
+            }
+            .components {
+                add(GifDecoder.Factory())
+                add(SvgDecoder.Factory())
+            }
             .build()
     }
 }
