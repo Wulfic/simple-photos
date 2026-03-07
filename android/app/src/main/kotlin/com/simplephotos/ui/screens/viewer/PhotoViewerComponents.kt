@@ -118,31 +118,40 @@ internal fun PhotoPageContent(
     val shouldDecrypt = !isPlainMode && !hasLocalPath && hasEncryptedBlob &&
         (!isMedia || isActivePage)
 
+    // ── Encrypted video/audio: streaming decrypt-to-file path ─────────
+    // Instead of loading the full decoded video into the Java heap (which
+    // causes OOM for large files), we stream-decrypt the base64 payload
+    // directly to a temp file. Peak heap: ~1× blob size (vs ~4× before).
     LaunchedEffect(photo.localId, shouldDecrypt) {
-        if (shouldDecrypt && decryptedData == null && tempMediaUri == null) {
+        if (shouldDecrypt && isMedia && decryptedData == null && tempMediaUri == null) {
+            decryptLoading = true
+            try {
+                val ext = if (photo.mediaType == "audio") ".mp3"
+                    else if (needsWebPreview(photo.filename) == "mp4") ".mp4"
+                    else "." + photo.filename.substringAfterLast('.', "mp4").lowercase()
+                val uri = withContext(Dispatchers.IO) {
+                    val tempFile = java.io.File.createTempFile("media_", ext, context.cacheDir)
+                    viewModel.downloadAndDecryptToFile(photo.serverBlobId!!, tempFile)
+                    Uri.fromFile(tempFile)
+                }
+                tempMediaUri = uri
+            } catch (e: Throwable) {
+                decryptError = e.message ?: "Failed to load media"
+            } finally {
+                decryptLoading = false
+            }
+        }
+    }
+
+    // ── Encrypted photo: in-memory decrypt path ──────────────────────
+    // Photos are small enough to hold in memory; Coil needs a ByteArray.
+    LaunchedEffect(photo.localId, shouldDecrypt) {
+        if (shouldDecrypt && !isMedia && decryptedData == null && tempMediaUri == null) {
             decryptLoading = true
             try {
                 val rawBytes = viewModel.downloadAndDecrypt(photo.serverBlobId!!)
-                if (isMedia) {
-                    // Write decrypted media to temp file on IO thread.
-                    // The encrypted blob already contains the web-compatible
-                    // format (e.g. MKV→MP4) so ExoPlayer can play directly.
-                    val ext = if (photo.mediaType == "audio") ".mp3"
-                        else if (needsWebPreview(photo.filename) == "mp4") ".mp4"
-                        else "." + photo.filename.substringAfterLast('.', "mp4").lowercase()
-                    val uri = withContext(Dispatchers.IO) {
-                        val tempFile = java.io.File.createTempFile("media_", ext, context.cacheDir)
-                        tempFile.outputStream().use { it.write(rawBytes) }
-                        Uri.fromFile(tempFile)
-                    }
-                    // rawBytes is now eligible for GC — only the temp file holds the data
-                    tempMediaUri = uri
-                } else {
-                    // For photos: store ByteArray for Coil to decode
-                    decryptedData = rawBytes
-                }
+                decryptedData = rawBytes
             } catch (e: Throwable) {
-                // Catch Throwable (not Exception) so OutOfMemoryError is handled
                 decryptError = e.message ?: "Failed to load media"
             } finally {
                 decryptLoading = false

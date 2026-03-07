@@ -233,6 +233,108 @@ class PhotoRepository @Inject constructor(
     }
 
     /**
+     * Download an encrypted blob, decrypt it, extract the base64-encoded
+     * "data" field from the JSON envelope, and write the decoded bytes
+     * directly to [outputFile].
+     *
+     * Memory profile (for a 50 MB video):
+     *   1. Stream download to temp file on disk          → ~8 KB heap
+     *   2. Read temp file + AES-GCM decrypt              → ~encrypted-size heap (unavoidable for GCM auth)
+     *   3. Stream-scan decrypted bytes for "data" field  → ~0 extra heap
+     *   4. Base64-decode in 48 KB chunks → write to file → ~48 KB heap
+     *   Total peak: ~1× blob size (vs ~4× before)
+     *
+     * This is used for video/audio where the raw bytes are large.
+     * Photos still use [downloadAndDecryptBlob] since Coil needs a ByteArray.
+     */
+    suspend fun downloadAndDecryptBlobToFile(blobId: String, outputFile: File) {
+        // Step 1: Stream the encrypted blob to a temp file (near-zero heap)
+        val encryptedTempFile = File.createTempFile("enc_", ".tmp", context.cacheDir)
+        try {
+            val response = api.downloadBlob(blobId)
+            response.byteStream().use { input ->
+                encryptedTempFile.outputStream().buffered().use { output ->
+                    input.copyTo(output, bufferSize = 8192)
+                }
+            }
+
+            // Step 2: Read encrypted file and decrypt (one allocation for GCM)
+            val encrypted = encryptedTempFile.readBytes()
+            // Delete the encrypted temp file immediately to free disk space
+            encryptedTempFile.delete()
+            val decrypted = crypto.decrypt(encrypted)
+            // encrypted is now GC-eligible
+
+            // Step 3: Extract the base64 "data" field and decode to output file.
+            // We scan for `"data":"` then read until the closing `"`, decoding
+            // base64 in chunks to avoid holding the full decoded bytes in memory.
+            streamExtractBase64ToFile(decrypted, outputFile)
+            // decrypted is now GC-eligible
+        } finally {
+            // Ensure cleanup even on error
+            if (encryptedTempFile.exists()) encryptedTempFile.delete()
+        }
+    }
+
+    /**
+     * Scan the decrypted JSON bytes for the `"data":"..."` field and
+     * stream-decode the base64 content directly to [outputFile].
+     *
+     * This avoids creating a full String copy of the JSON envelope and
+     * avoids holding the full base64 string + decoded bytes simultaneously.
+     */
+    private fun streamExtractBase64ToFile(decrypted: ByteArray, outputFile: File) {
+        // Find the "data" field start: look for `"data":"` pattern
+        val marker = "\"data\":\"".toByteArray(Charsets.UTF_8)
+        var markerIdx = -1
+        outer@ for (i in 0..decrypted.size - marker.size) {
+            for (j in marker.indices) {
+                if (decrypted[i + j] != marker[j]) continue@outer
+            }
+            markerIdx = i + marker.size
+            break
+        }
+        if (markerIdx < 0) {
+            // Fallback: try with a space after colon  `"data": "`
+            val markerAlt = "\"data\": \"".toByteArray(Charsets.UTF_8)
+            outer2@ for (i in 0..decrypted.size - markerAlt.size) {
+                for (j in markerAlt.indices) {
+                    if (decrypted[i + j] != markerAlt[j]) continue@outer2
+                }
+                markerIdx = i + markerAlt.size
+                break
+            }
+        }
+        if (markerIdx < 0) {
+            throw IllegalStateException("Could not find \"data\" field in decrypted blob")
+        }
+
+        // Find the closing quote for the data field
+        var endIdx = markerIdx
+        while (endIdx < decrypted.size && decrypted[endIdx] != '"'.code.toByte()) {
+            endIdx++
+        }
+        if (endIdx >= decrypted.size) {
+            throw IllegalStateException("Could not find end of \"data\" field in decrypted blob")
+        }
+
+        // Decode base64 in chunks and write to output file.
+        // Base64 decodes in groups of 4 chars → 3 bytes, so we process
+        // in multiples of 4 characters (e.g. 49152 chars → 36864 bytes).
+        outputFile.outputStream().buffered().use { out ->
+            val chunkSize = 49152 // must be multiple of 4
+            var pos = markerIdx
+            while (pos < endIdx) {
+                val end = minOf(pos + chunkSize, endIdx)
+                val base64Chunk = String(decrypted, pos, end - pos, Charsets.UTF_8)
+                val decoded = android.util.Base64.decode(base64Chunk, android.util.Base64.NO_WRAP)
+                out.write(decoded)
+                pos = end
+            }
+        }
+    }
+
+    /**
      * Collect all filenames currently known on the server (plain mode).
      * Used by BackupWorker to skip uploading photos that already exist remotely.
      */
