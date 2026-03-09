@@ -29,12 +29,14 @@ interface UseViewerActionsParams {
   currentIndex: number;
   cropCorners: { x: number; y: number; w: number; h: number };
   brightness: number;
+  rotateValue: number;
   trimStart: number;
   trimEnd: number;
   mediaDuration: number;
   setCropData: (data: CropMetadata | null) => void;
   setCropCorners: (data: { x: number; y: number; w: number; h: number }) => void;
   setBrightness: (v: number) => void;
+  setRotateValue: (v: number) => void;
   setTrimStart: (v: number) => void;
   setTrimEnd: (v: number) => void;
   setEditMode: (v: boolean) => void;
@@ -53,12 +55,14 @@ export default function useViewerActions({
   currentIndex,
   cropCorners,
   brightness,
+  rotateValue,
   trimStart,
   trimEnd,
   mediaDuration,
   setCropData,
   setCropCorners,
   setBrightness,
+  setRotateValue,
   setTrimStart,
   setTrimEnd,
   setEditMode,
@@ -69,25 +73,27 @@ export default function useViewerActions({
 
   const [showLeavePrompt, setShowLeavePrompt] = useState(false);
   const [showDownloadDialog, setShowDownloadDialog] = useState(false);
+  const [saveCopySuccess, setSaveCopySuccess] = useState(false);
 
   /** Build the edit metadata object from current edit state */
   const buildEditMetadata = useCallback((): CropMetadata | null => {
     const c = cropCorners;
     const isDefaultCrop = c.x <= 0.01 && c.y <= 0.01 && c.w >= 0.99 && c.h >= 0.99;
     const isDefaultBrightness = Math.abs(brightness) < 1;
+    const isDefaultRotate = rotateValue === 0;
     const isDefaultTrim = trimStart <= 0.01 && (mediaDuration <= 0 || Math.abs(trimEnd - mediaDuration) < 0.5);
-    const allDefault = isDefaultCrop && isDefaultBrightness && isDefaultTrim;
+    const allDefault = isDefaultCrop && isDefaultBrightness && isDefaultRotate && isDefaultTrim;
     if (allDefault) return null;
     return {
       x: Math.max(0, Math.min(1, c.x)),
       y: Math.max(0, Math.min(1, c.y)),
       width: Math.max(0.05, Math.min(1, c.w)),
       height: Math.max(0.05, Math.min(1, c.h)),
-      rotate: 0,
+      rotate: rotateValue,
       brightness,
       ...((!isDefaultTrim) ? { trimStart, trimEnd } : {}),
     };
-  }, [cropCorners, brightness, trimStart, trimEnd, mediaDuration]);
+  }, [cropCorners, brightness, rotateValue, trimStart, trimEnd, mediaDuration]);
 
   const handleSaveEdit = useCallback(async () => {
     if (!id) return;
@@ -123,13 +129,16 @@ export default function useViewerActions({
       if (isPlainMode) {
         await api.photos.duplicate(id, metaJson);
       } else {
-        // Encrypted mode: duplicate the IndexedDB entry with its own ID + new metadata
+        // Encrypted mode: duplicate the IndexedDB entry with its own ID + new metadata.
+        // The copy gets a new blobId (primary key) but keeps storageBlobId pointing
+        // to the original's server blob so the viewer can still fetch the media.
         const original = await db.photos.get(id);
         if (original) {
           const copyId = crypto.randomUUID();
           await db.photos.put({
             ...original,
             blobId: copyId,
+            storageBlobId: original.storageBlobId || original.blobId,
             filename: original.filename.startsWith("Copy of ")
               ? original.filename
               : `Copy of ${original.filename}`,
@@ -139,10 +148,14 @@ export default function useViewerActions({
         }
       }
       setEditMode(false);
+      // Brief success flash — auto-clears after 2 seconds
+      setSaveCopySuccess(true);
+      setTimeout(() => setSaveCopySuccess(false), 2000);
     } catch (err) {
       console.error("[Viewer] Save Copy failed:", err);
+      setError("Save Copy failed — please try again.");
     }
-  }, [id, isPlainMode, buildEditMetadata, setEditMode]);
+  }, [id, isPlainMode, buildEditMetadata, setEditMode, setError]);
 
   const handleClearCrop = useCallback(async () => {
     if (!id) return;
@@ -155,10 +168,11 @@ export default function useViewerActions({
       setCropData(null);
       setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
       setBrightness(0);
+      setRotateValue(0);
       setTrimStart(0);
       setTrimEnd(mediaDuration);
     } catch { /* ignore */ }
-  }, [id, isPlainMode, setCropData, setCropCorners, setBrightness, setTrimStart, setTrimEnd, mediaDuration]);
+  }, [id, isPlainMode, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd, mediaDuration]);
 
   const handleLeaveAndSave = useCallback(async () => {
     await handleSaveEdit();
@@ -349,6 +363,7 @@ export default function useViewerActions({
     setShowLeavePrompt,
     showDownloadDialog,
     setShowDownloadDialog,
+    saveCopySuccess,
     buildEditMetadata,
     handleSaveEdit,
     handleSaveCopy,

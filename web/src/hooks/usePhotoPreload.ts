@@ -149,23 +149,27 @@ export default function usePhotoPreload(
   /** Preload an encrypted photo into the cache (background, no state updates) */
   async function preloadEncryptedPhoto(blobId: string) {
     try {
-      // Check IndexedDB full-photo cache first
-      const idbCached = await db.fullPhotos?.get(blobId);
+      // Resolve the actual server blob ID (copies reference the original via storageBlobId)
+      const dbEntry = await db.photos.get(blobId);
+      const fetchId = dbEntry?.storageBlobId || blobId;
+
+      // Check IndexedDB full-photo cache first (keyed by fetchId for dedup)
+      const idbCached = await db.fullPhotos?.get(fetchId);
       if (idbCached?.data) {
         const blob = new Blob([idbCached.data], { type: idbCached.mimeType });
         const url = URL.createObjectURL(blob);
         preloadCache.current.set(blobId, {
           url,
-          filename: idbCached.filename,
+          filename: dbEntry?.filename ?? idbCached.filename,
           mimeType: idbCached.mimeType,
           mediaType: idbCached.mediaType,
-          cropData: idbCached.cropData ? JSON.parse(idbCached.cropData) : null,
+          cropData: dbEntry?.cropData ? JSON.parse(dbEntry.cropData) : null,
           isFavorite: idbCached.isFavorite,
         });
         return;
       }
 
-      const encrypted = await api.blobs.download(blobId);
+      const encrypted = await api.blobs.download(fetchId);
       const decrypted = await decrypt(encrypted);
       const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
 
@@ -183,9 +187,8 @@ export default function usePhotoPreload(
       const blob = new Blob([bytes], { type: payload.mime_type });
       const url = URL.createObjectURL(blob);
 
-      // Load crop data from IndexedDB
+      // Load crop data from the already-fetched dbEntry
       let photoCropData = null;
-      const dbEntry = await db.photos.get(blobId);
       if (dbEntry?.cropData) {
         try { photoCropData = JSON.parse(dbEntry.cropData); } catch { /* ignore */ }
       }
@@ -200,10 +203,11 @@ export default function usePhotoPreload(
       });
 
       // Cache in IndexedDB for cross-session persistence (skip large videos > 50MB)
+      // Use fetchId as key so copies share the same cached blob data
       if (bytes.byteLength < 50 * 1024 * 1024) {
         try {
           await db.fullPhotos?.put({
-            photoId: blobId,
+            photoId: fetchId,
             filename: payload.filename,
             mimeType: payload.mime_type,
             mediaType: resolvedType,
