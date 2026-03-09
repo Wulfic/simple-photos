@@ -2,18 +2,33 @@ package com.simplephotos.ui.screens.viewer
 
 import android.net.Uri
 import android.util.Log
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -22,9 +37,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -33,6 +50,7 @@ import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -803,6 +821,7 @@ internal fun VideoPlayerPage(
             val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
             val videoRotationModifier = if (activeRotation != 0) {
                 if (isSwapped && photoWidth > 0 && photoHeight > 0 && containerW > 0 && containerH > 0) {
+                    // Known media dimensions — precise scaling so the rotated video fits
                     val origAspect = photoWidth.toFloat() / photoHeight.toFloat()
                     val containerAspect = containerW / containerH
                     val origRendW: Float
@@ -813,6 +832,13 @@ internal fun VideoPlayerPage(
                         origRendH = containerH; origRendW = containerH * origAspect
                     }
                     val rotScale = minOf(containerW / origRendH, containerH / origRendW)
+                    Modifier.graphicsLayer {
+                        scaleX = rotScale; scaleY = rotScale
+                        rotationZ = activeRotation.toFloat()
+                    }
+                } else if (isSwapped && containerW > 0 && containerH > 0) {
+                    // Unknown media dimensions — use container-based scale to prevent overflow
+                    val rotScale = minOf(containerW / containerH, containerH / containerW)
                     Modifier.graphicsLayer {
                         scaleX = rotScale; scaleY = rotScale
                         rotationZ = activeRotation.toFloat()
@@ -831,7 +857,7 @@ internal fun VideoPlayerPage(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         this.player = sharedPlayer
-                        useController = true
+                        useController = false
                     }
                 },
                 update = { playerView ->
@@ -854,6 +880,46 @@ internal fun VideoPlayerPage(
                 )
             }
         }
+
+            // Tap catcher — toggles custom controls visibility.
+            // Sits between the video and the controls overlay so taps on
+            // the video area trigger show/hide while taps on control widgets
+            // are handled by those widgets directly (they stack above this).
+            var showControls by remember { mutableStateOf(true) }
+
+            // Auto-hide controls after 3 seconds when video is playing
+            val playerIsPlaying = remember { mutableStateOf(sharedPlayer.isPlaying) }
+            DisposableEffect(sharedPlayer) {
+                val listener = object : Player.Listener {
+                    override fun onIsPlayingChanged(playing: Boolean) {
+                        playerIsPlaying.value = playing
+                    }
+                }
+                sharedPlayer.addListener(listener)
+                onDispose { sharedPlayer.removeListener(listener) }
+            }
+            LaunchedEffect(showControls, playerIsPlaying.value) {
+                if (showControls && playerIsPlaying.value) {
+                    delay(3000)
+                    showControls = false
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { showControls = !showControls }
+            )
+
+            // Custom controls overlay — NOT rotated
+            VideoControlsOverlay(
+                player = sharedPlayer,
+                visible = showControls,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     } else {
         // Not active or player showing a different video — black placeholder
@@ -864,6 +930,142 @@ internal fun VideoPlayerPage(
             // Intentionally blank
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Custom video controls overlay — always renders upright (outside rotation)
+// ---------------------------------------------------------------------------
+
+@Composable
+internal fun VideoControlsOverlay(
+    player: ExoPlayer,
+    visible: Boolean,
+    modifier: Modifier = Modifier
+) {
+    // ── Reactive player state ──────────────────────────────────────────────
+    var isPlaying by remember { mutableStateOf(player.isPlaying) }
+    var currentPosition by remember { mutableLongStateOf(player.currentPosition) }
+    var duration by remember { mutableLongStateOf(player.duration.coerceAtLeast(0L)) }
+    var isMuted by remember { mutableStateOf(player.volume == 0f) }
+    var isSeeking by remember { mutableStateOf(false) }
+    var seekFraction by remember { mutableFloatStateOf(0f) }
+
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
+            override fun onPlaybackStateChanged(state: Int) {
+                val d = player.duration
+                if (d > 0) duration = d
+            }
+        }
+        player.addListener(listener)
+        isPlaying = player.isPlaying
+        isMuted = player.volume == 0f
+        val d = player.duration; if (d > 0) duration = d
+        onDispose { player.removeListener(listener) }
+    }
+
+    // Poll position for smooth seek bar (every 250ms)
+    LaunchedEffect(player) {
+        while (true) {
+            if (!isSeeking) currentPosition = player.currentPosition
+            delay(250)
+        }
+    }
+
+    val progress = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))
+                    )
+                )
+                // Consume taps within the controls area so they don't toggle visibility
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { /* no-op */ }
+                .padding(horizontal = 16.dp)
+                .padding(top = 32.dp, bottom = 8.dp)
+        ) {
+            // Seek bar
+            Slider(
+                value = if (isSeeking) seekFraction else progress,
+                onValueChange = {
+                    isSeeking = true
+                    seekFraction = it
+                },
+                onValueChangeFinished = {
+                    player.seekTo((seekFraction * duration).toLong())
+                    isSeeking = false
+                },
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color(0xFF3B82F6),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Play / Pause
+                IconButton(onClick = {
+                    if (player.isPlaying) player.pause() else player.play()
+                }) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+
+                // Time
+                Text(
+                    text = "${formatPlayerTime(currentPosition)} / ${formatPlayerTime(duration)}",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Spacer(Modifier.weight(1f))
+
+                // Mute / unmute
+                IconButton(onClick = {
+                    if (player.volume == 0f) { player.volume = 1f; isMuted = false }
+                    else { player.volume = 0f; isMuted = true }
+                }) {
+                    Icon(
+                        imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = if (isMuted) "Unmute" else "Mute",
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatPlayerTime(ms: Long): String {
+    if (ms <= 0) return "0:00"
+    val totalSec = ms / 1000
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 // ── Info detail helpers ──────────────────────────────────────────────────────

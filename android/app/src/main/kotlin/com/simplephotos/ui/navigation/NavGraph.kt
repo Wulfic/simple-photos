@@ -20,6 +20,7 @@ import com.simplephotos.ui.screens.trash.TrashScreen
 import com.simplephotos.ui.screens.twofactor.TwoFactorSetupScreen
 import com.simplephotos.ui.screens.viewer.PhotoViewerScreen
 import com.simplephotos.ui.screens.search.SearchScreen
+import com.simplephotos.ui.screens.diagnostics.DiagnosticsScreen
 import com.simplephotos.ui.screens.securegallery.SecureGalleryScreen
 
 @Composable
@@ -52,7 +53,7 @@ fun NavGraph() {
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
-                onDiagnosticsClick = { navController.navigate(Screen.Settings.route) },
+                onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
             )
         }
@@ -124,6 +125,11 @@ fun NavGraph() {
         }
         composable(Screen.FolderSelection.route) {
             FolderSelectionScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.Diagnostics.route) {
+            DiagnosticsScreen(
                 onBack = { navController.popBackStack() }
             )
         }

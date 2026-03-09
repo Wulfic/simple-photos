@@ -9,6 +9,7 @@ import TagsBar from "../components/viewer/TagsBar";
 import LeavePrompt from "../components/viewer/LeavePrompt";
 import DownloadFormatDialog from "../components/viewer/DownloadFormatDialog";
 import CropOverlay from "../components/viewer/CropOverlay";
+import VideoControls from "../components/viewer/VideoControls";
 import useZoomPan from "../hooks/useZoomPan";
 import usePhotoPreload from "../hooks/usePhotoPreload";
 import useViewerMedia from "../hooks/useViewerMedia";
@@ -67,6 +68,7 @@ export default function Viewer() {
   const [cropCorners, setCropCorners] = useState<{ x: number; y: number; w: number; h: number }>({ x: 0, y: 0, w: 1, h: 1 });
   const [draggingCorner, setDraggingCorner] = useState<string | null>(null);
   const [brightness, setBrightness] = useState(0);
+  const [rotateValue, setRotateValue] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
   const [mediaDuration, setMediaDuration] = useState(0);
@@ -114,6 +116,7 @@ export default function Viewer() {
   const {
     showLeavePrompt, setShowLeavePrompt,
     showDownloadDialog, setShowDownloadDialog,
+    saveCopySuccess,
     handleSaveEdit, handleSaveCopy, handleClearCrop,
     handleLeaveAndSave, handleLeaveAndDiscard,
     handleDelete, handleRemoveFromAlbum,
@@ -122,8 +125,8 @@ export default function Viewer() {
   } = useViewerActions({
     id, isPlainMode, mediaUrl, filename, mediaType,
     albumId, photoIds, currentIndex,
-    cropCorners, brightness, trimStart, trimEnd, mediaDuration,
-    setCropData, setCropCorners, setBrightness, setTrimStart, setTrimEnd,
+    cropCorners, brightness, rotateValue, trimStart, trimEnd, mediaDuration,
+    setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd,
     setEditMode, setError,
     preloadCache,
   });
@@ -142,16 +145,24 @@ export default function Viewer() {
     const containerH = container.clientHeight;
     if (imgW === 0 || imgH === 0 || containerW === 0 || containerH === 0) return;
 
+    const rot = ((cropData.rotate ?? 0) % 360 + 360) % 360;
+    const isSwapped = rot === 90 || rot === 270;
+
+    // Crop dimensions in the image's unrotated coordinate space
     const cropPixW = cropData.width * imgW;
     const cropPixH = cropData.height * imgH;
-    const scaleW = containerW / cropPixW;
-    const scaleH = containerH / cropPixH;
+
+    // After rotation, visible crop width/height may swap
+    const visW = isSwapped ? cropPixH : cropPixW;
+    const visH = isSwapped ? cropPixW : cropPixH;
+    const scaleW = containerW / visW;
+    const scaleH = containerH / visH;
     const scale = Math.min(scaleW, scaleH);
     const cx = cropData.x + cropData.width / 2;
     const cy = cropData.y + cropData.height / 2;
 
     setCropZoomStyle({
-      transform: `translate(${(0.5 - cx) * 100}%, ${(0.5 - cy) * 100}%) scale(${scale})`,
+      transform: `translate(${(0.5 - cx) * 100}%, ${(0.5 - cy) * 100}%) scale(${scale})${rot ? ` rotate(${rot}deg)` : ""}`,
       transformOrigin: `${cx * 100}% ${cy * 100}%`,
       filter: cropData.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
     });
@@ -251,11 +262,13 @@ export default function Viewer() {
     if (cropData) {
       setCropCorners({ x: cropData.x, y: cropData.y, w: cropData.width, h: cropData.height });
       setBrightness(cropData.brightness ?? 0);
+      setRotateValue(cropData.rotate ?? 0);
       setTrimStart(cropData.trimStart ?? 0);
       setTrimEnd(cropData.trimEnd ?? dur);
     } else {
       setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
       setBrightness(0);
+      setRotateValue(0);
       setTrimStart(0);
       setTrimEnd(dur);
     }
@@ -300,6 +313,7 @@ export default function Viewer() {
     setTrimEnd(0);
     setMediaDuration(0);
     setBrightness(0);
+    setRotateValue(0);
     setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
     setEditTab("crop");
 
@@ -336,8 +350,10 @@ export default function Viewer() {
             const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: "image/jpeg" }));
             setPreviewUrl(url);
           }
-        });
-        loadEncryptedMedia(id);
+          // Use storageBlobId for copies that reference the original's server blob
+          const fetchId = dbCached?.storageBlobId || id;
+          loadEncryptedMedia(fetchId);
+        }).catch(() => loadEncryptedMedia(id));
       }
     }
     const preloadTimer = setTimeout(() => preloadAdjacentPhotos(id), 50);
@@ -548,10 +564,13 @@ export default function Viewer() {
         )}
 
         {/* Photo edit mode */}
-        {editMode && mediaUrl && mediaType === "photo" && (
+        {editMode && mediaUrl && mediaType === "photo" && (() => {
+          const rot = ((rotateValue % 360) + 360) % 360;
+          const isSwapped = rot === 90 || rot === 270;
+          return (
           <div
             ref={cropContainerRef}
-            className="relative w-full h-full flex items-center justify-center"
+            className="relative w-full h-full flex items-center justify-center overflow-hidden"
             onPointerMove={editTab === "crop" ? handleCornerPointerMove : undefined}
             onPointerUp={editTab === "crop" ? handleCornerPointerUp : undefined}
           >
@@ -564,6 +583,9 @@ export default function Viewer() {
               style={{
                 filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
                 ...(mimeType === "image/svg+xml" ? { backgroundColor: "white" } : {}),
+                ...(rot !== 0 ? {
+                  transform: `rotate(${rot}deg)${isSwapped ? " scale(0.75)" : ""}`,
+                } : {}),
               }}
             />
             {editTab === "crop" && cropImageRef.current && cropContainerRef.current && (
@@ -575,41 +597,61 @@ export default function Viewer() {
               />
             )}
           </div>
-        )}
+          );
+        })()}
 
-        {/* Video player (normal mode) */}
-        {mediaUrl && mediaType === "video" && !videoError && !editMode && (
-          <div className="max-w-full max-h-full w-full h-full flex items-center justify-center">
-            <video
-              ref={videoRef}
-              src={mediaUrl}
-              controls playsInline autoPlay
-              className="max-w-full max-h-full"
-              style={{
-                background: "black",
-                filter: cropData?.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
-              }}
-              onLoadedMetadata={(e) => {
-                const v = e.currentTarget;
-                setMediaDuration(v.duration || 0);
-                if (cropData?.trimStart && cropData.trimStart > 0) v.currentTime = cropData.trimStart;
-              }}
-              onTimeUpdate={(e) => {
-                if (cropData?.trimEnd && e.currentTarget.currentTime >= cropData.trimEnd) {
-                  e.currentTarget.pause();
-                  e.currentTarget.currentTime = cropData.trimEnd;
-                }
-              }}
-              onError={() => setVideoError(true)}
-            />
+        {/* Video player (normal mode) — rotation applied to inner wrapper,
+            custom controls sit outside so they stay upright */}
+        {mediaUrl && mediaType === "video" && !videoError && !editMode && (() => {
+          const rot = (((cropData?.rotate ?? 0) % 360) + 360) % 360;
+          const isSwapped = rot === 90 || rot === 270;
+          const rotStyle: React.CSSProperties = rot !== 0
+            ? { transform: `rotate(${rot}deg)${isSwapped ? " scale(0.75)" : ""}` }
+            : {};
+          return (
+          <div className="relative max-w-full max-h-full w-full h-full flex items-center justify-center">
+            {/* Rotation wrapper — only the video is rotated */}
+            <div
+              className="max-w-full max-h-full w-full h-full flex items-center justify-center"
+              style={rotStyle}
+            >
+              <video
+                ref={videoRef}
+                src={mediaUrl}
+                playsInline autoPlay
+                className="max-w-full max-h-full"
+                style={{
+                  background: "black",
+                  filter: cropData?.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
+                }}
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  setMediaDuration(v.duration || 0);
+                  if (cropData?.trimStart && cropData.trimStart > 0) v.currentTime = cropData.trimStart;
+                }}
+                onTimeUpdate={(e) => {
+                  if (cropData?.trimEnd && e.currentTarget.currentTime >= cropData.trimEnd) {
+                    e.currentTarget.pause();
+                    e.currentTarget.currentTime = cropData.trimEnd;
+                  }
+                }}
+                onError={() => setVideoError(true)}
+              />
+            </div>
+            {/* Custom controls — NOT rotated */}
+            <VideoControls videoRef={videoRef} visible={showOverlay} />
           </div>
-        )}
+          );
+        })()}
 
         {/* Video edit mode */}
-        {editMode && mediaUrl && mediaType === "video" && !videoError && (
+        {editMode && mediaUrl && mediaType === "video" && !videoError && (() => {
+          const rot = ((rotateValue % 360) + 360) % 360;
+          const isSwapped = rot === 90 || rot === 270;
+          return (
           <div
             ref={cropContainerRef}
-            className="relative w-full h-full flex items-center justify-center"
+            className="relative w-full h-full flex items-center justify-center overflow-hidden"
             onPointerMove={editTab === "crop" ? handleCornerPointerMove : undefined}
             onPointerUp={editTab === "crop" ? handleCornerPointerUp : undefined}
           >
@@ -621,6 +663,9 @@ export default function Viewer() {
               style={{
                 background: "black",
                 filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
+                ...(rot !== 0 ? {
+                  transform: `rotate(${rot}deg)${isSwapped ? " scale(0.75)" : ""}`,
+                } : {}),
               }}
               onLoadedMetadata={(e) => {
                 const v = e.currentTarget;
@@ -645,7 +690,8 @@ export default function Viewer() {
               />
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* Conversion in progress — file not yet available in browser-compatible format */}
         {isConverting && !mediaUrl && !loading && (
@@ -745,6 +791,7 @@ export default function Viewer() {
         <ViewerEditPanel
           editTab={editTab} setEditTab={setEditTab}
           mediaType={mediaType} brightness={brightness} setBrightness={setBrightness}
+          rotateValue={rotateValue} setRotateValue={setRotateValue}
           cropData={cropData} trimStart={trimStart} trimEnd={trimEnd}
           setTrimStart={setTrimStart} setTrimEnd={setTrimEnd} duration={mediaDuration}
           onSave={handleSaveEdit} onSaveCopy={handleSaveCopy}
@@ -765,6 +812,14 @@ export default function Viewer() {
 
       <PhotoInfoPanel show={showInfoPanel} onClose={() => setShowInfoPanel(false)} photoInfo={photoInfo} />
       <LeavePrompt show={showLeavePrompt} onCancel={() => setShowLeavePrompt(false)} onDiscard={handleLeaveAndDiscard} onSave={handleLeaveAndSave} />
+
+      {/* Save Copy success toast */}
+      {saveCopySuccess && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-fade-in">
+          Copy saved ✓
+        </div>
+      )}
+
       {showDownloadDialog && (
         <DownloadFormatDialog
           filename={filename}

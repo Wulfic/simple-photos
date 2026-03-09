@@ -4,7 +4,7 @@ import type { MediaType } from "../../db";
 // ── Types ────────────────────────────────────────────────────────────────────
 
 /** Which editing tab is active */
-export type EditTab = "crop" | "brightness" | "trim";
+export type EditTab = "crop" | "brightness" | "rotate" | "trim";
 
 interface ViewerEditPanelProps {
   /** Which tab is currently active */
@@ -17,6 +17,10 @@ interface ViewerEditPanelProps {
   /** Brightness value (-100 to 100) */
   brightness: number;
   setBrightness: (v: number) => void;
+
+  /** Rotation value in degrees (0, 90, 180, 270) */
+  rotateValue: number;
+  setRotateValue: (v: number) => void;
 
   /** Existing crop/edit data (used to show Reset button) */
   cropData: {
@@ -69,6 +73,8 @@ export default function ViewerEditPanel({
   mediaType,
   brightness,
   setBrightness,
+  rotateValue,
+  setRotateValue,
   cropData,
   trimStart,
   trimEnd,
@@ -86,6 +92,7 @@ export default function ViewerEditPanel({
   const isAudio = mediaType === "audio";
   const showCrop = isPhoto || isVideo;
   const showBrightness = isPhoto || isVideo;
+  const showRotate = isPhoto || isVideo;
   const showTrim = isVideo || isAudio;
 
   // ── Trim range slider refs for dual-thumb control ──────────────────────
@@ -178,6 +185,18 @@ export default function ViewerEditPanel({
             Brightness
           </button>
         )}
+        {showRotate && (
+          <button
+            onClick={() => setEditTab("rotate")}
+            className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              editTab === "rotate"
+                ? "bg-white text-black"
+                : "bg-white/10 text-white hover:bg-white/20"
+            }`}
+          >
+            Rotate
+          </button>
+        )}
         {showTrim && (
           <button
             onClick={() => setEditTab("trim")}
@@ -210,6 +229,33 @@ export default function ViewerEditPanel({
             <circle cx="12" cy="12" r="4" />
             <path strokeLinecap="round" d="M12 2v2m0 16v2m-7.07-3.93l1.41-1.41m9.9-9.9l1.41-1.41M2 12h2m16 0h2M4.93 4.93l1.41 1.41m9.9 9.9l1.41 1.41" />
           </svg>
+        </div>
+      )}
+
+      {/* ── Rotate controls ──────────────────────────────────────────── */}
+      {editTab === "rotate" && (
+        <div className="flex items-center justify-center gap-4">
+          <button
+            onClick={() => setRotateValue(((rotateValue - 90) % 360 + 360) % 360)}
+            className="flex items-center gap-2 px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 transition-colors text-sm font-medium"
+            title="Rotate left 90°"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+            </svg>
+            −90°
+          </button>
+          <span className="text-white text-sm font-medium tabular-nums w-12 text-center">{rotateValue}°</span>
+          <button
+            onClick={() => setRotateValue((rotateValue + 90) % 360)}
+            className="flex items-center gap-2 px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 transition-colors text-sm font-medium"
+            title="Rotate right 90°"
+          >
+            +90°
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 000 12h3" />
+            </svg>
+          </button>
         </div>
       )}
 
