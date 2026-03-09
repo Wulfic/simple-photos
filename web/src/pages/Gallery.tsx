@@ -189,27 +189,24 @@ export default function Gallery() {
 
         {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
 
-        {/* Upload button — encrypted mode only */}
-        {mode === "encrypted" && (
-          <div className="flex justify-end mb-4">
-            <label
-              className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors shadow-sm cursor-pointer select-none"
-              title="Upload photos"
-            >
-              <AppIcon name="upload" size="w-4 h-4" themed={false} />
-              Upload
-              <input
-                ref={inputRef}
-                type="file"
-                multiple
-                accept={ACCEPTED_MIME_TYPES}
-                className="hidden"
-                onChange={handleFileInput}
-                disabled={uploading}
-              />
-            </label>
-          </div>
-        )}
+        {/* Floating upload button */}
+        <label
+          className="fixed bottom-6 right-6 z-50 w-14 h-14 flex items-center justify-center bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-500 transition-colors cursor-pointer select-none"
+          title="Upload photos"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            accept={ACCEPTED_MIME_TYPES}
+            className="hidden"
+            onChange={handleFileInput}
+            disabled={uploading}
+          />
+        </label>
 
         <div
           onDragOver={(e) => e.preventDefault()}

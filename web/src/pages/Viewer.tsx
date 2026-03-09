@@ -530,7 +530,9 @@ export default function Viewer() {
             ref={viewImgRef}
             src={mediaUrl}
             alt={filename}
-            className="max-w-full max-h-full object-contain transition-transform duration-150"
+            className={`object-contain transition-transform duration-150 ${
+              mimeType === "image/svg+xml" ? "w-full h-full" : "max-w-full max-h-full"
+            }`}
             onLoad={computeCropZoom}
             style={{
               imageRendering: mediaType === "gif" ? "auto" : undefined,
@@ -577,28 +579,30 @@ export default function Viewer() {
 
         {/* Video player (normal mode) */}
         {mediaUrl && mediaType === "video" && !videoError && !editMode && (
-          <video
-            ref={videoRef}
-            src={mediaUrl}
-            controls playsInline autoPlay={false}
-            className="max-w-full max-h-full"
-            style={{
-              background: "black",
-              filter: cropData?.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
-            }}
-            onLoadedMetadata={(e) => {
-              const v = e.currentTarget;
-              setMediaDuration(v.duration || 0);
-              if (cropData?.trimStart && cropData.trimStart > 0) v.currentTime = cropData.trimStart;
-            }}
-            onTimeUpdate={(e) => {
-              if (cropData?.trimEnd && e.currentTarget.currentTime >= cropData.trimEnd) {
-                e.currentTarget.pause();
-                e.currentTarget.currentTime = cropData.trimEnd;
-              }
-            }}
-            onError={() => setVideoError(true)}
-          />
+          <div className="max-w-full max-h-full w-full h-full flex items-center justify-center">
+            <video
+              ref={videoRef}
+              src={mediaUrl}
+              controls playsInline autoPlay
+              className="max-w-full max-h-full"
+              style={{
+                background: "black",
+                filter: cropData?.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
+              }}
+              onLoadedMetadata={(e) => {
+                const v = e.currentTarget;
+                setMediaDuration(v.duration || 0);
+                if (cropData?.trimStart && cropData.trimStart > 0) v.currentTime = cropData.trimStart;
+              }}
+              onTimeUpdate={(e) => {
+                if (cropData?.trimEnd && e.currentTarget.currentTime >= cropData.trimEnd) {
+                  e.currentTarget.pause();
+                  e.currentTarget.currentTime = cropData.trimEnd;
+                }
+              }}
+              onError={() => setVideoError(true)}
+            />
+          </div>
         )}
 
         {/* Video edit mode */}
@@ -673,7 +677,7 @@ export default function Viewer() {
             <audio
               ref={audioRef}
               src={mediaUrl}
-              controls autoPlay={false}
+              controls autoPlay
               className="w-full max-w-md"
               style={{ filter: "invert(1) hue-rotate(180deg)", opacity: 0.85 }}
               onLoadedMetadata={(e) => {

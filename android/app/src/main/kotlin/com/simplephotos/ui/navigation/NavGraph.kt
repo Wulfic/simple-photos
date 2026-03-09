@@ -52,6 +52,7 @@ fun NavGraph() {
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
+                onDiagnosticsClick = { navController.navigate(Screen.Settings.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
             )
         }

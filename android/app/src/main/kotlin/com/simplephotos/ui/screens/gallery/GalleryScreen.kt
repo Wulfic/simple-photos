@@ -26,6 +26,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
@@ -59,6 +60,7 @@ import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import com.simplephotos.ui.theme.ThemeState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -80,6 +82,7 @@ fun GalleryScreen(
     onTrashClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onSecureGalleryClick: () -> Unit = {},
+    onDiagnosticsClick: () -> Unit = {},
     onLogout: () -> Unit,
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
@@ -167,6 +170,7 @@ fun GalleryScreen(
                         onTrashClick = onTrashClick,
                         onSettingsClick = onSettingsClick,
                         onSecureGalleryClick = onSecureGalleryClick,
+                        onDiagnosticsClick = onDiagnosticsClick,
                         onLogout = { viewModel.logout(onLogout) },
                         onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
                     ),
@@ -178,7 +182,7 @@ fun GalleryScreen(
         floatingActionButton = {
             if (!viewModel.isSelectionMode) {
                 FloatingActionButton(
-                    onClick = { pickMediaLauncher.launch(arrayOf("image/*", "video/*")) },
+                    onClick = { pickMediaLauncher.launch(arrayOf("image/*", "video/*", "audio/*")) },
                     containerColor = MaterialTheme.colorScheme.primary
                 ) {
                     if (viewModel.isImporting) {
@@ -197,6 +201,10 @@ fun GalleryScreen(
         if (pullToRefreshState.isRefreshing) {
             LaunchedEffect(true) {
                 viewModel.syncFromServer()
+                // Wait for sync to actually complete before ending the refresh indicator
+                snapshotFlow { viewModel.isSyncing }
+                    .filter { !it }
+                    .first()
                 pullToRefreshState.endRefresh()
             }
         }
@@ -475,6 +483,26 @@ private fun MediaTile(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
+            // Filename overlay
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))
+                        )
+                    )
+                    .padding(start = 4.dp, end = 4.dp, top = 12.dp, bottom = 2.dp)
+            ) {
+                Text(
+                    text = photo.filename,
+                    color = Color.White,
+                    fontSize = 8.sp,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
         } else {
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
                 Box(contentAlignment = Alignment.Center) {
@@ -494,6 +522,13 @@ private fun MediaTile(
         } else if (photo.mediaType == "gif") {
             Surface(modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp), shape = MaterialTheme.shapes.extraSmall, color = Color.Black.copy(alpha = 0.6f)) {
                 Text("GIF", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
+            }
+        } else if (photo.mediaType == "audio") {
+            Surface(modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp), shape = MaterialTheme.shapes.extraSmall, color = Color.Black.copy(alpha = 0.6f)) {
+                Text(
+                    text = if (photo.durationSecs != null) { val m = (photo.durationSecs / 60).toInt(); val s = (photo.durationSecs % 60).toInt(); "\u266B $m:${s.toString().padStart(2, '0')}" } else "\u266B",
+                    color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                )
             }
         }
 

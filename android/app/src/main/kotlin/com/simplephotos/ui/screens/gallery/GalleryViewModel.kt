@@ -354,6 +354,19 @@ class GalleryViewModel @Inject constructor(
                         else -> "photo"
                     }
                     val data = withContext(Dispatchers.IO) { resolver.openInputStream(uri)?.use { it.readBytes() } } ?: continue
+
+                    // Content hash dedup — skip if identical content already exists in DB
+                    val contentHash = withContext(Dispatchers.IO) {
+                        java.security.MessageDigest.getInstance("SHA-256")
+                            .digest(data)
+                            .take(6)
+                            .joinToString("") { "%02x".format(it) }
+                    }
+                    val existingByHash = withContext(Dispatchers.IO) {
+                        db.photoDao().getSyncedByHash(contentHash)
+                    }
+                    if (existingByHash != null) continue
+
                     val thumbBytes = if (mediaType != "video") {
                         withContext(Dispatchers.IO) {
                             val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -373,7 +386,8 @@ class GalleryViewModel @Inject constructor(
                     val photo = PhotoEntity(
                         localId = localId, filename = filename, takenAt = System.currentTimeMillis(),
                         mimeType = mimeType, mediaType = mediaType, width = 0, height = 0,
-                        localPath = uri.toString(), syncStatus = SyncStatus.PENDING
+                        localPath = uri.toString(), syncStatus = SyncStatus.PENDING,
+                        photoHash = contentHash
                     )
                     photoRepository.insertPhoto(photo)
                     if (thumbBytes.isNotEmpty()) {

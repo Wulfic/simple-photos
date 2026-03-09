@@ -48,6 +48,7 @@ data class HeaderNavigation(
     val onTrashClick: () -> Unit = {},
     val onSettingsClick: () -> Unit = {},
     val onSecureGalleryClick: () -> Unit = {},
+    val onDiagnosticsClick: () -> Unit = {},
     val onLogout: () -> Unit = {},
     val onToggleTheme: () -> Unit = {},
 )
@@ -193,6 +194,7 @@ fun AppHeader(
                     inactiveTextColor = inactiveTextColor,
                     onSecureGalleryClick = navigation.onSecureGalleryClick,
                     onSettingsClick = navigation.onSettingsClick,
+                    onDiagnosticsClick = navigation.onDiagnosticsClick,
                     onLogout = navigation.onLogout,
                     onToggleTheme = navigation.onToggleTheme
                 )
@@ -273,6 +275,7 @@ private fun UserMenu(
     inactiveTextColor: Color,
     onSecureGalleryClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onDiagnosticsClick: () -> Unit = {},
     onLogout: () -> Unit,
     onToggleTheme: () -> Unit = {},
 ) {
@@ -365,6 +368,16 @@ private fun UserMenu(
                 },
                 leadingIcon = {
                     Icon(painter = painterResource(R.drawable.ic_gear), contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Diagnostics") },
+                onClick = {
+                    expanded = false
+                    onDiagnosticsClick()
+                },
+                leadingIcon = {
+                    Icon(painter = painterResource(R.drawable.ic_shield), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
             HorizontalDivider()
