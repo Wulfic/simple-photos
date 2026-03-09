@@ -1034,7 +1034,7 @@ fun PhotoViewerScreen(
                                 Text(
                                     "Crop",
                                     color = if (editTab == "crop") Color.Black else Color.White,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium
                                 )
@@ -1052,7 +1052,7 @@ fun PhotoViewerScreen(
                                 Text(
                                     "Brightness",
                                     color = if (editTab == "brightness") Color.Black else Color.White,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium
                                 )
@@ -1070,7 +1070,7 @@ fun PhotoViewerScreen(
                                 Text(
                                     "Rotate",
                                     color = if (editTab == "rotate") Color.Black else Color.White,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium
                                 )
@@ -1088,7 +1088,7 @@ fun PhotoViewerScreen(
                                 Text(
                                     "Trim",
                                     color = if (editTab == "trim") Color.Black else Color.White,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium
                                 )
