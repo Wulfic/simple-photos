@@ -27,6 +27,7 @@ class NavViewModel @Inject constructor(
         val KEY_DIAGNOSTIC_LOGGING = booleanPreferencesKey("diagnostic_logging")
         val KEY_BIOMETRIC_ENABLED = booleanPreferencesKey("biometric_enabled")
         val KEY_THUMBNAIL_SIZE = stringPreferencesKey("thumbnail_size")
+        val KEY_WIFI_ONLY_BACKUP = booleanPreferencesKey("wifi_only_backup")
     }
 
     private val _startDestination = MutableStateFlow<String?>(null)

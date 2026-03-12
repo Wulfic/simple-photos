@@ -397,7 +397,7 @@ class GalleryViewModel @Inject constructor(
                     try {
                         withContext(Dispatchers.IO) {
                             if (encryptionMode == "plain") photoRepository.uploadPhotoPlain(photo, data)
-                            else photoRepository.uploadPhoto(photo, data, if (thumbBytes.isEmpty()) data else thumbBytes)
+                            else photoRepository.uploadPhoto(photo, data, thumbBytes.takeIf { it.isNotEmpty() })
                         }
                     } catch (_: Exception) {}
                     count++

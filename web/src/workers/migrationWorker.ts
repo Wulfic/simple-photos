@@ -243,7 +243,7 @@ async function reportProgress(payload: {
   done?: boolean;
   error?: string;
 }): Promise<void> {
-  await apiFetch("/encryption/progress", {
+  await apiFetch("/admin/encryption/progress", {
     method: "POST",
     body: JSON.stringify(payload),
   }).catch(() => {});

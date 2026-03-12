@@ -150,7 +150,7 @@ class PhotoRepository @Inject constructor(
     /**
      * Upload a photo/GIF/video with its thumbnail (encrypted mode).
      */
-    suspend fun uploadPhoto(photo: PhotoEntity, photoData: ByteArray, thumbnailData: ByteArray) {
+    suspend fun uploadPhoto(photo: PhotoEntity, photoData: ByteArray, thumbnailData: ByteArray?) {
         db.photoDao().updateSyncStatus(photo.localId, SyncStatus.UPLOADING)
 
         try {
@@ -161,24 +161,31 @@ class PhotoRepository @Inject constructor(
                 else -> "photo"
             }
 
-            android.util.Log.d("PhotoRepository", "uploadPhoto: encrypting thumbnail for ${photo.filename}")
+            var thumbBlobId: String? = null
 
-            // Build & encrypt thumbnail payload
-            val thumbPayload = JSONObject().apply {
-                put("v", 1)
-                put("photo_blob_id", "")
-                put("width", 256)
-                put("height", 256)
-                put("data", android.util.Base64.encodeToString(thumbnailData, android.util.Base64.NO_WRAP))
-            }.toString()
+            if (thumbnailData != null && thumbnailData.isNotEmpty()) {
+                android.util.Log.d("PhotoRepository", "uploadPhoto: encrypting thumbnail for ${photo.filename}")
 
-            val encryptedThumb = crypto.encrypt(thumbPayload.toByteArray())
-            val thumbHash = crypto.sha256Hex(encryptedThumb)
-            val thumbBody = encryptedThumb.toRequestBody("application/octet-stream".toMediaType())
+                // Build & encrypt thumbnail payload
+                val thumbPayload = JSONObject().apply {
+                    put("v", 1)
+                    put("photo_blob_id", "")
+                    put("width", 256)
+                    put("height", 256)
+                    put("data", android.util.Base64.encodeToString(thumbnailData, android.util.Base64.NO_WRAP))
+                }.toString()
 
-            android.util.Log.d("PhotoRepository", "uploadPhoto: uploading thumbnail blob (${encryptedThumb.size} bytes, type=$thumbBlobType)")
-            val thumbRes = api.uploadBlob(thumbBody, thumbBlobType, encryptedThumb.size.toString(), thumbHash)
-            android.util.Log.d("PhotoRepository", "uploadPhoto: thumbnail uploaded, blobId=${thumbRes.blobId}")
+                val encryptedThumb = crypto.encrypt(thumbPayload.toByteArray())
+                val thumbHash = crypto.sha256Hex(encryptedThumb)
+                val thumbBody = encryptedThumb.toRequestBody("application/octet-stream".toMediaType())
+
+                android.util.Log.d("PhotoRepository", "uploadPhoto: uploading thumbnail blob (${encryptedThumb.size} bytes, type=$thumbBlobType)")
+                val thumbRes = api.uploadBlob(thumbBody, thumbBlobType, encryptedThumb.size.toString(), thumbHash)
+                android.util.Log.d("PhotoRepository", "uploadPhoto: thumbnail uploaded, blobId=${thumbRes.blobId}")
+                thumbBlobId = thumbRes.blobId
+            } else {
+                android.util.Log.d("PhotoRepository", "uploadPhoto: no thumbnail data for ${photo.filename}, skipping thumbnail upload")
+            }
 
             // Build & encrypt media payload
             val mediaPayload = JSONObject().apply {
@@ -193,7 +200,7 @@ class PhotoRepository @Inject constructor(
                 if (photo.latitude != null) put("latitude", photo.latitude)
                 if (photo.longitude != null) put("longitude", photo.longitude)
                 put("album_ids", JSONArray())
-                put("thumbnail_blob_id", thumbRes.blobId)
+                if (thumbBlobId != null) put("thumbnail_blob_id", thumbBlobId)
                 put("data", android.util.Base64.encodeToString(photoData, android.util.Base64.NO_WRAP))
             }.toString()
 
@@ -207,10 +214,12 @@ class PhotoRepository @Inject constructor(
             val photoRes = api.uploadBlob(photoBody, mediaBlobType, encryptedPhoto.size.toString(), photoHash, contentHash)
             android.util.Log.d("PhotoRepository", "uploadPhoto: media uploaded, blobId=${photoRes.blobId}")
 
-            db.photoDao().markSynced(photo.localId, photoRes.blobId, thumbRes.blobId)
+            db.photoDao().markSynced(photo.localId, photoRes.blobId, thumbBlobId)
 
             // Cache uploaded thumbnail locally
-            saveThumbnailToDisk(photo.localId, thumbnailData)
+            if (thumbnailData != null && thumbnailData.isNotEmpty()) {
+                saveThumbnailToDisk(photo.localId, thumbnailData)
+            }
         } catch (e: retrofit2.HttpException) {
             val errorBody = e.response()?.errorBody()?.string()
             android.util.Log.e("PhotoRepository", "uploadPhoto HTTP ${e.code()}: $errorBody", e)
