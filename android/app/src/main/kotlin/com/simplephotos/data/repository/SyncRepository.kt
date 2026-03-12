@@ -38,12 +38,28 @@ class SyncRepository @Inject constructor(
         val KEY_LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
     }
 
+    // Mutex to prevent concurrent scans from inserting duplicate entries
+    private val scanMutex = kotlinx.coroutines.sync.Mutex()
+
     /**
      * Scan device MediaStore for photos and videos added since the last sync,
      * filtered to only include media from folders the user has selected for backup.
      * Inserts new items as PENDING in Room and enqueues BlobQueueEntity entries.
+     * Uses a mutex to ensure only one scan runs at a time.
      */
     suspend fun scanForNewMedia() {
+        if (!scanMutex.tryLock()) {
+            Log.i(TAG, "scanForNewMedia: another scan already in progress, skipping")
+            return
+        }
+        try {
+            scanForNewMediaInternal()
+        } finally {
+            scanMutex.unlock()
+        }
+    }
+
+    private suspend fun scanForNewMediaInternal() {
         Log.i(TAG, "scanForNewMedia: starting scan")
         // Ensure defaults are set on first run
         backupFolderRepository.initializeDefaultsIfNeeded()

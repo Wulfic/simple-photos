@@ -483,25 +483,27 @@ private fun MediaTile(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
             )
-            // Filename overlay
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))
+            // Filename overlay — only shown for audio files (images/videos rely on visual thumbnail)
+            if (photo.mediaType == "audio") {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))
+                            )
                         )
+                        .padding(start = 4.dp, end = 4.dp, top = 12.dp, bottom = 2.dp)
+                ) {
+                    Text(
+                        text = photo.filename,
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
-                    .padding(start = 4.dp, end = 4.dp, top = 12.dp, bottom = 2.dp)
-            ) {
-                Text(
-                    text = photo.filename,
-                    color = Color.White,
-                    fontSize = 8.sp,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
+                }
             }
         } else {
             Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {

@@ -131,33 +131,81 @@ export default function Viewer() {
     preloadCache,
   });
 
+  /**
+   * Compute CSS scale for 90°/270° rotation so the rotated element fits its container
+   * without stretching. Matches the Android approach: aspect-fit the original element,
+   * then scale so the rotated bounding box still fits.
+   */
+  const computeRotationScale = useCallback((el: HTMLElement | null, container: HTMLElement | null): number => {
+    if (!el || !container) return 0.75; // safe fallback
+    const containerW = container.clientWidth;
+    const containerH = container.clientHeight;
+    // Use the element's natural/intrinsic dimensions if available, else rendered size
+    const elW = (el as HTMLVideoElement).videoWidth || (el as HTMLImageElement).naturalWidth || el.clientWidth;
+    const elH = (el as HTMLVideoElement).videoHeight || (el as HTMLImageElement).naturalHeight || el.clientHeight;
+    if (elW === 0 || elH === 0 || containerW === 0 || containerH === 0) return 0.75;
+    // How the element renders when non-rotated (object-fit: contain / max-w-full max-h-full)
+    const aspect = elW / elH;
+    const containerAspect = containerW / containerH;
+    let rendW: number, rendH: number;
+    if (aspect > containerAspect) {
+      rendW = containerW; rendH = containerW / aspect;
+    } else {
+      rendH = containerH; rendW = containerH * aspect;
+    }
+    // After 90° rotation, rendW↔rendH swap; scale down so the rotated box fits
+    return Math.min(containerW / rendH, containerH / rendW);
+  }, []);
+
   // ── Crop zoom transform ────────────────────────────────────────────────
+  // Works for both photos (<img>) and videos (<video>) by checking both refs.
   const computeCropZoom = useCallback(() => {
-    if (!cropData || editMode || !viewImgRef.current || !viewerContainerRef.current) {
+    if (!cropData || editMode || !viewerContainerRef.current) {
       setCropZoomStyle({});
       return;
     }
-    const img = viewImgRef.current;
+    // Use the photo img ref or fall back to the video ref for element dimensions
+    const el = viewImgRef.current ?? videoRef.current;
+    if (!el) { setCropZoomStyle({}); return; }
+
     const container = viewerContainerRef.current;
-    const imgW = img.clientWidth;
-    const imgH = img.clientHeight;
+    // For videos, use videoWidth/videoHeight (natural dimensions) to compute
+    // the aspect-fit rendered size, since clientWidth/Height may be the full container.
+    const vid = videoRef.current;
+    let elW: number, elH: number;
+    if (vid && vid === el && vid.videoWidth > 0 && vid.videoHeight > 0) {
+      // Compute rendered (aspect-fit) dimensions from natural video size
+      const containerW = container.clientWidth;
+      const containerH = container.clientHeight;
+      const aspect = vid.videoWidth / vid.videoHeight;
+      if (aspect > containerW / containerH) {
+        elW = containerW; elH = containerW / aspect;
+      } else {
+        elH = containerH; elW = containerH * aspect;
+      }
+    } else {
+      elW = el.clientWidth;
+      elH = el.clientHeight;
+    }
     const containerW = container.clientWidth;
     const containerH = container.clientHeight;
-    if (imgW === 0 || imgH === 0 || containerW === 0 || containerH === 0) return;
+    if (elW === 0 || elH === 0 || containerW === 0 || containerH === 0) return;
 
     const rot = ((cropData.rotate ?? 0) % 360 + 360) % 360;
     const isSwapped = rot === 90 || rot === 270;
 
-    // Crop dimensions in the image's unrotated coordinate space
-    const cropPixW = cropData.width * imgW;
-    const cropPixH = cropData.height * imgH;
+    // Crop dimensions in the element's unrotated coordinate space
+    const cropPixW = cropData.width * elW;
+    const cropPixH = cropData.height * elH;
 
     // After rotation, visible crop width/height may swap
     const visW = isSwapped ? cropPixH : cropPixW;
     const visH = isSwapped ? cropPixW : cropPixH;
     const scaleW = containerW / visW;
     const scaleH = containerH / visH;
-    const scale = Math.min(scaleW, scaleH);
+    // Scale down slightly (~85%) so the crop doesn't fill edge-to-edge,
+    // matching the Android app's gentle zoom-out padding.
+    const scale = Math.min(scaleW, scaleH) * 0.85;
     const cx = cropData.x + cropData.width / 2;
     const cy = cropData.y + cropData.height / 2;
 
@@ -584,7 +632,7 @@ export default function Viewer() {
                 filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
                 ...(mimeType === "image/svg+xml" ? { backgroundColor: "white" } : {}),
                 ...(rot !== 0 ? {
-                  transform: `rotate(${rot}deg)${isSwapped ? " scale(0.75)" : ""}`,
+                  transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(cropImageRef.current, cropContainerRef.current)})` : ""}`,
                 } : {}),
               }}
             />
@@ -606,14 +654,19 @@ export default function Viewer() {
           const rot = (((cropData?.rotate ?? 0) % 360) + 360) % 360;
           const isSwapped = rot === 90 || rot === 270;
           const rotStyle: React.CSSProperties = rot !== 0
-            ? { transform: `rotate(${rot}deg)${isSwapped ? " scale(0.75)" : ""}` }
+            ? { transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(videoRef.current, viewerContainerRef.current)})` : ""}` }
             : {};
+          // When crop data is present, use the full crop zoom style (includes
+          // translate + scale + rotate + brightness), matching the photo behavior.
+          // Otherwise fall back to simple rotation styling.
+          const hasCropZoom = cropData && Object.keys(cropZoomStyle).length > 0;
+          const wrapperStyle: React.CSSProperties = hasCropZoom ? cropZoomStyle : rotStyle;
           return (
           <div className="relative max-w-full max-h-full w-full h-full flex items-center justify-center">
-            {/* Rotation wrapper — only the video is rotated */}
+            {/* Rotation/crop wrapper — only the video is transformed */}
             <div
               className="max-w-full max-h-full w-full h-full flex items-center justify-center"
-              style={rotStyle}
+              style={wrapperStyle}
             >
               <video
                 ref={videoRef}
@@ -622,12 +675,15 @@ export default function Viewer() {
                 className="max-w-full max-h-full"
                 style={{
                   background: "black",
-                  filter: cropData?.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
+                  // Apply brightness only when NOT using cropZoomStyle (which includes its own filter)
+                  ...(!hasCropZoom && cropData?.brightness ? { filter: `brightness(${1 + (cropData.brightness ?? 0) / 100})` } : {}),
                 }}
                 onLoadedMetadata={(e) => {
                   const v = e.currentTarget;
                   setMediaDuration(v.duration || 0);
                   if (cropData?.trimStart && cropData.trimStart > 0) v.currentTime = cropData.trimStart;
+                  // Recompute crop zoom now that video dimensions are known
+                  computeCropZoom();
                 }}
                 onTimeUpdate={(e) => {
                   if (cropData?.trimEnd && e.currentTarget.currentTime >= cropData.trimEnd) {
@@ -644,10 +700,14 @@ export default function Viewer() {
           );
         })()}
 
-        {/* Video edit mode */}
+        {/* Video edit mode — rotation applied to wrapper div, custom controls outside
+            so they stay upright (same pattern as normal mode) */}
         {editMode && mediaUrl && mediaType === "video" && !videoError && (() => {
           const rot = ((rotateValue % 360) + 360) % 360;
           const isSwapped = rot === 90 || rot === 270;
+          const rotStyle: React.CSSProperties = rot !== 0
+            ? { transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(videoRef.current, cropContainerRef.current)})` : ""}` }
+            : {};
           return (
           <div
             ref={cropContainerRef}
@@ -655,32 +715,37 @@ export default function Viewer() {
             onPointerMove={editTab === "crop" ? handleCornerPointerMove : undefined}
             onPointerUp={editTab === "crop" ? handleCornerPointerUp : undefined}
           >
-            <video
-              ref={videoRef}
-              src={mediaUrl}
-              controls playsInline autoPlay={false}
-              className="max-w-full max-h-full pointer-events-auto"
-              style={{
-                background: "black",
-                filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
-                ...(rot !== 0 ? {
-                  transform: `rotate(${rot}deg)${isSwapped ? " scale(0.75)" : ""}`,
-                } : {}),
-              }}
-              onLoadedMetadata={(e) => {
-                const v = e.currentTarget;
-                const dur = v.duration || 0;
-                setMediaDuration(dur);
-                if (trimEnd <= 0 || trimEnd > dur) setTrimEnd(dur);
-                if (trimStart > 0) v.currentTime = trimStart;
-              }}
-              onTimeUpdate={(e) => {
-                if (editTab === "trim" && trimEnd > 0 && e.currentTarget.currentTime >= trimEnd) {
-                  e.currentTarget.pause();
-                  e.currentTarget.currentTime = trimEnd;
-                }
-              }}
-            />
+            {/* Rotation wrapper — only the video is rotated */}
+            <div
+              className="max-w-full max-h-full w-full h-full flex items-center justify-center"
+              style={rotStyle}
+            >
+              <video
+                ref={videoRef}
+                src={mediaUrl}
+                playsInline autoPlay={false}
+                className="max-w-full max-h-full pointer-events-auto"
+                style={{
+                  background: "black",
+                  filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
+                }}
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  const dur = v.duration || 0;
+                  setMediaDuration(dur);
+                  if (trimEnd <= 0 || trimEnd > dur) setTrimEnd(dur);
+                  if (trimStart > 0) v.currentTime = trimStart;
+                }}
+                onTimeUpdate={(e) => {
+                  if (editTab === "trim" && trimEnd > 0 && e.currentTarget.currentTime >= trimEnd) {
+                    e.currentTarget.pause();
+                    e.currentTarget.currentTime = trimEnd;
+                  }
+                }}
+              />
+            </div>
+            {/* Custom controls — NOT rotated (sits outside rotation wrapper) */}
+            <VideoControls videoRef={videoRef} visible={true} />
             {editTab === "crop" && videoRef.current && cropContainerRef.current && (
               <CropOverlay
                 mediaRect={videoRef.current.getBoundingClientRect()}

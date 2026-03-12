@@ -116,9 +116,12 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
             className="w-full h-full object-cover"
             loading="lazy"
           />
-          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-1 pb-0.5 pt-3 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-            <span className="text-white text-[10px] leading-tight line-clamp-1 break-all drop-shadow">{photo.filename}</span>
-          </div>
+          {/* Filename overlay — only for audio files */}
+          {photo.media_type === "audio" && (
+            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-1 pb-0.5 pt-3 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+              <span className="text-white text-[10px] leading-tight line-clamp-1 break-all drop-shadow">{photo.filename}</span>
+            </div>
+          )}
         </>
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 px-1 text-center">
