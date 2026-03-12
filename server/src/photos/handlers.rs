@@ -471,7 +471,7 @@ pub async fn set_crop(
 
     if let Some((file_path, mime_type, thumb_path)) = photo {
         if let Some(thumb) = thumb_path {
-            let storage_root = std::path::Path::new(&state.config.storage.path);
+            let storage_root = state.storage_root.read().await.clone();
             let abs_file = storage_root.join(file_path);
             let abs_thumb = storage_root.join(&thumb);
             let crop_meta = req.crop_metadata.as_deref();

@@ -17,6 +17,7 @@ import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.SyncRepository
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
+import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_WIFI_ONLY_BACKUP
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
@@ -307,7 +308,8 @@ class BackupWorker @AssistedInject constructor(
 
             // Re-register the reactive content-URI observer so the next
             // new photo/video also triggers a backup automatically.
-            SyncScheduler.rescheduleReactive(applicationContext)
+            val wifiOnly = prefs[KEY_WIFI_ONLY_BACKUP] ?: true
+            SyncScheduler.rescheduleReactive(applicationContext, wifiOnly)
 
             diag.flush()
             Result.success()
