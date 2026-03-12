@@ -82,11 +82,15 @@ object SyncScheduler {
             )
             .build()
 
-        WorkManager.getInstance(context).enqueue(request)
+        // Use unique work with KEEP policy to prevent concurrent backup workers
+        // when triggerNow() is called multiple times (e.g., gallery re-composition)
+        WorkManager.getInstance(context)
+            .enqueueUniqueWork("photo_backup_immediate", ExistingWorkPolicy.KEEP, request)
     }
 
     fun cancel(context: Context) {
         WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
         WorkManager.getInstance(context).cancelUniqueWork(REACTIVE_WORK_NAME)
+        WorkManager.getInstance(context).cancelUniqueWork("photo_backup_immediate")
     }
 }

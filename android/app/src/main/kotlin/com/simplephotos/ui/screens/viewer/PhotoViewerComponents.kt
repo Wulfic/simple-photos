@@ -624,11 +624,26 @@ internal fun PhotoPageContent(
 
                     // Decrypted blob — use Coil with ByteArray for memory-safe decoding
                     // Coil handles GIF (via GifDecoder), SVG (via SvgDecoder), and
-                    // standard formats while managing memory/downsampling automatically
+                    // standard formats while managing memory/downsampling automatically.
+                    // For SVG files, write to a temp file so Coil's SvgDecoder can
+                    // reliably detect the format via content sniffing.
                     decryptedData != null -> {
+                        val bytes = decryptedData!!  // local copy for smart-cast safety
+                        val isSvg = photo.mimeType.equals("image/svg+xml", ignoreCase = true)
+                                || photo.filename.endsWith(".svg", ignoreCase = true)
+                        val imageData: Any = if (isSvg) {
+                            // Write to temp file — SvgDecoder needs reliable content sniffing
+                            val svgFile = java.io.File(context.cacheDir, "svg_preview_${photo.localId}.svg")
+                            if (!svgFile.exists() || svgFile.length() != bytes.size.toLong()) {
+                                svgFile.writeBytes(bytes)
+                            }
+                            svgFile
+                        } else {
+                            bytes
+                        }
                         AsyncImage(
                             model = ImageRequest.Builder(context)
-                                .data(decryptedData)
+                                .data(imageData)
                                 .crossfade(true)
                                 .build(),
                             contentDescription = photo.filename,

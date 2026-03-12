@@ -150,13 +150,24 @@ export default function useViewerMedia(
       const { accessToken } = useAuthStore.getState();
       const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
       if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-      const fileRes = await fetch(api.photos.webUrl(photoId), { headers });
+      let fileRes = await fetch(api.photos.webUrl(photoId), { headers });
 
       // 202 = conversion in progress (non-browser-native format being processed)
+      // Retry with exponential backoff up to ~30 seconds total
       if (fileRes.status === 202) {
         setIsConverting(true);
-        setLoading(false);
-        return;
+        const delays = [2000, 3000, 5000, 8000, 12000];
+        for (const delay of delays) {
+          await new Promise((r) => setTimeout(r, delay));
+          fileRes = await fetch(api.photos.webUrl(photoId), { headers });
+          if (fileRes.status !== 202) break;
+        }
+        if (fileRes.status === 202) {
+          // Still converting after retries — leave the converting state active
+          setLoading(false);
+          return;
+        }
+        setIsConverting(false);
       }
 
       if (!fileRes.ok) throw new Error(`Failed to load photo: ${fileRes.status}`);

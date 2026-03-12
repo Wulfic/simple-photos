@@ -215,9 +215,9 @@ pub fn needs_web_preview(filename: &str) -> Option<&'static str> {
         // Images that browsers cannot display natively
         "heic" | "heif" | "tiff" | "tif" | "hdr" | "cr2" | "cur" | "cursor"
         | "dng" | "nef" | "arw" | "raw" => Some("jpg"),
-        // SVG → rasterized PNG for consistent rendering
+        // SVG is browser-native (<img> renders it natively) — no conversion needed.
         // ICO → PNG for consistent rendering on all platforms
-        "svg" | "ico" => Some("png"),
+        "ico" => Some("png"),
         // Audio that browsers cannot play natively
         "wma" | "aiff" | "aif" => Some("mp3"),
         // Video containers that browsers cannot play natively
