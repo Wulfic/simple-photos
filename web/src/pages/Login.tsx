@@ -33,26 +33,29 @@ export default function Login() {
           is6Digit ? totpCode.trim() : undefined,
           is6Digit ? undefined : totpCode.trim()
         );
+        // Clear stale data from a previous user session BEFORE setting
+        // tokens — setTokens triggers isAuthenticated=true which causes
+        // ProtectedLayout to immediately render Gallery.  If we clear
+        // after, there's a race where Gallery reads stale IndexedDB data.
+        await clearAllUserData().catch(() => {});
+        thumbMemoryCache.clear();
         setTokens(res.access_token, res.refresh_token);
         storeSetUsername(username);
         // Derive encryption key from the login password
         await deriveKey(password, username);
-        // Clear any stale data from a previous user session
-        await clearAllUserData().catch(() => {});
-        thumbMemoryCache.clear();
         navigate("/gallery");
       } else {
         const res = await api.auth.login(username, password);
         if (res.requires_totp && res.totp_session_token) {
           setTotpSession(res.totp_session_token);
         } else if (res.access_token && res.refresh_token) {
+          // Clear stale data BEFORE setting tokens (see comment above)
+          await clearAllUserData().catch(() => {});
+          thumbMemoryCache.clear();
           setTokens(res.access_token, res.refresh_token);
           storeSetUsername(username);
           // Derive encryption key from the login password
           await deriveKey(password, username);
-          // Clear any stale data from a previous user session
-          await clearAllUserData().catch(() => {});
-          thumbMemoryCache.clear();
           navigate("/gallery");
         }
       }
