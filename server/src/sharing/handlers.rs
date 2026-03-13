@@ -91,16 +91,14 @@ pub async fn list_shared_albums(
         )
         .bind(&id)
         .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
+        .await?;
 
         let member_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM shared_album_members WHERE album_id = ?",
         )
         .bind(&id)
         .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
+        .await?;
 
         albums.push(SharedAlbumInfo {
             id,
@@ -361,7 +359,8 @@ pub async fn add_photo(
 
 // ── Remove photo from shared album ────────────────────────────────────────
 
-/// Remove a photo from a shared album. Owner or the person who added it can remove.
+/// Remove a photo from a shared album. Any album member (or owner) can
+/// remove any photo in the album.
 ///
 /// DELETE /api/sharing/albums/{album_id}/photos/{photo_id}
 pub async fn remove_photo(

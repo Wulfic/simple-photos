@@ -95,6 +95,10 @@ interface ApiService {
     @Streaming
     suspend fun downloadBlob(@Path("id") blobId: String): ResponseBody
 
+    @GET("api/blobs/{id}/thumb")
+    @Streaming
+    suspend fun downloadThumbBlob(@Path("id") blobId: String): ResponseBody
+
     @DELETE("api/blobs/{id}")
     suspend fun deleteBlob(@Path("id") blobId: String): Response<Unit>
 
@@ -255,6 +259,10 @@ interface ApiService {
     // ── Client Diagnostic Logs ───────────────────────────────────────────
     @POST("api/client-logs")
     suspend fun submitClientLogs(@Body batch: ClientLogBatch): Map<String, Any>
+
+    // TODO: Shared Albums — server exposes 10 endpoints under /api/sharing/*
+    //   (create, list, get, update, delete, add/remove photos, generate/revoke link, access)
+    //   These are fully implemented on the web client but not yet wired into Android.
 
     // ── Diagnostics Config (admin) ───────────────────────────────────────
     @GET("api/admin/diagnostics/config")

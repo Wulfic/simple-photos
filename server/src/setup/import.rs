@@ -1,4 +1,4 @@
-//! Server-side import: scan directories and stream files for client-side encryption.
+//! Server-side import: scan directories and stream files for client-side upload.
 
 use axum::body::Body;
 use axum::extract::State;

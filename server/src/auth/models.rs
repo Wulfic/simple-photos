@@ -123,7 +123,9 @@ pub struct TotpSetupResponse {
 pub struct Claims {
     pub sub: String,
     pub exp: usize,
-    /// Unique JWT ID — enables per-token revocation
+    /// Unique JWT ID — currently used only for logging / tracing.
+    /// No server-side revocation list is checked; JWTs are valid until
+    /// expiry. To revoke access early, revoke the *refresh* token instead.
     #[serde(default)]
     pub jti: String,
     #[serde(default)]

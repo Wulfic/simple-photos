@@ -1,3 +1,10 @@
+//! Backup server management endpoints.
+//!
+//! CRUD for registered backup destinations, LAN server discovery
+//! (UDP broadcast + brute-force HTTP probe fallback), backup-mode
+//! toggling (primary/backup with auto-generated API key), and the
+//! audio-backup-enabled setting.
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -267,7 +274,11 @@ pub async fn discover_servers(
         })
         .collect();
 
-    // Also do a quick HTTP probe on common addresses as fallback
+    // Brute-force HTTP probe on common LAN subnets as fallback.
+    // WARNING: This is slow — up to 3 subnets × 254 hosts × 3 ports = 2,286
+    // sequential requests, each with a 2s timeout. Worst case ~76 min.
+    // The UDP broadcast above usually finds servers instantly; this path
+    // only fires for missed broadcasts or cross-subnet discovery.
     let our_port = state.config.server.port;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))

@@ -148,7 +148,9 @@ export const backupApi = {
       body: JSON.stringify({ mode }),
     }),
 
-  /** Trigger an auto-scan of the storage directory */
+  /** Trigger an auto-scan of the storage directory.
+   *  Note: Hits `/admin/photos/auto-scan` — grouped here with backup ops
+   *  since auto-scan feeds into the backup pipeline. */
   triggerAutoScan: () =>
     request<{ message: string }>("/admin/photos/auto-scan", {
       method: "POST",

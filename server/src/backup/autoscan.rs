@@ -86,10 +86,12 @@ async fn update_last_scan_time(pool: &sqlx::SqlitePool) {
 /// POST /api/admin/photos/auto-scan
 /// Trigger an immediate auto-scan (called when web UI or app opens).
 /// Runs synchronously so the client can await completion before loading photos.
+/// Admin only — the route is under `/api/admin/`.
 pub async fn trigger_auto_scan(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    super::handlers::require_admin(&state, &auth).await?;
     let pool = state.pool.clone();
     let storage_root = state.storage_root.read().await.clone();
 
@@ -158,14 +160,18 @@ async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
 
     // Start the migration
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "UPDATE encryption_migration SET status = 'encrypting', total = ?, completed = 0, \
          started_at = ?, error = NULL WHERE id = 'singleton'",
     )
     .bind(count)
     .bind(&now)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::error!("[DIAG:AUTOSCAN] Failed to start migration: {}", e);
+        return;
+    }
 
     tracing::info!(
         "[DIAG:AUTOSCAN] Auto-triggered encryption migration for {} unencrypted photos after scan",
@@ -282,7 +288,7 @@ async fn run_auto_scan(
                     // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
                     let photo_hash = compute_photo_hash_streaming(&abs_path).await;
 
-                    let _ = sqlx::query(
+                    if let Err(e) = sqlx::query(
                         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                          size_bytes, width, height, taken_at, thumb_path, created_at, photo_hash) \
                          VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)",
@@ -299,7 +305,11 @@ async fn run_auto_scan(
                     .bind(&now)
                     .bind(&photo_hash)
                     .execute(pool)
-                    .await;
+                    .await
+                    {
+                        tracing::error!("Autoscan: failed to register photo {}: {}", rel_path, e);
+                        continue;
+                    }
 
                     new_count += 1;
                     tracing::info!(

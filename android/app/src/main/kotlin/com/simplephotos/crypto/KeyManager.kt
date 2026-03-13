@@ -51,6 +51,7 @@ class KeyManager(private val context: Context) {
         )
     }
 
+    /** True if a wrapped DEK exists in encrypted preferences. */
     val isKeyConfigured: Boolean
         get() = prefs.contains(KEY_WRAPPED_DEK)
 
@@ -97,6 +98,12 @@ class KeyManager(private val context: Context) {
         dekBytes.fill(0)
     }
 
+    /**
+     * Unwrap the persisted DEK from EncryptedSharedPreferences.
+     * Returns the in-memory cached key if already loaded, otherwise reads and
+     * decrypts the wrapped DEK from preferences.  Returns null if no key has
+     * been derived yet.
+     */
     fun loadKey(): SecretKey? {
         if (dek != null) return dek
 
@@ -122,6 +129,7 @@ class KeyManager(private val context: Context) {
         return key.encoded.joinToString("") { "%02x".format(it) }
     }
 
+    /** Wipe the DEK from memory and delete the wrapped copy from preferences. */
     fun clearKey() {
         dek = null
         prefs.edit()

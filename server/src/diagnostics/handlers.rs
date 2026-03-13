@@ -303,7 +303,8 @@ pub async fn get_diagnostics(
         .await
         .unwrap_or(0);
 
-    // Count rows in key tables
+    // Count rows in key tables.
+    // NOTE: These names must match the actual migration table names exactly.
     let tables = [
         "users",
         "photos",
@@ -311,12 +312,12 @@ pub async fn get_diagnostics(
         "audit_log",
         "client_logs",
         "refresh_tokens",
-        "trash",
+        "trash_items",
         "backup_servers",
-        "sync_logs",
+        "backup_sync_log",
         "shared_albums",
         "photo_tags",
-        "secure_galleries",
+        "encrypted_galleries",
     ];
     let mut table_counts: HashMap<String, i64> = HashMap::new();
     for table in tables {
@@ -552,12 +553,12 @@ pub async fn get_diagnostics(
             .await
             .unwrap_or(0);
     let total_sync_logs: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM sync_logs")
+        sqlx::query_scalar("SELECT COUNT(*) FROM backup_sync_log")
             .fetch_one(pool)
             .await
             .unwrap_or(0);
     let last_sync_at: Option<String> =
-        sqlx::query_scalar("SELECT MAX(created_at) FROM sync_logs")
+        sqlx::query_scalar("SELECT MAX(started_at) FROM backup_sync_log")
             .fetch_one(pool)
             .await
             .unwrap_or(None);

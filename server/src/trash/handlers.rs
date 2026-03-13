@@ -1,3 +1,16 @@
+//! Trash (soft-delete) management.
+//!
+//! Photos and encrypted blobs are soft-deleted into `trash_items` with a
+//! configurable retention period (default 30 days, stored in
+//! `server_settings.trash_retention_days`). Expired items are purged by
+//! a background task that runs hourly.
+//!
+//! Endpoints: list trash, restore, permanent-delete, empty-all,
+//! serve trash thumbnail, soft-delete blob (encrypted mode).
+//!
+//! All multi-step DB operations (INSERT→DELETE, SELECT→DELETE) are wrapped
+//! in SQLite transactions for atomicity.
+
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, StatusCode};
@@ -64,12 +77,16 @@ pub async fn list_trash(
 
 /// DELETE /api/photos/:id  (updated — now soft-deletes to trash)
 /// Move a photo to the trash. The photo row is removed from `photos` and
-/// inserted into `trash_items` with a 30-day expiration.
+/// inserted into `trash_items` with a configurable expiration (default 30 days,
+/// read from `server_settings.trash_retention_days`).
 pub async fn soft_delete_photo(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(photo_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // Begin transaction — INSERT into trash + DELETE from photos must be atomic
+    let mut tx = state.pool.begin().await?;
+
     // Fetch the photo record first
     let photo = sqlx::query_as::<_, TrashPhotoRow>(
         "SELECT id, filename, file_path, mime_type, media_type, size_bytes, \
@@ -78,7 +95,7 @@ pub async fn soft_delete_photo(
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
 
@@ -86,7 +103,7 @@ pub async fn soft_delete_photo(
     let retention_days: i64 = sqlx::query_scalar(
         "SELECT CAST(value AS INTEGER) FROM server_settings WHERE key = 'trash_retention_days'",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .unwrap_or(30);
 
@@ -118,15 +135,17 @@ pub async fn soft_delete_photo(
     .bind(&photo.thumb_path)
     .bind(now.to_rfc3339())
     .bind(expires_at.to_rfc3339())
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
     // Remove from photos table
     sqlx::query("DELETE FROM photos WHERE id = ? AND user_id = ?")
         .bind(&photo_id)
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
 
     tracing::info!(
         "Photo {} moved to trash (expires {})",
@@ -151,13 +170,22 @@ pub async fn soft_delete_blob(
         return Err(AppError::BadRequest("Invalid blob ID format".into()));
     }
 
+    // Sanitize client-supplied metadata before starting the transaction
+    let safe_filename = sanitize::sanitize_filename(&req.filename);
+    let safe_mime = sanitize::sanitize_freeform(&req.mime_type, 128);
+    let media_type = req.media_type.as_deref().unwrap_or("photo");
+    let size_bytes = req.size_bytes.unwrap_or(0);
+
+    // Begin transaction — INSERT trash + DELETE blob(s) must be atomic
+    let mut tx = state.pool.begin().await?;
+
     // Fetch the blob record (need storage_path)
     let storage_path = sqlx::query_scalar::<_, String>(
         "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
     )
     .bind(&blob_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
 
@@ -168,7 +196,7 @@ pub async fn soft_delete_blob(
         )
         .bind(thumb_id)
         .bind(&auth.user_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *tx)
         .await?
     } else {
         None
@@ -178,20 +206,13 @@ pub async fn soft_delete_blob(
     let retention_days: i64 = sqlx::query_scalar(
         "SELECT CAST(value AS INTEGER) FROM server_settings WHERE key = 'trash_retention_days'",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .unwrap_or(30);
 
     let now = Utc::now();
     let expires_at = now + Duration::days(retention_days);
     let trash_id = Uuid::new_v4().to_string();
-
-    let media_type = req.media_type.as_deref().unwrap_or("photo");
-    let size_bytes = req.size_bytes.unwrap_or(0);
-
-    // Sanitize client-supplied metadata
-    let safe_filename = sanitize::sanitize_filename(&req.filename);
-    let safe_mime = sanitize::sanitize_freeform(&req.mime_type, 128);
 
     // Insert into trash_items with blob references
     sqlx::query(
@@ -217,14 +238,14 @@ pub async fn soft_delete_blob(
     .bind(expires_at.to_rfc3339())
     .bind(&blob_id)
     .bind(&req.thumbnail_blob_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
     // Remove blob from blobs table (but keep files on disk!)
     sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
         .bind(&blob_id)
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
 
     // Also remove thumbnail blob record if present
@@ -232,9 +253,11 @@ pub async fn soft_delete_blob(
         sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
             .bind(thumb_id)
             .bind(&auth.user_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
+
+    tx.commit().await?;
 
     tracing::info!(
         "Encrypted blob {} moved to trash (expires {})",
@@ -256,19 +279,21 @@ pub async fn restore_from_trash(
     auth: AuthUser,
     Path(trash_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // Begin transaction — all restore operations must be atomic
+    let mut tx = state.pool.begin().await?;
+
     // Fetch the trash item to determine if it's a plain photo or encrypted blob
     let encrypted_blob_id: Option<String> = sqlx::query_scalar(
         "SELECT encrypted_blob_id FROM trash_items WHERE id = ? AND user_id = ?",
     )
     .bind(&trash_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
 
     if let Some(blob_id) = encrypted_blob_id {
         // ── Encrypted blob restore ──────────────────────────────────────────
-        // Re-create the blob record from trash metadata
         let row = sqlx::query_as::<_, TrashBlobRow>(
             "SELECT file_path, mime_type, media_type, size_bytes, thumb_path, \
              thumbnail_blob_id \
@@ -276,7 +301,7 @@ pub async fn restore_from_trash(
         )
         .bind(&trash_id)
         .bind(&auth.user_id)
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *tx)
         .await?;
 
         // Determine blob_type from media_type
@@ -300,7 +325,7 @@ pub async fn restore_from_trash(
         .bind(row.size_bytes)
         .bind(&now)
         .bind(&row.file_path)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
 
         // Re-insert the thumbnail blob if present
@@ -316,7 +341,7 @@ pub async fn restore_from_trash(
             .bind(&auth.user_id)
             .bind(&now)
             .bind(thumb_path)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
         }
 
@@ -324,7 +349,7 @@ pub async fn restore_from_trash(
         sqlx::query("DELETE FROM trash_items WHERE id = ? AND user_id = ?")
             .bind(&trash_id)
             .bind(&auth.user_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
 
         tracing::info!("Encrypted blob {} restored from trash", blob_id);
@@ -337,7 +362,7 @@ pub async fn restore_from_trash(
         )
         .bind(&trash_id)
         .bind(&auth.user_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *tx)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -365,18 +390,20 @@ pub async fn restore_from_trash(
         .bind(item.longitude)
         .bind(&item.thumb_path)
         .bind(&now)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
 
         // Remove from trash
         sqlx::query("DELETE FROM trash_items WHERE id = ? AND user_id = ?")
             .bind(&trash_id)
             .bind(&auth.user_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
 
         tracing::info!("Photo {} restored from trash", item.id);
     }
+
+    tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -388,29 +415,56 @@ pub async fn permanent_delete(
     auth: AuthUser,
     Path(trash_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // Begin transaction — ref-count check + DELETE must be atomic to prevent TOCTOU races
+    let mut tx = state.pool.begin().await?;
+
     let item: Option<(String, Option<String>)> = sqlx::query_as(
         "SELECT file_path, thumb_path FROM trash_items WHERE id = ? AND user_id = ?",
     )
     .bind(&trash_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?;
 
     let (file_path, thumb_path) = item.ok_or(AppError::NotFound)?;
 
     // Only delete files from disk if no other photo row references the same
     // file_path (which happens when the user duplicates a photo via "Save Copy").
-    let storage_root = state.storage_root.read().await.clone();
-
     let other_refs: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos WHERE file_path = ?",
     )
     .bind(&file_path)
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or(0);
+    .fetch_one(&mut *tx)
+    .await?;
 
-    if other_refs == 0 {
+    let can_delete_file = other_refs == 0;
+
+    let can_delete_thumb = if let Some(ref tp) = thumb_path {
+        let other_thumb_refs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
+        )
+        .bind(tp)
+        .fetch_one(&mut *tx)
+        .await?;
+        other_thumb_refs == 0
+    } else {
+        false
+    };
+
+    // Remove from database first (within the transaction)
+    sqlx::query("DELETE FROM trash_items WHERE id = ? AND user_id = ?")
+        .bind(&trash_id)
+        .bind(&auth.user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    // Delete files from disk AFTER commit — a failure here is a minor storage
+    // leak but preserves data integrity (the trash row is already gone).
+    let storage_root = state.storage_root.read().await.clone();
+
+    if can_delete_file {
         let full_path = storage_root.join(&file_path);
         if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
             if let Err(e) = tokio::fs::remove_file(&full_path).await {
@@ -420,16 +474,7 @@ pub async fn permanent_delete(
     }
 
     if let Some(ref tp) = thumb_path {
-        // Also check thumb_path references
-        let other_thumb_refs: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
-        )
-        .bind(tp)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
-
-        if other_thumb_refs == 0 {
+        if can_delete_thumb {
             let thumb_full = storage_root.join(tp);
             if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
                 if let Err(e) = tokio::fs::remove_file(&thumb_full).await {
@@ -438,13 +483,6 @@ pub async fn permanent_delete(
             }
         }
     }
-
-    // Remove from database
-    sqlx::query("DELETE FROM trash_items WHERE id = ? AND user_id = ?")
-        .bind(&trash_id)
-        .bind(&auth.user_id)
-        .execute(&state.pool)
-        .await?;
 
     tracing::info!("Permanently deleted trash item {}", trash_id);
 
@@ -457,32 +495,34 @@ pub async fn empty_trash(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Begin transaction — ref-count checks + batch DELETE must be atomic
+    let mut tx = state.pool.begin().await?;
+
     // Fetch all trash items for file cleanup
     let items: Vec<(String, Option<String>)> = sqlx::query_as(
         "SELECT file_path, thumb_path FROM trash_items WHERE user_id = ?",
     )
     .bind(&auth.user_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *tx)
     .await?;
 
+    let deleted_count = items.len() as i64;
+
+    // Build a list of files safe to delete (no other photo row references them).
+    // We check within the transaction to avoid TOCTOU races.
+    let mut files_to_delete: Vec<std::path::PathBuf> = Vec::new();
     let storage_root = state.storage_root.read().await.clone();
-    let mut deleted_count = 0i64;
 
     for (file_path, thumb_path) in &items {
-        // Only delete file if no other photo row references it (Save Copy shares files)
         let other_refs: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM photos WHERE file_path = ?",
         )
         .bind(file_path)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
+        .fetch_one(&mut *tx)
+        .await?;
 
         if other_refs == 0 {
-            let full_path = storage_root.join(file_path);
-            if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
-                let _ = tokio::fs::remove_file(&full_path).await;
-            }
+            files_to_delete.push(storage_root.join(file_path));
         }
 
         if let Some(tp) = thumb_path {
@@ -490,25 +530,32 @@ pub async fn empty_trash(
                 "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
             )
             .bind(tp)
-            .fetch_one(&state.pool)
-            .await
-            .unwrap_or(0);
+            .fetch_one(&mut *tx)
+            .await?;
 
             if other_thumb_refs == 0 {
-                let thumb_full = storage_root.join(tp);
-                if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
-                    let _ = tokio::fs::remove_file(&thumb_full).await;
-                }
+                files_to_delete.push(storage_root.join(tp));
             }
         }
-        deleted_count += 1;
     }
 
-    // Remove all from database
+    // Remove all rows from database (within the transaction)
     sqlx::query("DELETE FROM trash_items WHERE user_id = ?")
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
+
+    // Delete files from disk AFTER commit — failures here are minor storage
+    // leaks but preserve data integrity.
+    for path in &files_to_delete {
+        if tokio::fs::try_exists(path).await.unwrap_or(false) {
+            if let Err(e) = tokio::fs::remove_file(path).await {
+                tracing::warn!("Failed to delete file {:?}: {}", path, e);
+            }
+        }
+    }
 
     tracing::info!(
         "Emptied trash for user {}: {} items permanently deleted",
@@ -574,12 +621,21 @@ pub async fn serve_trash_thumbnail(
 pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) {
     let now = Utc::now().to_rfc3339();
 
+    // Begin transaction — ref-count checks + batch DELETE must be atomic
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!("Failed to begin transaction for trash purge: {}", e);
+            return;
+        }
+    };
+
     // Fetch expired items for file cleanup
     let expired: Vec<(String, String, Option<String>)> = match sqlx::query_as(
         "SELECT id, file_path, thumb_path FROM trash_items WHERE expires_at <= ?",
     )
     .bind(&now)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await
     {
         Ok(items) => items,
@@ -593,55 +649,79 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
         return;
     }
 
-    let mut purged = 0i64;
+    // Build list of files safe to delete and IDs to remove, all within the transaction
+    let mut files_to_delete: Vec<std::path::PathBuf> = Vec::new();
+    let mut ids_to_delete: Vec<&str> = Vec::new();
 
     for (id, file_path, thumb_path) in &expired {
-        // Only delete files if no other photo row still references them
-        let other_refs: i64 = sqlx::query_scalar(
+        // Only delete files if no other photo row still references them.
+        // On DB error, skip this item entirely — do NOT default to 0
+        // because that would cause irreversible file deletion.
+        let other_refs: i64 = match sqlx::query_scalar(
             "SELECT COUNT(*) FROM photos WHERE file_path = ?",
         )
         .bind(file_path)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await
-        .unwrap_or(0);
+        {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::error!("DB error checking file refs for {}: {} — skipping", id, e);
+                continue;
+            }
+        };
 
         if other_refs == 0 {
-            let full_path = storage_root.join(file_path);
-            if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
-                let _ = tokio::fs::remove_file(&full_path).await;
-            }
+            files_to_delete.push(storage_root.join(file_path));
         }
 
         if let Some(tp) = thumb_path {
-            let other_thumb_refs: i64 = sqlx::query_scalar(
+            let other_thumb_refs: i64 = match sqlx::query_scalar(
                 "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
             )
             .bind(tp)
-            .fetch_one(pool)
+            .fetch_one(&mut *tx)
             .await
-            .unwrap_or(0);
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::error!("DB error checking thumb refs for {}: {} — skipping", id, e);
+                    continue;
+                }
+            };
 
             if other_thumb_refs == 0 {
-                let thumb_full = storage_root.join(tp);
-                if tokio::fs::try_exists(&thumb_full).await.unwrap_or(false) {
-                    let _ = tokio::fs::remove_file(&thumb_full).await;
-                }
+                files_to_delete.push(storage_root.join(tp));
             }
         }
 
-        // Remove from database
+        ids_to_delete.push(id.as_str());
+    }
+
+    // Delete all expired rows within the transaction
+    for id in &ids_to_delete {
         if let Err(e) = sqlx::query("DELETE FROM trash_items WHERE id = ?")
             .bind(id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
         {
             tracing::error!("Failed to delete expired trash item {}: {}", id, e);
-            continue;
         }
-
-        purged += 1;
     }
 
+    if let Err(e) = tx.commit().await {
+        tracing::error!("Failed to commit trash purge transaction: {}", e);
+        return;
+    }
+
+    // Delete files from disk AFTER commit
+    for path in &files_to_delete {
+        if tokio::fs::try_exists(path).await.unwrap_or(false) {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+    }
+
+    let purged = ids_to_delete.len();
     if purged > 0 {
         tracing::info!("Purged {} expired trash items", purged);
     }

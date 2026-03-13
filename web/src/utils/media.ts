@@ -132,26 +132,6 @@ export function generateThumbnailFromBuffer(
   return generateImageThumbnailFromBuffer(data, mimeType, size);
 }
 
-/**
- * Migration-safe wrapper: generates a thumbnail but returns null instead of
- * throwing on failure. Used during encryption migration and similar batch jobs.
- */
-export async function generateMigrationThumbnail(
-  fileData: Uint8Array | ArrayBuffer,
-  mimeType: string,
-  size: number
-): Promise<ArrayBuffer | null> {
-  try {
-    return await generateThumbnailFromBuffer(
-      fileData instanceof Uint8Array ? (fileData.buffer as ArrayBuffer) : fileData,
-      mimeType,
-      size
-    );
-  } catch {
-    return null;
-  }
-}
-
 // ── Dimension & duration extraction ───────────────────────────────────────────
 
 /** Get image/video dimensions from raw data */

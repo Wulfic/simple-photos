@@ -11,7 +11,7 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * Every [encrypt] call generates a fresh 12-byte random nonce. The output format
  * is `nonce || ciphertext+tag`, matching the [EncryptedPayload] wire format used
- * by both the Android and web clients.
+ * by the Android client, the web client, and the server.
  */
 class CryptoManager(private val keyManager: KeyManager) {
 

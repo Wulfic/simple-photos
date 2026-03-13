@@ -59,8 +59,7 @@ pub async fn get_storage_stats(
     )
     .bind(&auth.user_id)
     .fetch_one(&state.pool)
-    .await
-    .unwrap_or((0, 0));
+    .await?;
 
     let plain_bytes = plain_row.0;
     let plain_count = plain_row.1;

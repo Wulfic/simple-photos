@@ -709,10 +709,12 @@ private fun SecureItemTile(
     var loading by remember(item.blobId) { mutableStateOf(true) }
 
     // Try to find matching photo in local DB for its thumbnail
+    // Use the dedicated thumbnail endpoint to avoid downloading the full-size
+    // encrypted blob for every grid tile. Falls back to full blob if no thumb.
     LaunchedEffect(item.blobId) {
         loading = true
         try {
-            val data = viewModel.downloadAndDecrypt(item.blobId)
+            val data = viewModel.downloadThumb(item.blobId)
             bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
         } catch (_: Exception) {
             bitmap = null

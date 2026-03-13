@@ -403,7 +403,7 @@ class GalleryViewModel @Inject constructor(
                     photoRepository.insertPhoto(photo)
                     if (thumbBytes.isNotEmpty()) {
                         val thumbPath = photoRepository.saveThumbnailToDisk(localId, thumbBytes)
-                        photoRepository.insertPhoto(photo.copy(thumbnailPath = thumbPath))
+                        photoRepository.updateThumbnailPath(localId, thumbPath)
                     }
                     try {
                         withContext(Dispatchers.IO) {

@@ -1,9 +1,24 @@
+//! Server‐to‐server backup “serving” API.
+//!
+//! When this instance is in backup mode, other Simple Photos servers can
+//! pull data from it via these endpoints. All requests are authenticated
+//! with an `X-API-Key` header (validated against `config.backup.api_key`).
+//!
+//! Endpoints:
+//! - `GET  /api/backup/list`                    — list all photos (with IDs)
+//! - `GET  /api/backup/list-trash`              — list all trash items (with IDs)
+//! - `GET  /api/backup/download/:id`            — download original file
+//! - `GET  /api/backup/download/:id/thumb`      — download thumbnail
+//! - `POST /api/backup/receive`                 — receive a photo pushed
+//!   from the primary server (verifies `X-Content-Hash` if present)
+
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -60,6 +75,31 @@ pub async fn backup_list_photos(
     .await?;
 
     Ok(Json(photos))
+}
+
+/// GET /api/backup/list-trash
+/// Returns a list of all trash items on this server, authenticated via API key.
+/// Used by the sync engine for delta-sync (skip items the remote already has).
+pub async fn backup_list_trash(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    validate_api_key(&state, &headers)?;
+
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT id, file_path, size_bytes FROM trash_items ORDER BY deleted_at ASC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(id, file_path, size_bytes)| {
+            serde_json::json!({ "id": id, "file_path": file_path, "size_bytes": size_bytes })
+        })
+        .collect();
+
+    Ok(Json(items))
 }
 
 /// GET /api/backup/download/:photo_id
@@ -149,6 +189,13 @@ pub async fn backup_download_thumb(
 /// Receives a file from a primary server during sync.
 /// Headers: X-API-Key, X-Photo-Id, X-File-Path, X-Source ("photos" or "trash")
 /// Body: raw file bytes
+///
+/// **Note:** The UPSERT only populates the core columns (`id`, `user_id`,
+/// `filename`, `file_path`, `mime_type`, `media_type`, `size_bytes`,
+/// `created_at`).  Metadata like `width`, `height`, `duration_secs`,
+/// `taken_at`, GPS coordinates, `photo_hash`, and `thumb_path` are NOT
+/// transferred — the background convert/scan tasks will fill some of these
+/// in later, but some (GPS, original taken_at) may be permanently lost.
 pub async fn backup_receive(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -178,6 +225,17 @@ pub async fn backup_receive(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("photos")
         .to_string();
+
+    // Verify checksum if the sender provided one (X-Content-Hash: hex SHA-256)
+    if let Some(expected_hash) = headers.get("X-Content-Hash").and_then(|v| v.to_str().ok()) {
+        let actual_hash = hex::encode(Sha256::digest(&body));
+        if !actual_hash.eq_ignore_ascii_case(expected_hash) {
+            return Err(AppError::BadRequest(format!(
+                "Content hash mismatch: expected {}, got {}",
+                expected_hash, actual_hash
+            )));
+        }
+    }
 
     let storage_root = state.storage_root.read().await.clone();
     let full_path = storage_root.join(&file_path);

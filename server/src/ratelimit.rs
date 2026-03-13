@@ -103,36 +103,43 @@ impl RateLimiter {
     }
 }
 
-/// Extract client IP from request, respecting X-Forwarded-For behind reverse proxy.
+/// Extract client IP from request headers.
+///
+/// When `trust_proxy` is `true`, reads `X-Forwarded-For` (leftmost) or
+/// `X-Real-IP`. When `false`, returns the loopback address so all
+/// clients share one rate-limit bucket (safe for direct-access setups).
 ///
 /// # Security note
-/// X-Forwarded-For is only trusted when behind a known reverse proxy.
-/// The server should be deployed behind nginx/caddy that sets this header.
-pub fn extract_client_ip(headers: &HeaderMap) -> IpAddr {
-    // Try X-Forwarded-For first (leftmost = original client)
-    if let Some(xff) = headers.get("x-forwarded-for") {
-        if let Ok(val) = xff.to_str() {
-            if let Some(first) = val.split(',').next() {
-                if let Ok(ip) = first.trim().parse::<IpAddr>() {
+/// Only set `trust_proxy = true` when behind a reverse proxy that
+/// overwrites these headers. Trusting them on a public-facing server
+/// lets attackers spoof arbitrary IPs to bypass rate limiting.
+pub fn extract_client_ip(headers: &HeaderMap, trust_proxy: bool) -> IpAddr {
+    if trust_proxy {
+        // Try X-Forwarded-For first (leftmost = original client)
+        if let Some(xff) = headers.get("x-forwarded-for") {
+            if let Ok(val) = xff.to_str() {
+                if let Some(first) = val.split(',').next() {
+                    if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                        return ip;
+                    }
+                }
+            }
+        }
+
+        // Try X-Real-IP
+        if let Some(xri) = headers.get("x-real-ip") {
+            if let Ok(val) = xri.to_str() {
+                if let Ok(ip) = val.trim().parse::<IpAddr>() {
                     return ip;
                 }
             }
         }
     }
 
-    // Try X-Real-IP
-    if let Some(xri) = headers.get("x-real-ip") {
-        if let Ok(val) = xri.to_str() {
-            if let Ok(ip) = val.trim().parse::<IpAddr>() {
-                return ip;
-            }
-        }
-    }
-
     // Fallback to loopback (ConnectInfo not used here — we extract from headers).
-    // WARNING: If no reverse proxy sets X-Forwarded-For, ALL clients share one
-    // rate-limit bucket (127.0.0.1). In production, always deploy behind
-    // nginx/Caddy that sets X-Forwarded-For.
+    // When trust_proxy is false (default), ALL clients share one rate-limit bucket.
+    // This is safe for simple deployments; for multi-user servers behind a proxy,
+    // enable trust_proxy in config.toml.
     "127.0.0.1".parse().unwrap()
 }
 
@@ -145,7 +152,8 @@ pub struct RateLimiters {
     pub register: RateLimiter,
     /// TOTP verification: 5 per 60 seconds (1M possible codes — brute-force must be blocked)
     pub totp: RateLimiter,
-    /// General API: 100 per 60 seconds
+    /// General API: 100 per 60 seconds.
+    /// Used for refresh and logout endpoints.
     pub general: RateLimiter,
 }
 

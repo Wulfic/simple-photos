@@ -217,7 +217,7 @@ pub async fn generate_thumbnail_file(
 }
 
 /// Returns the web preview file extension if this format is not browser-native.
-/// Images → "jpg", Audio → "mp3", Videos → "mp4".
+/// Images → "jpg" (ICO → "png"), Audio → "mp3", Videos → "mp4".
 pub fn needs_web_preview(filename: &str) -> Option<&'static str> {
     let ext = filename.rsplit('.').next()?.to_ascii_lowercase();
     match ext.as_str() {
@@ -242,8 +242,8 @@ pub async fn generate_web_preview_bg(input_path: &Path, output_path: &Path, prev
 }
 
 /// Generate a browser-compatible web preview file.
-/// Images → high-quality JPEG (FFmpeg, then ImageMagick fallback),
-/// SVG → rasterized PNG, Audio → MP3, Video → MP4 (H.264/AAC).
+/// Images → high-quality JPEG, ICO → PNG, Audio → MP3,
+/// Video → MP4 (H.264/AAC).
 /// Video conversion uses low-priority CPU settings to avoid starving other tasks.
 async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext: &str) -> bool {
     if let Some(parent) = output_path.parent() {
@@ -265,7 +265,7 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
             matches!(status, Ok(s) if s.success())
         }
         "png" => {
-            // SVG → rasterized PNG via FFmpeg (or ImageMagick fallback below)
+            // ICO → rasterized PNG via FFmpeg (or ImageMagick fallback below)
             let status = tokio::process::Command::new("nice")
                 .args(["-n", "19", "ffmpeg", "-y", "-i", input_str, output_str])
                 .stdout(std::process::Stdio::null())
@@ -552,6 +552,10 @@ pub async fn scan_and_register(
             .bind(pid)
             .execute(&state.pool)
             .await
+            .map_err(|e| {
+                tracing::warn!(photo_id = %pid, error = %e, "Failed to update photo metadata during scan");
+                e
+            })
             .ok();
             fixed_count += 1;
         }

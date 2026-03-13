@@ -83,7 +83,10 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response {
     );
 
     // Prevent caching of API responses — may contain user data or tokens.
-    // Static files served by the fallback ServeDir have their own cache headers.
+    // CAVEAT: This middleware runs after ServeDir, so it also overwrites
+    // cache headers on static assets (JS/CSS/images), forcing browsers to
+    // re-download them every page load. A future improvement could skip
+    // the header for static file paths.
     headers.insert(
         "Cache-Control",
         HeaderValue::from_static("no-store, no-cache, must-revalidate"),

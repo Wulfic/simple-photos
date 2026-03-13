@@ -23,8 +23,13 @@ data class EncryptedPayload(
     companion object {
         private const val NONCE_SIZE = 12
 
+        /** Minimum valid payload size: 12-byte nonce + 16-byte GCM tag. */
+        private const val MIN_PAYLOAD_SIZE = NONCE_SIZE + 16
+
         fun fromByteArray(data: ByteArray): EncryptedPayload {
-            require(data.size > NONCE_SIZE) { "Data too short to contain nonce + ciphertext" }
+            require(data.size >= MIN_PAYLOAD_SIZE) {
+                "Data too short ($${data.size} bytes): need at least $MIN_PAYLOAD_SIZE (nonce + GCM tag)"
+            }
             val nonce = data.copyOfRange(0, NONCE_SIZE)
             val ciphertext = data.copyOfRange(NONCE_SIZE, data.size)
             return EncryptedPayload(nonce, ciphertext)

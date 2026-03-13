@@ -3,7 +3,12 @@ use tokio::io::AsyncWriteExt;
 
 use crate::error::AppError;
 
-/// Build the on-disk path for a blob: {root}/blobs/{user_id[0..2]}/{user_id}/{blob_id[0..2]}/{blob_id}.bin
+/// Build the on-disk path for a blob: `{root}/blobs/{user_id[0..2]}/{user_id}/{blob_id[0..2]}/{blob_id}.bin`
+///
+/// # Panics / edge cases
+/// If `user_id` or `blob_id` is empty the prefix slicing produces `""`,
+/// resulting in degenerate paths like `blobs///.bin`. Callers must
+/// validate that both IDs are non-empty before calling this function.
 pub fn blob_path(root: &Path, user_id: &str, blob_id: &str) -> PathBuf {
     let user_prefix = &user_id[..2.min(user_id.len())];
     let blob_prefix = &blob_id[..2.min(blob_id.len())];

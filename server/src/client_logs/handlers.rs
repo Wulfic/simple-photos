@@ -1,3 +1,13 @@
+//! Client diagnostic log ingestion.
+//!
+//! Mobile clients push batches of structured log entries here.
+//! Inserts are best-effort: individual row failures are logged but
+//! never surfaced to the caller so logging cannot disrupt backup.
+//!
+//! **Note:** `client_ts` is bound verbatim from the client payload.
+//! It is not validated as a well-formed timestamp, so callers can
+//! store arbitrary strings in that column.
+
 use axum::extract::State;
 use axum::Json;
 use serde_json::json;

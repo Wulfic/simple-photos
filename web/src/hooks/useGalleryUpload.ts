@@ -39,9 +39,10 @@ export interface UploadDeps {
 /**
  * Handles file upload for the Gallery page.
  *
- * In plain mode, triggers a server-side scan to register files already
- * in the storage directory. In encrypted mode, encrypts and uploads files
- * through the blob API.
+ * In plain mode, the selected files are ignored — instead, a server-side
+ * scan registers files already placed in the storage directory.
+ * In encrypted mode, each selected file is encrypted client-side and
+ * uploaded through the blob API.
  */
 export function useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, setError }: UploadDeps) {
   const [uploading, setUploading] = useState(false);

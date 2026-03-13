@@ -49,7 +49,13 @@ pub async fn get_encryption_settings(
 }
 
 /// PUT /api/admin/encryption
-/// Toggle encryption mode. Admin only. Triggers background migration.
+/// Toggle encryption mode. Admin only.
+///
+/// Sets the mode in `server_settings` and updates `encryption_migration`
+/// status to `"encrypting"` or `"decrypting"`. Does **not** start the
+/// actual migration — that is triggered separately via
+/// `POST /api/admin/encryption/migrate` (server-side) or by the
+/// client-side migration worker.
 ///
 /// Request body for `PUT /api/admin/encryption`.
 #[derive(Debug, Deserialize)]
@@ -182,9 +188,19 @@ pub struct MigrationProgressRequest {
 
 pub async fn report_migration_progress(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
     Json(req): Json<MigrationProgressRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Verify admin — this endpoint is under /api/admin/ and should not be
+    // callable by non-admin users to prevent migration state corruption.
+    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+        .bind(&auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".into()));
+    }
+
     // Sanitize error messages — cap length and strip control characters
     let error = req.error.as_deref().map(|e| sanitize::sanitize_freeform(e, 2048));
 

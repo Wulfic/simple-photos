@@ -35,7 +35,7 @@ pub async fn register(
     headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AppError> {
-    let ip = extract_client_ip(&headers);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
     state.rate_limiters.register.check(ip)?;
 
     if !state.config.auth.allow_registration {
@@ -103,7 +103,7 @@ pub async fn login(
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let ip = extract_client_ip(&headers);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
     state.rate_limiters.login.check(ip)?;
 
     // Timing-safe: always do a password check even if user doesn't exist
@@ -200,7 +200,7 @@ pub async fn login_totp(
     headers: HeaderMap,
     Json(req): Json<TotpLoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    let ip = extract_client_ip(&headers);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
     state.rate_limiters.totp.check(ip)?;
 
     let key = DecodingKey::from_secret(state.config.auth.jwt_secret.as_bytes());
@@ -297,11 +297,16 @@ pub async fn login_totp(
 /// Implements refresh-token rotation: the old token is revoked on use.
 /// Reuse of a revoked token is treated as potential theft — *all* tokens
 /// for the user are revoked, forcing re-authentication everywhere.
+///
+/// Rate-limited with the `general` limiter (100 req/60s per IP) to prevent
+/// abuse from issuing unlimited refresh-token rotations.
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<RefreshRequest>,
 ) -> Result<Json<RefreshResponse>, AppError> {
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    state.rate_limiters.general.check(ip)?;
     let token_hash = hash_token(&req.refresh_token);
 
     let row = sqlx::query_as::<_, (String, String, bool)>(
@@ -367,11 +372,16 @@ pub async fn refresh(
 }
 
 /// POST /api/auth/logout — revoke the given refresh token.
+///
+/// Always returns `204 NO_CONTENT` regardless of whether the token existed
+/// or was already revoked. This prevents token-hash enumeration.
 pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<LogoutRequest>,
 ) -> Result<StatusCode, AppError> {
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    state.rate_limiters.general.check(ip)?;
     let token_hash = hash_token(&req.refresh_token);
 
     let user_id: Option<String> = sqlx::query_scalar(
@@ -595,13 +605,20 @@ pub async fn disable_2fa(
 }
 
 /// Change password — requires current password + new password.
+/// On success, revokes ALL existing refresh tokens for the user,
+/// forcing re-authentication on every device.
+///
+/// **Note:** This endpoint is rate-limited (login limiter) but does NOT
+/// trigger account lockout on wrong-password attempts. An attacker with
+/// a stolen access token could brute-force the current password within
+/// the rate limit window (10 req/min).
 pub async fn change_password(
     State(state): State<AppState>,
     headers: HeaderMap,
     auth: AuthUser,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, AppError> {
-    let ip = extract_client_ip(&headers);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
     state.rate_limiters.login.check(ip)?;
 
     validate_password(&req.new_password)?;
@@ -631,17 +648,24 @@ pub async fn change_password(
     let new_hash = bcrypt::hash(&req.new_password, state.config.auth.bcrypt_cost)
         .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
 
+    // Begin transaction — UPDATE password + revoke tokens must be atomic.
+    // If the password is updated but token revocation fails, old sessions
+    // continue using the old password's tokens with no forced re-auth.
+    let mut tx = state.pool.begin().await?;
+
     sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
         .bind(&new_hash)
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
 
     // Revoke ALL refresh tokens — force re-authentication everywhere
     sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?")
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
 
     audit::log(
         &state.pool,
@@ -659,13 +683,16 @@ pub async fn change_password(
 /// POST /api/auth/verify-password
 /// Verify the current user's password without any side effects.
 /// Used by clients to gate sensitive actions (e.g. enabling biometric lock).
+///
+/// **Note:** Rate-limited (login limiter) but does NOT trigger account
+/// lockout on failure. Same brute-force caveat as [`change_password`].
 pub async fn verify_password(
     State(state): State<AppState>,
     headers: HeaderMap,
     auth: AuthUser,
     Json(req): Json<VerifyPasswordRequest>,
 ) -> Result<StatusCode, AppError> {
-    let ip = extract_client_ip(&headers);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
     state.rate_limiters.login.check(ip)?;
 
     let current_hash: String = sqlx::query_scalar(

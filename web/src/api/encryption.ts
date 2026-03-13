@@ -39,19 +39,6 @@ export const encryptionApi = {
       body: JSON.stringify({ key_hex: keyHex }),
     }),
 
-  /** Connect to the SSE migration progress stream. Returns an EventSource. */
-  migrationStream: (): EventSource => {
-    const url = `${BASE}/admin/encryption/migrate/stream`;
-    // EventSource doesn't support custom headers, so we use a workaround
-    // by appending the token as a query param (server can check both).
-    // However, since our server uses Bearer auth, we'll use fetch-based SSE.
-    // Return a wrapper that mimics EventSource behavior using fetch.
-    const es = new EventSource(url);
-    // Note: EventSource doesn't support auth headers natively.
-    // We rely on the cookie/session or use the fetch-based approach below.
-    return es;
-  },
-
   /** Fetch-based SSE migration progress stream (supports auth headers).
    *  Calls `onProgress` for each event, and `onDone` when complete. */
   streamMigrationProgress: async (

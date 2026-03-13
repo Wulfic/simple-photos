@@ -175,7 +175,10 @@ pub async fn discover(
         crate::backup::broadcast::discover_via_broadcast(std::time::Duration::from_secs(6))
     })
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|e| {
+        tracing::error!("Broadcast discovery task panicked: {}", e);
+        Vec::new()
+    });
 
     let servers: Vec<serde_json::Value> = broadcast_results
         .into_iter()

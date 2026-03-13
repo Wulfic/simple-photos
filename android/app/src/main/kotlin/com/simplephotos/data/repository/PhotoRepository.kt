@@ -251,6 +251,25 @@ class PhotoRepository @Inject constructor(
     }
 
     /**
+     * Download and decrypt a **thumbnail** blob via `GET /api/blobs/{id}/thumb`.
+     *
+     * The server resolves the photo blob ID → encrypted_thumb_blob_id internally,
+     * so the caller only needs the photo's main blob ID. Returns the decrypted
+     * thumbnail bytes (typically small, ~30 KB JPEG).
+     *
+     * Falls back to `null` if the server returns 404 (no thumbnail available).
+     */
+    suspend fun downloadAndDecryptThumbBlob(blobId: String): ByteArray? {
+        return try {
+            val response = api.downloadThumbBlob(blobId)
+            val encrypted = response.bytes()
+            crypto.decrypt(encrypted)
+        } catch (e: retrofit2.HttpException) {
+            if (e.code() == 404) null else throw e
+        }
+    }
+
+    /**
      * Download an encrypted blob, decrypt it, extract the base64-encoded
      * "data" field from the JSON envelope, and write the decoded bytes
      * directly to [outputFile].
@@ -572,5 +591,42 @@ class PhotoRepository @Inject constructor(
         val ext = filename.substring(dot)
         val match = Regex("^(.+)_\\d+$").find(stem) ?: return filename
         return match.groupValues[1] + ext
+    }
+
+    /**
+     * Copy a local media file to a new path, handling both `content://` URIs
+     * (from the Android Media Store) and regular filesystem paths.
+     *
+     * Returns the absolute path to the new file, or `null` if the copy failed.
+     */
+    fun copyLocalFile(sourcePath: String, destFile: File): String? {
+        return try {
+            val inputStream = if (sourcePath.startsWith("content://")) {
+                context.contentResolver.openInputStream(android.net.Uri.parse(sourcePath))
+            } else {
+                val sourceFile = File(sourcePath)
+                if (sourceFile.exists()) sourceFile.inputStream() else null
+            }
+
+            inputStream?.use { input ->
+                destFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+                destFile.absolutePath
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PhotoRepository", "Failed to copy local file: ${e.message}")
+            null
+        }
+    }
+
+    /** App-internal cache directory for temporary file copies. */
+    fun getCacheDir(): File = context.cacheDir
+
+    /**
+     * Update only the thumbnail path for an existing photo entity in the local DB.
+     */
+    suspend fun updateThumbnailPath(localId: String, thumbnailPath: String) {
+        db.photoDao().updateThumbnailPath(localId, thumbnailPath)
     }
 }

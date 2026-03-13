@@ -3,8 +3,15 @@
 //! Startup sequence:
 //! 1. Load and validate configuration (TOML + env var overrides)
 //! 2. Initialize SQLite database pool and run migrations
-//! 3. Launch background tasks (token cleanup, trash purge, backup sync,
-//!    storage auto-scan, UDP broadcast, media format conversion)
+//! 3. Launch background tasks:
+//!    - Rate-limiter stale-entry cleanup (every 5 min)
+//!    - Housekeeping: expired token purge, audit-log trim (90 days),
+//!      client-diagnostic-log trim (14 days) — runs hourly
+//!    - Trash auto-purge (expired items, hourly)
+//!    - Backup server sync (hourly check per server frequency)
+//!    - Storage auto-scan (configurable interval)
+//!    - UDP broadcast for LAN backup-server discovery
+//!    - Media format conversion (on-demand via Notify + 60 s poll)
 //! 4. Build the Axum router with all API routes, middleware, and static
 //!    file serving
 //! 5. Bind to HTTP or HTTPS (if TLS configured) and start accepting
@@ -260,6 +267,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/blobs", get(blobs::handlers::list))
         .route("/blobs/{id}", get(blobs::handlers::download))
         .route("/blobs/{id}", delete(blobs::handlers::delete))
+        .route("/blobs/{id}/thumb", get(blobs::handlers::download_thumb))
         // Downloads — Android APK, etc.
         .route("/downloads/android", get(downloads::handlers::android_apk))
         // Admin — user management, server config (requires admin role)
@@ -369,6 +377,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/photos/auto-scan", post(backup::autoscan::trigger_auto_scan))
         // Backup serve — API-key authenticated, for server-to-server recovery
         .route("/backup/list", get(backup::serve::backup_list_photos))
+        .route("/backup/list-trash", get(backup::serve::backup_list_trash))
         .route("/backup/receive", post(backup::serve::backup_receive))
         .route("/backup/download/{photo_id}", get(backup::serve::backup_download_photo))
         .route("/backup/download/{photo_id}/thumb", get(backup::serve::backup_download_thumb))

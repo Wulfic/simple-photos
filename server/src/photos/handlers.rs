@@ -1,6 +1,15 @@
+//! Plain-mode photo management endpoints.
+//!
+//! Covers listing (paginated, sorted by `taken_at`), registration from
+//! on-disk files, serving originals / thumbnails / web-previews,
+//! favorite toggling, and crop-metadata storage.
+//!
+//! `serve_photo` and `serve_web` support HTTP Range requests for video
+//! seeking and large-file download resumption.
+
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
 use serde::Deserialize;
@@ -174,9 +183,11 @@ pub async fn register_photo(
 
 /// GET /api/photos/:id/file
 /// Serve the original (unencrypted) photo file from disk.
+/// Supports HTTP Range requests for video seeking and download resumption.
 pub async fn serve_photo(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
     let (file_path, mime_type, size_bytes): (String, String, i64) = sqlx::query_as(
@@ -207,31 +218,73 @@ pub async fn serve_photo(
         "serve_photo: serving file"
     );
 
-    let file = tokio::fs::File::open(&full_path).await.map_err(|e| {
-        tracing::error!(
-            user_id = %auth.user_id,
-            photo_id = %photo_id,
-            file_path = %file_path,
-            full_path = %full_path.display(),
-            error = %e,
-            "serve_photo: failed to open file on disk"
-        );
-        match e.kind() {
-            std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(format!("Failed to open photo: {}", e)),
-        }
-    })?;
+    let total_size = size_bytes as u64;
+    let content_type = HeaderValue::from_str(&mime_type)
+        .unwrap_or(HeaderValue::from_static("application/octet-stream"));
 
+    let open_file = || async {
+        tokio::fs::File::open(&full_path).await.map_err(|e| {
+            tracing::error!(
+                user_id = %auth.user_id,
+                photo_id = %photo_id,
+                file_path = %file_path,
+                full_path = %full_path.display(),
+                error = %e,
+                "serve_photo: failed to open file on disk"
+            );
+            match e.kind() {
+                std::io::ErrorKind::NotFound => AppError::NotFound,
+                _ => AppError::Internal(format!("Failed to open photo: {}", e)),
+            }
+        })
+    };
+
+    // ── HTTP Range support ─────────────────────────────────────────────
+    if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
+        if let Some((start, end)) = crate::blobs::handlers::parse_range_header(range_header, total_size) {
+            let length = end - start + 1;
+            let mut file = open_file().await?;
+
+            use tokio::io::{AsyncReadExt, AsyncSeekExt};
+            file.seek(std::io::SeekFrom::Start(start))
+                .await
+                .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
+
+            let stream = tokio_util::io::ReaderStream::new(file.take(length));
+            let body = Body::from_stream(stream);
+
+            return Ok(Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header("Content-Type", content_type)
+                .header("Content-Length", HeaderValue::from(length))
+                .header("Content-Range", HeaderValue::from_str(
+                    &format!("bytes {}-{}/{}", start, end, total_size)
+                ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
+                .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+                .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+                .body(body)
+                .map_err(|e| AppError::Internal(e.to_string()))?);
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header("Content-Range", HeaderValue::from_str(
+                    &format!("bytes */{}", total_size)
+                ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
+                .body(Body::empty())
+                .map_err(|e| AppError::Internal(e.to_string()))?);
+        }
+    }
+
+    // ── Full download ──────────────────────────────────────────────────
+    let file = open_file().await?;
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header(
-            "Content-Type",
-            HeaderValue::from_str(&mime_type).unwrap_or(HeaderValue::from_static("application/octet-stream")),
-        )
+        .header("Content-Type", content_type)
         .header("Content-Length", HeaderValue::from(size_bytes))
+        .header("Accept-Ranges", HeaderValue::from_static("bytes"))
         .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
@@ -300,9 +353,11 @@ fn needs_web_preview(filename: &str) -> Option<&'static str> {
 /// Serve a browser-compatible version of the media.
 /// If a web preview exists (pre-generated by scan for non-browser-native formats),
 /// serve that. Otherwise, serve the original file.
+/// Supports HTTP Range requests for video seeking.
 pub async fn serve_web(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
     let (file_path, mime_type, filename, size_bytes): (String, String, String, i64) = sqlx::query_as(
@@ -321,32 +376,21 @@ pub async fn serve_web(
         let preview_path =
             storage_root.join(format!(".web_previews/{}.web.{}", photo_id, ext));
         if tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
-            let meta = tokio::fs::metadata(&preview_path).await.ok();
-            let file = tokio::fs::File::open(&preview_path).await.map_err(|e| {
-                AppError::Internal(format!("Failed to open web preview: {}", e))
+            let meta = tokio::fs::metadata(&preview_path).await.map_err(|e| {
+                AppError::Internal(format!("Failed to read web preview metadata: {}", e))
             })?;
-            let content_type = match ext {
+            let total_size = meta.len();
+            let content_type: &str = match ext {
                 "jpg" => "image/jpeg",
                 "png" => "image/png",
                 "mp3" => "audio/mpeg",
                 "mp4" => "video/mp4",
                 _ => "application/octet-stream",
             };
-            let stream = tokio_util::io::ReaderStream::new(file);
-            let body = Body::from_stream(stream);
-            let mut builder = Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", HeaderValue::from_static(content_type))
-                .header(
-                    "Cache-Control",
-                    HeaderValue::from_static("private, max-age=86400"),
-                );
-            if let Some(m) = meta {
-                builder = builder.header("Content-Length", HeaderValue::from(m.len()));
-            }
-            return builder
-                .body(body)
-                .map_err(|e| AppError::Internal(e.to_string()));
+
+            return serve_file_with_range(
+                &preview_path, total_size, content_type, &headers,
+            ).await;
         } else {
             // Web preview needed but not generated yet — return 202 to signal
             // "conversion in progress" instead of falling back to the raw file
@@ -361,11 +405,62 @@ pub async fn serve_web(
 
     // Format is browser-native — serve the original file
     let full_path = storage_root.join(&file_path);
-    let file = tokio::fs::File::open(&full_path).await.map_err(|e| {
-        match e.kind() {
-            std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(format!("Failed to open file: {}", e)),
+    let content_type = mime_type.as_str();
+
+    serve_file_with_range(&full_path, size_bytes as u64, content_type, &headers).await
+}
+
+/// Internal helper: serve a file with optional HTTP Range support.
+async fn serve_file_with_range(
+    path: &std::path::Path,
+    total_size: u64,
+    content_type: &str,
+    headers: &HeaderMap,
+) -> Result<Response, AppError> {
+    let ct = HeaderValue::from_str(content_type)
+        .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+
+    if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
+        if let Some((start, end)) = crate::blobs::handlers::parse_range_header(range_header, total_size) {
+            let length = end - start + 1;
+            let mut file = tokio::fs::File::open(path).await.map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => AppError::NotFound,
+                _ => AppError::Internal(format!("Failed to open file: {}", e)),
+            })?;
+
+            use tokio::io::{AsyncReadExt, AsyncSeekExt};
+            file.seek(std::io::SeekFrom::Start(start))
+                .await
+                .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
+
+            let stream = tokio_util::io::ReaderStream::new(file.take(length));
+            let body = Body::from_stream(stream);
+
+            return Ok(Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header("Content-Type", ct)
+                .header("Content-Length", HeaderValue::from(length))
+                .header("Content-Range", HeaderValue::from_str(
+                    &format!("bytes {}-{}/{}", start, end, total_size)
+                ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
+                .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+                .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+                .body(body)
+                .map_err(|e| AppError::Internal(e.to_string()))?);
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header("Content-Range", HeaderValue::from_str(
+                    &format!("bytes */{}", total_size)
+                ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
+                .body(Body::empty())
+                .map_err(|e| AppError::Internal(e.to_string()))?);
         }
+    }
+
+    let file = tokio::fs::File::open(path).await.map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => AppError::NotFound,
+        _ => AppError::Internal(format!("Failed to open file: {}", e)),
     })?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
@@ -373,16 +468,10 @@ pub async fn serve_web(
 
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header(
-            "Content-Type",
-            HeaderValue::from_str(&mime_type)
-                .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-        )
-        .header("Content-Length", HeaderValue::from(size_bytes))
-        .header(
-            "Cache-Control",
-            HeaderValue::from_static("private, max-age=86400"),
-        )
+        .header("Content-Type", ct)
+        .header("Content-Length", HeaderValue::from(total_size))
+        .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+        .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }

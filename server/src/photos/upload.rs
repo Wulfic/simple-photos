@@ -17,10 +17,9 @@ use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 
 /// POST /api/photos/upload
 /// Upload a plain photo/video/GIF file from a mobile client.
-/// The file body is sent as raw bytes with metadata in headers:
+/// The file body is sent as raw bytes with metadata in custom headers:
 ///   X-Filename: original filename
 ///   X-Mime-Type: MIME type (e.g., image/jpeg)
-///   Content-Length: file size in bytes
 ///
 /// The server stores the file in the storage root and registers it as a plain photo.
 pub async fn upload_photo(

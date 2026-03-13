@@ -52,13 +52,53 @@ export default function Import() {
   const [encryptionMode, setEncryptionMode] = useState<EncryptionMode | null>(null);
   const [plainScanResult, setPlainScanResult] = useState<{ registered: number } | null>(null);
 
+  // ── Hooks (unconditional — must run in the same order every render) ────
+
   // Detect encryption mode on mount
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
     api.encryption.getSettings()
       .then((res) => setEncryptionMode(res.encryption_mode as EncryptionMode))
       .catch(() => setEncryptionMode("encrypted"));
   }, []);
+
+  // Plain mode: auto-scan and register on mount
+  useEffect(() => {
+    if (encryptionMode !== "plain" || scanning || plainScanResult) return;
+    setScanning(true);
+    startTask("import");
+    api.admin.scanAndRegister()
+      .then((res) => setPlainScanResult(res))
+      .catch((err: any) => setError(err.message))
+      .finally(() => {
+        setScanning(false);
+        endTask("import");
+      });
+  }, [encryptionMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Encrypted mode: auto-scan default storage on first mount
+  useEffect(() => {
+    if (encryptionMode !== "encrypted" || !hasCryptoKey() || autoScanned) return;
+    setAutoScanned(true);
+    autoImportPending.current = true;
+    handleServerScan();
+  }, [encryptionMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Encrypted mode: auto-import once scan populates items
+  useEffect(() => {
+    if (encryptionMode !== "encrypted" || !hasCryptoKey()) return;
+    if (
+      autoImportPending.current &&
+      !scanning &&
+      !importing &&
+      items.length > 0 &&
+      items.some((i) => i.status === "pending")
+    ) {
+      autoImportPending.current = false;
+      handleImport();
+    }
+  }, [items, scanning, importing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Conditional early returns (AFTER all hooks) ─────────────────────────
 
   // Redirect if encrypted mode and no crypto key
   if (encryptionMode === "encrypted" && !hasCryptoKey()) {
@@ -66,23 +106,8 @@ export default function Import() {
     return null;
   }
 
-  // Plain mode: auto-scan on mount and show results
+  // Plain mode: show scan results UI
   if (encryptionMode === "plain") {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    useEffect(() => {
-      if (!scanning && !plainScanResult) {
-        setScanning(true);
-        startTask("import");
-        api.admin.scanAndRegister()
-          .then((res) => setPlainScanResult(res))
-          .catch((err: any) => setError(err.message))
-          .finally(() => {
-            setScanning(false);
-            endTask("import");
-          });
-      }
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         <AppHeader />
@@ -131,7 +156,7 @@ export default function Import() {
     );
   }
 
-  // If we haven't determined the mode yet, show a loading spinner
+  // Loading spinner while encryption mode is being determined
   if (encryptionMode === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -139,31 +164,6 @@ export default function Import() {
       </div>
     );
   }
-
-  // Auto-scan the default storage directory on mount, then auto-import
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  useEffect(() => {
-    if (!autoScanned) {
-      setAutoScanned(true);
-      autoImportPending.current = true;
-      handleServerScan();
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // After auto-scan populates items, automatically start importing
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  useEffect(() => {
-    if (
-      autoImportPending.current &&
-      !scanning &&
-      !importing &&
-      items.length > 0 &&
-      items.some((i) => i.status === "pending")
-    ) {
-      autoImportPending.current = false;
-      handleImport();
-    }
-  }, [items, scanning, importing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Server scan ─────────────────────────────────────────────────────────
 

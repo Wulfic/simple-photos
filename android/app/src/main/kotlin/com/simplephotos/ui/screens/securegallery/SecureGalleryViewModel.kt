@@ -191,4 +191,20 @@ class SecureGalleryViewModel @Inject constructor(
         val dataBase64 = payload.getString("data")
         android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
     }
+
+    /**
+     * Download a small encrypted thumbnail via `GET /api/blobs/{id}/thumb`.
+     * Falls back to full-blob download if no dedicated thumbnail exists.
+     */
+    suspend fun downloadThumb(blobId: String): ByteArray = withContext(Dispatchers.IO) {
+        // Try the dedicated thumbnail endpoint first (~30 KB vs. multi-MB full blob)
+        val thumbBytes = photoRepository.downloadAndDecryptThumbBlob(blobId)
+        if (thumbBytes != null) {
+            val payload = org.json.JSONObject(String(thumbBytes, Charsets.UTF_8))
+            val dataBase64 = payload.getString("data")
+            return@withContext android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
+        }
+        // Fallback: download full blob (legacy encrypted photos without a thumb blob)
+        downloadAndDecrypt(blobId)
+    }
 }
