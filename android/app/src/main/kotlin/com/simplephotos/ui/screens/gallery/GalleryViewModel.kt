@@ -81,6 +81,13 @@ class GalleryViewModel @Inject constructor(
     var lastSyncResult by mutableStateOf<String?>(null)
         private set
 
+    /** True once the first server sync has completed.
+     *  Until then, the Gallery shows a loading indicator instead of
+     *  Room-cached photos — prevents flashing stale data from a
+     *  previous user's session. */
+    var dataReady by mutableStateOf(false)
+        private set
+
     var serverBaseUrl by mutableStateOf("")
         private set
     var encryptionMode by mutableStateOf("plain")
@@ -335,7 +342,7 @@ class GalleryViewModel @Inject constructor(
                 // Also sync albums from server (downloads manifests created on web)
                 try { withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() } } catch (_: Exception) {}
                 lastSyncResult = if (imported > 0) "Synced $imported new items" else "Up to date"
-            } catch (e: Exception) { error = "Sync failed: ${e.message}" } finally { isSyncing = false }
+            } catch (e: Exception) { error = "Sync failed: ${e.message}" } finally { isSyncing = false; dataReady = true }
         }
     }
 

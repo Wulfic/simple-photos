@@ -199,6 +199,7 @@ fun TrashScreen(
     onSettingsClick: () -> Unit,
     onSecureGalleryClick: () -> Unit = {},
     onLogout: () -> Unit,
+    isAdmin: Boolean = false,
     viewModel: TrashViewModel = hiltViewModel()
 ) {
     var showEmptyConfirm by remember { mutableStateOf(false) }
@@ -218,7 +219,8 @@ fun TrashScreen(
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
                     onLogout = { viewModel.logout(onLogout) },
-                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
+                    isAdmin = isAdmin
                 )
             )
         }

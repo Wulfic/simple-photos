@@ -29,6 +29,7 @@ fun NavGraph() {
     val navController = rememberNavController()
     val viewModel: NavViewModel = hiltViewModel()
     val startDestination by viewModel.startDestination.collectAsState()
+    val isAdmin by viewModel.isAdmin.collectAsState()
 
     if (startDestination == null) return // Loading
 
@@ -62,7 +63,8 @@ fun NavGraph() {
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
                 onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
-                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
+                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
+                isAdmin = isAdmin
             )
         }
         composable(Screen.AlbumList.route) {
@@ -73,7 +75,8 @@ fun NavGraph() {
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
-                onAlbumClick = { albumId -> navController.navigate(Screen.AlbumDetail.createRoute(albumId)) }
+                onAlbumClick = { albumId -> navController.navigate(Screen.AlbumDetail.createRoute(albumId)) },
+                isAdmin = isAdmin
             )
         }
         composable(Screen.Trash.route) {
@@ -83,7 +86,8 @@ fun NavGraph() {
                 onSearchClick = { navController.navigate(Screen.Search.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
-                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
+                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
+                isAdmin = isAdmin
             )
         }
         composable(Screen.Search.route) {
@@ -94,7 +98,8 @@ fun NavGraph() {
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
-                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } }
+                onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
+                isAdmin = isAdmin
             )
         }
         composable(

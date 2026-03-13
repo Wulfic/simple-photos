@@ -7,6 +7,8 @@ import { useProcessingStore } from "../store/processing";
 import { clearKey } from "../crypto/crypto";
 import { api } from "../api/client";
 import AppIcon from "./AppIcon";
+import { clearAllUserData } from "../db";
+import { thumbMemoryCache } from "../utils/gallery";
 
 interface NavItem {
   label: string;
@@ -101,6 +103,10 @@ export default function AppHeader({
         await api.auth.logout(refreshToken).catch(() => {});
       }
     } finally {
+      // Wipe all locally cached user data (IndexedDB, Cache API, memory)
+      // BEFORE clearing auth state to prevent any flash of stale photos.
+      await clearAllUserData().catch(() => {});
+      thumbMemoryCache.clear();
       clearKey();
       storeLogout();
       navigate("/login");
@@ -190,6 +196,7 @@ export default function AppHeader({
                     <AppIcon name="gear" />
                     Settings
                   </button>
+                  {isAdmin && (
                   <button
                     onClick={() => { navigate("/diagnostics"); setDropdownOpen(false); }}
                     className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
@@ -197,6 +204,7 @@ export default function AppHeader({
                     <AppIcon name="shield" />
                     Diagnostics
                   </button>
+                  )}
                   <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                   <button
                     onClick={() => { toggleTheme(); setDropdownOpen(false); }}

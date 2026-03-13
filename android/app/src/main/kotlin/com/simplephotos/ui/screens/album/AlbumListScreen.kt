@@ -190,6 +190,7 @@ fun AlbumListScreen(
     onSecureGalleryClick: () -> Unit = {},
     onLogout: () -> Unit,
     onAlbumClick: (String) -> Unit = {},
+    isAdmin: Boolean = false,
     viewModel: AlbumViewModel = hiltViewModel()
 ) {
     val albums by viewModel.albums.collectAsState(initial = emptyList())
@@ -213,7 +214,8 @@ fun AlbumListScreen(
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
                     onLogout = { viewModel.logout(onLogout) },
-                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
+                    isAdmin = isAdmin
                 )
             )
         }

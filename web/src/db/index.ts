@@ -175,6 +175,36 @@ class SimplePhotosDB extends Dexie {
 
 export const db = new SimplePhotosDB();
 
+/**
+ * Wipe ALL user-specific data from local caches.
+ *
+ * Must be called on logout (and defensively on login) to prevent a
+ * flash of the previous user's photos when another account signs in.
+ *
+ * Clears:
+ *  - All 5 IndexedDB tables (photos, albums, trash, fullPhotos, editCopies)
+ *  - The Cache API thumbnail cache (sp-thumbnails-v1)
+ *
+ * The in-memory thumbnail Map (thumbMemoryCache) is cleared separately
+ * by the caller since it lives in utils/gallery.ts.
+ */
+export async function clearAllUserData(): Promise<void> {
+  await Promise.all([
+    db.photos.clear(),
+    db.albums.clear(),
+    db.trash.clear(),
+    db.fullPhotos.clear(),
+    db.editCopies.clear(),
+  ]);
+
+  // Wipe persistent thumbnail cache (plain-mode)
+  try {
+    await caches.delete("sp-thumbnails-v1");
+  } catch {
+    // Cache API may be unavailable — fine
+  }
+}
+
 /** Derive the server blob type from a MIME type string */
 export function blobTypeFromMime(mimeType: string): string {
   if (mimeType === "image/gif") return "gif";
