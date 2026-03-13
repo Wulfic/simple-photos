@@ -1,3 +1,7 @@
+/**
+ * Gallery utilities — thumbnail generation, in-memory thumbnail caching,
+ * cursor-based pagination helpers, and the PlainPhoto type definition.
+ */
 import { api } from "../api/client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

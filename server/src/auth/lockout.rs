@@ -13,6 +13,10 @@ pub const MAX_LOGIN_ATTEMPTS: i32 = 10;
 /// Account lockout duration after exceeding max attempts (minutes).
 pub const LOCKOUT_DURATION_MINS: i64 = 10;
 
+/// Check if the account is currently locked out.
+///
+/// Returns `Err(Forbidden)` with a retry delay if locked. Automatically
+/// resets expired lockouts.
 pub async fn check_account_lockout(
     state: &AppState,
     user_id: &str,
@@ -48,6 +52,8 @@ pub async fn check_account_lockout(
     Ok(())
 }
 
+/// Increment the failed-login counter. Locks the account for
+/// [`LOCKOUT_DURATION_MINS`] minutes if it reaches [`MAX_LOGIN_ATTEMPTS`].
 pub async fn record_failed_login(
     state: &AppState,
     user_id: &str,

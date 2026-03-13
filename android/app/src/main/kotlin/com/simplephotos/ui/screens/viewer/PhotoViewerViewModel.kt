@@ -28,6 +28,13 @@ import javax.inject.Inject
 // ViewModel — loads photo list for paging + handles deletion
 // ---------------------------------------------------------------------------
 
+/**
+ * ViewModel for the full-screen photo/video viewer with horizontal paging.
+ *
+ * Handles: encrypted blob download & decryption, tags (plain mode), favorites,
+ * crop/brightness metadata, photo duplication ("Save Copy"), and album removal.
+ * Supports memory-efficient streaming decryption to temp files for large videos.
+ */
 @HiltViewModel
 class PhotoViewerViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,

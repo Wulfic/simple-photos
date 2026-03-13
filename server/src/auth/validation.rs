@@ -2,7 +2,10 @@
 
 use crate::error::AppError;
 
-/// Maximum password length to prevent DoS via bcrypt (bcrypt truncates at 72 bytes anyway)
+/// Maximum password length to prevent denial-of-service via bcrypt hashing.
+///
+/// bcrypt silently truncates at 72 bytes, but we allow up to 128 to avoid
+/// surprising users while still bounding CPU cost.
 pub const MAX_PASSWORD_LENGTH: usize = 128;
 
 /// Username validation: alphanumeric + underscore, 3–50 chars

@@ -1,3 +1,10 @@
+/**
+ * Album detail page — renders photos for a user-created album or a
+ * "smart album" (Favorites, Photos, GIFs, Videos, Audio).
+ *
+ * Supports both plain and encrypted modes and handles album CRUD,
+ * photo addition/removal, cover photo selection, and sharing controls.
+ */
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";

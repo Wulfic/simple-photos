@@ -62,6 +62,10 @@ internal fun buildGridItems(dayGroups: List<Pair<String, List<PhotoEntity>>>): L
 
 // ── ViewModel ───────────────────────────────────────────────────────────────
 
+/**
+ * Drives the main gallery screen: server sync, multi-select operations,
+ * photo import from content URIs, album management, and diagnostic reporting.
+ */
 @HiltViewModel
 class GalleryViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,

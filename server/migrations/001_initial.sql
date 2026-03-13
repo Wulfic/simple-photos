@@ -1,3 +1,6 @@
+-- Initial schema: core tables for authentication (users, TOTP 2FA, refresh tokens),
+-- encrypted blob storage, and photo metadata.
+
 CREATE TABLE users (
     id                    TEXT PRIMARY KEY,
     username              TEXT NOT NULL UNIQUE,

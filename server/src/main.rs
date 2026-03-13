@@ -1,3 +1,15 @@
+//! Entry point for the Simple Photos server.
+//!
+//! Startup sequence:
+//! 1. Load and validate configuration (TOML + env var overrides)
+//! 2. Initialize SQLite database pool and run migrations
+//! 3. Launch background tasks (token cleanup, trash purge, backup sync,
+//!    storage auto-scan, UDP broadcast, media format conversion)
+//! 4. Build the Axum router with all API routes, middleware, and static
+//!    file serving
+//! 5. Bind to HTTP or HTTPS (if TLS configured) and start accepting
+//!    connections
+
 mod audit;
 mod auth;
 mod backup;
@@ -37,6 +49,8 @@ use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize structured logging. Uses RUST_LOG env var if set
+    // (e.g. RUST_LOG=debug), otherwise defaults to "info" level.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -78,11 +92,15 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = db::init_pool(&config.database).await?;
 
-    // Initialize rate limiters and start background cleanup
+    // Initialize in-memory per-IP rate limiters for auth endpoints,
+    // and start a background task that evicts stale entries every 5 min.
     let rate_limiters = RateLimiters::new();
     rate_limiters.spawn_cleanup_task();
 
-    // Spawn background task to clean up expired refresh tokens every hour
+    // Background housekeeping (runs every hour):
+    // 1. Purge expired/revoked refresh tokens
+    // 2. Delete audit log entries older than 90 days
+    // 3. Delete client diagnostic logs older than 14 days
     {
         let pool_clone = pool.clone();
         tokio::spawn(async move {
@@ -189,8 +207,9 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn background task for media format conversion (MKV, AVI, HEIC, etc. → browser-native)
-    // Runs with low CPU priority (nice -n 19) so it doesn't starve interactive requests.
+    // Spawn background task for media format conversion (MKV, AVI, HEIC, etc. → browser-native).
+    // Converts non-web-native formats to JPEG/WebP/MP4 so they can play in the browser.
+    // Wakes on-demand via `convert_notify` (e.g. after upload/scan) or polls every 60s.
     let convert_notify = Arc::new(tokio::sync::Notify::new());
     let conversion_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let encryption_key: Arc<tokio::sync::RwLock<Option<[u8; 32]>>> = Arc::new(tokio::sync::RwLock::new(None));
@@ -205,6 +224,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Build shared application state — cloned (via Arc) into every Axum handler.
     let state = AppState {
         pool,
         config: Arc::new(config.clone()),
@@ -396,6 +416,8 @@ async fn main() -> anyhow::Result<()> {
         .layer(RequestBodyLimitLayer::new(
             config.storage.max_blob_size_bytes as usize,
         ))
+        // Wide-open CORS — safe because the API uses stateless JWT auth, not
+        // cookies. If cookie-based auth is ever added, restrict origins.
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

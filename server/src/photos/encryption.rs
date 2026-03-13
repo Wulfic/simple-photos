@@ -50,9 +50,12 @@ pub async fn get_encryption_settings(
 
 /// PUT /api/admin/encryption
 /// Toggle encryption mode. Admin only. Triggers background migration.
+///
+/// Request body for `PUT /api/admin/encryption`.
 #[derive(Debug, Deserialize)]
 pub struct SetEncryptionModeRequest {
-    pub mode: String, // "plain" or "encrypted"
+    /// Target encryption mode: `"plain"` or `"encrypted"`.
+    pub mode: String,
 }
 
 pub async fn set_encryption_mode(

@@ -26,6 +26,18 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
+/**
+ * WorkManager worker that performs the automatic photo/video backup pipeline:
+ *
+ * 1. Scan MediaStore for new media in user-selected folders.
+ * 2. Reset any uploads stuck at UPLOADING (from a previous crash).
+ * 3. Deduplicate by server filename (plain mode) and content hash (both modes).
+ * 4. Generate JPEG thumbnails (256×256) for each new item.
+ * 5. Upload via [PhotoRepository] in the appropriate encryption mode.
+ * 6. Re-register the reactive MediaStore content-URI observer for next trigger.
+ *
+ * Retries on failure using WorkManager's exponential backoff.
+ */
 @HiltWorker
 class BackupWorker @AssistedInject constructor(
     @Assisted context: Context,

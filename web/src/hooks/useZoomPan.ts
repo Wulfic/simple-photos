@@ -1,5 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 
+/**
+ * Hook managing zoom and pan state for the photo Viewer.
+ *
+ * Provides double-click-to-zoom, mouse-wheel zoom, and exposes refs for
+ * pinch-to-zoom and pan gestures (consumed by useSwipeNavigation).
+ * Resets zoom when the photo changes or edit mode is entered.
+ */
 export default function useZoomPan(
   id: string | undefined,
   editMode: boolean,

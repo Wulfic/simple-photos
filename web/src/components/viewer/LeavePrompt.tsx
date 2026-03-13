@@ -1,3 +1,4 @@
+/** Modal prompt confirming unsaved edit changes before navigating away. */
 interface LeavePromptProps {
   show: boolean;
   onCancel: () => void;

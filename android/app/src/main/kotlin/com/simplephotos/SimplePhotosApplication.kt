@@ -14,6 +14,11 @@ import dagger.hilt.android.HiltAndroidApp
 import okhttp3.OkHttpClient
 import javax.inject.Inject
 
+/**
+ * Application subclass that initialises Hilt DI, configures WorkManager with
+ * [HiltWorkerFactory], and provides a custom Coil [ImageLoader] backed by the
+ * authenticated OkHttp client (required so image loads carry the Bearer token).
+ */
 @HiltAndroidApp
 class SimplePhotosApplication : Application(), Configuration.Provider, ImageLoaderFactory {
 

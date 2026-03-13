@@ -3,6 +3,7 @@ package com.simplephotos.data.local.dao
 import androidx.room.*
 import com.simplephotos.data.local.entities.BlobQueueEntity
 
+/** Room DAO for the blob upload queue consumed by [com.simplephotos.sync.BackupWorker]. */
 @Dao
 interface BlobQueueDao {
     @Query("SELECT * FROM blob_queue WHERE status = 'queued' ORDER BY priority ASC, id ASC")

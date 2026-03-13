@@ -1,3 +1,4 @@
+/** Reusable password input components with strength indicator and confirmation matching. */
 import { useState } from "react";
 import { type PasswordStrength } from "../utils/validation";
 

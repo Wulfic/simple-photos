@@ -1,3 +1,4 @@
+/** Wizard step — display a pairing code so a backup server can connect. */
 import { useState, useEffect } from "react";
 import type { WizardStep } from "./types";
 

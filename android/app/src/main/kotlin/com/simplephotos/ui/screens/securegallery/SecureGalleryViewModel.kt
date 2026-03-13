@@ -25,6 +25,10 @@ import javax.inject.Inject
 // ViewModel
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Manages password-protected secure galleries: unlock with account password,
+ * browse galleries, view encrypted items, and add photos.
+ */
 @HiltViewModel
 class SecureGalleryViewModel @Inject constructor(
     private val api: ApiService,

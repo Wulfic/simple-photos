@@ -42,6 +42,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
+/**
+ * Single-activity host for the Jetpack Compose UI.
+ *
+ * Handles two gates that must pass before the user reaches the app:
+ * 1. **Biometric unlock** — optional, controlled by a DataStore preference.
+ * 2. **Media permissions** — requires full READ_MEDIA_IMAGES/VIDEO access
+ *    (not the Android 14 "Select photos" partial mode) for folder discovery.
+ */
 @AndroidEntryPoint
 class MainActivity : FragmentActivity() {
 

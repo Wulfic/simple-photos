@@ -1,3 +1,4 @@
+/** Wizard step — choose between fresh install and restore-from-backup. */
 import type { WizardStep, InstallType } from "./types";
 
 export interface InstallTypeStepProps {

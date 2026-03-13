@@ -44,7 +44,8 @@ const DANGEROUS_CODEPOINTS: &[char] = &[
     '\u{001E}', // RS
     '\u{001F}', // US
     '\u{007F}', // DEL
-    // C1 controls (often misinterpreted)
+    // C1 controls (0x80–0x9F): rarely used legitimately, often misinterpreted
+    // by terminal emulators and web renderers. Can cause display corruption.
     '\u{0080}', '\u{0081}', '\u{0082}', '\u{0083}', '\u{0084}',
     '\u{0086}', '\u{0087}', '\u{0088}', '\u{0089}', '\u{008A}',
     '\u{008B}', '\u{008C}', '\u{008D}', '\u{008E}', '\u{008F}',
@@ -69,7 +70,7 @@ const DANGEROUS_CODEPOINTS: &[char] = &[
     '\u{200C}', // Zero Width Non-Joiner
     '\u{200D}', // Zero Width Joiner
     '\u{FEFF}', // BOM / Zero Width No-Break Space
-    '\u{FFFE}', // Not a character (reversed BOM)
+    '\u{FFFE}', // Non-character codepoint (sometimes appears as reversed BOM)
     // Interlinear annotation anchors — abused for text injection
     '\u{FFF9}', '\u{FFFA}', '\u{FFFB}',
     // Object replacement / replacement character signals
@@ -96,6 +97,7 @@ pub fn sanitize_text(input: &str) -> String {
 /// 3. Truncates to `max_len` **characters** (not bytes).
 ///
 /// Returns `Err(reason)` if the result is empty after sanitization.
+/// Callers wrap this in `AppError::BadRequest`.
 pub fn sanitize_display_name(input: &str, max_len: usize) -> Result<String, &'static str> {
     let cleaned = sanitize_text(input);
 
@@ -148,6 +150,8 @@ pub fn validate_relative_path(path: &str) -> Result<(), &'static str> {
         return Err("Path must be relative, not absolute");
     }
     // Windows drive letters: C:\, D:\, etc.
+    // Only checks single-byte ASCII drive letters (A-Z), which covers all
+    // real Windows paths.
     if path.len() >= 2 && path.as_bytes()[1] == b':' {
         return Err("Path must not contain a drive letter");
     }

@@ -1,3 +1,10 @@
+/**
+ * Full-screen photo/video viewer page.
+ *
+ * Orchestrates media loading (plain & encrypted), swipe/zoom gestures,
+ * photo preloading, crop/brightness/rotation editing, tags, favorites,
+ * and prev/next navigation via photoIds passed through location.state.
+ */
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api } from "../api/client";

@@ -124,11 +124,21 @@ pub async fn log(
     .await;
 
     if let Err(e) = result {
-        // Audit log failures should never crash the server, but we log them
+        // We intentionally swallow errors here — if the audit DB is broken, we
+        // still want requests to succeed. The tracing::error! ensures ops notice
+        // in server logs.
         tracing::error!(event = event.as_str(), error = %e, "Failed to write audit log");
     }
 }
 
+/// Extract the client IP address from proxy headers.
+///
+/// Checks `X-Forwarded-For` first (leftmost entry = original client),
+/// then `X-Real-IP`. Returns `"unknown"` if neither is present.
+///
+/// # Security
+/// These headers are only trustworthy when deployed behind a reverse proxy
+/// (nginx, Caddy) that overwrites them. A direct client can forge these.
 fn extract_ip(headers: &HeaderMap) -> String {
     // X-Forwarded-For (first entry = original client)
     if let Some(xff) = headers.get("x-forwarded-for") {

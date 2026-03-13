@@ -15,12 +15,14 @@ use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// Query parameters for the encrypted sync endpoint.
 #[derive(Debug, Deserialize)]
 pub struct SyncQuery {
     pub after: Option<String>,
     pub limit: Option<i64>,
 }
 
+/// Photo metadata record for encrypted-mode sync (no file content).
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct EncryptedSyncRecord {
     pub id: String,
@@ -40,6 +42,7 @@ pub struct EncryptedSyncRecord {
     pub photo_hash: Option<String>,
 }
 
+/// Paginated response from `GET /api/photos/encrypted-sync`.
 #[derive(Debug, Serialize)]
 pub struct EncryptedSyncResponse {
     pub photos: Vec<EncryptedSyncRecord>,

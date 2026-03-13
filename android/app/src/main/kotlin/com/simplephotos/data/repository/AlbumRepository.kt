@@ -14,6 +14,14 @@ import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Manages album CRUD and server synchronisation.
+ *
+ * In encrypted mode, each album is represented as an encrypted manifest blob
+ * on the server (blob_type = "album_manifest"). The manifest contains the
+ * album name, cover photo, and a list of photo blob IDs. In plain mode,
+ * albums are stored locally only.
+ */
 @Singleton
 class AlbumRepository @Inject constructor(
     private val api: ApiService,

@@ -1,3 +1,7 @@
+/**
+ * Search page — tag-based and text search across both plain-mode (server)
+ * and encrypted-mode (local IndexedDB) photo libraries, with unified results.
+ */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";

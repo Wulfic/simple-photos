@@ -1,3 +1,8 @@
+/**
+ * Media utilities — binary encoding helpers, thumbnail/dimension extraction
+ * from raw buffers, MIME type guessing, Google Photos metadata matching,
+ * and fallback thumbnail generation for unsupported formats.
+ */
 import type { GooglePhotosMetadata, ImportItem } from "./importTypes";
 
 // ── Binary utilities ──────────────────────────────────────────────────────────

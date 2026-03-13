@@ -1,6 +1,13 @@
+//! Application configuration, loaded from a TOML file with environment variable overrides.
+//!
+//! Config file: `$SIMPLE_PHOTOS_CONFIG` or `./config.toml`
+//! Override any field: `SIMPLE_PHOTOS_<SECTION>_<KEY>=value`
+
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// Top-level configuration, deserialized from `config.toml`.
+/// Each nested struct corresponds to a `[section]` in the TOML file.
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
@@ -16,16 +23,22 @@ pub struct AppConfig {
     pub scan: ScanConfig,
 }
 
+/// HTTP(S) listener settings.
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    /// Public base URL (e.g. "https://photos.example.com"). Used in backup
+    /// broadcast and anywhere an absolute URL is needed.
     pub base_url: String,
 }
 
+/// SQLite database connection settings.
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
+    /// Path to the SQLite database file (created if missing).
     pub path: PathBuf,
+    /// Maximum number of connections in the pool (default: 5).
     pub max_connections: u32,
 }
 
@@ -59,17 +72,28 @@ pub struct StorageConfig {
     pub max_blob_size_bytes: u64,
 }
 
+/// Authentication and token settings.
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthConfig {
+    /// HMAC secret for signing JWTs. Must be at least 32 chars.
+    /// Generate with: `openssl rand -hex 32`
     pub jwt_secret: String,
+    /// Access token lifetime in seconds (e.g. 900 = 15 min).
     pub access_token_ttl_secs: u64,
+    /// Refresh token lifetime in days (e.g. 30).
     pub refresh_token_ttl_days: u64,
+    /// Whether new user registration is allowed (disable after initial setup).
     pub allow_registration: bool,
+    /// bcrypt hash cost factor. Recommended: 10–12 for production, 4 for tests.
+    /// Higher values are more secure but slower — each increment doubles the time.
     pub bcrypt_cost: u32,
 }
 
+/// Settings for serving the static web frontend.
 #[derive(Debug, Deserialize, Clone)]
 pub struct WebConfig {
+    /// Path to the built web frontend directory (e.g. "../web/dist").
+    /// Empty string disables static file serving.
     pub static_root: String,
 }
 

@@ -1,3 +1,7 @@
+/**
+ * Shared album detail page — displays photos in a collaborative album
+ * and manages member list (add/remove users).
+ */
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";

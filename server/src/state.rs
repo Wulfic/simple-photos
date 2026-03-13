@@ -1,3 +1,8 @@
+//! Shared application state, injected into every Axum handler via `State<AppState>`.
+//!
+//! All fields use `Arc` (or are internally `Arc`-wrapped) so cloning the struct
+//! is cheap — Axum clones state into each handler invocation.
+
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,10 +12,14 @@ use tokio::sync::{Notify, RwLock};
 use crate::config::AppConfig;
 use crate::ratelimit::RateLimiters;
 
+/// Shared state for all request handlers and background tasks.
 #[derive(Clone)]
 pub struct AppState {
+    /// SQLite connection pool — shared across all handlers and background tasks.
     pub pool: SqlitePool,
+    /// Immutable server configuration loaded at startup.
     pub config: Arc<AppConfig>,
+    /// In-memory per-IP rate limiters for auth endpoints (login, register, TOTP).
     pub rate_limiters: RateLimiters,
     /// Mutable storage root — can be changed at runtime via admin API.
     /// Initialised from config.storage.root on startup.

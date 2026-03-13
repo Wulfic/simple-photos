@@ -1,3 +1,4 @@
+/** SSL/TLS certificate configuration panel — upload cert/key or configure Let's Encrypt. */
 import { useState, useEffect } from "react";
 import { api } from "../../api/client";
 

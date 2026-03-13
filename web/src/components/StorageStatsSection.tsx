@@ -1,3 +1,4 @@
+/** Server storage usage breakdown — displayed on Settings and Diagnostics pages. */
 import { formatBytes } from "../utils/formatters";
 
 export interface StorageStats {

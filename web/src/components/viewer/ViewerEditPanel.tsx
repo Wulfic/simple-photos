@@ -1,3 +1,4 @@
+/** Photo editing panel — brightness, rotation, crop controls with live canvas preview. */
 import { useRef, useEffect, useCallback } from "react";
 import type { MediaType } from "../../db";
 

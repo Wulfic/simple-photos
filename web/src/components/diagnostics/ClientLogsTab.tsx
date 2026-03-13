@@ -1,3 +1,4 @@
+/** Client diagnostic log viewer tab — filterable, paginated browser-side logs. */
 import { useState, useEffect, useCallback } from "react";
 import { api, ClientLogEntry } from "../../api/client";
 import { Section, getDateCutoff, tryPrettyJson } from "./shared";

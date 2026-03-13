@@ -5,9 +5,14 @@ use sha2::{Digest, Sha256};
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// Verify a 6-digit TOTP code against the user's Base32-encoded secret.
+///
+/// Uses SHA-1, 30-second step, and a single-step time window (±0 adjacent
+/// periods).
 pub fn verify_totp_code(
     secret_b32: &str,
     code: &str,
+    // `_issuer` accepted for API compatibility but currently hardcoded to "SimplePhotos".
     _issuer: &str,
     account: &str,
 ) -> Result<(), AppError> {
@@ -42,6 +47,10 @@ pub fn verify_totp_code(
     }
 }
 
+/// Verify and consume a one-time backup code.
+///
+/// The code is SHA-256 hashed and compared against stored hashes. On success
+/// the code is marked as used (single-use).
 pub async fn verify_backup_code(
     state: &AppState,
     user_id: &str,

@@ -2,6 +2,8 @@ import { request, tryRefresh, BASE } from "./core";
 import { useAuthStore } from "../store/auth";
 import type { TotpSetupResponse } from "./types";
 
+// ── Admin API ────────────────────────────────────────────────────────────────
+
 export const adminApi = {
   createUser: (username: string, password: string, role: "admin" | "user" = "user") =>
     request<{

@@ -1,3 +1,4 @@
+/** Shared TypeScript types for the welcome wizard (step names, server roles, install types). */
 export type WizardStep =
   | "loading"
   | "welcome"

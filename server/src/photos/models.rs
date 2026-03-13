@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+/// Full photo row from the `photos` table.
+/// Used internally (e.g. duplication). Not directly serialized to API clients
+/// — see [`PhotoRecord`] for the public-facing subset.
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Photo {
     pub id: String,
@@ -25,12 +28,14 @@ pub struct Photo {
     pub photo_hash: Option<String>,
 }
 
+/// Paginated list of plain-mode photos returned by `GET /api/photos`.
 #[derive(Debug, Serialize)]
 pub struct PhotoListResponse {
     pub photos: Vec<PhotoRecord>,
     pub next_cursor: Option<String>,
 }
 
+/// Public-facing photo record (excludes `user_id` and encryption internals).
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct PhotoRecord {
     pub id: String,
@@ -53,6 +58,8 @@ pub struct PhotoRecord {
     pub photo_hash: Option<String>,
 }
 
+/// Request body for `POST /api/photos/register`.
+/// Registers an existing file on disk as a photo in the database.
 #[derive(Debug, Deserialize)]
 pub struct RegisterPhotoRequest {
     pub filename: String,

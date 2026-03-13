@@ -1,3 +1,7 @@
+/**
+ * App header with navigation, theme toggle, backup-mode indicator,
+ * and hamburger menu (mobile). Visible on all authenticated pages.
+ */
 import { useState, useRef, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/auth";

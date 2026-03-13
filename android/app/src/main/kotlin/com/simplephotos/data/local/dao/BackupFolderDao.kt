@@ -4,6 +4,7 @@ import androidx.room.*
 import com.simplephotos.data.local.entities.BackupFolderEntity
 import kotlinx.coroutines.flow.Flow
 
+/** Room DAO for device folders selected for automatic backup. */
 @Dao
 interface BackupFolderDao {
     @Query("SELECT * FROM backup_folders ORDER BY bucketName")

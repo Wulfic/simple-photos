@@ -1,3 +1,4 @@
+/** Admin user management panel — list, create, delete users; reset 2FA. */
 import { useState, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { api } from "../../api/client";

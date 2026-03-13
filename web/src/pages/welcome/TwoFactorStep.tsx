@@ -1,3 +1,4 @@
+/** Wizard step — set up TOTP two-factor authentication for the admin account. */
 import { QRCodeSVG } from "qrcode.react";
 import type { TotpSetupResponse } from "../../api/client";
 import type { WizardStep, CreatedUser } from "./types";

@@ -24,6 +24,11 @@ import com.simplephotos.ui.screens.search.SearchScreen
 import com.simplephotos.ui.screens.diagnostics.DiagnosticsScreen
 import com.simplephotos.ui.screens.securegallery.SecureGalleryScreen
 
+/**
+ * Top-level navigation host. Routes are defined in [Screen].
+ * The start destination is resolved at runtime by [NavViewModel]
+ * (server setup → login → gallery).
+ */
 @Composable
 fun NavGraph() {
     val navController = rememberNavController()

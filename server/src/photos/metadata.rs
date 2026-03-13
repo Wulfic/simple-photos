@@ -1,3 +1,13 @@
+//! EXIF and media metadata extraction.
+//!
+//! Provides two entry points:
+//! - [`extract_media_metadata`] — reads from a file path (used during scan).
+//! - [`extract_media_metadata_from_bytes`] — reads from in-memory bytes
+//!   (used during upload).
+//!
+//! Both extract: image dimensions (via `imagesize`), camera make/model, GPS
+//! coordinates, and `DateTimeOriginal` (via the `exif` crate).
+
 /// Extract image dimensions, camera model, and GPS coordinates from a file.
 /// Returns (width, height, camera_model, latitude, longitude, taken_at).
 pub(crate) fn extract_media_metadata(

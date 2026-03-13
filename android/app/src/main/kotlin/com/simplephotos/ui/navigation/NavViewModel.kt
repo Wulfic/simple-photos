@@ -15,6 +15,11 @@ import android.util.Base64
 import org.json.JSONObject
 import javax.inject.Inject
 
+/**
+ * Determines the start destination (server setup → login → gallery) based on
+ * persisted DataStore preferences, and decodes the admin role from the JWT
+ * access token to gate admin-only UI features.
+ */
 @HiltViewModel
 class NavViewModel @Inject constructor(
     private val dataStore: DataStore<Preferences>

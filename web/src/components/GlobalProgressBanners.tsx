@@ -1,3 +1,11 @@
+/**
+ * Persistent progress banners for long-running background tasks
+ * (encryption migration, file conversion, missing thumbnails).
+ *
+ * Uses a "minimum display" pattern: once a banner appears, it stays
+ * visible for at least 8 seconds even if the task finishes sooner,
+ * showing a "done" state to prevent jarring flash-and-vanish behavior.
+ */
 import { useState, useEffect, useRef } from "react";
 import { useActivityStore } from "../store/activity";
 

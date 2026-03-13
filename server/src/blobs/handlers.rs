@@ -30,13 +30,27 @@ const VALID_BLOB_TYPES: &[&str] = &[
     "album_manifest",
 ];
 
+/// Query parameters for the blob list endpoint.
 #[derive(Debug, Deserialize)]
 pub struct ListBlobsQuery {
+    /// Filter by blob type (e.g. "photo", "video", "thumbnail").
     pub blob_type: Option<String>,
+    /// Cursor for pagination — `upload_time` of the last item from the previous page.
     pub after: Option<String>,
+    /// Maximum items to return (default 50, max 200).
     pub limit: Option<i64>,
 }
 
+/// POST /api/blobs — upload an encrypted blob.
+///
+/// Headers:
+/// - `x-blob-type` — one of: photo, gif, video, audio, thumbnail,
+///   video_thumbnail, album_manifest (default: "photo")
+/// - `x-client-hash` — optional SHA-256 hex digest for integrity verification
+/// - `x-content-hash` — optional short hash of the *original* (pre-encryption)
+///   content, used for cross-platform photo alignment
+///
+/// Enforces per-user storage quota. Returns 201 with the new blob ID.
 pub async fn upload(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -188,6 +202,8 @@ pub async fn upload(
     ))
 }
 
+/// GET /api/blobs — list blobs for the authenticated user with cursor-based pagination.
+/// Supports filtering by `blob_type` and forward-only cursor via `after`.
 pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -374,6 +390,7 @@ pub async fn download(
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }
 
+/// DELETE /api/blobs/:id — delete a blob and its on-disk file. Returns 204 on success.
 pub async fn delete(
     State(state): State<AppState>,
     auth: AuthUser,

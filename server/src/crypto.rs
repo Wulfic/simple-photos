@@ -19,7 +19,8 @@ pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
 
     let nonce_bytes = aes_gcm::aead::rand_core::RngCore::next_u64(&mut OsRng);
     let mut nonce_arr = [0u8; NONCE_LENGTH];
-    // Fill 12 bytes of nonce from random
+    // AES-GCM requires a 96-bit (12-byte) nonce. We fill it from two random u64
+    // values: 8 bytes from the first call, 4 bytes from the second.
     let extra = aes_gcm::aead::rand_core::RngCore::next_u64(&mut OsRng);
     nonce_arr[..8].copy_from_slice(&nonce_bytes.to_le_bytes());
     nonce_arr[8..].copy_from_slice(&extra.to_le_bytes()[..4]);
@@ -37,8 +38,12 @@ pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Decrypt data produced by [`encrypt`] (or the equivalent client-side code).
 /// Input format: `[12-byte nonce][ciphertext + 16-byte auth tag]`.
+///
+/// Currently used by the background converter during encrypted→web-format
+/// migration. May appear unused in some build configurations.
 #[allow(dead_code)]
 pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
+    // Minimum valid ciphertext: 12-byte nonce + 16-byte GCM authentication tag
     if data.len() < NONCE_LENGTH + 16 {
         return Err("Ciphertext too short".into());
     }
@@ -52,6 +57,7 @@ pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Parse a hex-encoded AES-256 key (64 hex chars → 32 bytes).
+/// Used when the admin supplies the encryption key via the reconvert API endpoint.
 pub fn parse_key_hex(hex_str: &str) -> Result<[u8; 32], String> {
     let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid hex key: {}", e))?;
     if bytes.len() != 32 {

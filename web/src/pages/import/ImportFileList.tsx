@@ -1,3 +1,4 @@
+/** File list component for the Import page — shows queued files with sizes and status icons. */
 import { formatBytes } from "../../utils/media";
 import type { ImportItem } from "../../utils/importTypes";
 

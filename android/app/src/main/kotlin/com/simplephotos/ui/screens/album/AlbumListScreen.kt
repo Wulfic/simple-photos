@@ -41,6 +41,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
+/**
+ * ViewModel for the album list screen. Loads user albums, smart album counts,
+ * syncs album manifests from the server, and manages album CRUD.
+ */
 @HiltViewModel
 class AlbumViewModel @Inject constructor(
     private val albumRepository: AlbumRepository,

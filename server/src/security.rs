@@ -22,6 +22,10 @@ use uuid::Uuid;
 /// These headers provide defense-in-depth and are recommended by OWASP.
 /// They do NOT replace proper server-side security but reduce the attack
 /// surface on the client side.
+///
+/// **Note on HSTS:** `Strict-Transport-Security` is set unconditionally.
+/// For LAN-only HTTP deployments this is harmless, but once a browser
+/// visits over HTTPS it will refuse plain HTTP for 1 year.
 pub async fn security_headers(request: Request<Body>, next: Next) -> Response {
     // Generate a request ID for tracing and correlation
     let request_id = Uuid::new_v4().to_string();
@@ -78,8 +82,8 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response {
         ),
     );
 
-    // Prevent caching of API responses (static files use the fallback service
-    // which has its own cache headers)
+    // Prevent caching of API responses — may contain user data or tokens.
+    // Static files served by the fallback ServeDir have their own cache headers.
     headers.insert(
         "Cache-Control",
         HeaderValue::from_static("no-store, no-cache, must-revalidate"),
