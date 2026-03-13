@@ -85,7 +85,10 @@ async fn run_conversion_pass(
     // Check if we have the encryption key available for encrypted blob processing
     let key_available = encryption_key.read().await.is_some();
 
-    // Fetch ALL photos.
+    // Fetch ALL photos — no pagination or user filter.
+    // This loads every row into memory on each 60-second cycle.
+    // For very large libraries (50k+ photos) consider adding a
+    // WHERE filter to skip already-converted rows or a LIMIT clause.
     let photos: Vec<(String, String, String, Option<String>, String, Option<String>, String)> = match sqlx::query_as(
         "SELECT id, file_path, filename, thumb_path, mime_type, encrypted_blob_id, user_id FROM photos",
     )
@@ -166,9 +169,16 @@ async fn run_conversion_pass(
                     // re-encrypt the blob with the converted data so the
                     // client gets web-compatible media after decryption.
                     if is_encrypted && key_available {
+                        let Some(enc_id) = encrypted_blob_id.as_deref() else {
+                            tracing::error!(
+                                photo_id = %photo_id,
+                                "Background convert: is_encrypted=true but encrypted_blob_id is NULL — skipping re-encryption"
+                            );
+                            continue;
+                        };
                         if let Err(e) = reencrypt_blob_with_converted_data(
                             pool, storage_root, encryption_key, photo_id, user_id,
-                            encrypted_blob_id.as_deref().unwrap(), filename, &preview_path, preview_ext,
+                            enc_id, filename, &preview_path, preview_ext,
                         ).await {
                             tracing::warn!(
                                 photo_id = %photo_id,
@@ -217,7 +227,13 @@ async fn run_conversion_pass(
 
         // ── Path B: No source file on disk, but encrypted → temp-decrypt ─
         if is_encrypted && key_available {
-            let blob_id = encrypted_blob_id.as_deref().unwrap();
+            let Some(blob_id) = encrypted_blob_id.as_deref() else {
+                tracing::error!(
+                    photo_id = %photo_id,
+                    "Background convert: is_encrypted=true but encrypted_blob_id is NULL — skipping"
+                );
+                continue;
+            };
 
             // Check if this blob already contains converted data by looking
             // at whether we previously marked it as converted.
@@ -275,15 +291,13 @@ async fn run_conversion_pass(
     (converted, thumbnails_generated)
 }
 
-/// Check if an encrypted blob has already been converted by looking at
-/// the mime_type stored in the encrypted payload. We track this with a
-/// simple check: if a `.web_previews/{id}.converted` marker file exists,
-/// the blob has been re-encrypted with converted data.
+/// Check if an encrypted blob has already been converted.
+///
+/// Uses a lightweight marker in the `server_settings` DB table
+/// (key = `blob_converted_{photo_id}`, value = `"true"`).
 async fn is_blob_already_converted(pool: &SqlitePool, photo_id: &str) -> bool {
-    // Use a lightweight marker approach: check for a sentinel file
-    // that we create after successful re-encryption.
-    // Alternatively, we could store this in the DB, but a marker file
-    // is simpler and doesn't require a schema migration.
+    // Query the DB marker set by `mark_blob_converted` after
+    // successful re-encryption with web-compatible data.
     let marker: Option<String> = sqlx::query_scalar(
         "SELECT value FROM server_settings WHERE key = ?",
     )
@@ -297,12 +311,17 @@ async fn is_blob_already_converted(pool: &SqlitePool, photo_id: &str) -> bool {
 
 /// Mark an encrypted blob as having been converted.
 async fn mark_blob_converted(pool: &SqlitePool, photo_id: &str) {
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, 'true')",
     )
     .bind(format!("blob_converted_{}", photo_id))
     .execute(pool)
-    .await;
+    .await
+    {
+        // Without this marker the photo will be redundantly re-converted on
+        // every background cycle — wasteful but not data-corrupting.
+        tracing::warn!(photo_id = photo_id, error = %e, "Failed to mark blob as converted");
+    }
 }
 
 /// Decrypt an encrypted blob, extract the media payload, convert it to a
@@ -727,9 +746,11 @@ pub async fn trigger_reconvert(
         }
     }
 
-    // Count how many encrypted photos need conversion
+    // Count how many encrypted photos need conversion.
+    // LIMIT 10000 to prevent OOM on massive libraries — this is a diagnostic
+    // count, not an exhaustive scan.
     let photos: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, filename FROM photos WHERE encrypted_blob_id IS NOT NULL",
+        "SELECT id, filename FROM photos WHERE encrypted_blob_id IS NOT NULL LIMIT 10000",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -811,9 +832,10 @@ pub async fn conversion_status(
     .flatten()
     .unwrap_or_else(|| "idle".to_string());
 
-    // ── Check ALL photos for pending web-preview conversions ───────────
+    // ── Check ALL photos for pending web-preview conversions ────────────
+    // LIMIT 10000 to prevent OOM on massive libraries.
     let photos: Vec<(String, String, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, filename, file_path, thumb_path, encrypted_blob_id FROM photos WHERE user_id = ?",
+        "SELECT id, filename, file_path, thumb_path, encrypted_blob_id FROM photos WHERE user_id = ? LIMIT 10000",
     )
     .bind(&_auth.user_id)
     .fetch_all(&state.pool)

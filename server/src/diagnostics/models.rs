@@ -143,7 +143,7 @@ pub struct BackupSummary {
 
 #[derive(Debug, Serialize)]
 pub struct PerformanceStats {
-    /// Average query latency for a simple SELECT (ms)
+    /// Single-sample round-trip latency for `SELECT 1` (ms). Not averaged.
     pub db_ping_ms: f64,
     /// SQLite cache hit ratio (if available)
     pub cache_hit_ratio: Option<f64>,

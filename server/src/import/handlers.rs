@@ -57,15 +57,12 @@ pub async fn import_metadata(
     let raw_json = serde_json::to_vec_pretty(&req.metadata)
         .map_err(|e| AppError::Internal(format!("Failed to serialize metadata: {}", e)))?;
 
-    let data_to_write = if is_encrypted {
-        // In encrypted mode, the metadata JSON is encrypted client-side before
-        // upload. For server-side import, we store it as-is and mark it as
-        // needing encryption; the client migration process will encrypt it.
-        // (The actual AES encryption happens on the client, same as blobs.)
-        raw_json.clone()
-    } else {
-        raw_json.clone()
-    };
+    // NOTE: In encrypted mode the metadata JSON is encrypted client-side
+    // before upload.  For server-side import we store the plaintext JSON;
+    // the client migration process will encrypt it later.  Both branches
+    // currently produce the same output, but the distinction is preserved
+    // so future server-side encryption can be added to the first branch.
+    let data_to_write = raw_json.clone();
 
     // Write the metadata file to storage_root/metadata/...
     let storage_root = state.storage_root.read().await.clone();

@@ -86,16 +86,13 @@ fn progress_store() -> &'static tokio::sync::RwLock<Option<Arc<MigrationProgress
 
 /// Generate a 256×256 JPEG thumbnail for the migration pipeline.
 ///
-/// Delegates to `scan.rs::generate_thumbnail_file()` which correctly handles:
-/// - Video seeking to `-ss 1` (avoids black first frames from fade-ins)
-/// - Using the original file path (correct extension for FFmpeg/ImageMagick
-///   format detection — fixes `.bin` extension bug for CR2, etc.)
-/// - ImageMagick fallback for exotic formats (CR2, SVG, HEIC, CUR)
-///
-/// For formats the `image` crate handles well (JPEG, PNG, GIF, WebP, BMP,
-/// TIFF, ICO, HDR), uses fast in-memory processing as the first attempt.
-///
-/// Audio files intentionally get a black 256×256 placeholder.
+/// Multi-stage fallback strategy:
+/// 1. **Audio**: generates a black 256×256 placeholder (no subprocess).
+/// 2. **Non-video images**: tries `image::load_from_memory` first for fast
+///    in-memory processing (JPEG, PNG, GIF, WebP, BMP, TIFF, ICO, HDR).
+///    Falls through on failure or degenerate output (< 1 KiB).
+/// 3. **Fallback**: delegates to `scan.rs::generate_thumbnail_file()` which
+///    invokes FFmpeg/ImageMagick (handles video seeking, raw formats, etc.).
 async fn generate_thumbnail_for_migration(
     source_path: &std::path::Path,
     data: &[u8],
@@ -305,7 +302,7 @@ async fn encrypt_one_photo(
 
     // Step 4: Upload thumbnail blob (if generated)
     let mut thumb_blob_id = String::new();
-    if let Some(ref thumb_bytes) = thumb_data {
+    let thumb_insert_params = if let Some(ref thumb_bytes) = thumb_data {
         let thumb_payload = serde_json::json!({
             "v": 1,
             "photo_blob_id": "",
@@ -339,24 +336,22 @@ async fn encrypt_one_photo(
                 .await
                 .map_err(|e| format!("Write thumbnail blob failed: {}", e))?;
 
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
-        )
-        .bind(&blob_id)
-        .bind(&photo.user_id)
-        .bind(blob_type)
-        .bind(enc_thumb.len() as i64)
-        .bind(&enc_thumb_hash)
-        .bind(&now)
-        .bind(&blob_storage_path)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Insert thumbnail blob row: {}", e))?;
+        // Defer the DB INSERT to the transaction below — save params
+        let thumb_now = Utc::now().to_rfc3339();
+        let thumb_insert_params = Some((
+            blob_id.clone(),
+            blob_type.to_string(),
+            enc_thumb.len() as i64,
+            enc_thumb_hash,
+            thumb_now,
+            blob_storage_path,
+        ));
 
         thumb_blob_id = blob_id;
-    }
+        thumb_insert_params
+    } else {
+        None
+    };
 
     // Step 5: Build the photo payload JSON (same format as the client).
     // Uses the web-compatible data (transcoded) when available so the
@@ -411,6 +406,31 @@ async fn encrypt_one_photo(
             .map_err(|e| format!("Write photo blob failed: {}", e))?;
 
     let now = Utc::now().to_rfc3339();
+
+    // Begin transaction — INSERT thumb blob + INSERT photo blob + UPDATE photos
+    // must be atomic. If any step fails, no orphan blob rows or half-linked
+    // photos will exist. Disk files written above are harmless extras on rollback.
+    let mut tx = pool.begin().await.map_err(|e| format!("Begin tx: {}", e))?;
+
+    // Insert thumbnail blob (deferred from step 4)
+    if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params {
+        sqlx::query(
+            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+        )
+        .bind(tid)
+        .bind(&photo.user_id)
+        .bind(ttype)
+        .bind(tsize)
+        .bind(thash)
+        .bind(ttime)
+        .bind(tpath)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Insert thumbnail blob row: {}", e))?;
+    }
+
+    // Insert photo blob
     sqlx::query(
         "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -423,7 +443,7 @@ async fn encrypt_one_photo(
     .bind(&now)
     .bind(&blob_storage_path)
     .bind(&content_hash)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| format!("Insert photo blob row: {}", e))?;
 
@@ -433,9 +453,11 @@ async fn encrypt_one_photo(
         .bind(if thumb_blob_id.is_empty() { None::<&str> } else { Some(thumb_blob_id.as_str()) })
         .bind(&photo.id)
         .bind(&photo.user_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| format!("Mark encrypted failed: {}", e))?;
+
+    tx.commit().await.map_err(|e| format!("Commit tx: {}", e))?;
 
     Ok(())
 }
@@ -485,11 +507,14 @@ async fn run_migration(
     if total == 0 {
         progress.running.store(false, Ordering::Release);
         // Mark migration complete in DB
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "UPDATE encryption_migration SET status = 'idle', completed = total, error = NULL WHERE id = 'singleton'",
         )
         .execute(&pool)
-        .await;
+        .await
+        {
+            tracing::error!("Failed to finalize zero-photo migration status: {}", e);
+        }
         tracing::info!("[DIAG:SERVER_MIG] 0 photos to encrypt, set idle, triggering converter");
         convert_notify.notify_one();
         return;
@@ -512,7 +537,15 @@ async fn run_migration(
         let progress_clone = progress.clone();
         let filename = photo.filename.clone();
         let handle = tokio::spawn(async move {
-            let _permit = sem.acquire().await.expect("semaphore closed");
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => {
+                    tracing::error!("[DIAG:SERVER_MIG] semaphore closed, skipping {}", filename);
+                    progress_clone.failed.fetch_add(1, Ordering::Relaxed);
+                    progress_clone.completed.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            };
 
             *progress_clone.current_file.write().await = filename.clone();
             let start = std::time::Instant::now();
@@ -555,7 +588,9 @@ async fn run_migration(
 
     // Wait for all tasks to complete
     for handle in handles {
-        let _ = handle.await;
+        if let Err(e) = handle.await {
+            tracing::error!("Migration worker task panicked: {}", e);
+        }
     }
 
     // Finalize
@@ -709,12 +744,15 @@ async fn run_migration(
         None
     };
 
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "UPDATE encryption_migration SET status = 'idle', completed = total, error = ? WHERE id = 'singleton'",
     )
     .bind(&error_msg)
     .execute(&pool)
-    .await;
+    .await
+    {
+        tracing::error!("Failed to finalize migration status: {}", e);
+    }
 
     tracing::info!(
         "[DIAG:SERVER_MIG] migration finalized, set idle, triggering converter in 5s"

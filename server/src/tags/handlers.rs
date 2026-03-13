@@ -1,3 +1,9 @@
+//! Tag management handlers.
+//!
+//! Provides CRUD for per-photo tags and a full-text search endpoint that
+//! matches against both tag names and filenames. Tags for search results
+//! are batch-loaded in a single `WHERE photo_id IN (...)` query.
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -198,32 +204,50 @@ pub async fn search_photos(
 
     let rows: Vec<SearchRow> = q.fetch_all(&state.pool).await?;
 
-    // Gather tags for each result
-    let mut results = Vec::with_capacity(rows.len());
-    for row in rows {
-        let tags: Vec<(String,)> = sqlx::query_as(
-            "SELECT tag FROM photo_tags WHERE photo_id = ? AND user_id = ? ORDER BY tag",
-        )
-        .bind(&row.id)
-        .bind(&auth.user_id)
-        .fetch_all(&state.pool)
-        .await?;
+    // Batch-load tags for all results in a single query (avoids N+1).
+    // Build a dynamic `WHERE photo_id IN (?, ?, ...)` clause.
+    let photo_ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    let mut tags_by_photo: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
-        results.push(SearchResult {
-            id: row.id,
-            filename: row.filename,
-            media_type: row.media_type,
-            mime_type: row.mime_type,
-            thumb_path: row.thumb_path,
-            created_at: row.created_at,
-            taken_at: row.taken_at,
-            latitude: row.latitude,
-            longitude: row.longitude,
-            width: row.width,
-            height: row.height,
-            tags: tags.into_iter().map(|(t,)| t).collect(),
-        });
+    if !photo_ids.is_empty() {
+        let placeholders = photo_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let tags_sql = format!(
+            "SELECT photo_id, tag FROM photo_tags WHERE photo_id IN ({}) AND user_id = ? ORDER BY tag",
+            placeholders
+        );
+        let mut tags_q = sqlx::query_as::<_, (String, String)>(&tags_sql);
+        for pid in &photo_ids {
+            tags_q = tags_q.bind(pid);
+        }
+        tags_q = tags_q.bind(&auth.user_id);
+
+        let tag_rows: Vec<(String, String)> = tags_q.fetch_all(&state.pool).await?;
+        for (pid, tag) in tag_rows {
+            tags_by_photo.entry(pid).or_default().push(tag);
+        }
     }
+
+    let results: Vec<SearchResult> = rows
+        .into_iter()
+        .map(|row| {
+            let tags = tags_by_photo.remove(&row.id).unwrap_or_default();
+            SearchResult {
+                id: row.id,
+                filename: row.filename,
+                media_type: row.media_type,
+                mime_type: row.mime_type,
+                thumb_path: row.thumb_path,
+                created_at: row.created_at,
+                taken_at: row.taken_at,
+                latitude: row.latitude,
+                longitude: row.longitude,
+                width: row.width,
+                height: row.height,
+                tags,
+            }
+        })
+        .collect();
 
     Ok(Json(SearchResponse { results }))
 }

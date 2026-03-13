@@ -116,7 +116,7 @@ function ExternalApiSection() {
           <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-md border border-amber-200 dark:border-amber-800">
             <p className="text-xs text-amber-700 dark:text-amber-400">
               <strong>Authentication:</strong> All endpoints require HTTP Basic Auth
-              with an admin account's username and password a header with username and password.
+              with an admin account's username and password.
               External API endpoints work regardless of the diagnostics toggle above.
             </p>
           </div>

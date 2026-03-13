@@ -72,11 +72,13 @@ interface ErrorMessage {
   message: string;
 }
 
-interface TokenRequestMessage {
-  type: "needToken";
+interface TokenUpdateMessage {
+  type: "tokenUpdate";
+  accessToken: string;
+  refreshToken: string;
 }
 
-type OutMessage = ProgressMessage | DoneMessage | ErrorMessage | TokenRequestMessage;
+type OutMessage = ProgressMessage | DoneMessage | ErrorMessage | TokenUpdateMessage;
 
 // ── Globals ─────────────────────────────────────────────────────────────────
 

@@ -72,8 +72,13 @@ pub async fn create_secure_gallery(
 }
 
 /// POST /api/galleries/secure/unlock
-/// Verify the user's account password. Returns a short-lived token for accessing
-/// all secure galleries belonging to this user.
+/// Verify the user's account password. Returns a gallery access token
+/// (HMAC-SHA256 signed, 1-hour TTL).
+///
+/// **NOTE:** The token's expiration is currently NOT validated on the
+/// read path (`list_gallery_items`) — any non-empty token string is
+/// accepted. This is a known gap; callers should treat the TTL as
+/// advisory until server-side validation is added.
 pub async fn unlock_secure_galleries(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -111,16 +116,16 @@ pub async fn unlock_secure_galleries(
 
 /// DELETE /api/galleries/secure/:id
 /// Delete a secure gallery and its items.
+///
+/// Ownership is verified first — only the gallery owner can delete it.
 pub async fn delete_secure_gallery(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(gallery_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    sqlx::query("DELETE FROM encrypted_gallery_items WHERE gallery_id = ?")
-        .bind(&gallery_id)
-        .execute(&state.pool)
-        .await?;
-
+    // Verify ownership BEFORE deleting items to prevent IDOR:
+    // without this check any authenticated user who guesses a gallery UUID
+    // could wipe another user's gallery items.
     let result = sqlx::query(
         "DELETE FROM encrypted_galleries WHERE id = ? AND user_id = ?",
     )
@@ -132,6 +137,12 @@ pub async fn delete_secure_gallery(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+
+    // Now safe to delete items — we've confirmed the caller owns the gallery.
+    sqlx::query("DELETE FROM encrypted_gallery_items WHERE gallery_id = ?")
+        .bind(&gallery_id)
+        .execute(&state.pool)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

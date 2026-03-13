@@ -10,8 +10,11 @@ import { useProcessingStore } from "./processing";
 
 interface ActivityState {
   // ── Conversion ────────────────────────────────────────────────────────
-  conversionPending: number;  /** Encrypted items needing conversion but no key available yet */
-  conversionAwaitingKey: number;  conversionMissingThumbs: number;
+  /** Number of photos that still need conversion (web preview / thumbnail). */
+  conversionPending: number;
+  /** Encrypted items needing conversion but no key is available yet. */
+  conversionAwaitingKey: number;
+  conversionMissingThumbs: number;
   /** True while the server’s background converter is actively processing */
   conversionActive: boolean;
 

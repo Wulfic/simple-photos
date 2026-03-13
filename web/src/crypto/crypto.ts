@@ -51,10 +51,10 @@ async function sha256Digest(data: Uint8Array): Promise<Uint8Array> {
 /**
  * Derive the AES-256-GCM encryption key from the user's password.
  *
- * The salt is deterministically derived from SHA-256(username) so the same
- * username + password always produces the same key — no separate passphrase
- * step needed. The password never leaves the browser in raw form for this
- * purpose; Argon2id makes brute-force infeasible.
+ * The salt is deterministically derived from SHA-256("simple-photos:" + username)
+ * so the same username + password always produces the same key — no separate
+ * passphrase step needed. The password never leaves the browser in raw form for
+ * this purpose; Argon2id makes brute-force infeasible.
  */
 export async function deriveKey(password: string, username: string): Promise<void> {
   // Deterministic 16-byte salt = first 16 bytes of SHA-256("simple-photos:" + username)
@@ -110,12 +110,6 @@ export async function loadKeyFromSession(): Promise<boolean> {
     cachedRawKey = keyBytes;
   }
   return true;
-}
-
-/** @deprecated Salt is now derived deterministically from the username. */
-export function getSalt(): Uint8Array | null {
-  const hex = sessionStorage.getItem("sp_salt");
-  return hex ? hexToArray(hex) : null;
 }
 
 /* ------------------------------------------------------------------ */

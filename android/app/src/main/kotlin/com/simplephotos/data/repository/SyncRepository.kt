@@ -107,7 +107,12 @@ class SyncRepository @Inject constructor(
     /**
      * Build a SQL selection clause that filters by BUCKET_ID.
      * Example: "date_added > ? AND bucket_id IN (123, 456, 789)"
+     *
+     * NOTE: This function is currently dead code — [scanImages] and
+     * [scanVideos] construct their bucket filters inline instead.
+     * Kept for potential future refactoring.
      */
+    @Suppress("unused")
     private fun buildBucketFilter(
         dateColumn: String,
         bucketIdColumn: String,

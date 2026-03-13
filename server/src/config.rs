@@ -31,6 +31,13 @@ pub struct ServerConfig {
     /// Public base URL (e.g. "https://photos.example.com"). Used in backup
     /// broadcast and anywhere an absolute URL is needed.
     pub base_url: String,
+    /// Whether to trust `X-Forwarded-For` / `X-Real-IP` headers for
+    /// rate-limiting and audit logging. Set to `true` ONLY when behind
+    /// a reverse proxy (nginx, Caddy, etc.) that sets these headers.
+    /// When `false` (default), the server ignores proxy headers and uses
+    /// the TCP peer address for rate-limiting.
+    #[serde(default)]
+    pub trust_proxy: bool,
 }
 
 /// SQLite database connection settings.
@@ -98,12 +105,27 @@ pub struct WebConfig {
 }
 
 /// Configuration for backup server features.
-/// `api_key` is the key that OTHER servers must provide (via X-API-Key header)
-/// to access this server's backup list/download endpoints.
+///
+/// NOTE: There are *two* API key concepts in the backup system:
+///
+/// 1. `backup.api_key` (this config field / `SIMPLE_PHOTOS_BACKUP_API_KEY` env)
+///    — the key that OTHER servers must provide via `X-API-Key` to access this
+///    server's backup-serve endpoints (`/api/backup/serve/*`). Validated in
+///    `backup::serve::validate_api_key()`. If unset, backup serving is disabled.
+///
+/// 2. `server_settings.backup_api_key` (DB row) — auto-generated when the admin
+///    enables "backup mode" via `/api/admin/backup/mode`. Returned to the UI and
+///    broadcast via LAN discovery. Only generated if `backup.api_key` is not
+///    already set in config.
+///
+/// In typical usage, the config file value takes priority. The DB value is a
+/// fallback for users who configure backup mode through the UI without editing
+/// the config file.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct BackupConfig {
     /// API key that remote servers use to pull data from this instance.
     /// If empty/unset, backup serving endpoints are disabled.
+    /// See also: `server_settings.backup_api_key` (DB-stored fallback).
     #[serde(default)]
     pub api_key: Option<String>,
 }
@@ -248,6 +270,17 @@ impl AppConfig {
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_KEY_PATH") {
             config.tls.key_path = Some(v);
+        }
+
+        // ── Startup validation ───────────────────────────────────────────
+        // Reject obviously insecure JWT secrets early rather than waiting
+        // for an auth failure at runtime.
+        if config.auth.jwt_secret.len() < 32 {
+            anyhow::bail!(
+                "auth.jwt_secret must be at least 32 characters (got {}). \
+                 Generate one with: openssl rand -hex 32",
+                config.auth.jwt_secret.len()
+            );
         }
 
         Ok(config)

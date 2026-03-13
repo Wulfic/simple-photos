@@ -1,6 +1,6 @@
 import { request, downloadRaw, BASE } from "./core";
 
-// ── Plain-mode Photos API ────────────────────────────────────────────────────
+// ── Photos API (plain and encrypted) ───────────────────────────────────────────────────
 
 export const photosApi = {
   list: (params?: { after?: string; limit?: number; media_type?: string; favorites_only?: boolean }) => {
@@ -75,7 +75,13 @@ export const photosApi = {
   delete: (photoId: string) =>
     request<void>(`/photos/${photoId}`, { method: "DELETE" }),
 
-  /** Mark a plain photo as encrypted by linking it to the uploaded blob */
+  /**
+   * Mark a plain photo as encrypted by linking it to the uploaded blob.
+   *
+   * **Dead code:** The migration worker calls the endpoint directly via
+   * its own `apiFetch` helper rather than this client method. Kept for
+   * API surface documentation.
+   */
   markEncrypted: (photoId: string, blobId: string) =>
     request<{ ok: boolean }>(`/photos/${photoId}/mark-encrypted`, {
       method: "POST",
@@ -155,6 +161,7 @@ export const photosApi = {
         encrypted_blob_id: string | null;
         encrypted_thumb_blob_id: string | null;
         is_favorite: boolean;
+        crop_metadata: string | null;
         photo_hash: string | null;
       }>;
       next_cursor: string | null;

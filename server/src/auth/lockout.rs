@@ -92,13 +92,22 @@ pub async fn record_failed_login(
             let lockout_until =
                 (Utc::now() + chrono::Duration::minutes(LOCKOUT_DURATION_MINS)).to_rfc3339();
 
-            let _ = sqlx::query(
+            // SECURITY: This write MUST succeed for brute-force protection
+            // to work. Log loudly on failure so operators notice.
+            if let Err(e) = sqlx::query(
                 "UPDATE account_lockouts SET lockout_until = ? WHERE user_id = ?",
             )
             .bind(&lockout_until)
             .bind(user_id)
             .execute(&state.pool)
-            .await;
+            .await
+            {
+                tracing::error!(
+                    user_id = user_id,
+                    error = %e,
+                    "CRITICAL: Failed to set account lockout — brute-force protection bypassed"
+                );
+            }
 
             tracing::warn!(
                 user_id = user_id,
@@ -120,8 +129,13 @@ pub async fn record_failed_login(
 }
 
 pub async fn clear_failed_logins(state: &AppState, user_id: &str) {
-    let _ = sqlx::query("DELETE FROM account_lockouts WHERE user_id = ?")
+    if let Err(e) = sqlx::query("DELETE FROM account_lockouts WHERE user_id = ?")
         .bind(user_id)
         .execute(&state.pool)
-        .await;
+        .await
+    {
+        // Non-critical: user stays "locked" longer than needed but can still
+        // log in once the real lockout expires.
+        tracing::warn!(user_id = user_id, error = %e, "Failed to clear account lockout record");
+    }
 }

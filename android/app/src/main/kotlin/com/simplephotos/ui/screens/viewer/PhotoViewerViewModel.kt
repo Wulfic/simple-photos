@@ -301,13 +301,17 @@ class PhotoViewerViewModel @Inject constructor(
                 else {
                     val copyId = java.util.UUID.randomUUID().toString()
                     
+                    // Copy the local file if available, handling both content:// URIs
+                    // and regular filesystem paths via PhotoRepository.copyLocalFile().
                     var newLocalPath: String? = null
                     photo.localPath?.let { oldPath ->
-                        val oldFile = java.io.File(oldPath)
-                        if (oldFile.exists()) {
-                            val newFile = java.io.File(oldFile.parentFile, "copy_${copyId}_${oldFile.name}")
-                            oldFile.copyTo(newFile, overwrite = true)
-                            newLocalPath = newFile.absolutePath
+                        val cacheDir = withContext(Dispatchers.IO) {
+                            photoRepository.getCacheDir()
+                        }
+                        val ext = photo.filename.substringAfterLast('.', "jpg")
+                        val destFile = java.io.File(cacheDir, "copy_${copyId}.$ext")
+                        newLocalPath = withContext(Dispatchers.IO) {
+                            photoRepository.copyLocalFile(oldPath, destFile)
                         }
                     }
 
@@ -331,6 +335,9 @@ class PhotoViewerViewModel @Inject constructor(
     }
 
     /** Download the photo's full-resolution file bytes (for saving to device). */
+    // WARNING: response.bytes() reads the entire HTTP response body into a single ByteArray in
+    // memory. For large videos (hundreds of MB) this will cause an OutOfMemoryError. Use a
+    // streaming approach (e.g. response.byteStream() writing to a file) instead.
     suspend fun downloadPhotoBytes(photo: PhotoEntity): ByteArray? = withContext(Dispatchers.IO) {
         try {
             when {

@@ -71,6 +71,9 @@ const DANGEROUS_CHARS =
 /**
  * Strip dangerous/invisible Unicode codepoints and trim whitespace.
  * Preserves normal printable Unicode (emoji, CJK, Arabic, etc.).
+ *
+ * NOTE: Currently unused — available for future sanitization needs
+ * (e.g. album names, tag names, user display names).
  */
 export function sanitizeText(input: string): string {
   return input.replace(DANGEROUS_CHARS, "").trim();

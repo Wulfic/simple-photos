@@ -32,7 +32,7 @@ pub struct RemoveTagRequest {
 pub struct SearchQuery {
     /// Search term — matched against tag names and filenames.
     pub q: String,
-    /// Maximum results to return (default 50).
+    /// Maximum results to return (default 100, capped at 500 by handler).
     pub limit: Option<i64>,
 }
 

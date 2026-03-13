@@ -7,6 +7,10 @@
 //!   `Authorization: Basic base64(username:password)`
 //!
 //! All endpoints require admin role.
+//!
+//! **Security note:** These endpoints perform bcrypt verification on every
+//! request but have **no rate limiting or account lockout**. In production,
+//! protect them behind a reverse proxy or firewall rule.
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -223,10 +227,11 @@ pub async fn external_full(
         .await
         .unwrap_or(0);
 
+    // NOTE: These names must match the actual migration table names exactly.
     let tables = [
         "users", "photos", "blobs", "audit_log", "client_logs",
-        "refresh_tokens", "trash", "backup_servers", "sync_logs",
-        "shared_albums", "photo_tags", "secure_galleries",
+        "refresh_tokens", "trash_items", "backup_servers", "backup_sync_log",
+        "shared_albums", "photo_tags", "encrypted_galleries",
     ];
     let mut table_counts: HashMap<String, i64> = HashMap::new();
     for table in tables {
@@ -388,9 +393,9 @@ pub async fn external_full(
     // ── Backup summary ────────────────────────────────────────────────
     let backup_servers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backup_servers")
         .fetch_one(pool).await.unwrap_or(0);
-    let total_sync_logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_logs")
+    let total_sync_logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backup_sync_log")
         .fetch_one(pool).await.unwrap_or(0);
-    let last_sync_at: Option<String> = sqlx::query_scalar("SELECT MAX(created_at) FROM sync_logs")
+    let last_sync_at: Option<String> = sqlx::query_scalar("SELECT MAX(started_at) FROM backup_sync_log")
         .fetch_one(pool).await.unwrap_or(None);
 
     let backup_summary = BackupSummary {

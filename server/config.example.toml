@@ -2,6 +2,9 @@
 host = "0.0.0.0"
 port = 3000
 base_url = "http://localhost:3000"
+# Set to true ONLY when behind a reverse proxy (nginx, Caddy) that sets
+# X-Forwarded-For. When false, proxy headers are ignored for rate limiting.
+trust_proxy = false
 
 [database]
 path = "/data/db/simple-photos.db"

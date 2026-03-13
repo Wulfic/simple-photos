@@ -168,7 +168,9 @@ export const adminApi = {
       }
     ),
 
-  /** Check how many files still need conversion or thumbnails */
+  /** Check how many files still need conversion or thumbnails.
+   *  Note: Hits `/photos/conversion-status` (not `/admin/...`) — lives here
+   *  for UI grouping since only admins use it in practice. */
   conversionStatus: () =>
     request<{
       pending_conversions: number;

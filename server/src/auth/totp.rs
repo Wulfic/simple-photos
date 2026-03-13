@@ -12,7 +12,9 @@ use crate::state::AppState;
 pub fn verify_totp_code(
     secret_b32: &str,
     code: &str,
-    // `_issuer` accepted for API compatibility but currently hardcoded to "SimplePhotos".
+    // Callers pass the server's base_url here, but it is ignored — the
+    // issuer is hardcoded to "SimplePhotos" below.  Kept in the signature
+    // so future per-instance branding can be added without an API change.
     _issuer: &str,
     account: &str,
 ) -> Result<(), AppError> {

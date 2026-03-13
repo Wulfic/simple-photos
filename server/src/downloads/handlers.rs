@@ -12,6 +12,9 @@ use crate::state::AppState;
 
 /// Serve the Android APK file for download.
 ///
+/// **Intentionally unauthenticated** — the APK is a public distributable;
+/// any user (or prospective user) on the LAN should be able to install it.
+///
 /// Looks for the APK in these locations (first match wins):
 /// 1. `{project_root}/android/app/build/outputs/apk/release/app-release.apk`
 /// 2. `{project_root}/android/app/build/outputs/apk/debug/app-debug.apk`
