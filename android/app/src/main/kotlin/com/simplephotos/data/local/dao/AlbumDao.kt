@@ -42,4 +42,10 @@ interface AlbumDao {
 
     @Query("SELECT photoLocalId FROM photo_album_xref WHERE albumLocalId = :albumId")
     suspend fun getPhotoIdsForAlbum(albumId: String): List<String>
+
+    @Query("DELETE FROM albums")
+    suspend fun deleteAll()
+
+    @Query("DELETE FROM photo_album_xref")
+    suspend fun deleteAllXRefs()
 }

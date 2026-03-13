@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import android.util.Base64
+import org.json.JSONObject
 import javax.inject.Inject
 
 @HiltViewModel
@@ -33,17 +35,37 @@ class NavViewModel @Inject constructor(
     private val _startDestination = MutableStateFlow<String?>(null)
     val startDestination: StateFlow<String?> = _startDestination
 
+    private val _isAdmin = MutableStateFlow(false)
+    val isAdmin: StateFlow<Boolean> = _isAdmin
+
     init {
         viewModelScope.launch {
             val prefs = dataStore.data.first()
             val serverConfigured = prefs[KEY_SERVER_CONFIGURED] ?: false
             val hasToken = prefs[KEY_ACCESS_TOKEN] != null
 
+            // Decode role from JWT access token
+            val token = prefs[KEY_ACCESS_TOKEN]
+            _isAdmin.value = decodeAdminFromJwt(token)
+
             _startDestination.value = when {
                 !serverConfigured -> Screen.ServerSetup.route
                 !hasToken -> Screen.Login.route
                 else -> Screen.Gallery.route
             }
+        }
+    }
+
+    /** Decode the "role" claim from a JWT access token. Returns true if role == "admin". */
+    private fun decodeAdminFromJwt(token: String?): Boolean {
+        if (token == null) return false
+        return try {
+            val payload = token.split(".").getOrNull(1) ?: return false
+            val decoded = String(Base64.decode(payload, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP))
+            val json = JSONObject(decoded)
+            json.optString("role") == "admin"
+        } catch (_: Exception) {
+            false
         }
     }
 }

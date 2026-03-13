@@ -145,6 +145,7 @@ fun SearchScreen(
     onSettingsClick: () -> Unit,
     onSecureGalleryClick: () -> Unit = {},
     onLogout: () -> Unit,
+    isAdmin: Boolean = false,
     viewModel: SearchViewModel = hiltViewModel()
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -167,7 +168,8 @@ fun SearchScreen(
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
                     onLogout = { viewModel.logout(onLogout) },
-                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
+                    onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
+                    isAdmin = isAdmin
                 )
             )
         }

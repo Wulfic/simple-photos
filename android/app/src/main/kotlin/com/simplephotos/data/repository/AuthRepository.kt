@@ -1,17 +1,25 @@
 package com.simplephotos.data.repository
 
+import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.work.WorkManager
+import coil.ImageLoader
+import coil.imageLoader
 import com.simplephotos.crypto.KeyManager
+import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.*
+import com.simplephotos.sync.SyncScheduler
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_ACCESS_TOKEN
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_REFRESH_TOKEN
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,7 +27,9 @@ import javax.inject.Singleton
 class AuthRepository @Inject constructor(
     private val api: ApiService,
     private val dataStore: DataStore<Preferences>,
-    private val keyManager: KeyManager
+    private val keyManager: KeyManager,
+    private val db: AppDatabase,
+    @ApplicationContext private val context: Context
 ) {
     suspend fun register(username: String, password: String): RegisterResponse =
         api.register(RegisterRequest(username, password))
@@ -71,11 +81,44 @@ class AuthRepository @Inject constructor(
         }
     }
 
+    /**
+     * Full logout: clear server session, all local caches, and scheduled work.
+     *
+     * Prevents stale data from flashing when another user logs in:
+     *  - Room DB (photos, albums, cross-refs, blob queue, backup folders)
+     *  - Thumbnail files on disk
+     *  - Coil in-memory image cache
+     *  - WorkManager backup workers
+     *  - DataStore preferences (tokens, settings)
+     *  - Encryption key
+     */
     suspend fun logout() {
+        // 1. Notify server (best-effort)
         val prefs = dataStore.data.first()
         prefs[KEY_REFRESH_TOKEN]?.let { token ->
             try { api.logout(LogoutRequest(token)) } catch (_: Exception) {}
         }
+
+        // 2. Cancel all scheduled backup workers
+        SyncScheduler.cancel(context)
+
+        // 3. Clear Room database tables
+        db.photoDao().deleteAll()
+        db.albumDao().deleteAll()
+        db.albumDao().deleteAllXRefs()
+        db.blobQueueDao().deleteAll()
+        db.backupFolderDao().deleteAll()
+
+        // 4. Delete cached thumbnail files from disk
+        val thumbnailDir = File(context.filesDir, "thumbnails")
+        if (thumbnailDir.exists()) {
+            thumbnailDir.deleteRecursively()
+        }
+
+        // 5. Clear Coil in-memory bitmap cache
+        context.imageLoader.memoryCache?.clear()
+
+        // 6. Clear auth tokens and encryption key
         dataStore.edit { it.clear() }
         keyManager.clearKey()
     }

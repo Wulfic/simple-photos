@@ -25,4 +25,7 @@ interface BlobQueueDao {
 
     @Query("UPDATE blob_queue SET status = 'failed' WHERE attempts >= 5 AND status != 'done'")
     suspend fun markExhaustedAsFailed()
+
+    @Query("DELETE FROM blob_queue")
+    suspend fun deleteAll()
 }

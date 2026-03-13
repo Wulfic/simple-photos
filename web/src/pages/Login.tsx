@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { deriveKey } from "../crypto/crypto";
+import { clearAllUserData } from "../db";
+import { thumbMemoryCache } from "../utils/gallery";
 import ThemeToggle from "../components/ThemeToggle";
 
 export default function Login() {
@@ -35,6 +37,9 @@ export default function Login() {
         storeSetUsername(username);
         // Derive encryption key from the login password
         await deriveKey(password, username);
+        // Clear any stale data from a previous user session
+        await clearAllUserData().catch(() => {});
+        thumbMemoryCache.clear();
         navigate("/gallery");
       } else {
         const res = await api.auth.login(username, password);
@@ -45,6 +50,9 @@ export default function Login() {
           storeSetUsername(username);
           // Derive encryption key from the login password
           await deriveKey(password, username);
+          // Clear any stale data from a previous user session
+          await clearAllUserData().catch(() => {});
+          thumbMemoryCache.clear();
           navigate("/gallery");
         }
       }

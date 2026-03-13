@@ -84,6 +84,7 @@ fun GalleryScreen(
     onSecureGalleryClick: () -> Unit = {},
     onDiagnosticsClick: () -> Unit = {},
     onLogout: () -> Unit,
+    isAdmin: Boolean = false,
     viewModel: GalleryViewModel = hiltViewModel()
 ) {
     val photos by viewModel.photos.collectAsState(initial = emptyList())
@@ -172,7 +173,8 @@ fun GalleryScreen(
                         onSecureGalleryClick = onSecureGalleryClick,
                         onDiagnosticsClick = onDiagnosticsClick,
                         onLogout = { viewModel.logout(onLogout) },
-                        onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) }
+                        onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
+                        isAdmin = isAdmin
                     ),
                     isSyncing = viewModel.isSyncing,
                     syncLabel = if (viewModel.isSyncing) "Syncing" else null
@@ -222,7 +224,7 @@ fun GalleryScreen(
                     Text(err, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
                 }
 
-                if (photos.isEmpty() && !viewModel.isSyncing) {
+                if (photos.isEmpty() && !viewModel.isSyncing && viewModel.dataReady) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("No photos yet", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -230,7 +232,9 @@ fun GalleryScreen(
                             Text("Tap + to add photos or grant permissions for auto-backup", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 32.dp))
                         }
                     }
-                } else if (photos.isEmpty() && viewModel.isSyncing) {
+                } else if (!viewModel.dataReady || (photos.isEmpty() && viewModel.isSyncing)) {
+                    // Show loading until the first server sync completes.
+                    // This prevents flashing stale photos from a previous user session.
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator()

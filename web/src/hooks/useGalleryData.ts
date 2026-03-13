@@ -46,7 +46,9 @@ export interface GalleryDataResult {
   error: string;
   setError: (msg: string) => void;
   plainPhotos: PlainPhoto[];
-  /** Encrypted-mode photos from IndexedDB (live query, auto-updates). */
+  /** Encrypted-mode photos from IndexedDB (live query, auto-updates).
+   *  Returns undefined until the first server sync completes to prevent
+   *  flashing stale data from a previous user's session. */
   encryptedPhotos: CachedPhoto[] | undefined;
   secureBlobIds: Set<string>;
   migrationStatus: string;
@@ -76,10 +78,18 @@ export function useGalleryData(): GalleryDataResult {
   const [migrationCompleted, setMigrationCompleted] = useState(0);
   const navigate = useNavigate();
 
+  // Tracks whether the first server sync has completed for encrypted mode.
+  // Until this is true, we suppress the IndexedDB live query results to
+  // prevent flashing stale data from a previous user's session.
+  const [encryptedDataReady, setEncryptedDataReady] = useState(false);
+
   // Encrypted-mode: cached photos from IndexedDB (live query)
-  const encryptedPhotos = useLiveQuery(() =>
+  const rawEncryptedPhotos = useLiveQuery(() =>
     db.photos.orderBy("takenAt").reverse().toArray()
   );
+
+  // Gate: only expose encrypted photos after the first server sync
+  const encryptedPhotos = encryptedDataReady ? rawEncryptedPhotos : undefined;
 
   // ── Initialization ──────────────────────────────────────────────────────
 
@@ -232,6 +242,10 @@ export function useGalleryData(): GalleryDataResult {
       if (staleIds.length > 0) {
         await db.photos.bulkDelete(staleIds);
       }
+
+      // Stale data is purged — safe to expose the live query to the UI.
+      // Any remaining cached entries belong to the current user.
+      setEncryptedDataReady(true);
 
       // Phase 3: Populate IndexedDB from sync records (migrated photos).
       // Only download small thumbnail blobs (~30 KB) — not full photos.

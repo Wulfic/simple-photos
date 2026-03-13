@@ -372,7 +372,8 @@ export default function Settings() {
         </section>
       )}
 
-      {/* ── Privacy & Encryption ─────────────────────────────────────────── */}
+      {/* ── Privacy & Encryption (admin only) ────────────────────────────── */}
+      {isAdmin && (
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Privacy & Encryption</h2>
 
@@ -457,6 +458,7 @@ export default function Settings() {
           </div>
         )}
       </section>
+      )}
 
       {/* ── Cleanup Backed-Up Photos (encrypted mode only, when there are files) ── */}
       {encryptionMode === "encrypted" && !encryptionLoading && cleanableCount > 0 && (
@@ -579,7 +581,8 @@ export default function Settings() {
         </section>
       )}
 
-      {/* ── Backup Recovery ─────────────────────────────────────────────────── */}
+      {/* ── Backup Recovery (admin only) ──────────────────────────────────── */}
+      {isAdmin && (
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Backup Recovery</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
@@ -730,6 +733,7 @@ export default function Settings() {
           )}
         </div>
       </section>
+      )}
 
       {/* ── Apps ───────────────────────────────────────────────────────────── */}
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">

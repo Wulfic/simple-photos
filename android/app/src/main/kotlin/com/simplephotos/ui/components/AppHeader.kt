@@ -51,6 +51,7 @@ data class HeaderNavigation(
     val onDiagnosticsClick: () -> Unit = {},
     val onLogout: () -> Unit = {},
     val onToggleTheme: () -> Unit = {},
+    val isAdmin: Boolean = false,
 )
 
 /**
@@ -195,6 +196,7 @@ fun AppHeader(
                     onSecureGalleryClick = navigation.onSecureGalleryClick,
                     onSettingsClick = navigation.onSettingsClick,
                     onDiagnosticsClick = navigation.onDiagnosticsClick,
+                    isAdmin = navigation.isAdmin,
                     onLogout = navigation.onLogout,
                     onToggleTheme = navigation.onToggleTheme
                 )
@@ -276,6 +278,7 @@ private fun UserMenu(
     onSecureGalleryClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onDiagnosticsClick: () -> Unit = {},
+    isAdmin: Boolean = false,
     onLogout: () -> Unit,
     onToggleTheme: () -> Unit = {},
 ) {
@@ -370,6 +373,7 @@ private fun UserMenu(
                     Icon(painter = painterResource(R.drawable.ic_gear), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
+            if (isAdmin) {
             DropdownMenuItem(
                 text = { Text("Diagnostics") },
                 onClick = {
@@ -380,6 +384,7 @@ private fun UserMenu(
                     Icon(painter = painterResource(R.drawable.ic_shield), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
+            }
             HorizontalDivider()
             DropdownMenuItem(
                 text = {

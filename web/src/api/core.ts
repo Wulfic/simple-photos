@@ -1,4 +1,7 @@
 import { useAuthStore } from "../store/auth";
+import { clearAllUserData } from "../db";
+import { thumbMemoryCache } from "../utils/gallery";
+import { clearKey } from "../crypto/crypto";
 
 export const BASE = "/api";
 
@@ -85,6 +88,9 @@ export async function request<T>(
       return JSON.parse(retryText) as T;
     }
     // Refresh failed — force logout
+    clearAllUserData().catch(() => {});
+    thumbMemoryCache.clear();
+    clearKey();
     useAuthStore.getState().logout();
     throw new Error("Session expired. Please sign in again.");
   }
@@ -200,6 +206,9 @@ export async function downloadRaw(url: string): Promise<ArrayBuffer> {
       }
       return retry.arrayBuffer();
     }
+    clearAllUserData().catch(() => {});
+    thumbMemoryCache.clear();
+    clearKey();
     useAuthStore.getState().logout();
     throw new Error("Session expired");
   }
