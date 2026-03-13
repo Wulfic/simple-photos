@@ -1,5 +1,14 @@
 package com.simplephotos.crypto
 
+/**
+ * Wire format for AES-256-GCM encrypted data: a 12-byte nonce followed by the
+ * ciphertext (which includes the GCM authentication tag appended by the JCE).
+ *
+ * Layout: `[nonce (12 bytes)][ciphertext + GCM tag]`
+ *
+ * Custom [equals] and [hashCode] use content-based comparison since [ByteArray]
+ * defaults to reference equality.
+ */
 data class EncryptedPayload(
     val nonce: ByteArray,
     val ciphertext: ByteArray

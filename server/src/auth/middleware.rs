@@ -1,3 +1,6 @@
+//! Axum extractor that validates a Bearer JWT and yields the authenticated
+//! user's ID. Use `AuthUser` as a handler parameter on any protected route.
+
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
@@ -7,6 +10,11 @@ use crate::state::AppState;
 
 use super::models::Claims;
 
+/// Authenticated user extracted from a valid Bearer JWT.
+///
+/// Usage: add `auth: AuthUser` to any handler signature to require
+/// authentication. The extractor rejects TOTP session tokens (half-
+/// authenticated) — only fully-authenticated JWTs are accepted.
 pub struct AuthUser {
     pub user_id: String,
 }
@@ -36,6 +44,8 @@ impl FromRequestParts<AppState> for AuthUser {
         let token_data = decode::<Claims>(token, &key, &validation)
             .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
 
+        // Reject TOTP session tokens — they represent a half-authenticated
+        // state (password OK, 2FA pending) and must not access protected routes.
         if token_data.claims.totp_required {
             return Err(AppError::Unauthorized(
                 "TOTP verification required".into(),

@@ -1,3 +1,4 @@
+/** Wizard step — create the first admin account (username + password). */
 import type { WizardStep } from "./types";
 import type { PasswordStrength } from "../../utils/validation";
 import { Checkmark, PasswordField, ConfirmPasswordField } from "../../components/PasswordFields";

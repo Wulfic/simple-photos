@@ -24,6 +24,15 @@ import java.time.ZoneOffset
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Central photo/video management: upload (plain and encrypted modes), download,
+ * decrypt, sync from server, and local cache management.
+ *
+ * In encrypted mode, media is wrapped in a JSON envelope (`{v, filename, data,
+ * ...}`) and encrypted with AES-256-GCM before upload. In plain mode, raw
+ * bytes are sent directly. The repository also handles content-hash dedup
+ * and server-side filename cross-matching.
+ */
 @Singleton
 class PhotoRepository @Inject constructor(
     private val api: ApiService,

@@ -1,3 +1,4 @@
+/** Visual progress indicator showing completed/current/upcoming setup steps. */
 import type { WizardStep, ServerRole, InstallType } from "./types";
 
 export interface StepIndicatorProps {

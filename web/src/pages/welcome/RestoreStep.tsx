@@ -1,3 +1,4 @@
+/** Wizard step — restore data from a backup server or local file. */
 import { useState, useEffect } from "react";
 import type { WizardStep, RestoreSource } from "./types";
 

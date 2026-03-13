@@ -1,3 +1,8 @@
+/**
+ * Diagnostics dashboard (admin only) — server metrics, audit logs,
+ * client logs, and an external API reference section for monitoring
+ * integrations (Uptime Kuma, Grafana, etc.).
+ */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {

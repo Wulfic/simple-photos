@@ -5,6 +5,7 @@ import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoAlbumXRef
 import kotlinx.coroutines.flow.Flow
 
+/** Room DAO for albums and the photo↔album cross-reference table. */
 @Dao
 interface AlbumDao {
     @Query("SELECT * FROM albums ORDER BY name")

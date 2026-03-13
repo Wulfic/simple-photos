@@ -14,6 +14,8 @@ pub const MEDIA_EXTENSIONS: &[&str] = &[
 ];
 
 /// Check whether a filename has a recognised media extension.
+/// O(n) linear scan is fine for ~40 extensions; only used during import scans,
+/// not in hot request paths.
 pub fn is_media_file(name: &str) -> bool {
     let lower = name.to_lowercase();
     MEDIA_EXTENSIONS
@@ -47,7 +49,7 @@ pub fn mime_from_extension(name: &str) -> &'static str {
         "m4v" => "video/x-m4v",
         "wmv" => "video/x-ms-wmv",
         "asf" => "video/x-ms-asf",
-        
+        // Raw codec formats
         "h264" => "video/h264",
         "mpg" | "mpeg" => "video/mpeg",
         "mp3" => "audio/mpeg",
@@ -56,6 +58,7 @@ pub fn mime_from_extension(name: &str) -> &'static str {
         "ogg" => "audio/ogg",
         "wav" => "audio/wav",
         "wma" => "audio/x-ms-wma",
+        // Unknown extension — return generic binary MIME type
         _ => "application/octet-stream",
     }
 }

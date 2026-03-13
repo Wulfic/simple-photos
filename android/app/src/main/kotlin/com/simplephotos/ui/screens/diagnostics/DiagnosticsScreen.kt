@@ -42,6 +42,10 @@ import javax.inject.Inject
 
 // ── ViewModel ────────────────────────────────────────────────────────────────
 
+/**
+ * Collects diagnostic data (server connectivity, photo sync stats, device info)
+ * for the admin diagnostics screen.
+ */
 @HiltViewModel
 class DiagnosticsViewModel @Inject constructor(
     private val api: ApiService,

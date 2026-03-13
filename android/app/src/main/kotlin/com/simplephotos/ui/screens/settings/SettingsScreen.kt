@@ -51,6 +51,12 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dagger.hilt.android.qualifiers.ApplicationContext
 
+/**
+ * ViewModel powering the Settings screen: account management (password change,
+ * 2FA status), encryption mode admin controls, storage stats, backup server
+ * configuration, user management (admin), and app preferences (thumbnail size,
+ * Wi-Fi-only backup, biometric lock, diagnostic logging).
+ */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val authRepo: AuthRepository,

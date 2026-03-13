@@ -1,3 +1,4 @@
+/** Wizard step — configure SSL/TLS (upload cert or enable Let's Encrypt). */
 import { useState } from "react";
 import { api } from "../../api/client";
 

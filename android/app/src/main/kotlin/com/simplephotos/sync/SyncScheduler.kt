@@ -6,6 +6,15 @@ import android.provider.MediaStore
 import androidx.work.*
 import java.util.concurrent.TimeUnit
 
+/**
+ * Configures WorkManager scheduling for [BackupWorker].
+ *
+ * Two strategies run in parallel:
+ * - **Periodic**: every 15 minutes as a fallback safety net.
+ * - **Reactive**: content-URI triggers on MediaStore that fire within seconds
+ *   of a new photo/video being captured. The reactive observer is a one-shot
+ *   worker that must be re-registered after each execution.
+ */
 object SyncScheduler {
     private const val WORK_NAME = "photo_backup"
     private const val REACTIVE_WORK_NAME = "photo_backup_reactive"

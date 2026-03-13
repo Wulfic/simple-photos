@@ -29,6 +29,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * Handles the login flow, including optional TOTP two-factor authentication.
+ * On successful login, [AuthRepository] derives the E2E encryption key.
+ */
 @HiltViewModel
 class LoginViewModel @Inject constructor(
     private val authRepo: AuthRepository,

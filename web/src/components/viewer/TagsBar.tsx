@@ -1,3 +1,4 @@
+/** Inline tag bar — add/remove tags on the viewed photo (supports both encrypted and plain modes). */
 interface TagsBarProps {
   show: boolean;
   isPlainMode: boolean;

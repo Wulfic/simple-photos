@@ -1,3 +1,4 @@
+/** Wizard step — configure backup server connection (URL + pairing code). */
 import { useState, useEffect } from "react";
 import { api } from "../../api/client";
 import type { WizardStep } from "./types";

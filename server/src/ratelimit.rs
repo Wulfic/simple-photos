@@ -91,7 +91,8 @@ impl RateLimiter {
     }
 
     /// Periodically evict stale entries to prevent memory growth.
-    /// Call this from a background task.
+    /// Called every 5 minutes by the background cleanup task spawned
+    /// from [`RateLimiters::spawn_cleanup_task`].
     pub fn cleanup(&self) {
         let now = Instant::now();
         let window = self.inner.window;
@@ -128,7 +129,10 @@ pub fn extract_client_ip(headers: &HeaderMap) -> IpAddr {
         }
     }
 
-    // Fallback to loopback (ConnectInfo not used here — we extract from headers)
+    // Fallback to loopback (ConnectInfo not used here — we extract from headers).
+    // WARNING: If no reverse proxy sets X-Forwarded-For, ALL clients share one
+    // rate-limit bucket (127.0.0.1). In production, always deploy behind
+    // nginx/Caddy that sets X-Forwarded-For.
     "127.0.0.1".parse().unwrap()
 }
 

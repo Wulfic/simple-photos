@@ -24,6 +24,14 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 
+/**
+ * Hilt module providing the OkHttp client, Retrofit instance, and [ApiService].
+ *
+ * Features:
+ * - Dynamic base-URL interceptor (reads server URL from DataStore per request).
+ * - Bearer token injection on every request.
+ * - Transparent 401 → refresh-token → retry authenticator.
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {

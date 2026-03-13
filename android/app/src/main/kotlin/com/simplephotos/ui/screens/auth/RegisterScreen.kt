@@ -24,6 +24,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/** Handles new user registration with client-side password validation. */
 @HiltViewModel
 class RegisterViewModel @Inject constructor(
     private val authRepo: AuthRepository,

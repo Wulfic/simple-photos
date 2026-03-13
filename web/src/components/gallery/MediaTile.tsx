@@ -1,3 +1,5 @@
+/** Gallery thumbnail tile for encrypted-mode photos. Creates object URLs
+ *  from decrypted IndexedDB thumbnail data, lazy-loaded via IntersectionObserver. */
 import { useState, useEffect, useRef } from "react";
 import type { CachedPhoto } from "../../db";
 import useLongPress from "../../hooks/useLongPress";

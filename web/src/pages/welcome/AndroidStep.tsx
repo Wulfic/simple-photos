@@ -1,3 +1,4 @@
+/** Wizard step — Android app download link and server URL QR code. */
 import type { WizardStep } from "./types";
 import AppIcon from "../../components/AppIcon";
 

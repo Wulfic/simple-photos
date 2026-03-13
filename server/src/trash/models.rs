@@ -1,3 +1,5 @@
+//! DTOs for the trash (soft-delete) system.
+
 use serde::{Deserialize, Serialize};
 
 /// A photo in the trash bin, pending permanent deletion.
@@ -25,12 +27,14 @@ pub struct TrashItem {
     pub thumbnail_blob_id: Option<String>,
 }
 
+/// Paginated trash listing response.
 #[derive(Debug, Serialize)]
 pub struct TrashListResponse {
     pub items: Vec<TrashItem>,
     pub next_cursor: Option<String>,
 }
 
+/// Query parameters for `GET /api/trash`.
 #[derive(Debug, Deserialize)]
 pub struct TrashListQuery {
     pub after: Option<String>,

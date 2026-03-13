@@ -1,3 +1,5 @@
+//! DTOs for the shared albums feature.
+
 use serde::{Deserialize, Serialize};
 
 /// A shared album with ownership info.
@@ -41,11 +43,13 @@ pub struct SharedAlbumPhoto {
 
 // ── Request types ──────────────────────────────────────────────────────────
 
+/// Request body for `POST /api/sharing/albums`.
 #[derive(Debug, Deserialize)]
 pub struct CreateSharedAlbumRequest {
     pub name: String,
 }
 
+/// Request body for `POST /api/sharing/albums/:id/members`.
 #[derive(Debug, Deserialize)]
 pub struct AddMemberRequest {
     pub user_id: String,

@@ -1,3 +1,4 @@
+/** Wizard step — setup complete confirmation with redirect to login. */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api/client";

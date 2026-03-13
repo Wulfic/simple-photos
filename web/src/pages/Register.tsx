@@ -1,3 +1,8 @@
+/**
+ * User registration page — creates a new account and derives the
+ * encryption key. Includes inline password strength and username
+ * validation (mirroring server-side rules).
+ */
 import { useState, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { api } from "../api/client";

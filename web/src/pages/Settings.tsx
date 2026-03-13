@@ -1,3 +1,10 @@
+/**
+ * Settings page — admin and user configuration panel.
+ *
+ * Sections: encryption mode toggle + migration, backup server management,
+ * auto-scan/conversion (plain mode), SSL settings, account (password/2FA),
+ * user management (admin), and thumbnail size preference.
+ */
 import { useState, useEffect, useCallback } from "react";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";

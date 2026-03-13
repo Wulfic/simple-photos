@@ -1,3 +1,4 @@
+/** Wizard step — create additional user accounts during initial setup. */
 import type { PasswordStrength } from "../../utils/validation";
 import { Checkmark, PasswordField, ConfirmPasswordField } from "../../components/PasswordFields";
 import type { WizardStep, CreatedUser } from "./types";

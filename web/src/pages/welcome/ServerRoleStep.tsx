@@ -1,3 +1,4 @@
+/** Wizard step — choose server role (primary or backup instance). */
 import type { WizardStep, ServerRole } from "./types";
 
 export interface ServerRoleStepProps {

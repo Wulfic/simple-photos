@@ -1,3 +1,9 @@
+/**
+ * Login page — handles username/password authentication with optional
+ * TOTP two-factor. On success, derives the Argon2id encryption key
+ * from the password and clears stale IndexedDB data before activating
+ * the session to avoid race conditions with Gallery rendering.
+ */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";

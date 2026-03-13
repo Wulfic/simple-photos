@@ -17,6 +17,10 @@ import javax.inject.Singleton
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
+/**
+ * Hilt module providing application-scoped singletons: DataStore, Room database,
+ * [KeyManager], and [CryptoManager].
+ */
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {

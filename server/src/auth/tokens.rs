@@ -1,4 +1,8 @@
 //! JWT and refresh-token helpers.
+//!
+//! JWTs use HS256 (HMAC-SHA256) for signing. Refresh tokens are stored as
+//! SHA-256 hashes in the `refresh_tokens` table (the raw token is only
+//! ever sent to the client).
 
 use chrono::Utc;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
@@ -10,6 +14,7 @@ use crate::state::AppState;
 
 use super::models::Claims;
 
+/// Create a signed HS256 JWT with the given user ID, role, and TTL.
 pub fn create_jwt(
     user_id: &str,
     totp_required: bool,
@@ -36,6 +41,10 @@ pub fn create_jwt(
     .map_err(|e| AppError::Internal(format!("JWT encoding error: {}", e)))
 }
 
+/// Issue a fresh access + refresh token pair for `user_id`.
+///
+/// The refresh token is stored as a SHA-256 hash in the `refresh_tokens` table.
+/// The raw (unhashed) refresh token is returned to the caller for the client.
 pub async fn issue_tokens(
     state: &AppState,
     user_id: &str,
@@ -74,6 +83,10 @@ pub async fn issue_tokens(
     Ok((access_token, raw_refresh))
 }
 
+/// SHA-256 hash a raw token string for secure storage.
+///
+/// Refresh tokens are never stored in plaintext — only the hash is persisted,
+/// so a database leak does not compromise active sessions.
 pub fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }

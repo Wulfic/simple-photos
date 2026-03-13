@@ -1,3 +1,4 @@
+/** Account settings section — password change, TOTP 2FA setup/disable. */
 import { useState, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { api } from "../../api/client";

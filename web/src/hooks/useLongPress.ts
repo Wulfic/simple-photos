@@ -1,5 +1,12 @@
 import { useRef, useCallback } from "react";
 
+/**
+ * Hook for detecting long-press (touch-hold) gestures.
+ *
+ * Returns touch handlers and a `wasLongPress()` guard so the caller
+ * can suppress the subsequent `onClick` after a long press fires.
+ * Automatically cancels if the user moves their finger (scroll).
+ */
 export default function useLongPress(callback: () => void, delay = 500) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const triggeredRef = useRef(false);

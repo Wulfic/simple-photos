@@ -1,3 +1,10 @@
+/**
+ * Zustand store for authentication state.
+ *
+ * Persists access/refresh tokens and username to localStorage so sessions
+ * survive page reloads. The access token is sent as a Bearer header on
+ * every API request (see api/core.ts).
+ */
 import { create } from "zustand";
 
 interface AuthState {

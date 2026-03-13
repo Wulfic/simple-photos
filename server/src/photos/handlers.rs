@@ -16,11 +16,16 @@ use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 
 // ── Plain Photo Endpoints ─────────────────────────────────────────────────────
 
+/// Query parameters for `GET /api/photos`.
 #[derive(Debug, Deserialize)]
 pub struct PhotoListQuery {
+    /// Cursor for reverse-chronological pagination (taken_at or created_at).
     pub after: Option<String>,
+    /// Maximum items to return (default 100, max 500).
     pub limit: Option<i64>,
+    /// Filter by media type: "photo", "video", "gif", "audio".
     pub media_type: Option<String>,
+    /// When `true`, return only favorited photos.
     pub favorites_only: Option<bool>,
 }
 

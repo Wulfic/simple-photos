@@ -1,3 +1,10 @@
+/**
+ * First-run setup wizard — multi-step onboarding flow for new server instances.
+ *
+ * Steps branch based on server role (primary vs. backup) and install type
+ * (fresh vs. restore). Persists the current step to sessionStorage so
+ * accidental refreshes don't restart the wizard.
+ */
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, TotpSetupResponse } from "../api/client";

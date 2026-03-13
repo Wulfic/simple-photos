@@ -1,3 +1,9 @@
+//! Axum handlers for authentication endpoints.
+//!
+//! Covers the full auth lifecycle: registration, login (with optional TOTP),
+//! token refresh (with rotation + theft detection), logout, 2FA management,
+//! and password changes.
+
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
@@ -21,6 +27,9 @@ use super::validation::{validate_password, validate_username};
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
+/// POST /api/auth/register — create a new user account.
+///
+/// Rate-limited, validates username/password, hashes with bcrypt.
 pub async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -85,6 +94,10 @@ pub async fn register(
     ))
 }
 
+/// POST /api/auth/login — authenticate with username + password.
+///
+/// If 2FA is enabled for this user, returns a short-lived TOTP session token
+/// instead of full tokens — the client must complete login via `login_totp`.
 pub async fn login(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -178,6 +191,10 @@ pub async fn login(
     })))
 }
 
+/// POST /api/auth/login/totp — complete login by providing a TOTP code or backup code.
+///
+/// Validates the short-lived TOTP session token issued by `login`, then verifies
+/// the 6-digit TOTP code (or single-use backup code) before issuing full tokens.
 pub async fn login_totp(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -275,6 +292,11 @@ pub async fn login_totp(
     }))
 }
 
+/// POST /api/auth/refresh — exchange a refresh token for a new access/refresh pair.
+///
+/// Implements refresh-token rotation: the old token is revoked on use.
+/// Reuse of a revoked token is treated as potential theft — *all* tokens
+/// for the user are revoked, forcing re-authentication everywhere.
 pub async fn refresh(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -292,6 +314,10 @@ pub async fn refresh(
     .ok_or_else(|| AppError::Unauthorized("Invalid or expired refresh token".into()))?;
 
     let (token_id, user_id, revoked) = row;
+
+    // Refresh-token rotation theft detection: if a revoked token is replayed,
+    // either an attacker or the legitimate user has a stolen token — revoke
+    // everything to contain the breach.
     if revoked {
         tracing::warn!(
             user_id = user_id,
@@ -340,6 +366,7 @@ pub async fn refresh(
     }))
 }
 
+/// POST /api/auth/logout — revoke the given refresh token.
 pub async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -386,6 +413,10 @@ pub async fn get_2fa_status(
     Ok(Json(serde_json::json!({ "totp_enabled": enabled })))
 }
 
+/// POST /api/auth/2fa/setup — generate a TOTP secret and backup codes.
+///
+/// Does **not** enable 2FA yet — the client must confirm with [`confirm_2fa`]
+/// by providing a valid code from their authenticator app.
 pub async fn setup_2fa(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -466,6 +497,9 @@ pub async fn setup_2fa(
     }))
 }
 
+/// POST /api/auth/2fa/confirm — verify a TOTP code to activate 2FA.
+///
+/// The user must have called `setup_2fa` first to generate a secret.
 pub async fn confirm_2fa(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -513,6 +547,7 @@ pub async fn confirm_2fa(
     Ok(StatusCode::OK)
 }
 
+/// POST /api/auth/2fa/disable — turn off 2FA (requires a valid TOTP code to confirm).
 pub async fn disable_2fa(
     State(state): State<AppState>,
     headers: HeaderMap,

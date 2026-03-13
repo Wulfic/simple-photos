@@ -1,5 +1,6 @@
 package com.simplephotos.ui.navigation
 
+/** Navigation route definitions for [NavGraph]. */
 sealed class Screen(val route: String) {
     data object ServerSetup : Screen("server_setup")
     data object Login : Screen("login")

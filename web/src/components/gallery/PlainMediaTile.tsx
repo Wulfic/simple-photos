@@ -1,3 +1,5 @@
+/** Gallery thumbnail tile for plain-mode photos. Lazy-loads thumbnails
+ *  via IntersectionObserver and retries when conversion is still queued. */
 import { useState, useEffect, useRef } from "react";
 import useLongPress from "../../hooks/useLongPress";
 import { getCachedThumbnail, cacheThumbnail, formatDuration, type PlainPhoto } from "../../utils/gallery";

@@ -1,3 +1,11 @@
+/**
+ * Import page — bulk photo/video import from server paths or local files.
+ *
+ * In plain mode, triggers a server-side directory scan. In encrypted mode,
+ * reads files client-side, encrypts with AES-256-GCM, and uploads blobs.
+ * Supports Google Photos Takeout metadata matching and deduplication via
+ * content hashes.
+ */
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";

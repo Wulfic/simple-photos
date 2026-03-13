@@ -1,3 +1,12 @@
+//! Filesystem scanning, thumbnail generation, and web preview creation.
+//!
+//! `POST /api/admin/photos/scan` walks the storage directory tree, registers
+//! every unregistered media file as a plain photo, extracts EXIF metadata,
+//! generates JPEG thumbnails (via ImageMagick → FFmpeg fallback), and creates
+//! browser-compatible web previews for non-native formats (HEIC → JPEG,
+//! MKV → MP4, etc.). Video transcoding is deferred to the background
+//! conversion task in [`super::convert`].
+
 use std::path::Path;
 
 use axum::extract::State;

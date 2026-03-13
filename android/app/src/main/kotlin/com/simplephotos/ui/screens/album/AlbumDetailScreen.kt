@@ -43,6 +43,10 @@ import javax.inject.Inject
 import com.simplephotos.R
 import androidx.compose.ui.res.painterResource
 
+/**
+ * ViewModel for the album detail screen, supporting both user-created albums
+ * and virtual "smart" albums (Favorites, Photos, GIFs, Videos).
+ */
 @HiltViewModel
 class AlbumDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,

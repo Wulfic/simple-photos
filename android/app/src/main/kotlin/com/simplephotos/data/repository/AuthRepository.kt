@@ -23,6 +23,15 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Handles authentication (register, login, TOTP, token refresh) and full
+ * logout with cleanup of all local caches so no stale data leaks between
+ * user sessions.
+ *
+ * On login, derives the E2E encryption key via [KeyManager.deriveAndStoreKey]
+ * using the same deterministic salt as the web client, ensuring cross-platform
+ * decryption compatibility.
+ */
 @Singleton
 class AuthRepository @Inject constructor(
     private val api: ApiService,

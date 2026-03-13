@@ -1,3 +1,4 @@
+/** Wizard step — configure storage path, photo directory, and server URL. */
 import { useState, useCallback } from "react";
 import { api } from "../../api/client";
 import FolderBrowserModal from "../../components/FolderBrowserModal";

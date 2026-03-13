@@ -1,3 +1,4 @@
+/** Audit log viewer tab — filterable, paginated server-side event log. */
 import { useState, useEffect, useCallback } from "react";
 import { api, AuditLogEntry } from "../../api/client";
 import { Section, getDateCutoff, tryPrettyJson } from "./shared";

@@ -1,7 +1,17 @@
+//! Unified error type for all API handlers.
+//!
+//! Each `AppError` variant maps to an HTTP status code with a JSON body.
+//! Internal errors (database, anyhow) are logged server-side with full detail
+//! but return only a generic "Internal server error" to the client to avoid
+//! leaking implementation details.
+
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+/// Application error type returned by all handlers via `Result<T, AppError>`.
+/// Implements `IntoResponse` to convert each variant into the appropriate HTTP
+/// status code and JSON error body.
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("Not found")]
@@ -35,6 +45,11 @@ pub enum AppError {
     Anyhow(#[from] anyhow::Error),
 }
 
+/// Convert `AppError` into an Axum HTTP response.
+///
+/// Internal errors (`Sqlx`, `Anyhow`, `Internal`) are logged with full detail
+/// but return a generic 500 response — never expose internal error messages to
+/// the client.
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {

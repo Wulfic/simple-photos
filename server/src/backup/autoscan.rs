@@ -1,3 +1,10 @@
+//! Automatic filesystem scanner that registers new media files into the database.
+//!
+//! Runs as a background task on a configurable interval and can also be
+//! triggered on-demand via `POST /api/admin/photos/auto-scan`. Files are
+//! assigned to the first admin user; duplicates are skipped by comparing
+//! relative `file_path` values against the `photos` table.
+
 use std::path::Path;
 
 use axum::extract::State;

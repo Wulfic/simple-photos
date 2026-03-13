@@ -1,3 +1,4 @@
+/** Wizard step — initial landing screen with existing-install detection. */
 import type { WizardStep, SetupStatus } from "./types";
 
 export interface WelcomeStepProps {

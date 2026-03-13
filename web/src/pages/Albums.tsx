@@ -1,3 +1,8 @@
+/**
+ * Albums page — lists user albums (encrypted via IndexedDB manifests),
+ * smart/default albums (Favorites, Photos, Videos, GIFs, Audio),
+ * and shared albums (server-managed, multi-user).
+ */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";

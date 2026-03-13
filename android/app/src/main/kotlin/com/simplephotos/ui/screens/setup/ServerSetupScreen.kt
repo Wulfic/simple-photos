@@ -32,6 +32,10 @@ import android.content.Context
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * Handles first-run server configuration: LAN auto-discovery via [ServerDiscovery]
+ * and manual URL entry. Persists the chosen server URL to DataStore.
+ */
 @HiltViewModel
 class ServerSetupViewModel @Inject constructor(
     val dataStore: DataStore<Preferences>,

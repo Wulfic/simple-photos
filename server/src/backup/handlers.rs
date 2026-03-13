@@ -517,6 +517,8 @@ pub async fn set_audio_backup_setting(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/// Verify the authenticated user has the `admin` role.
+/// Returns `AppError::Forbidden` if the user is not an admin.
 pub(super) async fn require_admin(state: &AppState, auth: &AuthUser) -> Result<(), AppError> {
     let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
         .bind(&auth.user_id)

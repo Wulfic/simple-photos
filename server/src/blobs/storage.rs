@@ -37,7 +37,8 @@ pub fn metadata_relative_path(user_id: &str, blob_id: &str) -> String {
 }
 
 /// Write metadata JSON to the metadata subtree.
-/// If `encrypt_fn` is provided, the data is encrypted before writing.
+/// Creates parent directories if they don't exist. Returns the relative
+/// storage path suitable for storing in the database.
 pub async fn write_metadata(
     root: &Path,
     user_id: &str,
@@ -80,6 +81,8 @@ pub async fn delete_metadata(root: &Path, storage_path: &str) -> Result<(), AppE
     }
 }
 
+/// Write a blob's bytes to disk. Creates parent directories as needed.
+/// Returns the relative storage path for DB storage.
 pub async fn write_blob(root: &Path, user_id: &str, blob_id: &str, data: &[u8]) -> Result<String, AppError> {
     let path = blob_path(root, user_id, blob_id);
 
@@ -104,6 +107,7 @@ pub async fn write_blob(root: &Path, user_id: &str, blob_id: &str, data: &[u8]) 
     Ok(relative_path(user_id, blob_id))
 }
 
+/// Read a blob's bytes from disk. Returns `AppError::NotFound` if the file is missing.
 pub async fn read_blob(root: &Path, storage_path: &str) -> Result<Vec<u8>, AppError> {
     let path = root.join(storage_path);
     tokio::fs::read(&path)
@@ -114,6 +118,7 @@ pub async fn read_blob(root: &Path, storage_path: &str) -> Result<Vec<u8>, AppEr
         })
 }
 
+/// Delete a blob file from disk. Silently succeeds if the file is already gone.
 pub async fn delete_blob(root: &Path, storage_path: &str) -> Result<(), AppError> {
     let path = root.join(storage_path);
     match tokio::fs::remove_file(&path).await {

@@ -1,3 +1,4 @@
+/** Slide-in panel showing photo metadata (dimensions, size, camera, dates). */
 import { formatBytes } from "../../utils/formatters";
 
 interface PhotoInfoPanelProps {

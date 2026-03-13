@@ -1,3 +1,26 @@
+//! Photo management — the core of Simple Photos.
+//!
+//! Supports two operational modes:
+//! - **Plain mode** — files live on disk; thumbnails and web previews are
+//!   generated server-side via FFmpeg / ImageMagick.
+//! - **Encrypted mode** — files are stored as opaque blobs (see [`crate::blobs`]);
+//!   the server never sees cleartext media.
+//!
+//! Key sub-modules:
+//! - [`handlers`]        — List, serve, favorite, and crop endpoints for plain photos.
+//! - [`upload`]          — Mobile client upload with content-hash deduplication.
+//! - [`scan`]            — Filesystem scan, thumbnail & web-preview generation.
+//! - [`convert`]         — Background media conversion task (MKV→MP4, HEIC→JPEG, etc.).
+//! - [`encryption`]      — Encryption toggle, migration progress, and mark-encrypted.
+//! - [`server_migrate`]  — Server-side parallel encryption migration pipeline.
+//! - [`sync`]            — Encrypted-mode metadata sync for mobile gallery population.
+//! - [`copies`]          — Photo duplication and edit-copy management.
+//! - [`galleries`]       — Secure (password-protected) gallery CRUD.
+//! - [`cleanup`]         — Remove plain originals after successful encryption.
+//! - [`storage_stats`]   — Per-user and filesystem storage usage stats.
+//! - [`metadata`]        — EXIF extraction (dimensions, GPS, camera model, date).
+//! - [`utils`]           — Timestamp normalization and content hashing.
+
 pub mod cleanup;
 pub mod convert;
 pub mod copies;

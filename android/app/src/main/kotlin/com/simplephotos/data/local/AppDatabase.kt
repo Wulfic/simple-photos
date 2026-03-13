@@ -8,6 +8,13 @@ import com.simplephotos.data.local.dao.BlobQueueDao
 import com.simplephotos.data.local.dao.PhotoDao
 import com.simplephotos.data.local.entities.*
 
+/**
+ * Room database for the Simple Photos Android client.
+ *
+ * Stores local photo metadata, album manifests, the blob upload queue, and
+ * backup folder selections. Uses [fallbackToDestructiveMigration] so schema
+ * changes during development wipe the cache rather than crashing.
+ */
 @Database(
     entities = [PhotoEntity::class, AlbumEntity::class, PhotoAlbumXRef::class, BlobQueueEntity::class, BackupFolderEntity::class],
     version = 8,

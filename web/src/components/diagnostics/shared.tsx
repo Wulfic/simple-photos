@@ -1,3 +1,4 @@
+/** Shared layout primitives for the diagnostics dashboard (Section, StatCard, helpers). */
 import type React from "react";
 
 /** Reusable collapsible section wrapper */

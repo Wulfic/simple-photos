@@ -1,3 +1,11 @@
+/**
+ * Main gallery page — displays the user's photo/video grid.
+ *
+ * Supports both plain-mode (server thumbnails) and encrypted-mode
+ * (client-decrypted thumbnails from IndexedDB). Delegates data loading
+ * to useGalleryData, encryption migration to useGalleryMigration, and
+ * file upload to useGalleryUpload.
+ */
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
