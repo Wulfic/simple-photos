@@ -4,6 +4,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { api } from "../../api/client";
 import { useIsAdmin } from "../../hooks/useIsAdmin";
 import AppIcon from "../AppIcon";
+import { getErrorMessage } from "../../utils/formatters";
 
 type ManagedUser = {
   id: string;
@@ -64,8 +65,8 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       setNewUserRole("user");
       setShowAddUser(false);
       await loadManagedUsers();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -76,8 +77,8 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       setSuccess("User deleted.");
       setConfirmDeleteId(null);
       await loadManagedUsers();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -87,8 +88,8 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       await api.admin.updateUserRole(userId, role);
       setSuccess("Role updated.");
       await loadManagedUsers();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -103,8 +104,8 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       setSuccess("Password reset.");
       setResetPwUserId(null);
       setResetPwValue("");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -114,8 +115,8 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       await api.admin.resetUser2fa(userId);
       setSuccess("2FA disabled for user.");
       await loadManagedUsers();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -128,8 +129,8 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       setSetup2faUri(res.otpauth_uri);
       setSetup2faBackupCodes(res.backup_codes);
       setSetup2faCode("");
-    } catch (err: any) {
-      setError(err.message || "Failed to start 2FA setup");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to start 2FA setup"));
     } finally {
       setSetup2faLoading(false);
     }
@@ -147,8 +148,8 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       setSetup2faBackupCodes([]);
       setSetup2faCode("");
       await loadManagedUsers();
-    } catch (err: any) {
-      setError(err.message || "Invalid TOTP code");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Invalid TOTP code"));
     } finally {
       setSetup2faLoading(false);
     }

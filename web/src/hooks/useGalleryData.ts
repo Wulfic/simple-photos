@@ -267,6 +267,9 @@ export function useGalleryData(): GalleryDataResult {
         }
 
         // Download and decrypt thumbnail blob if available
+        // TODO: Consider using the server's GET /api/blobs/{id}/thumb endpoint
+        // which resolves photo-blob-ID → thumb automatically, instead of
+        // requiring the client to know the thumb blob ID up front.
         let thumbnailData: ArrayBuffer | undefined;
         const thumbBlobId = photo.encrypted_thumb_blob_id;
         if (thumbBlobId) {

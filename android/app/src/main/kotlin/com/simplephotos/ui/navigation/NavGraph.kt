@@ -23,6 +23,7 @@ import com.simplephotos.ui.screens.viewer.PhotoViewerScreen
 import com.simplephotos.ui.screens.search.SearchScreen
 import com.simplephotos.ui.screens.diagnostics.DiagnosticsScreen
 import com.simplephotos.ui.screens.securegallery.SecureGalleryScreen
+import com.simplephotos.ui.screens.sharing.SharedAlbumsScreen
 
 /**
  * Top-level navigation host. Routes are defined in [Screen].
@@ -67,6 +68,7 @@ fun NavGraph() {
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
                 onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 isAdmin = isAdmin
@@ -79,6 +81,8 @@ fun NavGraph() {
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
+                onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 onAlbumClick = { albumId -> navController.navigate(Screen.AlbumDetail.createRoute(albumId)) },
                 isAdmin = isAdmin
@@ -91,6 +95,8 @@ fun NavGraph() {
                 onSearchClick = { navController.navigate(Screen.Search.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
+                onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 isAdmin = isAdmin
             )
@@ -103,6 +109,8 @@ fun NavGraph() {
                 onTrashClick = { navController.navigate(Screen.Trash.route) },
                 onSettingsClick = { navController.navigate(Screen.Settings.route) },
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
+                onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
+                onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 isAdmin = isAdmin
             )
@@ -155,6 +163,11 @@ fun NavGraph() {
             SecureGalleryScreen(
                 onBack = { navController.popBackStack() },
                 onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) }
+            )
+        }
+        composable(Screen.SharedAlbums.route) {
+            SharedAlbumsScreen(
+                onBack = { navController.popBackStack() }
             )
         }
     }

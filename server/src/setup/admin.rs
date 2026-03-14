@@ -74,20 +74,8 @@ pub async fn create_user(
         ));
     }
 
-    // Validate password
-    if req.password.len() < 8 || req.password.len() > 128 {
-        return Err(AppError::BadRequest(
-            "Password must be between 8 and 128 characters".into(),
-        ));
-    }
-    let has_upper = req.password.chars().any(|c| c.is_ascii_uppercase());
-    let has_lower = req.password.chars().any(|c| c.is_ascii_lowercase());
-    let has_digit = req.password.chars().any(|c| c.is_ascii_digit());
-    if !has_upper || !has_lower || !has_digit {
-        return Err(AppError::BadRequest(
-            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".into(),
-        ));
-    }
+    // Validate password (shared rules with auth::validation)
+    crate::auth::validation::validate_password(&req.password)?;
 
     // Check for duplicate username
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username = ?)")
@@ -304,20 +292,8 @@ pub async fn admin_reset_password(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&state, &auth).await?;
 
-    // Validate password strength
-    if req.new_password.len() < 8 || req.new_password.len() > 128 {
-        return Err(AppError::BadRequest(
-            "Password must be between 8 and 128 characters".into(),
-        ));
-    }
-    let has_upper = req.new_password.chars().any(|c| c.is_ascii_uppercase());
-    let has_lower = req.new_password.chars().any(|c| c.is_ascii_lowercase());
-    let has_digit = req.new_password.chars().any(|c| c.is_ascii_digit());
-    if !has_upper || !has_lower || !has_digit {
-        return Err(AppError::BadRequest(
-            "Password must contain at least one uppercase letter, one lowercase letter, and one digit".into(),
-        ));
-    }
+    // Validate password strength (shared rules with auth::validation)
+    crate::auth::validation::validate_password(&req.new_password)?;
 
     let password_hash =
         bcrypt::hash(&req.new_password, state.config.auth.bcrypt_cost)

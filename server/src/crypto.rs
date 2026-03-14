@@ -39,9 +39,8 @@ pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
 /// Decrypt data produced by [`encrypt`] (or the equivalent client-side code).
 /// Input format: `[12-byte nonce][ciphertext + 16-byte auth tag]`.
 ///
-/// Currently used by the background converter during encrypted→web-format
-/// migration. May appear unused in some build configurations.
-#[allow(dead_code)]
+/// Used by the background converter during encrypted→web-format migration
+/// (see [`crate::photos::convert`]).
 pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
     // Minimum valid ciphertext: 12-byte nonce + 16-byte GCM authentication tag
     if data.len() < NONCE_LENGTH + 16 {

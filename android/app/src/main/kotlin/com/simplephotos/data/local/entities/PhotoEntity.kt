@@ -29,6 +29,7 @@ data class PhotoEntity(
     /** File path to cached thumbnail JPEG in app-internal storage */
     val thumbnailPath: String? = null,
     val syncStatus: SyncStatus = SyncStatus.PENDING,
+    /** @deprecated Currently unused — retained to avoid a Room schema migration. */
     val encryptedBlobSize: Long? = null,
     /** File size in bytes (from server, for plain-mode photos) */
     val sizeBytes: Long? = null,

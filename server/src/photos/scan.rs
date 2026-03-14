@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::metadata::extract_media_metadata;
@@ -357,14 +358,7 @@ pub async fn scan_and_register(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Verify admin
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     let storage_root = state.storage_root.read().await.clone();
 

@@ -29,6 +29,7 @@ use crate::auth::middleware::AuthUser;
 use crate::blobs::storage;
 use crate::crypto;
 use crate::error::AppError;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::scan::{needs_web_preview, generate_web_preview_bg, generate_thumbnail_file};
@@ -791,14 +792,7 @@ pub async fn start_migration(
     auth: AuthUser,
     Json(req): Json<StartMigrationRequest>,
 ) -> Result<Json<StartMigrationResponse>, AppError> {
-    // Admin check
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     // Parse & validate key
     let key = crypto::parse_key_hex(&req.key_hex)
@@ -882,14 +876,7 @@ pub async fn migration_stream(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Response, AppError> {
-    // Admin check
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     let progress = {
         let guard = progress_store().read().await;

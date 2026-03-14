@@ -22,5 +22,6 @@ sealed class Screen(val route: String) {
     data object TwoFactorSetup : Screen("two_factor_setup")
     data object FolderSelection : Screen("folder_selection")
     data object SecureGallery : Screen("secure_gallery")
+    data object SharedAlbums : Screen("shared_albums")
     data object Diagnostics : Screen("diagnostics")
 }

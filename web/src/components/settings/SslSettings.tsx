@@ -1,6 +1,7 @@
 /** SSL/TLS certificate configuration panel — upload cert/key or configure Let's Encrypt. */
 import { useState, useEffect } from "react";
 import { api } from "../../api/client";
+import { getErrorMessage } from "../../utils/formatters";
 
 interface SslSettingsProps {
   error: string;
@@ -44,8 +45,8 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
       });
       setSslSaved(true);
       setSuccess("TLS configuration saved. Restart the server to apply changes.");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setSslSaving(false);
     }

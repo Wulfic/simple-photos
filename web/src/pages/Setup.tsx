@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { deriveKey } from "../crypto/crypto";
 import { useAuthStore } from "../store/auth";
 import ThemeToggle from "../components/ThemeToggle";
+import { getErrorMessage } from "../utils/formatters";
 
 /**
  * Encryption unlock page.
@@ -32,8 +33,8 @@ export default function Setup() {
     try {
       await deriveKey(password, username);
       navigate("/gallery");
-    } catch (err: any) {
-      setError(err.message || "Key derivation failed");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Key derivation failed"));
     } finally {
       setLoading(false);
     }

@@ -12,6 +12,7 @@ import { deriveKey } from "../crypto/crypto";
 import { clearAllUserData } from "../db";
 import { thumbMemoryCache } from "../utils/gallery";
 import ThemeToggle from "../components/ThemeToggle";
+import { getErrorMessage } from "../utils/formatters";
 
 export default function Login() {
   const [username, setUsername] = useState("");
@@ -65,8 +66,8 @@ export default function Login() {
           navigate("/gallery");
         }
       }
-    } catch (err: any) {
-      setError(err.message || "Login failed");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Login failed"));
     } finally {
       setLoading(false);
     }

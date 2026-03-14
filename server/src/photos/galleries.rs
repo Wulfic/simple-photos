@@ -147,13 +147,12 @@ pub async fn delete_secure_gallery(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/galleries/secure/:id/items
-/// Add a blob to a secure gallery.
 #[derive(Debug, Deserialize)]
 pub struct AddGalleryItemRequest {
     pub blob_id: String,
 }
 
+/// POST /api/galleries/secure/{id}/items — add a blob to a secure gallery.
 pub async fn add_gallery_item(
     State(state): State<AppState>,
     auth: AuthUser,

@@ -260,9 +260,49 @@ interface ApiService {
     @POST("api/client-logs")
     suspend fun submitClientLogs(@Body batch: ClientLogBatch): Map<String, Any>
 
-    // TODO: Shared Albums — server exposes 10 endpoints under /api/sharing/*
-    //   (create, list, get, update, delete, add/remove photos, generate/revoke link, access)
-    //   These are fully implemented on the web client but not yet wired into Android.
+    // ── Shared Albums ────────────────────────────────────────────────────
+
+    @GET("api/sharing/albums")
+    suspend fun listSharedAlbums(): List<SharedAlbumInfo>
+
+    @POST("api/sharing/albums")
+    suspend fun createSharedAlbum(@Body request: CreateSharedAlbumRequest): CreateSharedAlbumResponse
+
+    @DELETE("api/sharing/albums/{id}")
+    suspend fun deleteSharedAlbum(@Path("id") albumId: String): retrofit2.Response<Unit>
+
+    @GET("api/sharing/albums/{id}/members")
+    suspend fun listSharedAlbumMembers(@Path("id") albumId: String): List<SharedAlbumMember>
+
+    @POST("api/sharing/albums/{id}/members")
+    suspend fun addSharedAlbumMember(
+        @Path("id") albumId: String,
+        @Body request: AddMemberRequest
+    ): AddMemberResponse
+
+    @DELETE("api/sharing/albums/{id}/members/{userId}")
+    suspend fun removeSharedAlbumMember(
+        @Path("id") albumId: String,
+        @Path("userId") userId: String
+    ): retrofit2.Response<Unit>
+
+    @GET("api/sharing/albums/{id}/photos")
+    suspend fun listSharedAlbumPhotos(@Path("id") albumId: String): List<SharedAlbumPhoto>
+
+    @POST("api/sharing/albums/{id}/photos")
+    suspend fun addSharedAlbumPhoto(
+        @Path("id") albumId: String,
+        @Body request: AddSharedPhotoRequest
+    ): AddSharedPhotoResponse
+
+    @DELETE("api/sharing/albums/{albumId}/photos/{photoId}")
+    suspend fun removeSharedAlbumPhoto(
+        @Path("albumId") albumId: String,
+        @Path("photoId") photoId: String
+    ): retrofit2.Response<Unit>
+
+    @GET("api/sharing/users")
+    suspend fun listUsersForSharing(): List<ShareableUser>
 
     // ── Diagnostics Config (admin) ───────────────────────────────────────
     @GET("api/admin/diagnostics/config")

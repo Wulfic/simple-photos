@@ -459,11 +459,6 @@ pub async fn setup_2fa(
     let otpauth_uri = totp.get_url();
 
     let secret_b32 = secret.to_encoded().to_string();
-    sqlx::query("UPDATE users SET totp_secret = ? WHERE id = ?")
-        .bind(&secret_b32)
-        .bind(&auth.user_id)
-        .execute(&state.pool)
-        .await?;
 
     // Generate 10 backup codes using CSPRNG
     let backup_codes: Vec<String> = {
@@ -477,9 +472,20 @@ pub async fn setup_2fa(
             .collect()
     };
 
+    // Wrap secret + backup-code writes in a transaction so a crash between
+    // DELETE and INSERTs can't leave the user with a TOTP secret but no
+    // backup codes.
+    let mut tx = state.pool.begin().await?;
+
+    sqlx::query("UPDATE users SET totp_secret = ? WHERE id = ?")
+        .bind(&secret_b32)
+        .bind(&auth.user_id)
+        .execute(&mut *tx)
+        .await?;
+
     sqlx::query("DELETE FROM totp_backup_codes WHERE user_id = ?")
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
 
     for code in &backup_codes {
@@ -488,9 +494,11 @@ pub async fn setup_2fa(
             .bind(Uuid::new_v4().to_string())
             .bind(&auth.user_id)
             .bind(&code_hash)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
+
+    tx.commit().await?;
 
     audit::log(
         &state.pool,
@@ -581,15 +589,21 @@ pub async fn disable_2fa(
 
     verify_totp_code(&secret, &req.totp_code, &state.config.server.base_url, &username)?;
 
+    // Transaction: disable 2FA flag + delete backup codes atomically so a
+    // crash can't leave orphaned codes in the table.
+    let mut tx = state.pool.begin().await?;
+
     sqlx::query("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?")
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query("DELETE FROM totp_backup_codes WHERE user_id = ?")
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
 
     audit::log(
         &state.pool,

@@ -14,6 +14,8 @@
  * speed regardless of whether the user is looking at the tab.
  */
 
+import { getErrorMessage } from "../utils/formatters";
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 interface PlainPhoto {
@@ -342,10 +344,10 @@ async function runMigration(
             );
             thumbBlobId = thumbUpload.blob_id;
           }
-        } catch (thumbErr: any) {
+        } catch (thumbErr: unknown) {
           console.warn(
             `[Worker Migration] Thumbnail failed for "${photo.filename}":`,
-            thumbErr.message
+            getErrorMessage(thumbErr)
           );
         }
 
@@ -389,14 +391,14 @@ async function runMigration(
 
         itemSuccess = true;
         succeeded++;
-      } catch (itemErr: any) {
+      } catch (itemErr: unknown) {
         console.error(
           `[Worker Migration] FAILED "${photo.filename}" attempt ${attempts}/3:`,
-          itemErr.message
+          getErrorMessage(itemErr)
         );
         if (attempts >= 3) {
           failedCount++;
-          lastError = `Failed on "${photo.filename}": ${itemErr.message}`;
+          lastError = `Failed on "${photo.filename}": ${getErrorMessage(itemErr)}`;
         } else {
           // Brief pause before retry
           await new Promise((r) => setTimeout(r, 500 * attempts));
@@ -476,11 +478,11 @@ self.onmessage = async (e: MessageEvent<InMessage>) => {
       );
 
       await runMigration(cryptoKey, msg.photos);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("[Worker Migration] Fatal:", err);
       const errMsg: ErrorMessage = {
         type: "error",
-        message: err.message || "Migration worker failed",
+        message: getErrorMessage(err, "Migration worker failed"),
       };
       self.postMessage(errMsg);
     }

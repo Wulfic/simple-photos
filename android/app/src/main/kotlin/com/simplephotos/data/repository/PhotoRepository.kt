@@ -251,6 +251,21 @@ class PhotoRepository @Inject constructor(
     }
 
     /**
+     * Download a plain-mode photo/video file from the server and stream it
+     * directly to [outputFile].  Uses `@Streaming` on the Retrofit call so
+     * the response body is never buffered entirely in memory — safe for
+     * multi-hundred-MB videos that would OOM with `response.bytes()`.
+     */
+    suspend fun downloadPlainPhotoToFile(photoId: String, outputFile: File) {
+        val response = api.photoFile(photoId)
+        response.byteStream().use { input ->
+            outputFile.outputStream().buffered().use { output ->
+                input.copyTo(output, bufferSize = 8192)
+            }
+        }
+    }
+
+    /**
      * Download and decrypt a **thumbnail** blob via `GET /api/blobs/{id}/thumb`.
      *
      * The server resolves the photo blob ID → encrypted_thumb_blob_id internally,

@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::models::{ClientLogBatch, ClientLogListResponse, ClientLogRecord};
@@ -131,16 +132,7 @@ pub async fn list_logs(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<ListLogsParams>,
 ) -> Result<Json<ClientLogListResponse>, AppError> {
-    // Admin check — verify role
-    let role: Option<String> =
-        sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-            .bind(&auth.user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-
-    if role.as_deref() != Some("admin") {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     let limit = params.limit.unwrap_or(100).min(500) as i64;
 

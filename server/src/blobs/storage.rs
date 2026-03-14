@@ -1,3 +1,5 @@
+//! Blob storage utilities — path derivation, file I/O, and existence checks.
+
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 

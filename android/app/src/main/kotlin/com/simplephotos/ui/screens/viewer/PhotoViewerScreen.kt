@@ -70,9 +70,14 @@ private data class CropCorners(
 )
 
 // ---------------------------------------------------------------------------
-// Screen — HorizontalPager for swipe navigation between photos
 // ---------------------------------------------------------------------------
 
+/**
+ * Full-screen photo/video viewer with horizontal swipe paging.
+ *
+ * Supports pinch-to-zoom, video playback, EXIF info, favorites,
+ * crop/edit mode, and detail overlays.
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -752,35 +757,59 @@ fun PhotoViewerScreen(
                             val photo = currentPhoto ?: return@IconButton
                             scope.launch {
                                 try {
-                                    // For local files, use content resolver; for server files, download
-                                    val bytes: ByteArray? = when {
+                                    val values = ContentValues().apply {
+                                        put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
+                                        put(MediaStore.MediaColumns.MIME_TYPE, when {
+                                            photo.filename.endsWith(".png", true) -> "image/png"
+                                            photo.filename.endsWith(".gif", true) -> "image/gif"
+                                            photo.filename.endsWith(".mp4", true) -> "video/mp4"
+                                            photo.filename.endsWith(".webm", true) -> "video/webm"
+                                            else -> "image/jpeg"
+                                        })
+                                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                    }
+                                    val destUri = context.contentResolver.insert(
+                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                                    )
+                                    if (destUri == null) {
+                                        downloadMessage = "Download failed"
+                                        return@launch
+                                    }
+
+                                    val saved = when {
+                                        // Local files: stream from content resolver
                                         photo.localPath != null -> {
                                             try {
-                                                context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.readBytes()
-                                            } catch (_: Exception) { null }
+                                                context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
+                                                    context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                                        input.copyTo(output)
+                                                    }
+                                                }
+                                                true
+                                            } catch (_: Exception) { false }
                                         }
-                                        else -> viewModel.downloadPhotoBytes(photo)
-                                    }
-                                    if (bytes != null) {
-                                        val values = ContentValues().apply {
-                                            put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
-                                            put(MediaStore.MediaColumns.MIME_TYPE, when {
-                                                photo.filename.endsWith(".png", true) -> "image/png"
-                                                photo.filename.endsWith(".gif", true) -> "image/gif"
-                                                photo.filename.endsWith(".mp4", true) -> "video/mp4"
-                                                photo.filename.endsWith(".webm", true) -> "video/webm"
-                                                else -> "image/jpeg"
-                                            })
-                                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                        // Server files: stream download → temp file → MediaStore
+                                        // Uses downloadPhotoToFile() which streams to disk with
+                                        // constant ~8 KB heap — safe for large videos.
+                                        else -> {
+                                            val tempFile = java.io.File.createTempFile("save_", ".tmp", context.cacheDir)
+                                            try {
+                                                val ok = viewModel.downloadPhotoToFile(photo, tempFile)
+                                                if (ok) {
+                                                    tempFile.inputStream().buffered().use { input ->
+                                                        context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                                            input.copyTo(output)
+                                                        }
+                                                    }
+                                                }
+                                                ok
+                                            } finally {
+                                                tempFile.delete()
+                                            }
                                         }
-                                        val uri = context.contentResolver.insert(
-                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                                        )
-                                        uri?.let { context.contentResolver.openOutputStream(it)?.use { os -> os.write(bytes) } }
-                                        downloadMessage = "Saved to Downloads"
-                                    } else {
-                                        downloadMessage = "Download failed"
                                     }
+
+                                    downloadMessage = if (saved) "Saved to Downloads" else "Download failed"
                                 } catch (e: Exception) {
                                     downloadMessage = "Download failed: ${e.message}"
                                 }

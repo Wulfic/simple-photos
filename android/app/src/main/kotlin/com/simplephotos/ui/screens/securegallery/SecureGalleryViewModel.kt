@@ -16,6 +16,9 @@ import com.simplephotos.data.remote.dto.SecureGalleryUnlockRequest
 import com.simplephotos.data.repository.PhotoRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -169,9 +172,11 @@ class SecureGalleryViewModel @Inject constructor(
         val gallery = selectedGallery ?: return
         viewModelScope.launch {
             try {
-                for (blobId in blobIds) {
-                    withContext(Dispatchers.IO) {
-                        api.addSecureGalleryItem(gallery.id, SecureGalleryAddItemRequest(blobId))
+                withContext(Dispatchers.IO) {
+                    coroutineScope {
+                        blobIds.map { blobId ->
+                            async { api.addSecureGalleryItem(gallery.id, SecureGalleryAddItemRequest(blobId)) }
+                        }.awaitAll()
                     }
                 }
                 loadItems(gallery.id)

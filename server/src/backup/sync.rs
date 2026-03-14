@@ -26,9 +26,9 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
-use super::handlers::require_admin;
 use super::models::*;
 
 // ── Concurrency Lock ─────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ fn active_syncs() -> &'static std::sync::Mutex<HashSet<String>> {
 }
 
 /// RAII guard that removes the server ID from the active set on drop.
-struct SyncGuard {
+pub struct SyncGuard {
     server_id: String,
 }
 
@@ -56,7 +56,7 @@ impl Drop for SyncGuard {
 
 /// Try to acquire the sync lock for a server. Returns `Some(SyncGuard)` if
 /// no other sync is running for that server, or `None` if one is already active.
-fn try_acquire_sync(server_id: &str) -> Option<SyncGuard> {
+pub fn try_acquire_sync(server_id: &str) -> Option<SyncGuard> {
     let mut set = active_syncs().lock().ok()?;
     if set.contains(server_id) {
         None

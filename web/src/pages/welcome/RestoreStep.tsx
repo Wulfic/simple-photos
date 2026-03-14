@@ -1,12 +1,6 @@
 /** Wizard step — restore data from a backup server or local file. */
 import { useState, useEffect } from "react";
-import type { WizardStep, RestoreSource } from "./types";
-
-interface DiscoveredServer {
-  address: string;
-  name: string;
-  version: string;
-}
+import type { WizardStep, RestoreSource, DiscoveredServer } from "./types";
 
 export interface RestoreStepProps {
   setStep: (step: WizardStep) => void;

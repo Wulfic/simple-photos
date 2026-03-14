@@ -26,9 +26,11 @@ use uuid::Uuid;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::models::*;
+use super::sync::try_acquire_sync;
 
 // ── Recovery ─────────────────────────────────────────────────────────────────
 
@@ -38,9 +40,9 @@ use super::models::*;
 ///
 /// This endpoint:
 /// 1. Connects to the backup server's /api/backup/list endpoint
-/// 2. Compares filenames with local photos
+/// 2. Deduplicates by **photo ID** against the local `photos` table
 /// 3. Downloads any missing photos and stores them locally
-/// 4. Registers them in the photos table
+/// 4. Registers them in the photos table (INSERT OR IGNORE for idempotency)
 pub async fn recover_from_backup(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -83,13 +85,22 @@ pub async fn recover_from_backup(
     .execute(&state.pool)
     .await?;
 
-    // Spawn recovery as a background task
+    // Prevent overlapping recoveries to the same server
+    let guard = try_acquire_sync(&server_id).ok_or_else(|| {
+        AppError::BadRequest(
+            "A sync or recovery is already in progress for this server".into(),
+        )
+    })?;
+
+    // Spawn recovery as a background task (guard moves into the task
+    // so the lock is held for the full duration and released on drop).
     let pool = state.pool.clone();
     let storage_root = state.storage_root.read().await.clone();
     let user_id = auth.user_id.clone();
     let recovery_id_clone = recovery_id.clone();
 
     tokio::spawn(async move {
+        let _guard = guard; // hold lock until task completes
         run_recovery(
             &pool,
             &storage_root,
@@ -421,17 +432,4 @@ pub async fn proxy_backup_photos(
             e
         ))),
     }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-async fn require_admin(state: &AppState, auth: &AuthUser) -> Result<(), AppError> {
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
-    Ok(())
 }

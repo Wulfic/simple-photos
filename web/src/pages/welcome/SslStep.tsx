@@ -1,9 +1,11 @@
 /** Wizard step — configure SSL/TLS (upload cert or enable Let's Encrypt). */
 import { useState } from "react";
 import { api } from "../../api/client";
+import type { WizardStep } from "./types";
+import { getErrorMessage } from "../../utils/formatters";
 
 export interface SslStepProps {
-  setStep: (step: any) => void;
+  setStep: (step: WizardStep) => void;
   setError: (msg: string) => void;
   error: string;
 }
@@ -33,8 +35,8 @@ export default function SslStep({ setStep, setError, error }: SslStepProps) {
         key_path: keyPath.trim(),
       });
       setSaved(true);
-    } catch (err: any) {
-      setError(err.message || "Failed to save SSL configuration");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to save SSL configuration"));
     } finally {
       setSaving(false);
     }

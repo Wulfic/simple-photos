@@ -8,6 +8,7 @@ import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db, type CachedTrashItem } from "../db";
 import AppHeader from "../components/AppHeader";
+import { formatBytes, getErrorMessage } from "../utils/formatters";
 import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
@@ -35,14 +36,6 @@ interface TrashItem {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-}
 
 function timeUntil(isoDate: string): string {
   const now = new Date();
@@ -107,8 +100,8 @@ export default function Trash() {
       }
 
       setItems(enriched);
-    } catch (e: any) {
-      setError(e.message || "Failed to load trash");
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, "Failed to load trash"));
     } finally {
       setLoading(false);
     }
@@ -155,8 +148,8 @@ export default function Trash() {
         next.delete(id);
         return next;
       });
-    } catch (e: any) {
-      setError(e.message || "Failed to restore");
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, "Failed to restore"));
     } finally {
       setActionLoading(null);
     }
@@ -180,8 +173,8 @@ export default function Trash() {
         next.delete(id);
         return next;
       });
-    } catch (e: any) {
-      setError(e.message || "Failed to delete");
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, "Failed to delete"));
     } finally {
       setActionLoading(null);
     }
@@ -199,8 +192,8 @@ export default function Trash() {
       setItems([]);
       setSelectedIds(new Set());
       setConfirmEmpty(false);
-    } catch (e: any) {
-      setError(e.message || "Failed to empty trash");
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, "Failed to empty trash"));
     } finally {
       setActionLoading(null);
     }
@@ -237,8 +230,8 @@ export default function Trash() {
       }
       setItems((prev) => prev.filter((i) => !selectedIds.has(i.id)));
       setSelectedIds(new Set());
-    } catch (e: any) {
-      setError(e.message || "Failed to restore selected items");
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, "Failed to restore selected items"));
       loadTrash(); // Refresh to get accurate state
     } finally {
       setActionLoading(null);
@@ -258,8 +251,8 @@ export default function Trash() {
       }
       setItems((prev) => prev.filter((i) => !selectedIds.has(i.id)));
       setSelectedIds(new Set());
-    } catch (e: any) {
-      setError(e.message || "Failed to delete selected items");
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, "Failed to delete selected items"));
       loadTrash();
     } finally {
       setActionLoading(null);

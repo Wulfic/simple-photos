@@ -146,7 +146,58 @@ export default function useViewerMedia(
         return;
       }
 
-      // Cache miss — fetch from server (use /web endpoint for browser-compatible format)
+      // ── Streaming path (video / audio) ──────────────────────────────────
+      // For video and audio, point the <video>/<audio> element directly at
+      // the server URL with an inline auth token.  This lets the browser
+      // issue native HTTP Range requests — enabling instant seeking and
+      // progressive playback without downloading the entire file first.
+      if ((resolved === "video" || resolved === "audio") && useAuthStore.getState().accessToken) {
+        const token = useAuthStore.getState().accessToken!;
+
+        // Check for 202 (conversion in progress) before handing off
+        const headers: Record<string, string> = {
+          "X-Requested-With": "SimplePhotos",
+          Authorization: `Bearer ${token}`,
+        };
+        let probeRes = await fetch(api.photos.webUrl(photoId), {
+          method: "HEAD",
+          headers,
+        });
+        if (probeRes.status === 202) {
+          setIsConverting(true);
+          const delays = [2000, 3000, 5000, 8000, 12000];
+          for (const delay of delays) {
+            await new Promise((r) => setTimeout(r, delay));
+            probeRes = await fetch(api.photos.webUrl(photoId), {
+              method: "HEAD",
+              headers,
+            });
+            if (probeRes.status !== 202) break;
+          }
+          if (probeRes.status === 202) {
+            setLoading(false);
+            return;
+          }
+          setIsConverting(false);
+        }
+
+        // Server has the file ready — set the direct streaming URL.
+        const streamingUrl = api.photos.streamUrl(photoId, token);
+        setMediaUrl(streamingUrl);
+        preloadCache.current.set(photoId, {
+          url: streamingUrl,
+          filename: resolvedFilename,
+          mimeType: resolvedMime,
+          mediaType: resolved,
+          cropData: photoCropData,
+          isFavorite: photoIsFavorite,
+        });
+        setLoading(false);
+        return;
+      }
+
+      // ── Blob path (images / gifs / fallback) ───────────────────────────
+      // Images benefit from blob-URL caching (IDB + in-memory preload map).
       const { accessToken } = useAuthStore.getState();
       const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
       if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;

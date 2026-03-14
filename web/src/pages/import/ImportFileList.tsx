@@ -1,5 +1,5 @@
 /** File list component for the Import page — shows queued files with sizes and status icons. */
-import { formatBytes } from "../../utils/media";
+import { formatBytes } from "../../utils/formatters";
 import type { ImportItem } from "../../utils/importTypes";
 
 interface ImportFileListProps {

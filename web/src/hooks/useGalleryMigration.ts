@@ -4,6 +4,7 @@ import { hasCryptoKey } from "../crypto/crypto";
 import { useAuthStore } from "../store/auth";
 import { useProcessingStore } from "../store/processing";
 import type { PlainPhoto } from "../utils/gallery";
+import { getErrorMessage } from "../utils/formatters";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -153,11 +154,11 @@ export function useGalleryMigration({
         keyHex,
         photos: allPhotos,
       });
-    } catch (err: any) {
-      console.error("[Gallery Migration] Setup error:", err.message);
+    } catch (err: unknown) {
+      console.error("[Gallery Migration] Setup error:", getErrorMessage(err));
       await api.encryption.reportProgress({
         completed_count: 0,
-        error: `Migration failed: ${err.message}`,
+        error: `Migration failed: ${getErrorMessage(err)}`,
       }).catch(() => {});
       migrationRunningRef.current = false;
       endTask("encryption");
@@ -228,11 +229,11 @@ export function useGalleryMigration({
           // SSE connection failed — polling handles progress
           console.warn("[Gallery Migration] SSE unavailable, relying on polling");
         }
-      } catch (serverErr: any) {
+      } catch (serverErr: unknown) {
         // Server-side migration not available — fall back to Web Worker
         console.warn(
           "[Gallery Migration] Server-side migration unavailable, falling back to Web Worker:",
-          serverErr.message
+          getErrorMessage(serverErr)
         );
         await startWebWorkerMigration();
       }

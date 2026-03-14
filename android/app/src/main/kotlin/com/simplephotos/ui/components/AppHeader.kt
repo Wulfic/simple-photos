@@ -48,6 +48,7 @@ data class HeaderNavigation(
     val onTrashClick: () -> Unit = {},
     val onSettingsClick: () -> Unit = {},
     val onSecureGalleryClick: () -> Unit = {},
+    val onSharedAlbumsClick: () -> Unit = {},
     val onDiagnosticsClick: () -> Unit = {},
     val onLogout: () -> Unit = {},
     val onToggleTheme: () -> Unit = {},
@@ -194,6 +195,7 @@ fun AppHeader(
                     isSyncing = isSyncing,
                     inactiveTextColor = inactiveTextColor,
                     onSecureGalleryClick = navigation.onSecureGalleryClick,
+                    onSharedAlbumsClick = navigation.onSharedAlbumsClick,
                     onSettingsClick = navigation.onSettingsClick,
                     onDiagnosticsClick = navigation.onDiagnosticsClick,
                     isAdmin = navigation.isAdmin,
@@ -276,6 +278,7 @@ private fun UserMenu(
     isSyncing: Boolean,
     inactiveTextColor: Color,
     onSecureGalleryClick: () -> Unit,
+    onSharedAlbumsClick: () -> Unit = {},
     onSettingsClick: () -> Unit,
     onDiagnosticsClick: () -> Unit = {},
     isAdmin: Boolean = false,
@@ -361,6 +364,16 @@ private fun UserMenu(
                 },
                 leadingIcon = {
                     Icon(painter = painterResource(R.drawable.ic_locks), contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Shared Albums") },
+                onClick = {
+                    expanded = false
+                    onSharedAlbumsClick()
+                },
+                leadingIcon = {
+                    Icon(painter = painterResource(R.drawable.ic_shared), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
             DropdownMenuItem(

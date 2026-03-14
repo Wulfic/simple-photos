@@ -7,6 +7,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
+import { getErrorMessage } from "../utils/formatters";
 
 interface Gallery {
   id: string;
@@ -113,8 +114,8 @@ export default function SecureGallery() {
       setGalleryToken(res.gallery_token);
       setAuthenticated(true);
       setPassword("");
-    } catch (err: any) {
-      setAuthError(err.message || "Invalid password");
+    } catch (err: unknown) {
+      setAuthError(getErrorMessage(err, "Invalid password"));
     } finally {
       setAuthLoading(false);
     }
@@ -132,8 +133,8 @@ export default function SecureGallery() {
       setNewName("");
       setShowCreate(false);
       await loadGalleries();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setCreating(false);
     }
@@ -151,8 +152,8 @@ export default function SecureGallery() {
         setItems([]);
       }
       await loadGalleries();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -186,8 +187,8 @@ export default function SecureGallery() {
       setShowAddPhotos(false);
       await loadItems(selectedGallery.id);
       await loadGalleries();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setAddingPhotos(false);
     }

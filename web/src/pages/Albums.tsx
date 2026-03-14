@@ -11,6 +11,7 @@ import { db, type CachedAlbum, type CachedPhoto } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import { getErrorMessage } from "../utils/formatters";
 
 type SharedAlbumInfo = {
   id: string;
@@ -146,8 +147,8 @@ export default function Albums() {
       if (staleIds.length > 0) {
         await db.albums.bulkDelete(staleIds);
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -187,8 +188,8 @@ export default function Albums() {
 
       setNewAlbumName("");
       setShowCreate(false);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -214,8 +215,8 @@ export default function Albums() {
       setNewSharedName("");
       setShowCreateShared(false);
       await loadSharedAlbums();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -224,8 +225,8 @@ export default function Albums() {
       await api.sharing.deleteAlbum(albumId);
       setConfirmDeleteSharedId(null);
       await loadSharedAlbums();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -234,8 +235,8 @@ export default function Albums() {
     try {
       const users = await api.sharing.listUsers();
       setShareUsers(users);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -244,8 +245,8 @@ export default function Albums() {
     try {
       await api.sharing.addMember(sharePickerAlbumId, userId);
       await loadSharedAlbums();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
