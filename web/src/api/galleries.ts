@@ -1,3 +1,12 @@
+/**
+ * Secure galleries API client — password-protected photo galleries.
+ *
+ * Create, unlock, list, and manage items in secure galleries. Unlocking
+ * returns a time-limited token that must be sent as `X-Gallery-Token`
+ * to access gallery items.
+ *
+ * Maps to server routes: `/api/galleries/secure/*`.
+ */
 import { request } from "./core";
 
 // ── Secure Galleries API ─────────────────────────────────────────────────────

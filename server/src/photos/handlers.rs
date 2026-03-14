@@ -515,6 +515,10 @@ pub async fn toggle_favorite(
 
 // ── Crop Metadata ───────────────────────────────────────────────────────────
 
+/// Request body for `PUT /api/photos/{id}/crop`.
+/// `crop_metadata` is a JSON string describing the crop rectangle as percentage
+/// coordinates: `{"x": 0.1, "y": 0.2, "width": 0.6, "height": 0.5, "rotate": 0}`.
+/// Send `null` to clear the crop.
 #[derive(Debug, Deserialize)]
 pub struct SetCropRequest {
     pub crop_metadata: Option<String>,

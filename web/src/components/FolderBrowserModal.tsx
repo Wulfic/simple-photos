@@ -1,3 +1,9 @@
+/**
+ * Full-screen modal for browsing and selecting server-side directories.
+ *
+ * Used by admin storage configuration and import features to let the user
+ * navigate the server's filesystem and pick a target folder.
+ */
 import { useState } from "react";
 
 interface FolderBrowserModalProps {

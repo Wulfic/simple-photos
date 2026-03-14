@@ -1,3 +1,10 @@
+/**
+ * Admin API client — user management, storage config, server settings,
+ * SSL/TLS, import scanning, media conversion triggers.
+ *
+ * All endpoints require admin role (enforced server-side).
+ * Maps to server routes: `/api/admin/*` plus a few `/api/photos/` helpers.
+ */
 import { request, tryRefresh, BASE } from "./core";
 import { useAuthStore } from "../store/auth";
 import type { TotpSetupResponse } from "./types";

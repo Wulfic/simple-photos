@@ -1,3 +1,8 @@
+/**
+ * Client diagnostic log DTOs — structured log entries submitted by the
+ * [com.simplephotos.sync.DiagnosticLogger] during backup operations,
+ * and the config toggle for enabling/disabling diagnostics.
+ */
 package com.simplephotos.data.remote.dto
 
 import com.google.gson.annotations.SerializedName

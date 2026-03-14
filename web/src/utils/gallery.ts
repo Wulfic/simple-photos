@@ -26,6 +26,13 @@ export interface PlainPhoto {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/**
+ * Generate a cover-cropped JPEG thumbnail from an image file.
+ * Draws the image scaled to fill a square canvas, center-cropped.
+ * @param file - Source image file
+ * @param size - Thumbnail dimension in pixels (square)
+ * @returns JPEG ArrayBuffer at 80% quality
+ */
 export function generateImageThumbnail(file: File, size: number): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -154,6 +161,7 @@ export async function fetchAllPages(blobType: string) {
   return allBlobs;
 }
 
+/** Format a duration in seconds as `M:SS` (e.g. `2:05`). */
 export function formatDuration(secs: number): string {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
@@ -167,6 +175,11 @@ export function formatDuration(secs: number): string {
 export const THUMB_CACHE_NAME = "sp-thumbnails-v1";
 export const thumbMemoryCache = new Map<string, string>(); // photoId → objectURL
 
+/**
+ * Retrieve a cached thumbnail URL for a photo.
+ * Checks in-memory Map first, then the persistent Cache API.
+ * @returns An ObjectURL for the thumbnail, or `null` if not cached.
+ */
 export async function getCachedThumbnail(photoId: string): Promise<string | null> {
   // Check memory cache first (fastest)
   const memUrl = thumbMemoryCache.get(photoId);
@@ -189,6 +202,11 @@ export async function getCachedThumbnail(photoId: string): Promise<string | null
   return null;
 }
 
+/**
+ * Store a thumbnail blob in both the in-memory cache and the
+ * persistent Cache API (if available).
+ * @returns An ObjectURL referencing the cached blob.
+ */
 export async function cacheThumbnail(photoId: string, blob: Blob): Promise<string> {
   const url = URL.createObjectURL(blob);
   thumbMemoryCache.set(photoId, url);

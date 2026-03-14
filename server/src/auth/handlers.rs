@@ -75,7 +75,7 @@ pub async fn register(
     .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::Register,
         Some(&user_id),
         &headers,
@@ -122,7 +122,7 @@ pub async fn login(
                 "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK",
             );
             audit::log(
-                &state.pool,
+                &state,
                 AuditEvent::LoginFailure,
                 None,
                 &headers,
@@ -144,7 +144,7 @@ pub async fn login(
         record_failed_login(&state, &user.id, &headers).await;
 
         audit::log(
-            &state.pool,
+            &state,
             AuditEvent::LoginFailure,
             Some(&user.id),
             &headers,
@@ -176,7 +176,7 @@ pub async fn login(
     let (access_token, refresh_token) = issue_tokens(&state, &user.id).await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::LoginSuccess,
         Some(&user.id),
         &headers,
@@ -235,7 +235,7 @@ pub async fn login_totp(
         match verify_totp_code(totp_secret, code, &state.config.server.base_url, &user.username) {
             Ok(()) => {
                 audit::log(
-                    &state.pool,
+                    &state,
                     AuditEvent::TotpLoginSuccess,
                     Some(user_id),
                     &headers,
@@ -246,7 +246,7 @@ pub async fn login_totp(
             Err(e) => {
                 record_failed_login(&state, user_id, &headers).await;
                 audit::log(
-                    &state.pool,
+                    &state,
                     AuditEvent::TotpLoginFailure,
                     Some(user_id),
                     &headers,
@@ -259,7 +259,7 @@ pub async fn login_totp(
     } else if let Some(backup) = &req.backup_code {
         verify_backup_code(&state, user_id, backup).await?;
         audit::log(
-            &state.pool,
+            &state,
             AuditEvent::BackupCodeUsed,
             Some(user_id),
             &headers,
@@ -277,7 +277,7 @@ pub async fn login_totp(
     let (access_token, refresh_token) = issue_tokens(&state, user_id).await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::LoginSuccess,
         Some(user_id),
         &headers,
@@ -334,7 +334,7 @@ pub async fn refresh(
             .await?;
 
         audit::log(
-            &state.pool,
+            &state,
             AuditEvent::LoginFailure,
             Some(&user_id),
             &headers,
@@ -356,7 +356,7 @@ pub async fn refresh(
     let (access_token, new_refresh_token) = issue_tokens(&state, &user_id).await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::TokenRefresh,
         Some(&user_id),
         &headers,
@@ -397,7 +397,7 @@ pub async fn logout(
         .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::Logout,
         user_id.as_deref(),
         &headers,
@@ -501,7 +501,7 @@ pub async fn setup_2fa(
     tx.commit().await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::TotpSetup,
         Some(&auth.user_id),
         &headers,
@@ -524,6 +524,10 @@ pub async fn confirm_2fa(
     auth: AuthUser,
     Json(req): Json<TotpConfirmRequest>,
 ) -> Result<StatusCode, AppError> {
+    // Rate-limit TOTP confirmation to prevent brute-force of 6-digit codes
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    state.rate_limiters.totp.check(ip)?;
+
     let user = sqlx::query_as::<_, (Option<String>, bool)>(
         "SELECT totp_secret, totp_enabled != 0 FROM users WHERE id = ?",
     )
@@ -553,7 +557,7 @@ pub async fn confirm_2fa(
         .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::TotpEnabled,
         Some(&auth.user_id),
         &headers,
@@ -572,6 +576,10 @@ pub async fn disable_2fa(
     auth: AuthUser,
     Json(req): Json<TotpDisableRequest>,
 ) -> Result<StatusCode, AppError> {
+    // Rate-limit TOTP verification to prevent brute-force of 6-digit codes
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    state.rate_limiters.totp.check(ip)?;
+
     let user = sqlx::query_as::<_, (Option<String>, bool, String)>(
         "SELECT totp_secret, totp_enabled != 0, username FROM users WHERE id = ?",
     )
@@ -606,7 +614,7 @@ pub async fn disable_2fa(
     tx.commit().await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::TotpDisabled,
         Some(&auth.user_id),
         &headers,
@@ -649,7 +657,7 @@ pub async fn change_password(
 
     if !valid {
         audit::log(
-            &state.pool,
+            &state,
             AuditEvent::LoginFailure,
             Some(&auth.user_id),
             &headers,
@@ -682,7 +690,7 @@ pub async fn change_password(
     tx.commit().await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::PasswordChanged,
         Some(&auth.user_id),
         &headers,

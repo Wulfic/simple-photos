@@ -1,3 +1,13 @@
+/**
+ * Single-activity host for the entire app.
+ *
+ * Entry gate sequence:
+ * 1. Biometric authentication (fingerprint / face) if device supports it
+ * 2. Media permission request (photos/videos access)
+ * 3. Compose UI with NavGraph navigation
+ *
+ * Uses Hilt for DI injection of server URL preferences and theme state.
+ */
 package com.simplephotos
 
 import android.Manifest

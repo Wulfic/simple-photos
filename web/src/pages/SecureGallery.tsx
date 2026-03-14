@@ -1,3 +1,10 @@
+/**
+ * Password-protected secure gallery page.
+ *
+ * Users can create PIN/password-gated galleries, add photos from the main
+ * library, and unlock them with a password. Photos inside secure galleries
+ * are hidden from the main gallery view.
+ */
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";

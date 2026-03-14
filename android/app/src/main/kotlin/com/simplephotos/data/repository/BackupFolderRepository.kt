@@ -207,6 +207,10 @@ class BackupFolderRepository @Inject constructor(
     suspend fun getEnabledFolders(): List<BackupFolderEntity> =
         db.backupFolderDao().getEnabledFolders()
 
+    /** Total number of folders saved in the DB (enabled + disabled). */
+    suspend fun getFolderCount(): Int =
+        db.backupFolderDao().count()
+
     suspend fun getEnabledBucketIds(): List<Long> =
         db.backupFolderDao().getEnabledBucketIds()
 

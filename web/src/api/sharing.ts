@@ -1,3 +1,9 @@
+/**
+ * Shared albums API client — create albums, manage members, and add/remove
+ * photos from shared albums visible to multiple users.
+ *
+ * Maps to server routes: `/api/sharing/*`.
+ */
 import { request } from "./core";
 
 // ── Shared Albums API ────────────────────────────────────────────────────────

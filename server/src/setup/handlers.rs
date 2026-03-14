@@ -120,7 +120,7 @@ pub async fn init(
     .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::Register,
         Some(&user_id),
         &headers,
@@ -340,7 +340,7 @@ pub async fn pair(
     let (access_token, refresh_token) = issue_tokens(&state, &user_id).await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::Register,
         Some(&user_id),
         &headers,

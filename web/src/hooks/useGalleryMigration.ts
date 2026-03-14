@@ -1,3 +1,10 @@
+/**
+ * Hook for client-side encryption migration — encrypts plain photos to
+ * AES-256-GCM blobs, uploads them, and marks the server record as encrypted.
+ *
+ * Prefers server-parallel migration when available, falls back to a dedicated
+ * Web Worker for large libraries. Reports progress via the activity store.
+ */
 import { useRef, useEffect } from "react";
 import { api } from "../api/client";
 import { hasCryptoKey } from "../crypto/crypto";
@@ -254,5 +261,8 @@ export function useGalleryMigration({
         migrationPollRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only re-run when migrationStatus
+    // changes. The other deps (startTask, endTask, setMigration*, load*) are stable refs or
+    // setters that never change identity; listing them would add noise without benefit.
   }, [migrationStatus]);
 }

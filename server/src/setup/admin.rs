@@ -106,7 +106,7 @@ pub async fn create_user(
     .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::Register,
         Some(&auth.user_id),
         &headers,
@@ -197,7 +197,7 @@ pub async fn delete_user(
         .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,
@@ -252,7 +252,7 @@ pub async fn update_user_role(
     }
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,
@@ -316,7 +316,7 @@ pub async fn admin_reset_password(
         .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,
@@ -365,7 +365,7 @@ pub async fn admin_reset_2fa(
         .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,
@@ -458,7 +458,7 @@ pub async fn admin_setup_2fa(
     }
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,
@@ -538,7 +538,7 @@ pub async fn admin_confirm_2fa(
         .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,

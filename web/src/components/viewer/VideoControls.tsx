@@ -1,3 +1,8 @@
+/**
+ * Custom video playback overlay controls — play/pause, seek bar, time display,
+ * mute toggle, and fullscreen button. Overlaid on `<video>` elements in the
+ * photo Viewer and hidden/shown with the viewer's toolbar toggle.
+ */
 import { useState, useEffect, useRef, useCallback } from "react";
 
 interface VideoControlsProps {

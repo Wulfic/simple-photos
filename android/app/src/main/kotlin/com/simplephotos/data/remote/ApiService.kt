@@ -1,3 +1,11 @@
+/**
+ * Retrofit interface defining all server API endpoints.
+ *
+ * Each method maps to a server route under `/api/`. Authentication is handled
+ * by the OkHttp interceptor in [com.simplephotos.di.NetworkModule] which
+ * injects `Authorization: Bearer <token>` on every request and handles
+ * transparent token refresh on 401 responses.
+ */
 package com.simplephotos.data.remote
 
 import com.simplephotos.data.remote.dto.*

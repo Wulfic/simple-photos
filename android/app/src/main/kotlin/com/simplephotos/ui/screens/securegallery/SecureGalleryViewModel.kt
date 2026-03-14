@@ -5,15 +5,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
-import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.SecureGallery
-import com.simplephotos.data.remote.dto.SecureGalleryAddItemRequest
-import com.simplephotos.data.remote.dto.SecureGalleryCreateRequest
 import com.simplephotos.data.remote.dto.SecureGalleryItem
-import com.simplephotos.data.remote.dto.SecureGalleryUnlockRequest
 import com.simplephotos.data.repository.PhotoRepository
+import com.simplephotos.data.repository.SecureGalleryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -34,9 +30,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class SecureGalleryViewModel @Inject constructor(
-    private val api: ApiService,
-    private val photoRepository: PhotoRepository,
-    private val db: AppDatabase
+    private val secureGalleryRepository: SecureGalleryRepository,
+    private val photoRepository: PhotoRepository
 ) : ViewModel() {
 
     // Auth gate
@@ -76,7 +71,7 @@ class SecureGalleryViewModel @Inject constructor(
             authError = null
             try {
                 val res = withContext(Dispatchers.IO) {
-                    api.unlockSecureGalleries(SecureGalleryUnlockRequest(password))
+                    secureGalleryRepository.unlock(password)
                 }
                 galleryToken = res.galleryToken
                 isAuthenticated = true
@@ -93,7 +88,7 @@ class SecureGalleryViewModel @Inject constructor(
         viewModelScope.launch {
             galleriesLoading = true
             try {
-                val res = withContext(Dispatchers.IO) { api.listSecureGalleries() }
+                val res = withContext(Dispatchers.IO) { secureGalleryRepository.listGalleries() }
                 galleries = res.galleries
             } catch (e: Exception) {
                 error = "Failed to load galleries: ${e.message}"
@@ -119,7 +114,7 @@ class SecureGalleryViewModel @Inject constructor(
             itemsLoading = true
             try {
                 val res = withContext(Dispatchers.IO) {
-                    api.listSecureGalleryItems(galleryId, galleryToken)
+                    secureGalleryRepository.listItems(galleryId, galleryToken)
                 }
                 items = res.items
             } catch (e: Exception) {
@@ -144,7 +139,7 @@ class SecureGalleryViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    api.createSecureGallery(SecureGalleryCreateRequest(name))
+                    secureGalleryRepository.createGallery(name)
                 }
                 loadGalleries()
             } catch (e: Exception) {
@@ -156,7 +151,7 @@ class SecureGalleryViewModel @Inject constructor(
     fun deleteGallery(gallery: SecureGallery) {
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { api.deleteSecureGallery(gallery.id) }
+                withContext(Dispatchers.IO) { secureGalleryRepository.deleteGallery(gallery.id) }
                 if (selectedGallery?.id == gallery.id) {
                     selectedGallery = null
                     items = emptyList()
@@ -175,7 +170,7 @@ class SecureGalleryViewModel @Inject constructor(
                 withContext(Dispatchers.IO) {
                     coroutineScope {
                         blobIds.map { blobId ->
-                            async { api.addSecureGalleryItem(gallery.id, SecureGalleryAddItemRequest(blobId)) }
+                            async { secureGalleryRepository.addItem(gallery.id, blobId) }
                         }.awaitAll()
                     }
                 }

@@ -1,3 +1,8 @@
+/**
+ * Main photo gallery screen — displays a responsive grid of photos/videos
+ * with multi-select support, pull-to-refresh, upload from device, and
+ * long-press to enter selection mode for batch delete/share/album operations.
+ */
 package com.simplephotos.ui.screens.gallery
 
 import android.net.Uri

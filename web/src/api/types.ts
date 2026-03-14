@@ -1,3 +1,11 @@
+/**
+ * Shared TypeScript interfaces for API request/response payloads.
+ *
+ * These types mirror the server-side Rust DTOs and are used by both the
+ * API client functions and UI components to ensure type safety across the
+ * network boundary.
+ */
+
 // ── Type definitions ─────────────────────────────────────────────────────────
 
 export interface RegisterResponse {

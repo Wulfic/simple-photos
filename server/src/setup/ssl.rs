@@ -98,7 +98,7 @@ pub async fn update_ssl(
     update_config_toml_ssl(req.enabled, req.cert_path.as_deref(), req.key_path.as_deref())?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,

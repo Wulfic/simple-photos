@@ -349,9 +349,22 @@ export default function useViewerActions({
   }, [id, isPlainMode, mediaUrl, filename]);
 
   const handleToggleFavorite = useCallback(async () => {
-    if (!id || !isPlainMode) return;
+    if (!id) return;
     try {
-      const res = await api.photos.toggleFavorite(id);
+      // In plain mode, the viewer id IS the photos.id.
+      // In encrypted mode, the viewer id is the blobId — look up the server photo ID
+      // from the IndexedDB cache (populated by encrypted-sync).
+      let photoId = id;
+      if (!isPlainMode) {
+        const cached = await db.photos.get(id);
+        if (!cached?.serverPhotoId) return; // No server mapping yet — can't toggle
+        photoId = cached.serverPhotoId;
+      }
+      const res = await api.photos.toggleFavorite(photoId);
+      // Persist the new favorite state in IndexedDB so it survives page reloads
+      if (!isPlainMode) {
+        await db.photos.update(id, { isFavorite: res.is_favorite });
+      }
       return res.is_favorite;
     } catch {
       return undefined;

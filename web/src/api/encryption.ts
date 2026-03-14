@@ -1,3 +1,9 @@
+/**
+ * Encryption settings API client — get/set encryption mode, report migration
+ * progress, and control server-side parallel encryption migration.
+ *
+ * Maps to server routes: `/api/settings/encryption`, `/api/admin/encryption/*`.
+ */
 import { request, BASE } from "./core";
 import { useAuthStore } from "../store/auth";
 

@@ -109,6 +109,16 @@ impl RateLimiter {
 /// `X-Real-IP`. When `false`, returns the loopback address so all
 /// clients share one rate-limit bucket (safe for direct-access setups).
 ///
+/// # Fallback behaviour — "all clients share one bucket"
+///
+/// When `trust_proxy` is `false` (the default), no proxy headers are inspected
+/// and every request is attributed to `127.0.0.1`. This means **all** clients
+/// share a single rate-limit bucket. This is intentional for simple single-user
+/// deployments where per-IP differentiation is unnecessary. For multi-user
+/// servers behind a reverse proxy, set `trust_proxy = true` in `config.toml`
+/// so that `X-Forwarded-For` / `X-Real-IP` headers are used to distinguish
+/// clients.
+///
 /// # Security note
 /// Only set `trust_proxy = true` when behind a reverse proxy that
 /// overwrites these headers. Trusting them on a public-facing server

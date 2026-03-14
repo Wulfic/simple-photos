@@ -1,3 +1,13 @@
+/**
+ * Photos API client — list, upload, download, favorite, crop, duplicate,
+ * edit copies, encrypted sync, and cleanup operations.
+ *
+ * Supports both plain-mode (server-stored files) and encrypted-mode (where
+ * blob IDs reference encrypted data). URL builders produce authenticated
+ * URLs for `<img>` / `<video>` elements that can't set headers.
+ *
+ * Maps to server routes: `/api/photos/*`.
+ */
 import { request, downloadRaw, BASE } from "./core";
 
 // ── Photos API (plain and encrypted) ───────────────────────────────────────────────────

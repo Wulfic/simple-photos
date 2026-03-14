@@ -1,3 +1,7 @@
+/**
+ * Secure gallery DTOs — create, unlock, list items, and manage
+ * password-protected photo galleries.
+ */
 package com.simplephotos.data.remote.dto
 
 import com.google.gson.annotations.SerializedName

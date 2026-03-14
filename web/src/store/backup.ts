@@ -1,3 +1,10 @@
+/**
+ * Zustand store for backup server UI state.
+ *
+ * Tracks the active backup server, view mode (main vs. backup gallery),
+ * recovery status, and the loaded server list. Pure UI state — API calls
+ * are made in page components, not here.
+ */
 import { create } from "zustand";
 
 export type ViewMode = "main" | "backup";

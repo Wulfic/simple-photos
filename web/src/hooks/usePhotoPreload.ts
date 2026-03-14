@@ -1,3 +1,10 @@
+/**
+ * Hook for preloading adjacent photos in the Viewer.
+ *
+ * Downloads and caches the next/previous photos in the gallery so swipe
+ * navigation feels instant. Works in both plain mode (prefetch URLs) and
+ * encrypted mode (decrypt + cache to IndexedDB).
+ */
 import { useRef, useCallback, useEffect } from "react";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";

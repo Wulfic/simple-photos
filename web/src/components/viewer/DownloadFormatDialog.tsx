@@ -1,3 +1,8 @@
+/**
+ * Download format chooser dialog — lets the user pick between the original
+ * file (e.g. HEIC, MKV) or the browser-native converted version (JPEG, MP4)
+ * when both are available.
+ */
 import { getConvertedFormat, formatLabel } from "../../utils/mediaFormats";
 
 interface DownloadFormatDialogProps {

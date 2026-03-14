@@ -1,3 +1,14 @@
+/**
+ * Client-side cryptography — AES-256-GCM encrypt/decrypt, Argon2id key
+ * derivation, and SHA-256 hashing.
+ *
+ * Wire format (shared with server `crypto.rs`):
+ *   `[12-byte nonce][AES-GCM ciphertext + 16-byte auth tag]`
+ *
+ * Key derivation: Argon2id(password, salt=username, memory=64 MiB, time=3,
+ * parallelism=4) → 32-byte AES key. The derived key is held in-memory
+ * (sessionStorage flag tracks its existence across refreshes).
+ */
 import { argon2id } from "hash-wasm";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { gcm } from "@noble/ciphers/aes.js";

@@ -1,3 +1,10 @@
+/**
+ * Hook for uploading files from the Gallery page.
+ *
+ * Handles thumbnail generation, optional AES-256-GCM encryption (in encrypted
+ * mode), SHA-256 dedup hashing, blob upload, and photo registration. Tracks
+ * upload progress and errors for UI display.
+ */
 import { useCallback, useRef, useState } from "react";
 import { api } from "../api/client";
 import { encrypt, sha256Hex } from "../crypto/crypto";
@@ -103,7 +110,10 @@ export function useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, s
       setUploadProgress(null);
       endTask("upload");
     }
-  }, [mode]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- startTask, endTask,
+  // setError are stable store/parent refs; loadPlainPhotos and loadEncryptedPhotos
+  // are declared in the parent hook but depend only on stable state setters.
+  }, [mode, loadPlainPhotos, loadEncryptedPhotos, startTask, endTask, setError]);
 
   async function uploadSingleFile(file: File) {
     const arrayBuf = await file.arrayBuffer();

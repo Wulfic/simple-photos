@@ -1,3 +1,10 @@
+/**
+ * Zustand store for background processing indicator state.
+ *
+ * Tracks active long-running tasks (import, encryption, upload, recovery)
+ * and exposes a processing flag + human-readable label for the nav-bar
+ * spinner. Tasks are added/removed by page components during async work.
+ */
 import { create } from "zustand";
 
 /** Human-readable labels for known task keys */

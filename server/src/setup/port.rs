@@ -68,7 +68,7 @@ pub async fn update_port(
     })?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,
@@ -148,7 +148,7 @@ pub async fn restart_server(
     require_admin(&state, &auth).await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,

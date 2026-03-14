@@ -1,3 +1,8 @@
+/**
+ * Photo viewer sub-components — video player with ExoPlayer, gesture
+ * handling (pinch-zoom, double-tap), info panel overlays, and toolbar
+ * action buttons used by [PhotoViewerScreen].
+ */
 package com.simplephotos.ui.screens.viewer
 
 import android.net.Uri

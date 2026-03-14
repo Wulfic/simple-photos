@@ -1,3 +1,9 @@
+/**
+ * Tags & search API client — add/remove/list tags on photos, and perform
+ * combined tag + filename search queries.
+ *
+ * Maps to server routes: `/api/tags`, `/api/photos/{id}/tags`, `/api/search`.
+ */
 import { request } from "./core";
 
 // ── Tags API ─────────────────────────────────────────────────────────────────

@@ -109,7 +109,7 @@ pub async fn update_storage(
     }
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::AdminAction,
         Some(&auth.user_id),
         &headers,

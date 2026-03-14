@@ -1,3 +1,10 @@
+/**
+ * Authentication API client — login, registration, TOTP 2FA, token refresh,
+ * and password management.
+ *
+ * Maps to server routes: `POST /api/auth/*`, `PUT /api/auth/password`,
+ * `GET /api/auth/2fa/status`.
+ */
 import { request } from "./core";
 import type {
   RegisterResponse,

@@ -147,6 +147,8 @@ pub async fn delete_secure_gallery(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Request body for `POST /api/galleries/secure/{id}/items`.
+/// Associates an encrypted blob with a secure gallery.
 #[derive(Debug, Deserialize)]
 pub struct AddGalleryItemRequest {
     pub blob_id: String,

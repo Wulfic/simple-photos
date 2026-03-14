@@ -9,15 +9,13 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
-import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.AuthRepository
 import com.simplephotos.data.repository.BackupFolderRepository
+import com.simplephotos.data.repository.DiagnosticRepository
 import com.simplephotos.data.repository.PhotoRepository
-import com.simplephotos.sync.DiagnosticLogger
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_THUMBNAIL_SIZE
@@ -70,8 +68,7 @@ internal fun buildGridItems(dayGroups: List<Pair<String, List<PhotoEntity>>>): L
 class GalleryViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
     private val authRepository: AuthRepository,
-    private val api: ApiService,
-    private val db: AppDatabase,
+    private val diagnosticRepository: DiagnosticRepository,
     private val albumRepository: AlbumRepository,
     private val backupFolderRepository: BackupFolderRepository,
     val dataStore: DataStore<Preferences>
@@ -200,7 +197,7 @@ class GalleryViewModel @Inject constructor(
             try {
                 val prefs = dataStore.data.first()
                 val loggingEnabled = prefs[KEY_DIAGNOSTIC_LOGGING] ?: false
-                val diag = DiagnosticLogger(api, loggingEnabled)
+                val diag = diagnosticRepository.createLogger(loggingEnabled)
                 diag.info("AppDiagnostic", "Gallery opened — sending diagnostic report")
 
                 // ── Device info ─────────────────────────────────────────
@@ -216,10 +213,10 @@ class GalleryViewModel @Inject constructor(
                 val permSnapshot = withContext(Dispatchers.IO) { backupFolderRepository.getPermissionSnapshot() }
                 diag.info("AppDiagnostic", "Permission state", permSnapshot.mapValues { it.value.toString() })
 
-                val pendingCount = withContext(Dispatchers.IO) { db.photoDao().getByStatus(SyncStatus.PENDING).size }
-                val failedCount = withContext(Dispatchers.IO) { db.photoDao().getByStatus(SyncStatus.FAILED).size }
-                val uploadingCount = withContext(Dispatchers.IO) { db.photoDao().getByStatus(SyncStatus.UPLOADING).size }
-                val syncedCount = withContext(Dispatchers.IO) { db.photoDao().getByStatus(SyncStatus.SYNCED).size }
+                val pendingCount = withContext(Dispatchers.IO) { photoRepository.getPhotoCountByStatus(SyncStatus.PENDING) }
+                val failedCount = withContext(Dispatchers.IO) { photoRepository.getPhotoCountByStatus(SyncStatus.FAILED) }
+                val uploadingCount = withContext(Dispatchers.IO) { photoRepository.getPhotoCountByStatus(SyncStatus.UPLOADING) }
+                val syncedCount = withContext(Dispatchers.IO) { photoRepository.getPhotoCountByStatus(SyncStatus.SYNCED) }
                 diag.info("AppDiagnostic", "Local DB photo status", mapOf(
                     "pending" to pendingCount.toString(), "failed" to failedCount.toString(),
                     "uploading" to uploadingCount.toString(), "synced" to syncedCount.toString()
@@ -263,8 +260,8 @@ class GalleryViewModel @Inject constructor(
                 }
 
                 // ── Backup folder diagnostic ────────────────────────────
-                val enabledFolders = withContext(Dispatchers.IO) { db.backupFolderDao().getEnabledFolders() }
-                val allSavedFolders = withContext(Dispatchers.IO) { db.backupFolderDao().count() }
+                val enabledFolders = withContext(Dispatchers.IO) { backupFolderRepository.getEnabledFolders() }
+                val allSavedFolders = withContext(Dispatchers.IO) { backupFolderRepository.getFolderCount() }
                 diag.info("AppDiagnostic", "Backup folders in DB", mapOf(
                     "totalInDB" to allSavedFolders.toString(),
                     "enabledCount" to enabledFolders.size.toString(),
@@ -309,7 +306,7 @@ class GalleryViewModel @Inject constructor(
                 }
 
                 try {
-                    val health = withContext(Dispatchers.IO) { api.health() }
+                    val health = withContext(Dispatchers.IO) { diagnosticRepository.getHealthInfo() }
                     diag.info("AppDiagnostic", "Server health OK", health.mapValues { it.value })
                 } catch (e: Exception) {
                     diag.error("AppDiagnostic", "Server health check failed: ${e.message}", mapOf("exception" to (e::class.simpleName ?: "Unknown")))
@@ -374,7 +371,7 @@ class GalleryViewModel @Inject constructor(
                             .joinToString("") { "%02x".format(it) }
                     }
                     val existingByHash = withContext(Dispatchers.IO) {
-                        db.photoDao().getSyncedByHash(contentHash)
+                        photoRepository.getSyncedByHash(contentHash)
                     }
                     if (existingByHash != null) continue
 

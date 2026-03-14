@@ -1,3 +1,10 @@
+/**
+ * Diagnostics & storage stats API client — fetch server metrics, audit logs,
+ * client logs, diagnostics config, and per-user storage usage.
+ *
+ * Maps to server routes: `/api/admin/diagnostics/*`, `/api/admin/audit-logs`,
+ * `/api/admin/client-logs`, `/api/settings/storage-stats`.
+ */
 import { request } from "./core";
 import type {
   DiagnosticsResponseUnion,

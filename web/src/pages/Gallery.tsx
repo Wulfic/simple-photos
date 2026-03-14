@@ -9,7 +9,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import { type CachedPhoto, ACCEPTED_MIME_TYPES } from "../db";
+import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { type PlainPhoto } from "../utils/gallery";
@@ -94,14 +94,55 @@ export default function Gallery() {
     setSelectionMode(false);
     setSelectedIds(new Set());
   }
+  /** Delete all selected photos/blobs. Plain mode hard-deletes; encrypted
+   *  mode soft-deletes to trash (30-day recovery window), mirroring the
+   *  single-photo delete behavior in the Viewer. */
   async function deleteSelected() {
     if (selectedIds.size === 0) return;
     try {
       for (const id of selectedIds) {
-        if (mode === "plain") await api.photos.delete(id);
-        else await api.blobs.delete(id);
+        if (mode === "plain") {
+          await api.photos.delete(id);
+        } else {
+          // Encrypted mode: soft-delete to trash with client metadata
+          const cached = await db.photos.get(id);
+          const result = await api.blobs.softDelete(id, {
+            thumbnail_blob_id: cached?.thumbnailBlobId,
+            filename: cached?.filename ?? "unknown",
+            mime_type: cached?.mimeType ?? "application/octet-stream",
+            media_type: cached?.mediaType,
+            size_bytes: 0,
+            width: cached?.width,
+            height: cached?.height,
+            duration_secs: cached?.duration,
+            taken_at: cached?.takenAt
+              ? new Date(cached.takenAt).toISOString()
+              : undefined,
+          });
+          // Cache in local trash table for the Trash page thumbnail grid
+          if (cached) {
+            await db.trash.put({
+              trashId: result.trash_id,
+              blobId: id,
+              thumbnailBlobId: cached.thumbnailBlobId,
+              filename: cached.filename,
+              mimeType: cached.mimeType,
+              mediaType: cached.mediaType,
+              width: cached.width,
+              height: cached.height,
+              takenAt: cached.takenAt,
+              deletedAt: Date.now(),
+              expiresAt: result.expires_at,
+              thumbnailData: cached.thumbnailData,
+              duration: cached.duration,
+              albumIds: cached.albumIds ?? [],
+            });
+          }
+          await db.photos.delete(id);
+        }
       }
       if (mode === "plain") await loadPlainPhotos();
+      else await loadEncryptedPhotos();
     } catch { /* ignore */ }
     clearSelection();
   }

@@ -1,3 +1,10 @@
+/**
+ * Room entity representing a photo in the local database.
+ *
+ * Stores both server-side metadata (server ID, blob IDs, timestamps) and
+ * device-local state (content URI, sync status, file hash). Used by
+ * [com.simplephotos.data.local.dao.PhotoDao] for all photo queries.
+ */
 package com.simplephotos.data.local.entities
 
 import androidx.room.Entity
