@@ -1,3 +1,5 @@
+//! Request/response DTOs and database row models for the backup subsystem.
+
 use serde::{Deserialize, Serialize};
 
 /// A configured backup server.

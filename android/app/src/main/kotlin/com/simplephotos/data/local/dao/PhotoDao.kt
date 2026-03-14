@@ -5,6 +5,7 @@ import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import kotlinx.coroutines.flow.Flow
 
+/** Room DAO for [PhotoEntity] CRUD, reactive queries, and sync-status management. */
 @Dao
 interface PhotoDao {
     // Secondary sort by filename ensures deterministic order when takenAt ties

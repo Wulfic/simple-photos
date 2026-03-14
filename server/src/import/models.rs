@@ -1,3 +1,5 @@
+//! DTOs for photo metadata import and Google Photos Takeout parsing.
+
 use serde::{Deserialize, Serialize};
 
 // ── Google Photos Takeout JSON schema ────────────────────────────────────────

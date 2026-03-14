@@ -91,7 +91,7 @@ pub async fn trigger_auto_scan(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    super::handlers::require_admin(&state, &auth).await?;
+    crate::setup::admin::require_admin(&state, &auth).await?;
     let pool = state.pool.clone();
     let storage_root = state.storage_root.read().await.clone();
 

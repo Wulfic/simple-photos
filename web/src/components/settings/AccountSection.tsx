@@ -3,6 +3,7 @@ import { useState, useMemo } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { api } from "../../api/client";
 import { checkPasswordStrength } from "../../utils/validation";
+import { getErrorMessage } from "../../utils/formatters";
 import { Checkmark } from "../PasswordFields";
 
 interface AccountSectionProps {
@@ -47,8 +48,8 @@ export default function AccountSection({
       const res = await api.auth.setup2fa();
       setTotpUri(res.otpauth_uri);
       setBackupCodes(res.backup_codes);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -63,8 +64,8 @@ export default function AccountSection({
       setSuccess("Two-factor authentication enabled successfully!");
       setTotpUri(null);
       setTotpCode("");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -79,8 +80,8 @@ export default function AccountSection({
       setSuccess("Two-factor authentication disabled.");
       setShowDisable2fa(false);
       setDisableCode("");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -118,8 +119,8 @@ export default function AccountSection({
       setCurrentPassword("");
       setNewPassword("");
       setConfirmNewPassword("");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }

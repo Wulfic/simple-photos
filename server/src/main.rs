@@ -41,6 +41,9 @@ mod state;
 mod tags;
 mod trash;
 
+/// Server version, read from `Cargo.toml` at compile time.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -66,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = config::AppConfig::load()?;
-    tracing::info!("Starting Simple Photos server v0.6.9");
+    tracing::info!("Starting Simple Photos server v{VERSION}");
     tracing::info!(
         "Listening on {}:{}",
         config.server.host,

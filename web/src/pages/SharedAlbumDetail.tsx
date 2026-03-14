@@ -8,6 +8,7 @@ import { api } from "../api/client";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
+import { getErrorMessage } from "../utils/formatters";
 
 type SharedPhoto = {
   id: string;
@@ -60,8 +61,8 @@ export default function SharedAlbumDetail() {
       // Load members
       const memberList = await api.sharing.listMembers(albumId!);
       setMembers(memberList);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -71,8 +72,8 @@ export default function SharedAlbumDetail() {
     try {
       await api.sharing.removePhoto(albumId!, photoId);
       setPhotos((prev) => prev.filter((p) => p.id !== photoId));
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -80,8 +81,8 @@ export default function SharedAlbumDetail() {
     try {
       await api.sharing.removeMember(albumId!, userId);
       setMembers((prev) => prev.filter((m) => m.user_id !== userId));
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -90,8 +91,8 @@ export default function SharedAlbumDetail() {
       const users = await api.sharing.listUsers();
       setShareUsers(users);
       setShowSharePicker(true);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -100,8 +101,8 @@ export default function SharedAlbumDetail() {
       await api.sharing.addMember(albumId!, userId);
       setShowSharePicker(false);
       await loadAlbum();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 

@@ -8,6 +8,6 @@ pub async fn health() -> Json<Value> {
     Json(json!({
         "status": "ok",
         "service": "simple-photos",
-        "version": "0.6.9"
+        "version": crate::VERSION
     }))
 }

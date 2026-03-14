@@ -46,14 +46,6 @@ pub struct LoginResponse {
     pub expires_in: u64,
 }
 
-/// Returned instead of `LoginResponse` when the user has 2FA enabled.
-/// The client must complete login via POST /api/auth/login/totp.
-#[derive(Debug, Serialize)]
-pub struct TotpRequiredResponse {
-    pub requires_totp: bool,
-    pub totp_session_token: String,
-}
-
 /// Body for POST /api/auth/login/totp — carries either a TOTP code or a backup code.
 #[derive(Debug, Deserialize)]
 pub struct TotpLoginRequest {

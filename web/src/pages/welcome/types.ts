@@ -9,7 +9,6 @@ export type WizardStep =
   | "account"
   | "admin-2fa"
   | "storage"
-  | "backup"
   | "ssl"
   | "encryption"
   | "users"
@@ -19,6 +18,13 @@ export type WizardStep =
 
 export type ServerRole = "primary" | "backup" | null;
 export type InstallType = "fresh" | "restore" | null;
+
+/** A server discovered via UDP broadcast on the LAN. */
+export interface DiscoveredServer {
+  address: string;
+  name: string;
+  version: string;
+}
 
 export interface SetupStatus {
   setup_complete: boolean;

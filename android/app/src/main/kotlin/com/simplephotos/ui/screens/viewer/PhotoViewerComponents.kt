@@ -95,6 +95,10 @@ internal fun needsWebPreview(filename: String): String? {
 // Per-page content — each page independently loads and renders its photo
 // ---------------------------------------------------------------------------
 
+/**
+ * Renders a single pager page: decrypts and displays the photo or video,
+ * manages zoom/pan gestures, and hosts the crop/edit overlay when active.
+ */
 @Composable
 internal fun PhotoPageContent(
     photo: PhotoEntity,

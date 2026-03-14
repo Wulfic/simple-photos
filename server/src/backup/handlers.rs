@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::broadcast;
@@ -125,43 +126,55 @@ pub async fn update_backup_server(
         return Err(AppError::NotFound);
     }
 
-    if let Some(ref name) = req.name {
-        let safe_name = sanitize::sanitize_display_name(name, 200)
-            .map_err(|reason| AppError::BadRequest(reason.into()))?;
+    // Validate name outside the transaction (sanitize may reject input).
+    let safe_name = req
+        .name
+        .as_ref()
+        .map(|n| sanitize::sanitize_display_name(n, 200))
+        .transpose()
+        .map_err(|reason| AppError::BadRequest(reason.into()))?;
+
+    // Transaction: apply all field updates atomically so a mid-request
+    // failure can't leave the row in a half-updated state.
+    let mut tx = state.pool.begin().await?;
+
+    if let Some(ref name) = safe_name {
         sqlx::query("UPDATE backup_servers SET name = ? WHERE id = ?")
-            .bind(&safe_name)
+            .bind(name)
             .bind(&server_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
     if let Some(ref address) = req.address {
         sqlx::query("UPDATE backup_servers SET address = ? WHERE id = ?")
             .bind(address.trim())
             .bind(&server_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
     if let Some(ref api_key) = req.api_key {
         sqlx::query("UPDATE backup_servers SET api_key = ? WHERE id = ?")
             .bind(api_key)
             .bind(&server_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
     if let Some(freq) = req.sync_frequency_hours {
         sqlx::query("UPDATE backup_servers SET sync_frequency_hours = ? WHERE id = ?")
             .bind(freq.max(1))
             .bind(&server_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
     if let Some(enabled) = req.enabled {
         sqlx::query("UPDATE backup_servers SET enabled = ? WHERE id = ?")
             .bind(enabled)
             .bind(&server_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
+
+    tx.commit().await?;
 
     Ok(Json(serde_json::json!({
         "message": "Backup server updated",
@@ -524,19 +537,4 @@ pub async fn set_audio_backup_setting(
             "Audio files will be excluded from backups."
         },
     })))
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Verify the authenticated user has the `admin` role.
-/// Returns `AppError::Forbidden` if the user is not an admin.
-pub(super) async fn require_admin(state: &AppState, auth: &AuthUser) -> Result<(), AppError> {
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
-    Ok(())
 }

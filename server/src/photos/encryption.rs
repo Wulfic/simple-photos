@@ -8,6 +8,7 @@ use serde::Deserialize;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::models::EncryptionSettingsResponse;
@@ -69,14 +70,7 @@ pub async fn set_encryption_mode(
     auth: AuthUser,
     Json(req): Json<SetEncryptionModeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Verify admin
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     if req.mode != "plain" && req.mode != "encrypted" {
         return Err(AppError::BadRequest(
@@ -191,15 +185,9 @@ pub async fn report_migration_progress(
     auth: AuthUser,
     Json(req): Json<MigrationProgressRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Verify admin — this endpoint is under /api/admin/ and should not be
-    // callable by non-admin users to prevent migration state corruption.
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    // This endpoint is under /api/admin/ and should not be callable by
+    // non-admin users to prevent migration state corruption.
+    require_admin(&state, &auth).await?;
 
     // Sanitize error messages — cap length and strip control characters
     let error = req.error.as_deref().map(|e| sanitize::sanitize_freeform(e, 2048));

@@ -152,7 +152,7 @@ pub async fn external_health(
 
     Ok(Json(ExternalHealthResponse {
         status: "ok".into(),
-        version: "0.6.9".into(),
+        version: crate::VERSION.into(),
         uptime_seconds: uptime,
         started_at: started_at.clone(),
         memory_rss_bytes: read_rss_bytes(),
@@ -183,7 +183,7 @@ pub async fn external_full(
     // ── Server info ───────────────────────────────────────────────────
     let storage_root = state.storage_root.read().await.clone();
     let server_info = ServerInfo {
-        version: "0.6.9".to_string(),
+        version: crate::VERSION.to_string(),
         uptime_seconds: uptime,
         rust_version: env!("CARGO_PKG_RUST_VERSION", "unknown").to_string(),
         os: std::env::consts::OS.to_string(),

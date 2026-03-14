@@ -22,10 +22,10 @@ import {
   getVideoDurationFromBuffer,
   guessMimeFromName,
   matchMetadataToFiles,
-  formatBytes,
   createFallbackThumbnail,
   createAudioFallbackThumbnail,
 } from "../utils/media";
+import { formatBytes, getErrorMessage } from "../utils/formatters";
 import ImportFileList from "./import/ImportFileList";
 
 type ImportMode = "server" | "local";
@@ -68,7 +68,7 @@ export default function Import() {
     startTask("import");
     api.admin.scanAndRegister()
       .then((res) => setPlainScanResult(res))
-      .catch((err: any) => setError(err.message))
+      .catch((err: unknown) => setError(getErrorMessage(err)))
       .finally(() => {
         setScanning(false);
         endTask("import");

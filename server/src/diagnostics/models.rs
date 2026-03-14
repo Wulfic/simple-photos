@@ -1,3 +1,5 @@
+//! DTOs for server diagnostics, metrics, and audit-log responses.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

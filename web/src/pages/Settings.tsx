@@ -18,7 +18,7 @@ import UserManagement from "../components/settings/UserManagement";
 import SslSettings from "../components/settings/SslSettings";
 import AccountSection from "../components/settings/AccountSection";
 import { useMigrationWorker } from "../hooks/useMigrationWorker";
-import { formatBytes } from "../utils/formatters";
+import { formatBytes, getErrorMessage } from "../utils/formatters";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 export default function Settings() {
@@ -179,8 +179,8 @@ export default function Settings() {
       setSuccess(res.message);
       // Reload to get migration status
       await loadEncryptionSettings();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setTogglingEncryption(false);
     }
@@ -196,8 +196,8 @@ export default function Settings() {
       const target = backupServers.find((s) => s.enabled) ?? backupServers[0];
       const res = await api.backup.recover(target.id);
       setSuccess(res.message);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setRecovering(false);
       endTask("recovery");
@@ -231,8 +231,8 @@ export default function Settings() {
       setBackupServerApiKey("");
       setBackupServerFrequency("24");
       await loadBackupServers();
-    } catch (err: any) {
-      setError(err.message || "Failed to add backup server.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to add backup server."));
     } finally {
       setAddingBackupServer(false);
     }
@@ -360,8 +360,8 @@ export default function Settings() {
                       ? `Found and registered ${res.registered} new file${res.registered > 1 ? "s" : ""}.`
                       : "No new files found."
                   );
-                } catch (err: any) {
-                  setError(err.message || "Scan failed");
+                } catch (err: unknown) {
+                  setError(getErrorMessage(err, "Scan failed"));
                 } finally {
                   setScanning(false);
                 }
@@ -517,8 +517,8 @@ export default function Settings() {
                       setCleanableCount(0);
                       setCleanableBytes(0);
                       await loadStorageStats();
-                    } catch (err: any) {
-                      setError(err.message || "Cleanup failed");
+                    } catch (err: unknown) {
+                      setError(getErrorMessage(err, "Cleanup failed"));
                     } finally {
                       setCleaningUp(false);
                     }
@@ -567,8 +567,8 @@ export default function Settings() {
                 }
                 const res = await api.admin.triggerReconvert(keyHex);
                 setReconvertResult(res.message);
-              } catch (err: any) {
-                setError(err.message || "Re-conversion failed");
+              } catch (err: unknown) {
+                setError(getErrorMessage(err, "Re-conversion failed"));
               } finally {
                 setReconverting(false);
               }
@@ -798,8 +798,8 @@ export default function Settings() {
                   const res = await api.backup.setAudioBackupSetting(newVal);
                   setAudioBackupEnabled(res.audio_backup_enabled);
                   setSuccess(res.message);
-                } catch (err: any) {
-                  setError(err.message || "Failed to update audio backup setting.");
+                } catch (err: unknown) {
+                  setError(getErrorMessage(err, "Failed to update audio backup setting."));
                 } finally {
                   setTogglingAudioBackup(false);
                 }

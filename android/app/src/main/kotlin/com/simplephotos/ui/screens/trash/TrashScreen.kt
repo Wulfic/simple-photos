@@ -43,6 +43,9 @@ import com.simplephotos.ui.theme.ThemeState
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -62,6 +65,7 @@ private fun formatBytes(bytes: Long): String {
 
 // ── ViewModel ───────────────────────────────────────────────────────────────
 
+/** Manages the trash bin: fetching trashed items, restoring, permanent deletion, and empty-all. */
 @HiltViewModel
 class TrashViewModel @Inject constructor(
     private val api: ApiService,
@@ -146,8 +150,10 @@ class TrashViewModel @Inject constructor(
         viewModelScope.launch {
             actionLoading = "bulk-restore"
             try {
-                for (id in selectedIds) {
-                    withContext(Dispatchers.IO) { api.restoreFromTrash(id) }
+                withContext(Dispatchers.IO) {
+                    coroutineScope {
+                        selectedIds.map { id -> async { api.restoreFromTrash(id) } }.awaitAll()
+                    }
                 }
                 items = items.filter { it.id !in selectedIds }
                 clearSelection()
@@ -164,8 +170,10 @@ class TrashViewModel @Inject constructor(
         viewModelScope.launch {
             actionLoading = "bulk-delete"
             try {
-                for (id in selectedIds) {
-                    withContext(Dispatchers.IO) { api.permanentDeleteTrash(id) }
+                withContext(Dispatchers.IO) {
+                    coroutineScope {
+                        selectedIds.map { id -> async { api.permanentDeleteTrash(id) } }.awaitAll()
+                    }
                 }
                 items = items.filter { it.id !in selectedIds }
                 clearSelection()
@@ -198,6 +206,8 @@ fun TrashScreen(
     onSearchClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onSecureGalleryClick: () -> Unit = {},
+    onSharedAlbumsClick: () -> Unit = {},
+    onDiagnosticsClick: () -> Unit = {},
     onLogout: () -> Unit,
     isAdmin: Boolean = false,
     viewModel: TrashViewModel = hiltViewModel()
@@ -218,6 +228,8 @@ fun TrashScreen(
                     onTrashClick = { /* already on trash */ },
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
+                    onSharedAlbumsClick = onSharedAlbumsClick,
+                    onDiagnosticsClick = onDiagnosticsClick,
                     onLogout = { viewModel.logout(onLogout) },
                     onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
                     isAdmin = isAdmin

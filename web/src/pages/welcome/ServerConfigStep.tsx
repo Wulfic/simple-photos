@@ -3,6 +3,7 @@ import { useState, useCallback } from "react";
 import { api } from "../../api/client";
 import FolderBrowserModal from "../../components/FolderBrowserModal";
 import type { WizardStep, ServerRole } from "./types";
+import { getErrorMessage } from "../../utils/formatters";
 
 export interface ServerConfigStepProps {
   // Port state
@@ -98,8 +99,8 @@ export default function ServerConfigStep({
       setStoragePathDirect(trimmed);
       await new Promise((r) => setTimeout(r, 50));
       handleSelectStoragePath();
-    } catch (err: any) {
-      setError(err.message || "Failed to set storage path.");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to set storage path."));
     } finally {
       setSaving(false);
     }

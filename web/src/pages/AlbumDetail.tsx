@@ -16,6 +16,7 @@ import AppIcon from "../components/AppIcon";
 import { type PlainPhoto } from "../utils/gallery";
 import PlainMediaTile from "../components/gallery/PlainMediaTile";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
+import { getErrorMessage } from "../utils/formatters";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
@@ -251,8 +252,8 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
     try {
       const updated = album.photoBlobIds.filter((id) => id !== blobId);
       await updateAlbumManifest({ ...album, photoBlobIds: updated });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -288,8 +289,8 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
       const updated = album.photoBlobIds.filter((id) => !selectedIds.has(id));
       await updateAlbumManifest({ ...album, photoBlobIds: updated });
       clearSelection();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -326,8 +327,8 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
         coverPhotoBlobId: cover,
       });
       setShowAddPhotos(false);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -372,8 +373,8 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
       }
       await db.albums.delete(album.albumId);
       navigate("/albums");
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -383,8 +384,8 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
     try {
       const users = await api.sharing.listUsers();
       setShareUsers(users);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -396,8 +397,8 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
       await api.sharing.addMember(created.id, userId);
       setShareSuccess(`Album shared successfully!`);
       setShowSharePicker(false);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     }
   }
 

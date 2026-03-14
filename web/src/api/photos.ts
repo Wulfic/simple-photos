@@ -64,6 +64,14 @@ export const photosApi = {
    *  pre-converted web preview. For browser-native formats, serves the original. */
   webUrl: (photoId: string) => `${BASE}/photos/${photoId}/web`,
 
+  /** Build a web-media URL with an inline auth token.
+   *  Use this for `<video>`/`<audio>` `src` attributes so the browser can
+   *  issue native HTTP Range requests (seeking, streaming).  The token is
+   *  passed as a query parameter because media elements cannot set custom
+   *  headers. */
+  streamUrl: (photoId: string, token: string) =>
+    `${BASE}/photos/${photoId}/web?token=${encodeURIComponent(token)}`,
+
   /** Download a plain photo file as raw binary, with 401 refresh retry */
   downloadFile: (photoId: string) =>
     downloadRaw(`${BASE}/photos/${photoId}/file`),
@@ -74,19 +82,6 @@ export const photosApi = {
 
   delete: (photoId: string) =>
     request<void>(`/photos/${photoId}`, { method: "DELETE" }),
-
-  /**
-   * Mark a plain photo as encrypted by linking it to the uploaded blob.
-   *
-   * **Dead code:** The migration worker calls the endpoint directly via
-   * its own `apiFetch` helper rather than this client method. Kept for
-   * API surface documentation.
-   */
-  markEncrypted: (photoId: string, blobId: string) =>
-    request<{ ok: boolean }>(`/photos/${photoId}/mark-encrypted`, {
-      method: "POST",
-      body: JSON.stringify({ blob_id: blobId }),
-    }),
 
   /** Toggle the is_favorite flag on a photo */
   toggleFavorite: (photoId: string) =>

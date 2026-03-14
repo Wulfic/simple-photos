@@ -55,6 +55,7 @@ import javax.inject.Inject
 
 // ── ViewModel ───────────────────────────────────────────────────────────────
 
+/** Drives server-side photo search by filename, applying results to the local gallery. */
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val api: ApiService,
@@ -144,6 +145,8 @@ fun SearchScreen(
     onTrashClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onSecureGalleryClick: () -> Unit = {},
+    onSharedAlbumsClick: () -> Unit = {},
+    onDiagnosticsClick: () -> Unit = {},
     onLogout: () -> Unit,
     isAdmin: Boolean = false,
     viewModel: SearchViewModel = hiltViewModel()
@@ -167,6 +170,8 @@ fun SearchScreen(
                     onTrashClick = onTrashClick,
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
+                    onSharedAlbumsClick = onSharedAlbumsClick,
+                    onDiagnosticsClick = onDiagnosticsClick,
                     onLogout = { viewModel.logout(onLogout) },
                     onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
                     isAdmin = isAdmin

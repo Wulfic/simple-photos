@@ -1,3 +1,5 @@
+//! Request/response DTOs for the blob storage endpoints.
+
 use serde::Serialize;
 
 /// A single blob record as returned by the list endpoint.

@@ -2,6 +2,7 @@ import { useRef, useEffect } from "react";
 import { api } from "../api/client";
 import { hasCryptoKey } from "../crypto/crypto";
 import { useAuthStore } from "../store/auth";
+import { getErrorMessage } from "../utils/formatters";
 
 /**
  * Hook that spawns a dedicated Web Worker for the encryption migration.
@@ -104,8 +105,8 @@ export function useMigrationWorker(
           keyHex,
           photos: allPhotos,
         });
-      } catch (err: any) {
-        console.error("[Migration Hook] Setup error:", err.message);
+      } catch (err: unknown) {
+        console.error("[Migration Hook] Setup error:", getErrorMessage(err));
         migrationRunningRef.current = false;
       }
     })();

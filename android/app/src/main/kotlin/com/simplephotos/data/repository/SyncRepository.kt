@@ -104,27 +104,6 @@ class SyncRepository @Inject constructor(
         scanVideos(0L, bucketIds)
     }
 
-    /**
-     * Build a SQL selection clause that filters by BUCKET_ID.
-     * Example: "date_added > ? AND bucket_id IN (123, 456, 789)"
-     *
-     * NOTE: This function is currently dead code — [scanImages] and
-     * [scanVideos] construct their bucket filters inline instead.
-     * Kept for potential future refactoring.
-     */
-    @Suppress("unused")
-    private fun buildBucketFilter(
-        dateColumn: String,
-        bucketIdColumn: String,
-        bucketIds: List<Long>
-    ): Pair<String, Array<String>> {
-        val placeholders = bucketIds.joinToString(",") { "?" }
-        val selection = "$dateColumn > ? AND $bucketIdColumn IN ($placeholders)"
-        val args = mutableListOf<String>()
-        // The lastSync arg is added by the caller; bucket IDs follow
-        return selection to bucketIds.map { it.toString() }.toTypedArray()
-    }
-
     private suspend fun scanImages(lastSyncSecs: Long, enabledBucketIds: List<Long>) {
         val projection = arrayOf(
             MediaStore.Images.Media._ID,

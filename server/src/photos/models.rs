@@ -1,3 +1,5 @@
+//! Request/response DTOs and database row types for the photos subsystem.
+
 use serde::{Deserialize, Serialize};
 
 /// Full photo row from the `photos` table.

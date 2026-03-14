@@ -1,3 +1,5 @@
+//! Request/response DTOs for client diagnostic log submission.
+
 use serde::{Deserialize, Serialize};
 
 /// A single log entry sent from a mobile client.

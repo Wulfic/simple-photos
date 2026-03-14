@@ -1,3 +1,9 @@
+//! UDP LAN discovery beacon for backup-mode servers.
+//!
+//! When backup mode is enabled, this module broadcasts a periodic UDP
+//! beacon on port 41820 so primary servers can auto-discover backup
+//! servers on the local network.
+
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::time::Duration;
 
@@ -60,8 +66,9 @@ pub async fn background_broadcast_task(
 
         // Build the broadcast payload
         let payload = format!(
-            "SPBK|{}|Simple Photos Backup|0.6.9|{}",
+            "SPBK|{}|Simple Photos Backup|{}|{}",
             server_port,
+            crate::VERSION,
             if api_key_set { "1" } else { "0" }
         );
 

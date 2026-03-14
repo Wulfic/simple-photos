@@ -47,3 +47,18 @@ export function relativeTime(iso: string): string {
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
 }
+
+/**
+ * Extract a human-readable message from an unknown `catch` value.
+ *
+ * Prefer this over `(err as any).message` so TypeScript's `unknown`
+ * catch-binding is respected and non-Error throws are handled gracefully.
+ */
+export function getErrorMessage(
+  err: unknown,
+  fallback = "An unexpected error occurred",
+): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return fallback;
+}

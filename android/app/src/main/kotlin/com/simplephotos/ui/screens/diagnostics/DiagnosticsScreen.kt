@@ -138,6 +138,7 @@ class DiagnosticsViewModel @Inject constructor(
 
 // ── Screen ───────────────────────────────────────────────────────────────────
 
+/** Admin-only diagnostics dashboard displaying server health, storage usage, and log viewer. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiagnosticsScreen(

@@ -2,15 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A shared album with ownership info.
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct SharedAlbum {
-    pub id: String,
-    pub owner_user_id: String,
-    pub name: String,
-    pub created_at: String,
-}
-
 /// Shared album with extra metadata for listing.
 #[derive(Debug, Serialize)]
 pub struct SharedAlbumInfo {

@@ -12,6 +12,7 @@ use crate::auth::middleware::AuthUser;
 use crate::blobs::storage as blob_storage;
 use crate::error::AppError;
 use crate::media::is_media_file;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::google_photos;
@@ -42,14 +43,7 @@ pub async fn scan_takeout(
     auth: AuthUser,
     Query(query): Query<TakeoutScanQuery>,
 ) -> Result<Json<TakeoutScanResponse>, AppError> {
-    // Admin check
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     if query.path.contains("..") {
         return Err(AppError::BadRequest("Path must not contain '..'".into()));
@@ -181,14 +175,7 @@ pub async fn import_takeout(
     headers: HeaderMap,
     Json(req): Json<TakeoutImportRequest>,
 ) -> Result<Json<TakeoutImportResponse>, AppError> {
-    // Admin check
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     if req.path.contains("..") {
         return Err(AppError::BadRequest("Path must not contain '..'".into()));

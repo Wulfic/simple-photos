@@ -31,6 +31,7 @@ use crate::auth::middleware::AuthUser;
 use crate::blobs::storage;
 use crate::crypto;
 use crate::error::AppError;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::scan::{needs_web_preview, generate_web_preview_bg, generate_thumbnail_file};
@@ -666,16 +667,9 @@ pub async fn background_convert_task(
 /// POST /admin/photos/convert
 pub async fn trigger_convert(
     State(state): State<AppState>,
-    _auth: AuthUser,
+    auth: AuthUser,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    // Verify admin role
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&_auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     state.convert_notify.notify_one();
 
@@ -702,14 +696,7 @@ pub async fn trigger_reconvert(
     auth: AuthUser,
     Json(req): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    // Verify admin role
-    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-        .bind(&auth.user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if role != "admin" {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
+    require_admin(&state, &auth).await?;
 
     // Parse the encryption key from the request body
     let key_hex = req.get("key_hex")

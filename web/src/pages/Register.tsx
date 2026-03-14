@@ -9,6 +9,7 @@ import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { deriveKey } from "../crypto/crypto";
 import ThemeToggle from "../components/ThemeToggle";
+import { getErrorMessage } from "../utils/formatters";
 
 /** Password strength rules — mirrors server-side validation. */
 function checkPasswordStrength(pw: string) {
@@ -89,8 +90,8 @@ export default function Register() {
       } else {
         navigate("/login");
       }
-    } catch (err: any) {
-      setError(err.message || "Registration failed");
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Registration failed"));
     } finally {
       setLoading(false);
     }

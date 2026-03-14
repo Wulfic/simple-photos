@@ -334,16 +334,48 @@ class PhotoViewerViewModel @Inject constructor(
         }
     }
 
-    /** Download the photo's full-resolution file bytes (for saving to device). */
-    // WARNING: response.bytes() reads the entire HTTP response body into a single ByteArray in
-    // memory. For large videos (hundreds of MB) this will cause an OutOfMemoryError. Use a
-    // streaming approach (e.g. response.byteStream() writing to a file) instead.
+    /**
+     * Download the photo's full-resolution file and save it to [outputFile].
+     *
+     * - **Plain mode:** Streams the response body directly to disk via
+     *   [PhotoRepository.downloadPlainPhotoToFile], using constant (~8 KB)
+     *   heap regardless of file size — safe for multi-hundred-MB videos.
+     * - **Encrypted mode:** Downloads + decrypts to file via
+     *   [PhotoRepository.downloadAndDecryptBlobToFile].
+     *
+     * Returns `true` on success, `false` on failure.
+     */
+    suspend fun downloadPhotoToFile(photo: PhotoEntity, outputFile: java.io.File): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                when {
+                    encryptionMode == "plain" && photo.serverPhotoId != null -> {
+                        photoRepository.downloadPlainPhotoToFile(photo.serverPhotoId!!, outputFile)
+                        true
+                    }
+                    photo.serverBlobId != null -> {
+                        photoRepository.downloadAndDecryptBlobToFile(photo.serverBlobId!!, outputFile)
+                        true
+                    }
+                    else -> false
+                }
+            } catch (_: Exception) { false }
+        }
+
+    /** Download the photo's full-resolution file bytes (for saving local files to device). */
     suspend fun downloadPhotoBytes(photo: PhotoEntity): ByteArray? = withContext(Dispatchers.IO) {
         try {
             when {
+                // Plain mode: stream to temp file, then read — avoids holding
+                // the Retrofit response body and the ByteArray simultaneously.
                 encryptionMode == "plain" && photo.serverPhotoId != null -> {
-                    val response = api.photoFile(photo.serverPhotoId!!)
-                    response.bytes()
+                    val tempFile = java.io.File.createTempFile("dl_", ".tmp", photoRepository.getCacheDir())
+                    try {
+                        photoRepository.downloadPlainPhotoToFile(photo.serverPhotoId!!, tempFile)
+                        tempFile.readBytes()
+                    } finally {
+                        tempFile.delete()
+                    }
                 }
                 photo.serverBlobId != null -> {
                     downloadAndDecrypt(photo.serverBlobId!!)

@@ -273,42 +273,7 @@ pub async fn backup_receive(
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| file_path.clone());
 
-    let mime_type = match std::path::Path::new(&file_path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("png") => "image/png",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("heic") | Some("heif") => "image/heic",
-        Some("bmp") => "image/bmp",
-        Some("tiff") | Some("tif") => "image/tiff",
-        Some("svg") => "image/svg+xml",
-        Some("ico") | Some("cur") => "image/x-icon",
-        Some("hdr") => "image/vnd.radiance",
-        Some("mp4") => "video/mp4",
-        Some("mov") => "video/quicktime",
-        Some("avi") => "video/x-msvideo",
-        Some("mkv") => "video/x-matroska",
-        Some("webm") => "video/webm",
-        Some("wmv") => "video/x-ms-wmv",
-        Some("asf") => "video/x-ms-asf",
-        Some("hevc") | Some("h265") => "video/hevc",
-        Some("h264") => "video/h264",
-        Some("mpg") | Some("mpeg") => "video/mpeg",
-        Some("m4v") => "video/x-m4v",
-        Some("mp3") => "audio/mpeg",
-        Some("aiff") => "audio/aiff",
-        Some("flac") => "audio/flac",
-        Some("ogg") => "audio/ogg",
-        Some("wav") => "audio/wav",
-        Some("wma") => "audio/x-ms-wma",
-        _ => "application/octet-stream",
-    }
-    .to_string();
+    let mime_type = crate::media::mime_from_extension(&file_path).to_string();
 
     let media_type = if mime_type.starts_with("video/") {
         "video"

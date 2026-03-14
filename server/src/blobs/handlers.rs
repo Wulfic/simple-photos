@@ -286,8 +286,10 @@ pub async fn list(
     Ok(Json(BlobListResponse { blobs, next_cursor }))
 }
 
-/// Stream a blob from disk. Uses tokio ReaderStream so memory usage stays flat
-/// regardless of file size (important for large video blobs).
+/// GET /api/blobs/{id} — stream an encrypted blob from disk.
+///
+/// Uses tokio ReaderStream so memory usage stays flat regardless of file size
+/// (important for large video blobs).
 ///
 /// Supports HTTP Range requests (`Range: bytes=START-END`) for video seeking
 /// and download resumption. Returns 206 Partial Content for valid ranges,

@@ -4,7 +4,6 @@ import { encrypt, sha256Hex } from "../crypto/crypto";
 import {
   blobTypeFromMime,
   mediaTypeFromMime,
-  ACCEPTED_MIME_TYPES,
 } from "../db";
 import { createFallbackThumbnail, createAudioFallbackThumbnail, arrayBufferToBase64 } from "../utils/media";
 import { useProcessingStore } from "../store/processing";

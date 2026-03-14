@@ -1,3 +1,8 @@
+//! Server diagnostics and audit log endpoints (admin only).
+//!
+//! Provides system metrics (CPU, memory, disk, DB size, photo/blob counts),
+//! diagnostics enable/disable configuration, and paginated audit log viewing.
+
 use axum::extract::{Query, State};
 use axum::Json;
 use axum::response::IntoResponse;
@@ -6,6 +11,7 @@ use std::time::Instant;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::models::*;
@@ -17,19 +23,6 @@ pub(crate) fn server_start() -> &'static (Instant, String) {
     SERVER_START.get_or_init(|| (Instant::now(), chrono::Utc::now().to_rfc3339()))
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-async fn require_admin(auth: &AuthUser, state: &AppState) -> Result<(), AppError> {
-    let role: Option<String> =
-        sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
-            .bind(&auth.user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    if role.as_deref() != Some("admin") {
-        return Err(AppError::Forbidden("Admin access required".into()));
-    }
-    Ok(())
-}
 
 /// Read `/proc/self/status` on Linux to get VmRSS in bytes.
 #[cfg(target_os = "linux")]
@@ -149,30 +142,24 @@ fn walk_recursive(
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// GET /api/admin/diagnostics/config — read diagnostics config
-// ═══════════════════════════════════════════════════════════════════════════
-
+/// GET /api/admin/diagnostics/config — read diagnostics configuration.
 pub async fn get_diagnostics_config(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<DiagnosticsConfig>, AppError> {
-    require_admin(&auth, &state).await?;
+    require_admin(&state, &auth).await?;
 
     let config = read_diagnostics_config(&state.pool).await;
     Ok(Json(config))
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PUT /api/admin/diagnostics/config — update diagnostics config
-// ═══════════════════════════════════════════════════════════════════════════
-
+/// PUT /api/admin/diagnostics/config — update diagnostics configuration.
 pub async fn update_diagnostics_config(
     auth: AuthUser,
     State(state): State<AppState>,
     Json(req): Json<UpdateDiagnosticsConfigRequest>,
 ) -> Result<Json<DiagnosticsConfig>, AppError> {
-    require_admin(&auth, &state).await?;
+    require_admin(&state, &auth).await?;
 
     if let Some(enabled) = req.diagnostics_enabled {
         let val = if enabled { "true" } else { "false" };
@@ -222,16 +209,15 @@ async fn read_diagnostics_config(pool: &sqlx::SqlitePool) -> DiagnosticsConfig {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// GET /api/admin/diagnostics — comprehensive server metrics
-// (returns lightweight stub when disabled to save performance)
-// ═══════════════════════════════════════════════════════════════════════════
-
+/// GET /api/admin/diagnostics — comprehensive server metrics.
+///
+/// Returns a lightweight stub when diagnostics collection is disabled
+/// to avoid expensive disk walks and table scans.
 pub async fn get_diagnostics(
     auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<axum::response::Response, AppError> {
-    require_admin(&auth, &state).await?;
+    require_admin(&state, &auth).await?;
 
     let (start_instant, started_at) = server_start();
     let uptime = start_instant.elapsed().as_secs();
@@ -244,7 +230,7 @@ pub async fn get_diagnostics(
         let resp = DisabledDiagnosticsResponse {
             enabled: false,
             server: BasicServerInfo {
-                version: "0.6.9".to_string(),
+                version: crate::VERSION.to_string(),
                 uptime_seconds: uptime,
                 started_at: started_at.clone(),
             },
@@ -259,7 +245,7 @@ pub async fn get_diagnostics(
     // ── Server info ───────────────────────────────────────────────────
     let storage_root = state.storage_root.read().await.clone();
     let server_info = ServerInfo {
-        version: "0.6.9".to_string(),
+        version: crate::VERSION.to_string(),
         uptime_seconds: uptime,
         rust_version: env!("CARGO_PKG_RUST_VERSION", "unknown").to_string(),
         os: std::env::consts::OS.to_string(),
@@ -599,16 +585,13 @@ pub async fn get_diagnostics(
     }).into_response())
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// GET /api/admin/audit-logs — paginated audit log with filters
-// ═══════════════════════════════════════════════════════════════════════════
-
+/// GET /api/admin/audit-logs — paginated audit log with optional filters.
 pub async fn list_audit_logs(
     auth: AuthUser,
     State(state): State<AppState>,
     Query(params): Query<AuditLogParams>,
 ) -> Result<Json<AuditLogListResponse>, AppError> {
-    require_admin(&auth, &state).await?;
+    require_admin(&state, &auth).await?;
 
     let limit = params.limit.unwrap_or(100).min(500) as i64;
 

@@ -192,6 +192,8 @@ fun AlbumListScreen(
     onTrashClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onSecureGalleryClick: () -> Unit = {},
+    onSharedAlbumsClick: () -> Unit = {},
+    onDiagnosticsClick: () -> Unit = {},
     onLogout: () -> Unit,
     onAlbumClick: (String) -> Unit = {},
     isAdmin: Boolean = false,
@@ -217,6 +219,8 @@ fun AlbumListScreen(
                     onTrashClick = onTrashClick,
                     onSettingsClick = onSettingsClick,
                     onSecureGalleryClick = onSecureGalleryClick,
+                    onSharedAlbumsClick = onSharedAlbumsClick,
+                    onDiagnosticsClick = onDiagnosticsClick,
                     onLogout = { viewModel.logout(onLogout) },
                     onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
                     isAdmin = isAdmin
