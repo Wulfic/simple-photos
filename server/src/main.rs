@@ -198,16 +198,6 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn background task for auto-scanning storage directory
-    {
-        let pool_clone = pool.clone();
-        let storage_root_clone = config.storage.root.clone();
-        let scan_interval = config.scan.auto_scan_interval_secs;
-        tokio::spawn(async move {
-            backup::autoscan::background_auto_scan_task(pool_clone, storage_root_clone, scan_interval).await;
-        });
-    }
-
     // Spawn background task for backup-mode UDP broadcast
     {
         let pool_clone = pool.clone();
@@ -234,6 +224,26 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn background task for auto-scanning storage directory
+    {
+        let pool_clone = pool.clone();
+        let storage_root_clone = config.storage.root.clone();
+        let scan_interval = config.scan.auto_scan_interval_secs;
+        let convert_notify_clone = convert_notify.clone();
+        let encryption_key_clone = encryption_key.clone();
+        let jwt_secret_clone = config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            backup::autoscan::background_auto_scan_task(
+                pool_clone,
+                storage_root_clone,
+                scan_interval,
+                convert_notify_clone,
+                encryption_key_clone,
+                jwt_secret_clone,
+            ).await;
+        });
+    }
+
     // Build shared application state — cloned (via Arc) into every Axum handler.
     let state = AppState {
         pool,
@@ -244,6 +254,27 @@ async fn main() -> anyhow::Result<()> {
         conversion_active,
         encryption_key,
     };
+
+    // Spawn background task to resume interrupted encryption migration on startup.
+    // If the server was restarted mid-migration, this picks up where it left off
+    // using the encryption key that was persisted (wrapped) in the database.
+    {
+        let pool_clone = state.pool.clone();
+        let storage_root_clone = config.storage.root.clone();
+        let convert_notify_clone = state.convert_notify.clone();
+        let encryption_key_clone = state.encryption_key.clone();
+        let jwt_secret_clone = config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            photos::server_migrate::resume_migration_on_startup(
+                pool_clone,
+                storage_root_clone,
+                convert_notify_clone,
+                encryption_key_clone,
+                jwt_secret_clone,
+            )
+            .await;
+        });
+    }
 
     let api_routes = Router::new()
         // First-run setup (public)

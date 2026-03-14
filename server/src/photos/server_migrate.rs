@@ -477,6 +477,7 @@ async fn run_migration(
     progress: Arc<MigrationProgress>,
     convert_notify: Arc<tokio::sync::Notify>,
     encryption_key_store: Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
+    jwt_secret: Option<String>,
 ) {
     // Store the encryption key in AppState so the background converter
     // can decrypt blobs, convert, and re-encrypt independently.
@@ -770,19 +771,239 @@ async fn run_migration(
 
     // Keep the encryption key available for a grace period so the background
     // converter can process any encrypted blobs that need conversion.
-    // After 30 minutes, clear the key from memory for security.
+    // After 30 minutes, clear the key from memory AND from the DB for security.
     tracing::info!(
         "[DIAG:SERVER_MIG] keeping encryption key in memory for 30 min post-migration conversion"
     );
     let key_store_clone = encryption_key_store.clone();
+    let pool_clone = pool.clone();
+    // jwt_secret is not needed for clear_wrapped_key (it only DELETEs rows),
+    // so we intentionally drop it here.
+    drop(jwt_secret);
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
         let mut guard = key_store_clone.write().await;
         *guard = None;
         tracing::info!("[DIAG:SERVER_MIG] encryption key cleared from memory (30 min grace period expired)");
+        // Also clear the wrapped key from the DB
+        if let Err(e) = crypto::clear_wrapped_key(&pool_clone).await {
+            tracing::error!("[DIAG:SERVER_MIG] failed to clear wrapped key from DB: {}", e);
+        }
     });
 
     progress.running.store(false, Ordering::Release);
+}
+
+// ── Public entry points for autonomous migration ────────────────────────────
+
+/// Start a server-side migration with the given key and user ID.
+/// Called from `set_encryption_mode` (when key_hex is provided) and from
+/// `resume_migration_on_startup` (when a stored key is found on boot).
+///
+/// This is the main entry point that makes migration fully server-autonomous:
+/// the client sends the key once, and the server handles everything from there.
+pub async fn run_migration_from_stored_key(
+    key: [u8; 32],
+    user_id: String,
+    pool: sqlx::SqlitePool,
+    storage_root: std::path::PathBuf,
+    convert_notify: Arc<tokio::sync::Notify>,
+    encryption_key_store: Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
+    jwt_secret: String,
+) {
+    // Check if a migration is already running in-process
+    {
+        let guard = progress_store().read().await;
+        if let Some(ref p) = *guard {
+            if p.running.load(Ordering::Acquire) {
+                tracing::warn!("[SERVER_MIG] Migration already running, skipping duplicate start");
+                return;
+            }
+        }
+    }
+
+    // Count items to migrate
+    let count: i64 = match sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE user_id = ? AND encrypted_blob_id IS NULL",
+    )
+    .bind(&user_id)
+    .fetch_one(&pool)
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("[SERVER_MIG] Failed to count photos for migration: {}", e);
+            return;
+        }
+    };
+
+    if count == 0 {
+        tracing::info!("[SERVER_MIG] No photos to migrate, marking idle");
+        let _ = sqlx::query(
+            "UPDATE encryption_migration SET status = 'idle', completed = total, error = NULL WHERE id = 'singleton'",
+        )
+        .execute(&pool)
+        .await;
+        return;
+    }
+
+    // Set up progress tracker
+    let progress = Arc::new(MigrationProgress::new(count as u64));
+    {
+        let mut guard = progress_store().write().await;
+        *guard = Some(progress.clone());
+    }
+
+    tracing::info!(
+        "[SERVER_MIG] Starting server-side migration for {} photos (user={})",
+        count, user_id
+    );
+
+    run_migration(
+        key,
+        user_id,
+        pool,
+        storage_root,
+        progress,
+        convert_notify,
+        encryption_key_store,
+        Some(jwt_secret),
+    )
+    .await;
+}
+
+/// Resume an interrupted encryption migration on server startup.
+///
+/// Checks if:
+/// 1. The encryption mode is "encrypted"
+/// 2. The migration status is "encrypting" (i.e. it was interrupted)
+/// 3. A wrapped encryption key is stored in the DB
+///
+/// If all conditions are met, loads the key and resumes the migration
+/// automatically — no client interaction needed.
+pub async fn resume_migration_on_startup(
+    pool: sqlx::SqlitePool,
+    storage_root: std::path::PathBuf,
+    convert_notify: Arc<tokio::sync::Notify>,
+    encryption_key_store: Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
+    jwt_secret: String,
+) {
+    // Wait a few seconds for the system to settle after startup
+    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+
+    // Check encryption mode
+    let mode: String = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "plain".to_string());
+
+    if mode != "encrypted" {
+        tracing::debug!("[STARTUP_MIG] Encryption mode is '{}', no migration resume needed", mode);
+        return;
+    }
+
+    // Check migration status
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "idle".to_string());
+
+    // Also check if there are unencrypted photos even if status is "idle"
+    // (handles the case where mode was set but scan hadn't found files yet).
+    // Uses a global count — `run_migration_from_stored_key` will re-query per-user.
+    let unencrypted_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
+
+    if status != "encrypting" && unencrypted_count == 0 {
+        tracing::debug!(
+            "[STARTUP_MIG] Migration status='{}', unencrypted={}, no resume needed",
+            status, unencrypted_count
+        );
+        return;
+    }
+
+    // Try to load the stored encryption key
+    let key = match crypto::load_wrapped_key(&pool, &jwt_secret).await {
+        Ok(Some(k)) => k,
+        Ok(None) => {
+            if status == "encrypting" || unencrypted_count > 0 {
+                tracing::warn!(
+                    "[STARTUP_MIG] Migration pending (status={}, unencrypted={}) but no stored key found. \
+                     A client must provide the key via PUT /api/admin/encryption or POST /api/admin/encryption/migrate.",
+                    status, unencrypted_count
+                );
+            }
+            return;
+        }
+        Err(e) => {
+            tracing::error!("[STARTUP_MIG] Failed to load stored encryption key: {}", e);
+            return;
+        }
+    };
+
+    // Load key into memory
+    {
+        let mut guard = encryption_key_store.write().await;
+        *guard = Some(key);
+    }
+
+    // Find the admin user to use for migration
+    let admin_id: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten();
+
+    let user_id = match admin_id {
+        Some(id) => id,
+        None => {
+            tracing::warn!("[STARTUP_MIG] No admin user found, cannot resume migration");
+            return;
+        }
+    };
+
+    // If status is idle but there are unencrypted photos, set status to encrypting
+    if status == "idle" && unencrypted_count > 0 {
+        let now = chrono::Utc::now().to_rfc3339();
+        let _ = sqlx::query(
+            "UPDATE encryption_migration SET status = 'encrypting', total = ?, completed = 0, \
+             started_at = ?, error = NULL WHERE id = 'singleton'",
+        )
+        .bind(unencrypted_count)
+        .bind(&now)
+        .execute(&pool)
+        .await;
+    }
+
+    tracing::info!(
+        "[STARTUP_MIG] Resuming encryption migration on startup: {} unencrypted photos",
+        unencrypted_count
+    );
+
+    run_migration_from_stored_key(
+        key,
+        user_id,
+        pool,
+        storage_root,
+        convert_notify,
+        encryption_key_store,
+        jwt_secret,
+    )
+    .await;
 }
 
 // ── HTTP handlers ───────────────────────────────────────────────────────────
@@ -801,6 +1022,11 @@ pub async fn start_migration(
     // Parse & validate key
     let key = crypto::parse_key_hex(&req.key_hex)
         .map_err(|e| AppError::BadRequest(e))?;
+
+    // Persist the key (wrapped) so the server can resume after restart
+    crypto::store_wrapped_key(&state.pool, &key, &state.config.auth.jwt_secret)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to persist encryption key: {}", e)))?;
 
     // Check that encryption mode is "encrypted" and migration is in progress
     let mig_status: String = sqlx::query_scalar(
@@ -862,8 +1088,9 @@ pub async fn start_migration(
     let user_id = auth.user_id.clone();
     let convert_notify = state.convert_notify.clone();
     let encryption_key_store = state.encryption_key.clone();
+    let jwt_secret = state.config.auth.jwt_secret.clone();
     tokio::spawn(async move {
-        run_migration(key, user_id, pool, storage_root, progress, convert_notify, encryption_key_store).await;
+        run_migration(key, user_id, pool, storage_root, progress, convert_notify, encryption_key_store, Some(jwt_secret)).await;
     });
 
     Ok(Json(StartMigrationResponse {

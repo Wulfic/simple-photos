@@ -19,12 +19,12 @@ export const encryptionApi = {
       migration_error: string | null;
     }>("/settings/encryption"),
 
-  setMode: (mode: "plain" | "encrypted") =>
+  setMode: (mode: "plain" | "encrypted", keyHex?: string) =>
     request<{ message: string; mode: string; migration_items: number }>(
       "/admin/encryption",
       {
         method: "PUT",
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, ...(keyHex ? { key_hex: keyHex } : {}) }),
       }
     ),
 

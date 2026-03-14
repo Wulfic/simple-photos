@@ -17,7 +17,7 @@ import StorageStatsSection from "../components/StorageStatsSection";
 import UserManagement from "../components/settings/UserManagement";
 import SslSettings from "../components/settings/SslSettings";
 import AccountSection from "../components/settings/AccountSection";
-import { useMigrationWorker } from "../hooks/useMigrationWorker";
+// Migration is now fully server-side — no browser-based worker needed
 import { formatBytes, getErrorMessage } from "../utils/formatters";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
@@ -166,15 +166,18 @@ export default function Settings() {
     };
   }, [migrationStatus, loadEncryptionSettings]);
 
-  useMigrationWorker(migrationStatus, loadEncryptionSettings);
-
   async function handleToggleEncryption() {
     setShowEncryptionWarning(false);
     setTogglingEncryption(true);
     setError("");
     try {
       const newMode = encryptionMode === "plain" ? "encrypted" : "plain";
-      const res = await api.encryption.setMode(newMode);
+      // Send the encryption key with the mode change so the server can
+      // run migration autonomously (even if the browser is closed).
+      const keyHex = newMode === "encrypted"
+        ? sessionStorage.getItem("sp_key") ?? undefined
+        : undefined;
+      const res = await api.encryption.setMode(newMode, keyHex);
       setEncryptionMode(newMode);
       setSuccess(res.message);
       // Reload to get migration status
