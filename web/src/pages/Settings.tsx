@@ -759,7 +759,14 @@ export default function Settings() {
                 try {
                   const res = await fetch("/api/downloads/android", { method: "HEAD" });
                   if (res.ok) {
-                    window.location.href = "/api/downloads/android";
+                    // Programmatic download via temporary anchor — avoids SPA
+                    // navigation issues that window.location.href can cause.
+                    const a = document.createElement("a");
+                    a.href = "/api/downloads/android";
+                    a.download = "simple-photos.apk";
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
                   } else {
                     setError("Android APK is not available yet. Build it with: cd android && ./gradlew assembleRelease — or place a pre-built APK at downloads/simple-photos.apk");
                   }

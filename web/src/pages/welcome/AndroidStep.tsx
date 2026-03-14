@@ -1,4 +1,5 @@
 /** Wizard step — Android app download link and server URL QR code. */
+import { useState } from "react";
 import type { WizardStep } from "./types";
 import AppIcon from "../../components/AppIcon";
 
@@ -8,6 +9,39 @@ export interface AndroidStepProps {
 }
 
 export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
+  const [downloading, setDownloading] = useState(false);
+
+  /** Programmatic download — avoids the double-download issue that <a> tags
+   *  can cause in SPAs (browser navigates + downloads simultaneously). */
+  async function handleDownload() {
+    if (downloading) return; // guard against double-click
+    setDownloading(true);
+    setError("");
+    try {
+      // HEAD check first to give a helpful error if the APK hasn't been built
+      const check = await fetch("/api/downloads/android", { method: "HEAD" });
+      if (!check.ok) {
+        setError(
+          "Android APK is not available. Build it with: cd android && ./gradlew assembleRelease — or place a pre-built APK at downloads/simple-photos.apk"
+        );
+        return;
+      }
+      // Trigger the actual download via a temporary anchor with `download`
+      // attribute, preventing the browser from navigating the SPA away.
+      const a = document.createElement("a");
+      a.href = "/api/downloads/android";
+      a.download = "simple-photos.apk";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch {
+      setError("Could not download the APK. Is the server running?");
+    } finally {
+      // Brief cooldown to prevent accidental double-clicks
+      setTimeout(() => setDownloading(false), 2000);
+    }
+  }
+
   return (
     <div>
       <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
@@ -19,14 +53,15 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
       </p>
 
       <div className="space-y-4">
-        {/* Download button */}
-        <a
-          href="/api/downloads/android"
-          className="flex items-center justify-center gap-3 w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 text-sm font-medium transition-colors"
+        {/* Download button — uses programmatic download to avoid SPA navigation issues */}
+        <button
+          onClick={handleDownload}
+          disabled={downloading}
+          className="flex items-center justify-center gap-3 w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium transition-colors"
         >
           <AppIcon name="download" size="w-6 h-6" />
-          Download APK
-        </a>
+          {downloading ? "Downloading…" : "Download APK"}
+        </button>
 
         {/* Sideloading instructions */}
         <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
