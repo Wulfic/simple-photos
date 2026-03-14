@@ -1,3 +1,6 @@
+/**
+ * Room DAO for the blob upload queue consumed by the backup worker.
+ */
 package com.simplephotos.data.local.dao
 
 import androidx.room.*

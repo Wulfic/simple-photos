@@ -1,3 +1,7 @@
+/**
+ * Buffered diagnostic logger that collects structured log entries during
+ * backup and flushes them to the server in a single batch.
+ */
 package com.simplephotos.sync
 
 import android.util.Log

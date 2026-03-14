@@ -1,3 +1,6 @@
+/**
+ * Sealed hierarchy of navigation route definitions used by [NavGraph].
+ */
 package com.simplephotos.ui.navigation
 
 /** Navigation route definitions for [NavGraph]. */

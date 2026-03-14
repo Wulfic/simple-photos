@@ -1,3 +1,7 @@
+/**
+ * Repository for album CRUD operations, including creation, renaming,
+ * deletion, and managing photo-to-album associations via the server API.
+ */
 package com.simplephotos.data.repository
 
 import com.simplephotos.crypto.CryptoManager

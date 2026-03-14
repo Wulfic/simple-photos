@@ -1,3 +1,7 @@
+/**
+ * Composable search screen providing tag-based and text-based photo search
+ * with a filterable results grid.
+ */
 package com.simplephotos.ui.screens.search
 
 import androidx.compose.animation.AnimatedVisibility

@@ -1,3 +1,4 @@
+/** Zustand store for gallery thumbnail size preference (persists to localStorage). */
 import { create } from "zustand";
 
 export type ThumbnailSize = "normal" | "large";

@@ -1,3 +1,7 @@
+/**
+ * ViewModel for the secure gallery screen, managing encrypted photo loading,
+ * decryption, and secure album state.
+ */
 package com.simplephotos.ui.screens.securegallery
 
 import androidx.compose.runtime.getValue

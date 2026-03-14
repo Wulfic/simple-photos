@@ -19,6 +19,7 @@ use super::google_photos;
 
 // ── Scan Google Photos Takeout directory ─────────────────────────────────────
 
+/// Query parameters for scanning a Google Photos Takeout directory for importable media.
 #[derive(Debug, Deserialize)]
 pub struct TakeoutScanQuery {
     pub path: String,

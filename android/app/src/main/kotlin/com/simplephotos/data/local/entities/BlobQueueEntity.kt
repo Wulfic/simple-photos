@@ -1,3 +1,6 @@
+/**
+ * Room entity representing a pending blob upload in the backup queue.
+ */
 package com.simplephotos.data.local.entities
 
 import androidx.room.Entity

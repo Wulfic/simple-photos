@@ -1,3 +1,6 @@
+/**
+ * Compose Navigation host defining all screen routes and their arguments.
+ */
 package com.simplephotos.ui.navigation
 
 import androidx.compose.runtime.Composable

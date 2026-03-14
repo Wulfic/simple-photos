@@ -145,6 +145,7 @@ pub fn update_config_toml_storage(new_root: &str) -> anyhow::Result<()> {
 
 // ── Directory Browser ───────────────────────────────────────────────────────
 
+/// Query parameters for browsing server-side directories during storage setup.
 #[derive(Debug, Deserialize)]
 pub struct BrowseQuery {
     pub path: Option<String>,

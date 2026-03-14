@@ -1,3 +1,6 @@
+/**
+ * Composable screen for setting up two-factor authentication via TOTP.
+ */
 package com.simplephotos.ui.screens.twofactor
 
 import android.graphics.Bitmap

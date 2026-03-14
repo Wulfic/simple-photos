@@ -1,3 +1,7 @@
+/**
+ * Room DAO providing CRUD operations and reactive queries for albums
+ * and the photo↔album cross-reference join table.
+ */
 package com.simplephotos.data.local.dao
 
 import androidx.room.*

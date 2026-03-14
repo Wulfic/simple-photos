@@ -1,3 +1,6 @@
+/**
+ * Repository providing diagnostic logging and server health-check capabilities.
+ */
 package com.simplephotos.data.repository
 
 import com.simplephotos.data.remote.ApiService

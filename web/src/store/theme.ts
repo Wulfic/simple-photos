@@ -1,3 +1,4 @@
+/** Zustand store for dark/light theme preference (persists to localStorage). */
 import { create } from "zustand";
 
 type Theme = "light" | "dark";

@@ -1,3 +1,7 @@
+/**
+ * Repository for discovering device media folders and managing which
+ * folders are selected for backup.
+ */
 package com.simplephotos.data.repository
 
 import android.Manifest

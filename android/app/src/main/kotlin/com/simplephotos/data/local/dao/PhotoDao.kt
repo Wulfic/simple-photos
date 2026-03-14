@@ -1,3 +1,6 @@
+/**
+ * Room DAO for photo CRUD operations, reactive queries, and sync-status management.
+ */
 package com.simplephotos.data.local.dao
 
 import androidx.room.*

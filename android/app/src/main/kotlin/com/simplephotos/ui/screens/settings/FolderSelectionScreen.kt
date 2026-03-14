@@ -1,3 +1,6 @@
+/**
+ * Composable screen for selecting device folders to include in photo backup.
+ */
 package com.simplephotos.ui.screens.settings
 
 import android.Manifest

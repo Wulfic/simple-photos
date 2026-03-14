@@ -1,3 +1,7 @@
+/**
+ * ViewModel for the main gallery screen, managing photo loading, sync operations,
+ * selection state, and album interactions.
+ */
 package com.simplephotos.ui.screens.gallery
 
 import android.net.Uri

@@ -1,3 +1,6 @@
+/**
+ * ViewModel that manages state and actions for the full-screen photo viewer.
+ */
 package com.simplephotos.ui.screens.viewer
 
 import androidx.compose.runtime.getValue

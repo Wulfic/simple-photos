@@ -1,3 +1,7 @@
+/**
+ * Configures periodic and reactive WorkManager scheduling for automatic
+ * photo/video backup.
+ */
 package com.simplephotos.sync
 
 import android.content.Context

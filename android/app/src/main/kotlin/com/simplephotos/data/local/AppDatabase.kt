@@ -1,3 +1,7 @@
+/**
+ * Room database definition and DAO accessors for local photo metadata,
+ * albums, blob upload queue, and backup folder selections.
+ */
 package com.simplephotos.data.local
 
 import androidx.room.Database

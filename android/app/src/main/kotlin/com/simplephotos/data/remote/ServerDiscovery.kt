@@ -1,3 +1,7 @@
+/**
+ * Local network scanning to auto-discover Simple Photos server instances
+ * by probing subnet IPs on common ports for the /health endpoint.
+ */
 package com.simplephotos.data.remote
 
 import android.content.Context

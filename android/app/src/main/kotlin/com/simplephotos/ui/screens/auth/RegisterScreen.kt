@@ -1,3 +1,7 @@
+/**
+ * Composable registration screen for new user account creation
+ * with server URL, username, and password fields.
+ */
 package com.simplephotos.ui.screens.auth
 
 import androidx.compose.foundation.Image

@@ -1,3 +1,7 @@
+/**
+ * Repository for photo metadata operations including fetch, upload, favorites,
+ * crop, duplicate detection, and edit-copy management.
+ */
 package com.simplephotos.data.repository
 
 import android.content.Context

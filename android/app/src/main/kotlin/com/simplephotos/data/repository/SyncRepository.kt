@@ -1,3 +1,7 @@
+/**
+ * Repository coordinating photo synchronisation between the local device
+ * and the remote server, including blob upload and download.
+ */
 package com.simplephotos.data.repository
 
 import android.content.ContentUris
