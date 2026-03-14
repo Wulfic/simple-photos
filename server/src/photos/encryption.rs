@@ -53,16 +53,29 @@ pub async fn get_encryption_settings(
 /// Toggle encryption mode. Admin only.
 ///
 /// Sets the mode in `server_settings` and updates `encryption_migration`
-/// status to `"encrypting"` or `"decrypting"`. Does **not** start the
-/// actual migration — that is triggered separately via
-/// `POST /api/admin/encryption/migrate` (server-side) or by the
-/// client-side migration worker.
+/// status to `"encrypting"` or `"decrypting"`.
+///
+/// When `key_hex` is provided alongside `mode = "encrypted"`, the server:
+/// 1. Validates and wraps the AES-256 key, persisting it in the DB
+/// 2. Loads the key into in-memory `AppState` for immediate use
+/// 3. Auto-starts the server-side encryption migration in the background
+///
+/// This makes the entire migration autonomous — the client only needs to
+/// send the key once; even if the browser is closed, the server continues.
+///
+/// Without `key_hex`, the mode is set but actual migration must be started
+/// separately via `POST /api/admin/encryption/migrate` or will be picked up
+/// by the autoscan background task if a stored key is available.
 ///
 /// Request body for `PUT /api/admin/encryption`.
 #[derive(Debug, Deserialize)]
 pub struct SetEncryptionModeRequest {
     /// Target encryption mode: `"plain"` or `"encrypted"`.
     pub mode: String,
+    /// Optional: hex-encoded AES-256 key (64 hex chars).
+    /// When provided with `mode = "encrypted"`, the server stores the key
+    /// (wrapped by the JWT secret) and auto-starts server-side migration.
+    pub key_hex: Option<String>,
 }
 
 pub async fn set_encryption_mode(
@@ -85,7 +98,7 @@ pub async fn set_encryption_mode(
     .await?
     .unwrap_or_else(|| "plain".to_string());
 
-    if current == req.mode {
+    if current == req.mode && req.key_hex.is_none() {
         return Ok(Json(serde_json::json!({
             "message": format!("Already in '{}' mode", req.mode),
             "mode": req.mode,
@@ -99,11 +112,28 @@ pub async fn set_encryption_mode(
     .await?
     .unwrap_or_else(|| "idle".to_string());
 
-    if mig_status != "idle" {
+    if mig_status != "idle" && req.key_hex.is_none() {
         return Err(AppError::BadRequest(
             "A migration is already in progress. Wait for it to complete.".into(),
         ));
     }
+
+    // If a key is provided, validate and persist it (wrapped by the JWT secret)
+    let parsed_key: Option<[u8; 32]> = if let Some(ref key_hex) = req.key_hex {
+        let key = crate::crypto::parse_key_hex(key_hex)
+            .map_err(|e| AppError::BadRequest(e))?;
+        crate::crypto::store_wrapped_key(&state.pool, &key, &state.config.auth.jwt_secret)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to persist encryption key: {}", e)))?;
+        // Also load it into the in-memory store for immediate use
+        {
+            let mut guard = state.encryption_key.write().await;
+            *guard = Some(key);
+        }
+        Some(key)
+    } else {
+        None
+    };
 
     sqlx::query(
         "INSERT OR REPLACE INTO server_settings (key, value) VALUES ('encryption_mode', ?)",
@@ -135,34 +165,58 @@ pub async fn set_encryption_mode(
         .await?
     };
 
-    // If there's nothing to migrate, stay idle — just flip the mode
+    // If there's nothing to migrate NOW, stay idle — just flip the mode.
+    // The autoscan background task will detect new files and trigger migration
+    // later once the initial scan completes (it calls auto_start_migration_if_needed).
     if count == 0 {
         tracing::info!(
-            "Encryption mode changed to '{}'. No items to migrate.",
+            "Encryption mode changed to '{}'. No items to migrate yet (scan may find files later).",
             req.mode
         );
         return Ok(Json(serde_json::json!({
-            "message": format!("Encryption mode set to '{}'. No migration needed.", req.mode),
+            "message": format!("Encryption mode set to '{}'. Migration will start automatically when photos are found.", req.mode),
             "mode": req.mode,
             "migration_items": 0,
         })));
     }
 
     let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "UPDATE encryption_migration SET status = ?, total = ?, completed = 0, started_at = ?, error = NULL WHERE id = 'singleton'",
-    )
-    .bind(direction)
-    .bind(count)
-    .bind(&now)
-    .execute(&state.pool)
-    .await?;
+    // Only start a new migration if status is idle (avoid overwriting a running migration)
+    if mig_status == "idle" {
+        sqlx::query(
+            "UPDATE encryption_migration SET status = ?, total = ?, completed = 0, started_at = ?, error = NULL WHERE id = 'singleton'",
+        )
+        .bind(direction)
+        .bind(count)
+        .bind(&now)
+        .execute(&state.pool)
+        .await?;
+    }
 
     tracing::info!(
         "Encryption mode changed to '{}'. Migration: {} items.",
         req.mode,
         count
     );
+
+    // If we have the key and we're encrypting, auto-start the server-side migration
+    if req.mode == "encrypted" && parsed_key.is_some() {
+        let key = parsed_key.unwrap();
+        let pool = state.pool.clone();
+        let storage_root = state.storage_root.read().await.clone();
+        let user_id = auth.user_id.clone();
+        let convert_notify = state.convert_notify.clone();
+        let encryption_key_store = state.encryption_key.clone();
+        let jwt_secret = state.config.auth.jwt_secret.clone();
+
+        tokio::spawn(async move {
+            super::server_migrate::run_migration_from_stored_key(
+                key, user_id, pool, storage_root, convert_notify, encryption_key_store, jwt_secret,
+            ).await;
+        });
+
+        tracing::info!("Server-side migration auto-started after setMode (key provided)");
+    }
 
     Ok(Json(serde_json::json!({
         "message": format!("Encryption mode set to '{}'. Migration started.", req.mode),

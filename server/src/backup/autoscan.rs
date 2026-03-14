@@ -40,6 +40,9 @@ pub async fn background_auto_scan_task(
     pool: sqlx::SqlitePool,
     storage_root: std::path::PathBuf,
     interval_secs: u64,
+    convert_notify: std::sync::Arc<tokio::sync::Notify>,
+    encryption_key_store: std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
+    jwt_secret: String,
 ) {
     if interval_secs == 0 {
         tracing::info!("Background auto-scan disabled (interval = 0)");
@@ -52,7 +55,9 @@ pub async fn background_auto_scan_task(
     let count = run_auto_scan(&pool, &storage_root).await;
     tracing::info!("[DIAG:AUTOSCAN] Startup auto-scan complete: registered {} new files", count);
     if count > 0 {
-        auto_start_migration_if_needed(&pool).await;
+        auto_start_migration_if_needed(
+            &pool, &storage_root, &convert_notify, &encryption_key_store, &jwt_secret,
+        ).await;
     }
     update_last_scan_time(&pool).await;
 
@@ -66,7 +71,9 @@ pub async fn background_auto_scan_task(
         let count = run_auto_scan(&pool, &storage_root).await;
         tracing::info!("[DIAG:AUTOSCAN] Interval auto-scan complete: registered {} new files", count);
         if count > 0 {
-            auto_start_migration_if_needed(&pool).await;
+            auto_start_migration_if_needed(
+                &pool, &storage_root, &convert_notify, &encryption_key_store, &jwt_secret,
+            ).await;
         }
         update_last_scan_time(&pool).await;
     }
@@ -98,7 +105,13 @@ pub async fn trigger_auto_scan(
     let count = run_auto_scan(&pool, &storage_root).await;
     tracing::info!("[DIAG:AUTOSCAN] On-demand scan complete: registered {} new files", count);
     if count > 0 {
-        auto_start_migration_if_needed(&pool).await;
+        auto_start_migration_if_needed(
+            &pool,
+            &storage_root,
+            &state.convert_notify,
+            &state.encryption_key,
+            &state.config.auth.jwt_secret,
+        ).await;
     }
 
     // Update last scan time
@@ -114,7 +127,16 @@ pub async fn trigger_auto_scan(
 /// unencrypted plain photos, automatically start the encryption migration.
 /// This resolves a race condition on fresh setup where the mode is set before
 /// the initial scan registers any files.
-async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
+///
+/// When a stored encryption key is available, this also spawns the actual
+/// migration task — making the entire process fully autonomous.
+async fn auto_start_migration_if_needed(
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+    convert_notify: &std::sync::Arc<tokio::sync::Notify>,
+    encryption_key_store: &std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
+    jwt_secret: &str,
+) {
     // Only relevant when mode is already "encrypted"
     let mode: String = sqlx::query_scalar(
         "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
@@ -145,7 +167,9 @@ async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
         return;
     }
 
-    // Count plain photos that need encryption
+    // Count plain photos that need encryption.
+    // Note: uses a global count (no user_id filter) because `run_migration` will
+    // re-query per-user. This is a quick check to decide whether to start at all.
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
     )
@@ -158,7 +182,7 @@ async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
         return;
     }
 
-    // Start the migration
+    // Start the migration (set DB status)
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     if let Err(e) = sqlx::query(
         "UPDATE encryption_migration SET status = 'encrypting', total = ?, completed = 0, \
@@ -177,6 +201,74 @@ async fn auto_start_migration_if_needed(pool: &sqlx::SqlitePool) {
         "[DIAG:AUTOSCAN] Auto-triggered encryption migration for {} unencrypted photos after scan",
         count
     );
+
+    // Try to load the encryption key and spawn the actual migration task
+    let key = {
+        // First check in-memory store
+        let guard = encryption_key_store.read().await;
+        *guard
+    };
+    let key = match key {
+        Some(k) => k,
+        None => {
+            // Try loading from DB
+            match crate::crypto::load_wrapped_key(pool, jwt_secret).await {
+                Ok(Some(k)) => {
+                    let mut guard = encryption_key_store.write().await;
+                    *guard = Some(k);
+                    k
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        "[DIAG:AUTOSCAN] No encryption key available (in-memory or DB). \
+                         Migration DB status set to 'encrypting' but actual task not started. \
+                         A client must provide the key."
+                    );
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("[DIAG:AUTOSCAN] Failed to load stored key: {}", e);
+                    return;
+                }
+            }
+        }
+    };
+
+    // Find the admin user
+    let admin_id: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let user_id = match admin_id {
+        Some(id) => id,
+        None => {
+            tracing::warn!("[DIAG:AUTOSCAN] No admin user found, cannot start migration task");
+            return;
+        }
+    };
+
+    // Spawn the migration in the background
+    let pool_clone = pool.clone();
+    let storage_root_clone = storage_root.to_path_buf();
+    let convert_notify_clone = convert_notify.clone();
+    let encryption_key_clone = encryption_key_store.clone();
+    let jwt_secret_clone = jwt_secret.to_string();
+    tokio::spawn(async move {
+        crate::photos::server_migrate::run_migration_from_stored_key(
+            key,
+            user_id,
+            pool_clone,
+            storage_root_clone,
+            convert_notify_clone,
+            encryption_key_clone,
+            jwt_secret_clone,
+        )
+        .await;
+    });
 }
 
 /// Scan storage directory and register any unregistered media files for ALL users.

@@ -168,17 +168,24 @@ export default function CompleteStep({
               }
 
               // ── Normal setup tasks ────────────────────────────────────
-              // Fire scan in background — it's slow (hashes, thumbnails, metadata)
-              // and the gallery will trigger auto-scan on mount anyway.
-              api.admin.scanAndRegister().then(() => {
+              // Await scan so files are registered BEFORE we set encryption mode.
+              // This ensures the server knows about photos and can start migration
+              // immediately — no race condition with background scan.
+              try {
+                await api.admin.scanAndRegister();
                 // After scan, trigger immediate conversion for thumbnails/previews
                 api.admin.triggerConvert().catch(() => {});
-              }).catch(() => {
-                // Non-critical: if scan fails, user can trigger manually from Settings
-              });
+              } catch {
+                // Non-critical: if scan fails, autoscan will catch files later
+              }
 
-              // Set the encryption mode on the server (fast operation).
-              await api.encryption.setMode(encryptionMode);
+              // Set the encryption mode on the server, including the encryption
+              // key so the server can run migration autonomously (even if the
+              // browser is closed immediately after this point).
+              const keyHex = encryptionMode === "encrypted"
+                ? sessionStorage.getItem("sp_key") ?? undefined
+                : undefined;
+              await api.encryption.setMode(encryptionMode, keyHex);
             } catch (err: unknown) {
               // Non-fatal: mode may already be set or endpoint unavailable
               console.warn("Setup finalization:", err);
