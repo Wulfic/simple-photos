@@ -1,3 +1,7 @@
+/**
+ * AES-256-GCM encryption/decryption operations and SHA-256 hashing utilities
+ * for the Simple Photos Android client.
+ */
 package com.simplephotos.crypto
 
 import java.security.MessageDigest

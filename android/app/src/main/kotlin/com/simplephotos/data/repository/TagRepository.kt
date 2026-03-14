@@ -1,3 +1,7 @@
+/**
+ * Repository for server-side photo tag operations including listing,
+ * adding, and removing tags.
+ */
 package com.simplephotos.data.repository
 
 import com.simplephotos.data.remote.ApiService

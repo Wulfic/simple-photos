@@ -1,3 +1,6 @@
+/**
+ * Room DAO for managing device folders selected for automatic photo backup.
+ */
 package com.simplephotos.data.local.dao
 
 import androidx.room.*

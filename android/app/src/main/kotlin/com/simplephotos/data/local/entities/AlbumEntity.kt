@@ -1,3 +1,6 @@
+/**
+ * Room entities for user-created albums and the photo↔album many-to-many join table.
+ */
 package com.simplephotos.data.local.entities
 
 import androidx.room.Entity

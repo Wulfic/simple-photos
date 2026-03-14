@@ -1,3 +1,7 @@
+/**
+ * WorkManager-based background worker that scans, deduplicates, and uploads
+ * new photos and videos to the server.
+ */
 package com.simplephotos.sync
 
 import android.content.Context

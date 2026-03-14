@@ -1,3 +1,6 @@
+/**
+ * Room entity representing a device folder selected for automatic backup.
+ */
 package com.simplephotos.data.local.entities
 
 import androidx.room.Entity

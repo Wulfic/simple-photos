@@ -1,3 +1,7 @@
+/**
+ * Wire-format representation of AES-256-GCM encrypted data (nonce + ciphertext)
+ * with serialization and deserialization helpers.
+ */
 package com.simplephotos.crypto
 
 /**

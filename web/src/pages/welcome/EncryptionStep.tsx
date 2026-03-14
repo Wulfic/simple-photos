@@ -1,5 +1,4 @@
 /** Wizard step — choose between plain mode and end-to-end encryption. */
-import { api } from "../../api/client";
 import type { WizardStep } from "./types";
 
 export interface EncryptionStepProps {

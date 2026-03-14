@@ -14,6 +14,7 @@ use crate::state::AppState;
 
 use super::admin::require_admin;
 
+/// Query parameters for scanning a server-side directory for importable media files.
 #[derive(Debug, Deserialize)]
 pub struct ImportScanQuery {
     pub path: Option<String>,
@@ -134,6 +135,7 @@ pub async fn import_scan(
     }))
 }
 
+/// Query parameters for streaming a single file from the server filesystem for client-side import.
 #[derive(Debug, Deserialize)]
 pub struct ImportFileQuery {
     pub path: String,

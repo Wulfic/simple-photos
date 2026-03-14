@@ -1,3 +1,7 @@
+/**
+ * ViewModel that resolves the start destination and decodes admin status
+ * from the persisted JWT access token.
+ */
 package com.simplephotos.ui.navigation
 
 import androidx.datastore.core.DataStore

@@ -1,3 +1,7 @@
+/**
+ * Manages derivation, wrapping, and secure storage of the AES-256 Data Encryption Key
+ * using Argon2id key derivation and Android Keystore.
+ */
 package com.simplephotos.crypto
 
 import android.content.Context

@@ -1,3 +1,7 @@
+/**
+ * Composable login screen handling username/password entry, TOTP verification,
+ * and server URL configuration.
+ */
 package com.simplephotos.ui.screens.auth
 
 import androidx.compose.foundation.Image

@@ -1,3 +1,7 @@
+/**
+ * Composable diagnostics screen showing device info, sync status,
+ * and server connectivity details for troubleshooting.
+ */
 package com.simplephotos.ui.screens.diagnostics
 
 import android.content.Context

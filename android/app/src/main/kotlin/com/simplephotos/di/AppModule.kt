@@ -1,3 +1,7 @@
+/**
+ * Hilt module providing app-level singletons such as the Room database,
+ * DataStore, CryptoManager, and KeyManager.
+ */
 package com.simplephotos.di
 
 import android.content.Context

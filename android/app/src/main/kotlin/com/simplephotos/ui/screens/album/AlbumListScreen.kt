@@ -1,3 +1,7 @@
+/**
+ * Composable screen that displays the user's albums in a scrollable list
+ * with options to create, rename, and delete albums.
+ */
 package com.simplephotos.ui.screens.album
 
 import androidx.compose.foundation.background

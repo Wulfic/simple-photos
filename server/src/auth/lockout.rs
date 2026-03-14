@@ -128,6 +128,8 @@ pub async fn record_failed_login(
     }
 }
 
+/// Deletes all failed-login / account-lockout records for the given user,
+/// typically called after a successful authentication.
 pub async fn clear_failed_logins(state: &AppState, user_id: &str) {
     if let Err(e) = sqlx::query("DELETE FROM account_lockouts WHERE user_id = ?")
         .bind(user_id)

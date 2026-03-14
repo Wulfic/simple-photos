@@ -211,6 +211,7 @@ pub async fn list_logs(
     }))
 }
 
+/// Query parameters for listing client-submitted log entries with optional filters and pagination.
 #[derive(Debug, serde::Deserialize)]
 pub struct ListLogsParams {
     pub user_id: Option<String>,

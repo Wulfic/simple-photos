@@ -1,3 +1,6 @@
+/**
+ * Composable screen that displays and manages user-configurable application settings.
+ */
 package com.simplephotos.ui.screens.settings
 
 import androidx.compose.foundation.background

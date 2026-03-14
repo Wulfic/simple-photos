@@ -172,6 +172,7 @@ pub struct AuditLogListResponse {
     pub total: i64,
 }
 
+/// Query parameters for filtering and paginating the security audit log.
 #[derive(Debug, serde::Deserialize)]
 pub struct AuditLogParams {
     pub event_type: Option<String>,

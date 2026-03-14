@@ -1,3 +1,6 @@
+/**
+ * Composable screen for viewing and managing shared photo albums.
+ */
 package com.simplephotos.ui.screens.sharing
 
 import androidx.compose.foundation.background

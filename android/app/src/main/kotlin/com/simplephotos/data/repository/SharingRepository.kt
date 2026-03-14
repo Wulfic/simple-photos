@@ -1,3 +1,6 @@
+/**
+ * Repository for shared album operations, wrapping the server sharing endpoints.
+ */
 package com.simplephotos.data.repository
 
 import com.simplephotos.data.remote.ApiService

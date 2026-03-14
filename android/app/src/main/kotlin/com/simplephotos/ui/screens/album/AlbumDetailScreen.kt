@@ -1,3 +1,7 @@
+/**
+ * Composable screen displaying the contents of a single album with photo grid,
+ * selection management, and album editing capabilities.
+ */
 package com.simplephotos.ui.screens.album
 
 import androidx.compose.foundation.ExperimentalFoundationApi

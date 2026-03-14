@@ -1,3 +1,7 @@
+/**
+ * Material 3 theme configuration with persisted light/dark/system mode
+ * and dynamic color support.
+ */
 package com.simplephotos.ui.theme
 
 import android.os.Build

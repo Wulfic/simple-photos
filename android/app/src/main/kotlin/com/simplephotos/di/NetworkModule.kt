@@ -1,3 +1,7 @@
+/**
+ * Hilt module providing the OkHttpClient, Retrofit instance, and ApiService
+ * with automatic token refresh and server-URL resolution.
+ */
 package com.simplephotos.di
 
 import androidx.datastore.core.DataStore

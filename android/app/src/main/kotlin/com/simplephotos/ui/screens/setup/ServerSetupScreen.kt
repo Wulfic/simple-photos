@@ -1,3 +1,6 @@
+/**
+ * Composable screen for initial server connection setup and configuration.
+ */
 package com.simplephotos.ui.screens.setup
 
 import androidx.compose.animation.AnimatedVisibility

@@ -1,3 +1,7 @@
+/**
+ * Repository for PIN-protected secure gallery operations including
+ * creation, unlock, and item management.
+ */
 package com.simplephotos.data.repository
 
 import com.simplephotos.data.remote.ApiService

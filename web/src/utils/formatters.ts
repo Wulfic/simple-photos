@@ -1,5 +1,8 @@
-// ── Formatting Utilities ──────────────────────────────────────────────────────
-// Shared formatters used across Settings, Diagnostics, Viewer, and other pages.
+/**
+ * Formatting utilities — shared formatters for bytes, uptime, dates, and errors.
+ *
+ * Used across Settings, Diagnostics, Viewer, and other pages.
+ */
 
 /** Format a byte count to a human-readable string (e.g. "1.2 GB") */
 export function formatBytes(bytes: number): string {

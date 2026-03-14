@@ -1,3 +1,6 @@
+/**
+ * Repository for authentication, session management, and credential storage.
+ */
 package com.simplephotos.data.repository
 
 import android.content.Context

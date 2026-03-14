@@ -1,3 +1,6 @@
+/**
+ * Composable screen for viewing and restoring or permanently deleting trashed photos.
+ */
 package com.simplephotos.ui.screens.trash
 
 import androidx.compose.foundation.ExperimentalFoundationApi
