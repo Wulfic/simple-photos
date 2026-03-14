@@ -1,3 +1,7 @@
+/**
+ * Trash DTOs — soft-deleted photo list items with remaining days until
+ * automatic permanent deletion (30-day retention).
+ */
 package com.simplephotos.data.remote.dto
 
 import com.google.gson.annotations.SerializedName

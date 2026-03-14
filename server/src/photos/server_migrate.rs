@@ -36,12 +36,16 @@ use super::scan::{needs_web_preview, generate_web_preview_bg, generate_thumbnail
 
 // ── Request / response types ────────────────────────────────────────────────
 
+/// Request body for `POST /api/admin/encryption/migrate`.
+/// Starts a server-side parallel encryption migration for all plain photos.
 #[derive(Debug, Deserialize)]
 pub struct StartMigrationRequest {
     /// Hex-encoded AES-256 key (64 hex chars).
     pub key_hex: String,
 }
 
+/// Response body for `POST /api/admin/encryption/migrate`.
+/// Returned immediately when the migration task is spawned.
 #[derive(Debug, Serialize)]
 pub struct StartMigrationResponse {
     pub message: String,

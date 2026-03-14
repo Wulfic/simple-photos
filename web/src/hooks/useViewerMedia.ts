@@ -328,6 +328,9 @@ export default function useViewerMedia(
         try { photoCropData = JSON.parse(dbEntry.cropData); } catch { /* ignore */ }
       }
 
+      // Read favorite status from the CachedPhoto entry (synced from server)
+      const photoIsFavorite = dbEntry?.isFavorite ?? false;
+
       // Store in preload cache so swiping back is instant
       preloadCache.current.set(blobId, {
         url,
@@ -335,7 +338,7 @@ export default function useViewerMedia(
         mimeType: payload.mime_type,
         mediaType: resolvedType,
         cropData: photoCropData,
-        isFavorite: false,
+        isFavorite: photoIsFavorite,
       });
 
       // Cache decrypted data in IndexedDB for cross-session persistence
@@ -344,7 +347,7 @@ export default function useViewerMedia(
           await db.fullPhotos?.put({
             photoId: blobId, filename: payload.filename, mimeType: payload.mime_type,
             mediaType: resolvedType, cropData: dbEntry?.cropData ?? undefined,
-            isFavorite: false, data: bytes, cachedAt: Date.now(),
+            isFavorite: photoIsFavorite, data: bytes, cachedAt: Date.now(),
           });
         } catch { /* non-fatal */ }
       }

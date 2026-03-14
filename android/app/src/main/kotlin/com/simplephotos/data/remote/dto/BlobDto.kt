@@ -1,3 +1,7 @@
+/**
+ * Blob storage DTOs — upload metadata, blob list responses, and encrypted
+ * blob identifiers used in encrypted mode.
+ */
 package com.simplephotos.data.remote.dto
 
 import com.google.gson.annotations.SerializedName

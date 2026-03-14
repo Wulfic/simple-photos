@@ -1,3 +1,7 @@
+/**
+ * Shared app header composable — top bar with navigation, sync-status
+ * spinner, theme toggle, and hamburger menu for all authenticated screens.
+ */
 package com.simplephotos.ui.components
 
 import androidx.compose.animation.core.*

@@ -1,3 +1,10 @@
+/**
+ * Application-level initialization.
+ *
+ * Configures Hilt dependency injection, WorkManager with [HiltWorkerFactory]
+ * for background backup scheduling, and a custom Coil [ImageLoader] for
+ * efficient thumbnail loading with server-authenticated requests.
+ */
 package com.simplephotos
 
 import android.app.Application

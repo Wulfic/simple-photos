@@ -20,11 +20,13 @@ export const useThumbnailSizeStore = create<ThumbnailSizeState>((set, get) => ({
   thumbnailSize:
     (localStorage.getItem("thumbnailSize") as ThumbnailSize) || "normal",
 
+  /** Set the thumbnail size explicitly, persisting to localStorage. */
   setThumbnailSize: (size: ThumbnailSize) => {
     localStorage.setItem("thumbnailSize", size);
     set({ thumbnailSize: size });
   },
 
+  /** Toggle between "normal" and "large" thumbnail sizes. */
   toggle: () => {
     const next = get().thumbnailSize === "normal" ? "large" : "normal";
     localStorage.setItem("thumbnailSize", next);

@@ -1,3 +1,8 @@
+/**
+ * Shared TypeScript types for the import system — encryption mode,
+ * Google Photos Takeout metadata shapes, and import queue item definitions.
+ */
+
 /** Encryption mode for photo storage */
 export type EncryptionMode = "plain" | "encrypted";
 

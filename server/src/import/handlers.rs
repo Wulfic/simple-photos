@@ -103,7 +103,7 @@ pub async fn import_metadata(
     .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::BlobUpload, // reuse existing event type
         Some(&auth.user_id),
         &headers,
@@ -202,7 +202,7 @@ pub async fn batch_import_metadata(
     }
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::BlobUpload,
         Some(&auth.user_id),
         &headers,

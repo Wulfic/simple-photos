@@ -8,13 +8,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
-import com.simplephotos.data.remote.ApiService
-import com.simplephotos.data.remote.dto.AddTagRequest
-import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
-import com.simplephotos.data.remote.dto.RemoveTagRequest
-import com.simplephotos.data.remote.dto.SetCropRequest
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.PhotoRepository
+import com.simplephotos.data.repository.TagRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -39,7 +35,7 @@ import javax.inject.Inject
 class PhotoViewerViewModel @Inject constructor(
     private val photoRepository: PhotoRepository,
     private val albumRepository: AlbumRepository,
-    private val api: ApiService,
+    private val tagRepository: TagRepository,
     val okHttpClient: OkHttpClient,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -184,10 +180,10 @@ class PhotoViewerViewModel @Inject constructor(
         if (photoId == null || encryptionMode != "plain") return
         viewModelScope.launch {
             try {
-                val response = withContext(Dispatchers.IO) { api.getPhotoTags(photoId) }
+                val response = withContext(Dispatchers.IO) { tagRepository.getPhotoTags(photoId) }
                 currentTags = response.tags
                 // Also refresh all-tags list
-                val tagsResponse = withContext(Dispatchers.IO) { api.listTags() }
+                val tagsResponse = withContext(Dispatchers.IO) { tagRepository.listTags() }
                 allTags = tagsResponse.tags
             } catch (_: Exception) {
                 currentTags = emptyList()
@@ -204,7 +200,7 @@ class PhotoViewerViewModel @Inject constructor(
         if (cleaned.isEmpty()) return
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { api.addTag(photoId, AddTagRequest(cleaned)) }
+                withContext(Dispatchers.IO) { tagRepository.addTag(photoId, cleaned) }
                 if (!currentTags.contains(cleaned)) {
                     currentTags = (currentTags + cleaned).sorted()
                 }
@@ -219,7 +215,7 @@ class PhotoViewerViewModel @Inject constructor(
     fun removeTag(photoId: String, tag: String) {
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { api.removeTag(photoId, RemoveTagRequest(tag)) }
+                withContext(Dispatchers.IO) { tagRepository.removeTag(photoId, tag) }
                 currentTags = currentTags.filter { it != tag }
             } catch (_: Exception) {}
         }
@@ -238,7 +234,7 @@ class PhotoViewerViewModel @Inject constructor(
     fun toggleFavorite(photoId: String) {
         viewModelScope.launch {
             try {
-                val response = withContext(Dispatchers.IO) { api.toggleFavorite(photoId) }
+                val response = withContext(Dispatchers.IO) { photoRepository.toggleFavorite(photoId) }
                 isFavorite = response.isFavorite
                 // Update the local allPhotos list so loadFavoriteForPhoto()
                 // returns the correct value when the user swipes away and back.
@@ -259,7 +255,7 @@ class PhotoViewerViewModel @Inject constructor(
                 if (encryptionMode == "plain" && photo.serverPhotoId != null) {
                     // Plain mode: save to server
                     withContext(Dispatchers.IO) {
-                        api.setCrop(photo.serverPhotoId!!, SetCropRequest(metadata))
+                        photoRepository.setCropOnServer(photo.serverPhotoId!!, metadata)
                     }
                 }
                 // Also update local DB
@@ -283,7 +279,7 @@ class PhotoViewerViewModel @Inject constructor(
             try {
                 if (encryptionMode == "plain" && photo.serverPhotoId != null) {
                     val response = withContext(Dispatchers.IO) {
-                        api.duplicatePhoto(photo.serverPhotoId!!, DuplicatePhotoRequest(metadata))
+                        photoRepository.duplicatePhotoOnServer(photo.serverPhotoId!!, metadata)
                     }
                     val copyEntity = photo.copy(
                         localId = response.id,

@@ -14,12 +14,14 @@ interface ThemeState {
  */
 export const useThemeStore = create<ThemeState>((set) => ({
   theme: (localStorage.getItem("theme") as Theme) || "dark",
+  /** Toggle between light and dark mode, persisting the choice to localStorage. */
   toggle: () =>
     set((s) => {
       const next = s.theme === "light" ? "dark" : "light";
       localStorage.setItem("theme", next);
       return { theme: next };
     }),
+  /** Set the theme to a specific value, persisting to localStorage. */
   setTheme: (t: Theme) => {
     localStorage.setItem("theme", t);
     set({ theme: t });

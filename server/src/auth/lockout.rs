@@ -117,7 +117,7 @@ pub async fn record_failed_login(
             );
 
             audit::log(
-                &state.pool,
+                state,
                 AuditEvent::AccountLocked,
                 Some(user_id),
                 headers,

@@ -101,12 +101,14 @@ export default function Albums() {
   // Compute encrypted smart album counts + first thumbnails from IndexedDB
   const encryptedPhotoCounts = encryptedPhotos ? {
     all: encryptedPhotos.length,
+    favorites: encryptedPhotos.filter(p => !!p.isFavorite).length,
     photos: encryptedPhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
     gifs: encryptedPhotos.filter(p => p.mediaType === "gif").length,
     videos: encryptedPhotos.filter(p => p.mediaType === "video").length,
     audio: encryptedPhotos.filter(p => p.mediaType === "audio").length,
   } : null;
   const encryptedFirstThumbs = encryptedPhotos ? {
+    favorites: encryptedPhotos.find(p => !!p.isFavorite && p.thumbnailData)?.thumbnailData,
     photos: encryptedPhotos.find(p => (p.mediaType === "photo" || p.mediaType === "gif") && p.thumbnailData)?.thumbnailData,
     gifs: encryptedPhotos.find(p => p.mediaType === "gif" && p.thumbnailData)?.thumbnailData,
     videos: encryptedPhotos.find(p => p.mediaType === "video" && p.thumbnailData)?.thumbnailData,
@@ -293,14 +295,13 @@ export default function Albums() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
         {/* ── Smart albums pinned at top ────────────────────────────────── */}
-        {encryptionMode === "plain" && (
-          <SmartAlbumCard
-            label="Favorites"
-            count={plainPhotoCounts?.favorites ?? 0}
-            plainThumbId={plainFirstIds.favorites}
-            onClick={() => navigate("/albums/smart-favorites")}
-          />
-        )}
+        <SmartAlbumCard
+          label="Favorites"
+          count={encryptionMode === "plain" ? (plainPhotoCounts?.favorites ?? 0) : (encryptedPhotoCounts?.favorites ?? 0)}
+          plainThumbId={encryptionMode === "plain" ? plainFirstIds.favorites : undefined}
+          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.favorites : undefined}
+          onClick={() => navigate("/albums/smart-favorites")}
+        />
         <SmartAlbumCard
           label="Photos"
           count={encryptionMode === "plain" ? (plainPhotoCounts?.photos ?? 0) : (encryptedPhotoCounts?.photos ?? 0)}

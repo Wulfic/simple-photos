@@ -1,3 +1,12 @@
+/**
+ * Blob storage API client — upload, list, download, and delete encrypted blobs.
+ *
+ * Used in encrypted mode where the client encrypts media before upload and the
+ * server stores opaque ciphertext. Soft-delete moves blobs to trash with
+ * 30-day retention.
+ *
+ * Maps to server routes: `/api/blobs/*`.
+ */
 import { request, downloadRaw, BASE } from "./core";
 
 // ── Blob Storage API ─────────────────────────────────────────────────────────

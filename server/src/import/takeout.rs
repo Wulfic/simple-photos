@@ -432,7 +432,7 @@ pub async fn import_takeout(
     }
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::BlobUpload,
         Some(&auth.user_id),
         &headers,

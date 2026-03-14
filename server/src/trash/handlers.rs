@@ -10,6 +10,13 @@
 //!
 //! All multi-step DB operations (INSERT→DELETE, SELECT→DELETE) are wrapped
 //! in SQLite transactions for atomicity.
+//!
+//! ## Metadata preservation (migration 020)
+//!
+//! Migration `020_trash_metadata_preservation` added columns to `trash_items`
+//! so that trashed photos retain their full metadata (camera model, GPS coords,
+//! dimensions, etc.). This allows the trash UI to display rich info and enables
+//! lossless restore without re-scanning the file.
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -87,10 +94,11 @@ pub async fn soft_delete_photo(
     // Begin transaction — INSERT into trash + DELETE from photos must be atomic
     let mut tx = state.pool.begin().await?;
 
-    // Fetch the photo record first
+    // Fetch the photo record first (includes metadata added in migration 020)
     let photo = sqlx::query_as::<_, TrashPhotoRow>(
         "SELECT id, filename, file_path, mime_type, media_type, size_bytes, \
-         width, height, duration_secs, taken_at, latitude, longitude, thumb_path \
+         width, height, duration_secs, taken_at, latitude, longitude, thumb_path, \
+         is_favorite, crop_metadata, camera_model, photo_hash, encrypted_thumb_blob_id \
          FROM photos WHERE id = ? AND user_id = ?",
     )
     .bind(&photo_id)
@@ -111,12 +119,13 @@ pub async fn soft_delete_photo(
     let expires_at = now + Duration::days(retention_days);
     let trash_id = Uuid::new_v4().to_string();
 
-    // Insert into trash
+    // Insert into trash (preserving all metadata for lossless restore)
     sqlx::query(
         "INSERT INTO trash_items (id, user_id, photo_id, filename, file_path, mime_type, \
          media_type, size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
-         thumb_path, deleted_at, expires_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         thumb_path, deleted_at, expires_at, \
+         is_favorite, crop_metadata, camera_model, photo_hash, encrypted_thumb_blob_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&trash_id)
     .bind(&auth.user_id)
@@ -135,6 +144,11 @@ pub async fn soft_delete_photo(
     .bind(&photo.thumb_path)
     .bind(now.to_rfc3339())
     .bind(expires_at.to_rfc3339())
+    .bind(photo.is_favorite)
+    .bind(&photo.crop_metadata)
+    .bind(&photo.camera_model)
+    .bind(&photo.photo_hash)
+    .bind(&photo.encrypted_thumb_blob_id)
     .execute(&mut *tx)
     .await?;
 
@@ -145,7 +159,13 @@ pub async fn soft_delete_photo(
         .execute(&mut *tx)
         .await?;
 
-    tx.commit().await?;
+    // Clean up shared album references to prevent dangling photo_ref entries
+    sqlx::query("DELETE FROM shared_album_photos WHERE photo_ref = ? AND ref_type = 'plain'")
+        .bind(&photo_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;;
 
     tracing::info!(
         "Photo {} moved to trash (expires {})",
@@ -179,15 +199,16 @@ pub async fn soft_delete_blob(
     // Begin transaction — INSERT trash + DELETE blob(s) must be atomic
     let mut tx = state.pool.begin().await?;
 
-    // Fetch the blob record (need storage_path)
-    let storage_path = sqlx::query_scalar::<_, String>(
-        "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
-    )
-    .bind(&blob_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    // Fetch the blob record (storage_path + hashes for preservation)
+    let (storage_path, client_hash, content_hash) =
+        sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+            "SELECT storage_path, client_hash, content_hash FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(&blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     // Optionally fetch thumbnail blob storage_path
     let thumb_storage_path = if let Some(ref thumb_id) = req.thumbnail_blob_id {
@@ -214,12 +235,13 @@ pub async fn soft_delete_blob(
     let expires_at = now + Duration::days(retention_days);
     let trash_id = Uuid::new_v4().to_string();
 
-    // Insert into trash_items with blob references
+    // Insert into trash_items with blob references and hash preservation
     sqlx::query(
         "INSERT INTO trash_items (id, user_id, photo_id, filename, file_path, mime_type, \
          media_type, size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
-         thumb_path, deleted_at, expires_at, encrypted_blob_id, thumbnail_blob_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)",
+         thumb_path, deleted_at, expires_at, encrypted_blob_id, thumbnail_blob_id, \
+         client_hash, content_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&trash_id)
     .bind(&auth.user_id)
@@ -238,6 +260,8 @@ pub async fn soft_delete_blob(
     .bind(expires_at.to_rfc3339())
     .bind(&blob_id)
     .bind(&req.thumbnail_blob_id)
+    .bind(&client_hash)
+    .bind(&content_hash)
     .execute(&mut *tx)
     .await?;
 
@@ -257,7 +281,13 @@ pub async fn soft_delete_blob(
             .await?;
     }
 
-    tx.commit().await?;
+    // Clean up shared album references to prevent dangling photo_ref entries
+    sqlx::query("DELETE FROM shared_album_photos WHERE photo_ref = ? AND ref_type = 'blob'")
+        .bind(&blob_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;;
 
     tracing::info!(
         "Encrypted blob {} moved to trash (expires {})",
@@ -296,7 +326,7 @@ pub async fn restore_from_trash(
         // ── Encrypted blob restore ──────────────────────────────────────────
         let row = sqlx::query_as::<_, TrashBlobRow>(
             "SELECT file_path, mime_type, media_type, size_bytes, thumb_path, \
-             thumbnail_blob_id \
+             thumbnail_blob_id, client_hash, content_hash \
              FROM trash_items WHERE id = ? AND user_id = ?",
         )
         .bind(&trash_id)
@@ -314,10 +344,11 @@ pub async fn restore_from_trash(
 
         let now = chrono::Utc::now().to_rfc3339();
 
-        // Re-insert the main blob
+        // Re-insert the main blob (restoring hash fields for dedup/integrity)
         sqlx::query(
-            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path, \
+             client_hash, content_hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&blob_id)
         .bind(&auth.user_id)
@@ -325,6 +356,8 @@ pub async fn restore_from_trash(
         .bind(row.size_bytes)
         .bind(&now)
         .bind(&row.file_path)
+        .bind(&row.client_hash)
+        .bind(&row.content_hash)
         .execute(&mut *tx)
         .await?;
 
@@ -357,7 +390,8 @@ pub async fn restore_from_trash(
         // ── Plain photo restore (original logic) ────────────────────────────
         let item = sqlx::query_as::<_, TrashPhotoRow>(
             "SELECT photo_id AS id, filename, file_path, mime_type, media_type, size_bytes, \
-             width, height, duration_secs, taken_at, latitude, longitude, thumb_path \
+             width, height, duration_secs, taken_at, latitude, longitude, thumb_path, \
+             is_favorite, crop_metadata, camera_model, photo_hash, encrypted_thumb_blob_id \
              FROM trash_items WHERE id = ? AND user_id = ?",
         )
         .bind(&trash_id)
@@ -368,12 +402,13 @@ pub async fn restore_from_trash(
 
         let now = Utc::now().to_rfc3339();
 
-        // Re-insert into photos
+        // Re-insert into photos (restoring all metadata for a lossless round-trip)
         sqlx::query(
             "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
              size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
-             thumb_path, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             thumb_path, created_at, is_favorite, crop_metadata, camera_model, photo_hash, \
+             encrypted_thumb_blob_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&item.id)
         .bind(&auth.user_id)
@@ -390,6 +425,11 @@ pub async fn restore_from_trash(
         .bind(item.longitude)
         .bind(&item.thumb_path)
         .bind(&now)
+        .bind(item.is_favorite)
+        .bind(&item.crop_metadata)
+        .bind(&item.camera_model)
+        .bind(&item.photo_hash)
+        .bind(&item.encrypted_thumb_blob_id)
         .execute(&mut *tx)
         .await?;
 
@@ -730,6 +770,7 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
 // ── Internal helper ─────────────────────────────────────────────────────────
 
 /// Minimal row type used to move data between photos ↔ trash_items.
+/// Extended in migration 020 to preserve metadata through the trash round-trip.
 #[derive(Debug, sqlx::FromRow)]
 struct TrashPhotoRow {
     id: String,
@@ -745,9 +786,16 @@ struct TrashPhotoRow {
     latitude: Option<f64>,
     longitude: Option<f64>,
     thumb_path: Option<String>,
+    // Fields added in migration 020 to prevent data loss on restore
+    is_favorite: i32,
+    crop_metadata: Option<String>,
+    camera_model: Option<String>,
+    photo_hash: Option<String>,
+    encrypted_thumb_blob_id: Option<String>,
 }
 
 /// Row type for restoring encrypted blob items from trash.
+/// Extended in migration 020 to preserve hash fields for dedup/integrity.
 #[derive(Debug, sqlx::FromRow)]
 struct TrashBlobRow {
     file_path: String,
@@ -756,4 +804,6 @@ struct TrashBlobRow {
     size_bytes: i64,
     thumb_path: Option<String>,
     thumbnail_blob_id: Option<String>,
+    client_hash: Option<String>,
+    content_hash: Option<String>,
 }

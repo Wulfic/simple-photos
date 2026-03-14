@@ -1,4 +1,12 @@
 /**
+ * Media format conversion utilities — maps non-browser-native extensions to
+ * their converted counterparts and provides human-readable format labels.
+ *
+ * Mirrors the server-side `needs_web_preview()` function in
+ * `photos/scan.rs` to keep client and server format detection in sync.
+ */
+
+/**
  * Maps non-browser-native file extensions to their converted format.
  * Mirrors the server-side `needs_web_preview()` function in scan.rs.
  *

@@ -1,3 +1,10 @@
+/**
+ * Hook for loading and managing gallery data in both plain and encrypted modes.
+ *
+ * Handles cursor-based pagination, date-group detection, encrypted sync
+ * (fetching blob IDs then decrypting thumbnails from IDB), and mode-switching
+ * between main gallery and backup server views.
+ */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
@@ -170,6 +177,10 @@ export function useGalleryData(): GalleryDataResult {
       }
     }
     init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentionally runs once on mount.
+    // All dependencies (loadPlainPhotos, loadEncryptedPhotos, navigate) are stable
+    // callbacks/functions defined in this hook. Including them would cause infinite
+    // re-fetches because the loaders update state that the effect closes over.
   }, []);
 
   // ── Load plain-mode photos from server ─────────────────────────────────
@@ -254,7 +265,15 @@ export function useGalleryData(): GalleryDataResult {
         if (!blobId) continue;
 
         const existing = await db.photos.get(blobId);
-        if (existing) continue;
+        if (existing) {
+          // Update mutable server-synced fields on existing records
+          // (favorite may have changed on another device, serverPhotoId may be missing)
+          const updates: Partial<CachedPhoto> = {};
+          if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
+          if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
+          if (Object.keys(updates).length > 0) await db.photos.update(blobId, updates);
+          continue;
+        }
 
         // Parse takenAt: prefer taken_at, fall back to created_at (matches Android)
         let takenAt: number;
@@ -297,6 +316,8 @@ export function useGalleryData(): GalleryDataResult {
           thumbnailData,
           contentHash: photo.photo_hash ?? undefined,
           cropData: photo.crop_metadata ?? undefined,
+          isFavorite: photo.is_favorite ?? false,
+          serverPhotoId: photo.id,
         });
       }
 

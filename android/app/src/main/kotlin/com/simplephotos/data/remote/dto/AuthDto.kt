@@ -1,3 +1,7 @@
+/**
+ * Authentication request/response DTOs — login, registration, TOTP 2FA,
+ * token refresh, and password management payloads.
+ */
 package com.simplephotos.data.remote.dto
 
 import com.google.gson.annotations.SerializedName

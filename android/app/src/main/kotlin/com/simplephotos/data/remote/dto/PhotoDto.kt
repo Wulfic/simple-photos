@@ -1,3 +1,7 @@
+/**
+ * Photo DTOs — plain-mode photo records, upload/register payloads, encrypted
+ * sync responses, favorites, crop metadata, and edit copies.
+ */
 package com.simplephotos.data.remote.dto
 
 import com.google.gson.annotations.SerializedName

@@ -1,3 +1,9 @@
+/**
+ * Trash API client — list, restore, and permanently delete soft-deleted photos.
+ * Trash items are auto-purged after 30 days by a server background task.
+ *
+ * Maps to server routes: `/api/trash/*`.
+ */
 import { request, BASE } from "./core";
 
 // ── Trash API ────────────────────────────────────────────────────────────────

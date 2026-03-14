@@ -17,6 +17,9 @@ use super::utils::utc_now_iso;
 
 // ── Duplicate Photo (Save as Copy) ─────────────────────────────────────────
 
+/// Request body for `POST /api/photos/{id}/duplicate`.
+/// Creates a new photos row sharing the same underlying file but with
+/// independent crop/edit metadata. `crop_metadata` is optional JSON.
 #[derive(Debug, Deserialize)]
 pub struct DuplicatePhotoRequest {
     pub crop_metadata: Option<String>,
@@ -129,6 +132,9 @@ pub async fn duplicate_photo(
 
 // ── Edit Copies (Save Copy) ────────────────────────────────────────────────
 
+/// Request body for `POST /api/photos/{id}/copies`.
+/// Creates a metadata-only edit copy of a photo — stores the edit parameters
+/// (brightness, rotation, filter, etc.) without duplicating the underlying file.
 #[derive(Debug, Deserialize)]
 pub struct CreateEditCopyRequest {
     pub name: Option<String>,

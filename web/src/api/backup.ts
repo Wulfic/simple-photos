@@ -1,3 +1,10 @@
+/**
+ * Backup server API client — manage backup servers, trigger sync/recovery,
+ * LAN discovery, backup mode toggle, and audio backup settings.
+ *
+ * Maps to server routes: `/api/admin/backup/*`, `/api/settings/audio-backup`,
+ * `/api/admin/audio-backup`, `/api/admin/photos/auto-scan`.
+ */
 import { request } from "./core";
 
 // ── Backup Servers API (Admin) ───────────────────────────────────────────────

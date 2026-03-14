@@ -171,8 +171,9 @@ pub async fn set_encryption_mode(
     })))
 }
 
-/// POST /api/admin/encryption/progress
-/// Client reports migration progress (one item at a time).
+/// Request body for `POST /api/admin/encryption/progress`.
+/// The client-side migration worker reports progress as it encrypts each photo.
+/// When `done` is `true`, the server marks the migration as complete.
 #[derive(Debug, Deserialize)]
 pub struct MigrationProgressRequest {
     pub completed_count: i64,

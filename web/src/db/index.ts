@@ -1,3 +1,10 @@
+/**
+ * Dexie (IndexedDB) database schema for client-side caching.
+ *
+ * Caches decrypted thumbnails, photo metadata, album definitions, and trash
+ * items so the UI can render instantly without waiting for server round-trips.
+ * Data is per-device and can be safely cleared without data loss.
+ */
 import Dexie, { type Table } from "dexie";
 
 /** Discriminated union for the four media categories */
@@ -26,6 +33,11 @@ export interface CachedPhoto {
   contentHash?: string;
   /** Actual server storage blob ID (defaults to blobId if undefined) */
   storageBlobId?: string;
+  /** Whether this photo is marked as favorite — synced with the server for both modes */
+  isFavorite?: boolean;
+  /** Server-side `photos.id` for API calls requiring the photo record ID
+   *  (e.g., toggle_favorite). Only set for encrypted photos synced via encrypted-sync. */
+  serverPhotoId?: string;
 }
 
 export interface CachedAlbum {

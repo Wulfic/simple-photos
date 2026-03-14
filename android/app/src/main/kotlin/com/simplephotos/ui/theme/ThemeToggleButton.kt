@@ -1,3 +1,9 @@
+/**
+ * Light/dark mode toggle icon button composable.
+ *
+ * Reads the current theme from [ThemeState] and toggles between light and
+ * dark modes on click, persisting the choice to DataStore.
+ */
 package com.simplephotos.ui.theme
 
 import androidx.compose.foundation.layout.size

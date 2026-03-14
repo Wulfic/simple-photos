@@ -179,7 +179,7 @@ pub async fn upload(
     .await?;
 
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::BlobUpload,
         Some(&auth.user_id),
         &headers,
@@ -425,14 +425,25 @@ pub async fn delete(
     let storage_root = state.storage_root.read().await.clone();
     storage::delete_blob(&storage_root, &storage_path).await?;
 
+    // Wrap DB operations in a transaction for atomicity
+    let mut tx = state.pool.begin().await?;
+
     sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
         .bind(&blob_id)
         .bind(&auth.user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
 
+    // Clean up shared album references to prevent dangling photo_ref entries
+    sqlx::query("DELETE FROM shared_album_photos WHERE photo_ref = ? AND ref_type = 'blob'")
+        .bind(&blob_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
     audit::log(
-        &state.pool,
+        &state,
         AuditEvent::BlobDelete,
         Some(&auth.user_id),
         &headers,

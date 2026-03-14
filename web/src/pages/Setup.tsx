@@ -1,3 +1,10 @@
+/**
+ * Encryption key unlock / re-derivation page.
+ *
+ * Shown when the user is authenticated but the in-memory AES encryption key
+ * is missing (e.g. after a page refresh in encrypted mode). Prompts for the
+ * password and re-derives the key via Argon2id.
+ */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { deriveKey } from "../crypto/crypto";

@@ -1,3 +1,9 @@
+/**
+ * Server metrics overview tab for the admin Diagnostics page.
+ *
+ * Displays uptime, storage usage, user/photo counts, recent audit events,
+ * and system health data fetched from `/api/admin/diagnostics`.
+ */
 import { DiagnosticsResponse } from "../../api/client";
 import { Section, StatCard } from "./shared";
 import { formatBytes, formatUptime, formatDate, relativeTime } from "../../utils/formatters";

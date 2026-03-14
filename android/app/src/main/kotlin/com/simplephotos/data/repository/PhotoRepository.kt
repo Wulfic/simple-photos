@@ -8,7 +8,11 @@ import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
+import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
+import com.simplephotos.data.remote.dto.DuplicatePhotoResponse
+import com.simplephotos.data.remote.dto.FavoriteToggleResponse
 import com.simplephotos.data.remote.dto.PlainPhotoRecord
+import com.simplephotos.data.remote.dto.SetCropRequest
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -644,4 +648,32 @@ class PhotoRepository @Inject constructor(
     suspend fun updateThumbnailPath(localId: String, thumbnailPath: String) {
         db.photoDao().updateThumbnailPath(localId, thumbnailPath)
     }
+
+    // ── Server-side metadata operations (used by PhotoViewerViewModel) ────
+
+    /** Toggle the is_favorite flag on the server and return the new state. */
+    suspend fun toggleFavorite(photoId: String): FavoriteToggleResponse =
+        api.toggleFavorite(photoId)
+
+    /** Persist crop/brightness/trim metadata on the server (plain mode). */
+    suspend fun setCropOnServer(photoId: String, cropMetadata: String?) {
+        api.setCrop(photoId, SetCropRequest(cropMetadata))
+    }
+
+    /** Create a server-side duplicate of a photo ("Save Copy"). */
+    suspend fun duplicatePhotoOnServer(
+        photoId: String,
+        cropMetadata: String?
+    ): DuplicatePhotoResponse =
+        api.duplicatePhoto(photoId, DuplicatePhotoRequest(cropMetadata))
+
+    // ── Diagnostic helpers (used by GalleryViewModel) ────────────────────
+
+    /** Count photos in a specific sync status (PENDING, FAILED, etc.). */
+    suspend fun getPhotoCountByStatus(status: SyncStatus): Int =
+        db.photoDao().getByStatus(status).size
+
+    /** Look up a synced photo by its content hash (for import dedup). */
+    suspend fun getSyncedByHash(hash: String): PhotoEntity? =
+        db.photoDao().getSyncedByHash(hash)
 }

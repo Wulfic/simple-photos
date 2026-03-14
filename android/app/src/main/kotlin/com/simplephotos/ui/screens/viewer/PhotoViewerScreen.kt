@@ -1,3 +1,10 @@
+/**
+ * Full-screen photo/video viewer with horizontal paging.
+ *
+ * Supports pinch-to-zoom, swipe navigation, share/download/delete actions,
+ * photo info panel, tag management, crop editing, and both plain-mode
+ * (authenticated URL) and encrypted-mode (decrypt-to-memory) rendering.
+ */
 package com.simplephotos.ui.screens.viewer
 
 import android.app.Activity

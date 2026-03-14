@@ -14,8 +14,9 @@
 
 use axum::http::HeaderMap;
 use serde_json::Value as JsonValue;
-use sqlx::SqlitePool;
 use uuid::Uuid;
+
+use crate::state::AppState;
 
 /// All auditable event types.
 #[derive(Debug, Clone, Copy)]
@@ -48,7 +49,13 @@ pub enum AuditEvent {
     BlobUpload,
     /// Blob deleted
     BlobDelete,
-    /// Rate limit triggered
+    /// Rate limit triggered.
+    ///
+    /// Currently emitted via `tracing::warn!` in [`crate::ratelimit::RateLimiter::check`]
+    /// rather than here, because the rate limiter doesn't have access to `AppState`
+    /// (would create a circular crate dependency). Kept as a variant so handlers
+    /// can emit it explicitly for high-value audit trails if needed.
+    #[allow(dead_code)]
     RateLimited,
     /// Account locked out
     AccountLocked,
@@ -82,16 +89,21 @@ impl AuditEvent {
 
 /// Write an audit log entry. This is fire-and-forget — audit logging should
 /// never cause a request to fail.
+///
+/// Reads `trust_proxy` from the app config to decide whether `X-Forwarded-For`
+/// / `X-Real-IP` headers are trusted for IP extraction. This prevents spoofed
+/// IPs from polluting audit logs on directly-exposed servers.
 pub async fn log(
-    pool: &SqlitePool,
+    state: &AppState,
     event: AuditEvent,
     user_id: Option<&str>,
     headers: &HeaderMap,
     details: Option<JsonValue>,
 ) {
+    let trust_proxy = state.config.server.trust_proxy;
     let id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let ip = extract_ip(headers);
+    let ip = extract_ip(headers, trust_proxy);
     let user_agent = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
@@ -120,7 +132,7 @@ pub async fn log(
     .bind(&user_agent)
     .bind(&details_str)
     .bind(&now)
-    .execute(pool)
+    .execute(&state.pool)
     .await;
 
     if let Err(e) = result {
@@ -131,15 +143,25 @@ pub async fn log(
     }
 }
 
-/// Extract the client IP address from proxy headers.
+/// Extract the client IP address from request headers.
 ///
-/// Checks `X-Forwarded-For` first (leftmost entry = original client),
-/// then `X-Real-IP`. Returns `"unknown"` if neither is present.
+/// When `trust_proxy` is `true`, checks `X-Forwarded-For` first (leftmost
+/// entry = original client), then `X-Real-IP`. Returns `"unknown"` if
+/// neither is present.
+///
+/// When `trust_proxy` is `false` (default), ignores proxy headers entirely
+/// and returns `"direct"` — the server is directly exposed, so proxy
+/// headers cannot be trusted and would let attackers poison audit logs.
 ///
 /// # Security
-/// These headers are only trustworthy when deployed behind a reverse proxy
-/// (nginx, Caddy) that overwrites them. A direct client can forge these.
-fn extract_ip(headers: &HeaderMap) -> String {
+/// Only set `trust_proxy = true` when behind a reverse proxy (nginx, Caddy)
+/// that overwrites `X-Forwarded-For` / `X-Real-IP`. See also
+/// [`crate::ratelimit::extract_client_ip`] which uses the same flag.
+fn extract_ip(headers: &HeaderMap, trust_proxy: bool) -> String {
+    if !trust_proxy {
+        return "direct".to_string();
+    }
+
     // X-Forwarded-For (first entry = original client)
     if let Some(xff) = headers.get("x-forwarded-for") {
         if let Ok(val) = xff.to_str() {

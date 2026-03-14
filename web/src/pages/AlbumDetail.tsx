@@ -23,7 +23,7 @@ import { getErrorMessage } from "../utils/formatters";
 const SMART_ALBUM_DEFS: Record<string, { label: string; filterEncrypted: (p: CachedPhoto) => boolean; filterPlain: (p: PlainPhoto) => boolean }> = {
   "smart-favorites": {
     label: "Favorites",
-    filterEncrypted: () => false, // not supported in encrypted mode
+    filterEncrypted: (p) => !!p.isFavorite,
     filterPlain: (p) => p.is_favorite,
   },
   "smart-photos": {

@@ -96,21 +96,27 @@ pub struct SecureGalleryRecord {
     pub item_count: i64,
 }
 
+/// Response body for `GET /api/galleries/secure` — wraps the gallery list.
 #[derive(Debug, Serialize)]
 pub struct SecureGalleryListResponse {
     pub galleries: Vec<SecureGalleryRecord>,
 }
 
+/// Request body for `POST /api/galleries/secure` — create a new secure gallery.
 #[derive(Debug, Deserialize)]
 pub struct CreateSecureGalleryRequest {
     pub name: String,
 }
 
+/// Request body for `POST /api/galleries/secure/unlock`.
+/// Verifies the gallery password and returns a short-lived access token.
 #[derive(Debug, Deserialize)]
 pub struct UnlockSecureGalleryRequest {
     pub password: String,
 }
 
+/// Response body for successful gallery unlock — contains a time-limited
+/// token that must be sent as `X-Gallery-Token` to access gallery items.
 #[derive(Debug, Serialize)]
 pub struct SecureGalleryUnlockResponse {
     pub gallery_token: String,

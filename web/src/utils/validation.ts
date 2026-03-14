@@ -1,3 +1,9 @@
+/**
+ * Client-side input validation utilities — password strength checking and
+ * username format validation. Rules mirror the server-side validation in
+ * `auth/validation.rs` to provide instant feedback before submission.
+ */
+
 /** Password strength result returned by `checkPasswordStrength`. */
 export interface PasswordStrength {
   checks: {

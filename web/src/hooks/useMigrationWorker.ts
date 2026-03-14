@@ -1,3 +1,10 @@
+/**
+ * Hook that spawns a dedicated Web Worker for encryption migration.
+ *
+ * The worker runs in a separate thread to avoid blocking the UI while
+ * re-encrypting photos. Used as a fallback when server-parallel migration
+ * is unavailable. Communicates progress back via `postMessage`.
+ */
 import { useRef, useEffect } from "react";
 import { api } from "../api/client";
 import { hasCryptoKey } from "../crypto/crypto";
