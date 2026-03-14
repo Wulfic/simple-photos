@@ -108,7 +108,10 @@ pub async fn duplicate_photo(
     .bind(&original.encrypted_thumb_blob_id)
     .bind(&meta)
     .bind(&original.camera_model)
-    .bind(&original.photo_hash)
+    // photo_hash must be NULL for copies — there is a UNIQUE index on
+    // (user_id, photo_hash) WHERE photo_hash IS NOT NULL, so reusing the
+    // original's hash would violate the constraint.
+    .bind(None::<String>)
     .execute(&state.pool)
     .await?;
 
