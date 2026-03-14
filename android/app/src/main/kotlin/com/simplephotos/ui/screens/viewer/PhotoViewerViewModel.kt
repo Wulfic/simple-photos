@@ -327,6 +327,12 @@ class PhotoViewerViewModel @Inject constructor(
                     withContext(Dispatchers.IO) {
                         photoRepository.insertPhoto(copyEntity)
                     }
+
+                    // Generate an edited thumbnail for the copy so the gallery
+                    // reflects the crop/brightness/rotation at a glance.
+                    withContext(Dispatchers.IO) {
+                        generateEditedThumbnail(photo, copyId, metadata)
+                    }
                 }
                 onDone()
             } catch (_: Exception) {}
@@ -382,5 +388,90 @@ class PhotoViewerViewModel @Inject constructor(
                 else -> null
             }
         } catch (_: Exception) { null }
+    }
+
+    // ── Thumbnail helpers ────────────────────────────────────────────────
+
+    /**
+     * Generate a thumbnail for an edited copy by reading the original's
+     * cached thumbnail, applying crop/brightness/rotation via Canvas, and
+     * saving the result for the new [copyId].
+     *
+     * Non-fatal: if the original has no thumbnail or decoding fails the copy
+     * simply won't have a thumbnail immediately — the gallery will show a
+     * placeholder until the next sync fills it in.
+     */
+    private suspend fun generateEditedThumbnail(
+        original: PhotoEntity,
+        copyId: String,
+        metadata: String?,
+    ) {
+        try {
+            val srcPath = original.thumbnailPath ?: return
+            val srcBitmap = android.graphics.BitmapFactory.decodeFile(srcPath) ?: return
+
+            // Parse crop metadata
+            val meta = metadata?.let {
+                try { org.json.JSONObject(it) } catch (_: Exception) { null }
+            }
+
+            val cx = meta?.optDouble("x", 0.0) ?: 0.0
+            val cy = meta?.optDouble("y", 0.0) ?: 0.0
+            val cw = meta?.optDouble("width", 1.0) ?: 1.0
+            val ch = meta?.optDouble("height", 1.0) ?: 1.0
+            val brightness = (meta?.optDouble("brightness", 0.0) ?: 0.0).toFloat()
+            val rotate = (meta?.optInt("rotate", 0) ?: 0).toFloat()
+
+            val SIZE = 256
+            val output = android.graphics.Bitmap.createBitmap(SIZE, SIZE, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(output)
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG)
+
+            // Apply brightness via ColorMatrix
+            if (brightness != 0f) {
+                val b = brightness / 100f  // -1..1 range
+                val cm = android.graphics.ColorMatrix(floatArrayOf(
+                    1f, 0f, 0f, 0f, b * 255f,
+                    0f, 1f, 0f, 0f, b * 255f,
+                    0f, 0f, 1f, 0f, b * 255f,
+                    0f, 0f, 0f, 1f, 0f,
+                ))
+                paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
+            }
+
+            // Source rectangle (crop region on original thumbnail)
+            val sx = (cx * srcBitmap.width).toInt()
+            val sy = (cy * srcBitmap.height).toInt()
+            val sw = (cw * srcBitmap.width).toInt().coerceAtLeast(1)
+            val sh = (ch * srcBitmap.height).toInt().coerceAtLeast(1)
+            val srcRect = android.graphics.Rect(sx, sy, sx + sw, sy + sh)
+
+            // Fit cropped region into SIZE×SIZE
+            val scale = maxOf(SIZE.toFloat() / sw, SIZE.toFloat() / sh)
+            val dw = sw * scale
+            val dh = sh * scale
+            val dstRect = android.graphics.RectF(
+                (SIZE - dw) / 2f, (SIZE - dh) / 2f,
+                (SIZE + dw) / 2f, (SIZE + dh) / 2f,
+            )
+
+            canvas.save()
+            if (rotate != 0f) {
+                canvas.rotate(rotate, SIZE / 2f, SIZE / 2f)
+            }
+            canvas.drawBitmap(srcBitmap, srcRect, dstRect, paint)
+            canvas.restore()
+            srcBitmap.recycle()
+
+            // Compress to JPEG and save
+            val stream = java.io.ByteArrayOutputStream()
+            output.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, stream)
+            output.recycle()
+
+            val thumbPath = photoRepository.saveThumbnailToDisk(copyId, stream.toByteArray())
+            photoRepository.updateThumbnailPath(copyId, thumbPath)
+        } catch (e: Exception) {
+            android.util.Log.w("PhotoViewerVM", "Failed to generate edited thumbnail: ${e.message}")
+        }
     }
 }

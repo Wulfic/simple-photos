@@ -33,8 +33,10 @@ export function getConvertedFormat(filename: string): string | null {
     case "raw":
       return "jpg";
 
-    // SVG / ICO → rasterized PNG
+    // SVG → rasterized JPEG (server uses ImageMagick to produce 1080p JPG)
     case "svg":
+      return "jpg";
+    // ICO → rasterized PNG
     case "ico":
       return "png";
 

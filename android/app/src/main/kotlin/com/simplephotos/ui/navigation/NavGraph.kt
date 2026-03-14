@@ -88,6 +88,7 @@ fun NavGraph() {
                 onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 onAlbumClick = { albumId -> navController.navigate(Screen.AlbumDetail.createRoute(albumId)) },
+                onSharedAlbumClick = { navController.navigate(Screen.SharedAlbums.route) },
                 isAdmin = isAdmin
             )
         }
