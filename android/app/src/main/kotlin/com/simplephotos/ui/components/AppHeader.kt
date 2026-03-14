@@ -370,16 +370,8 @@ private fun UserMenu(
                     Icon(painter = painterResource(R.drawable.ic_locks), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
-            DropdownMenuItem(
-                text = { Text("Shared Albums") },
-                onClick = {
-                    expanded = false
-                    onSharedAlbumsClick()
-                },
-                leadingIcon = {
-                    Icon(painter = painterResource(R.drawable.ic_shared), contentDescription = null, modifier = Modifier.size(18.dp))
-                }
-            )
+            // Shared Albums are now shown inline at the bottom of the Albums
+            // page (matching the web layout) rather than in this dropdown.
             DropdownMenuItem(
                 text = { Text("Settings") },
                 onClick = {

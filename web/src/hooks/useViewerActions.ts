@@ -10,6 +10,7 @@ import { api } from "../api/client";
 import { db, type MediaType } from "../db";
 import { useAuthStore } from "../store/auth";
 import { getConvertedFormat } from "../utils/mediaFormats";
+import { applyEditsToThumbnail } from "../utils/media";
 import type { CropMetadata, PreloadEntry } from "./useViewerMedia";
 
 interface ViewerLocationState {
@@ -129,21 +130,51 @@ export default function useViewerActions({
       if (isPlainMode) {
         await api.photos.duplicate(id, metaJson);
       } else {
-        // Encrypted mode: duplicate the IndexedDB entry with its own ID + new metadata.
-        // The copy gets a new blobId (primary key) but keeps storageBlobId pointing
-        // to the original's server blob so the viewer can still fetch the media.
+        // Encrypted mode: duplicate the IndexedDB entry with its own ID + new metadata,
+        // sync the copy to the server, and generate an edited thumbnail.
         const original = await db.photos.get(id);
         if (original) {
+          const copyFilename = original.filename.startsWith("Copy of ")
+            ? original.filename
+            : `Copy of ${original.filename}`;
+
+          // ── Server sync ────────────────────────────────────────────
+          // If the original has a server-side photo record, call the
+          // server's duplicate endpoint so the copy persists across
+          // sessions and devices. The server row shares the same
+          // encrypted_blob_id so no data is duplicated.
+          let serverCopyId: string | undefined;
+          if (original.serverPhotoId) {
+            try {
+              const res = await api.photos.duplicate(original.serverPhotoId, metaJson);
+              serverCopyId = res.id;
+            } catch (err) {
+              console.warn("[Viewer] Server duplicate failed, saving local-only copy:", err);
+            }
+          }
+
+          // ── Edited thumbnail ───────────────────────────────────────
+          // Apply crop/brightness/rotation to the original's cached
+          // thumbnail so the gallery shows the edits at a glance.
+          let editedThumb = original.thumbnailData;
+          if (meta && original.thumbnailData) {
+            try {
+              editedThumb = await applyEditsToThumbnail(original.thumbnailData, meta);
+            } catch {
+              // Non-fatal — fall back to the original thumbnail
+            }
+          }
+
           const copyId = crypto.randomUUID();
           await db.photos.put({
             ...original,
             blobId: copyId,
             storageBlobId: original.storageBlobId || original.blobId,
-            filename: original.filename.startsWith("Copy of ")
-              ? original.filename
-              : `Copy of ${original.filename}`,
+            filename: copyFilename,
             cropData: metaJson ?? undefined,
             takenAt: Date.now(),
+            thumbnailData: editedThumb,
+            serverPhotoId: serverCopyId,
           });
         }
       }

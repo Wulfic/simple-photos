@@ -225,7 +225,11 @@ pub fn needs_web_preview(filename: &str) -> Option<&'static str> {
         // Images that browsers cannot display natively
         "heic" | "heif" | "tiff" | "tif" | "hdr" | "cr2" | "cur" | "cursor"
         | "dng" | "nef" | "arw" | "raw" => Some("jpg"),
-        // SVG is browser-native (<img> renders it natively) — no conversion needed.
+        // SVG → rasterized 1080p JPEG for consistent cross-platform rendering.
+        // Browsers can render SVG natively but Android Coil and many image
+        // viewers struggle with vector content.  A high-resolution JPEG
+        // guarantees reliable display everywhere.
+        "svg" => Some("jpg"),
         // ICO → PNG for consistent rendering on all platforms
         "ico" => Some("png"),
         // Audio that browsers cannot play natively
@@ -253,6 +257,36 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
 
     let input_str = input_path.to_str().unwrap_or("");
     let output_str = output_path.to_str().unwrap_or("");
+
+    // SVG files need ImageMagick for reliable rasterisation — FFmpeg cannot
+    // handle vector inputs.  Rasterise to 1080p JPEG up front so we skip the
+    // generic FFmpeg path entirely.
+    let is_svg = input_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("svg"))
+        .unwrap_or(false);
+    if is_svg && preview_ext == "jpg" {
+        // Try ImageMagick: rasterise at 1920×1080 max (preserving aspect ratio)
+        let magick_ok = tokio::process::Command::new("convert")
+            .args([
+                &format!("{}[0]", input_str), // first layer only
+                "-background", "white",       // SVGs often have transparent bg
+                "-flatten",
+                "-resize", "1920x1080>",       // scale down only, keep aspect
+                "-quality", "92",
+                output_str,
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        if matches!(magick_ok, Ok(s) if s.success()) {
+            return true;
+        }
+        // ImageMagick failed — return false, nothing else can rasterise SVG
+        return false;
+    }
 
     let ffmpeg_ok = match preview_ext {
         "jpg" => {

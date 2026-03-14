@@ -297,6 +297,74 @@ export async function createFallbackThumbnail(): Promise<ArrayBuffer> {
   });
 }
 
+/**
+ * Apply crop/brightness/rotation edits to an existing JPEG thumbnail,
+ * producing a new 256×256 JPEG ArrayBuffer.
+ *
+ * Used when saving an edited copy in encrypted mode so the gallery
+ * thumbnail reflects the user's edits instead of the unedited original.
+ */
+export function applyEditsToThumbnail(
+  thumbnailData: ArrayBuffer,
+  crop: { x: number; y: number; width: number; height: number; rotate?: number; brightness?: number },
+): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([thumbnailData], { type: "image/jpeg" });
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const SIZE = 256;
+      const canvas = document.createElement("canvas");
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+      const ctx = canvas.getContext("2d")!;
+
+      // Source region (crop expressed as 0–1 fractions)
+      const sx = crop.x * img.width;
+      const sy = crop.y * img.height;
+      const sw = crop.width * img.width;
+      const sh = crop.height * img.height;
+
+      // Fit the cropped region into SIZE×SIZE (cover)
+      const scale = Math.max(SIZE / sw, SIZE / sh);
+      const dw = sw * scale;
+      const dh = sh * scale;
+
+      ctx.save();
+      // Rotation around center
+      if (crop.rotate) {
+        ctx.translate(SIZE / 2, SIZE / 2);
+        ctx.rotate((crop.rotate * Math.PI) / 180);
+        ctx.translate(-SIZE / 2, -SIZE / 2);
+      }
+      // Brightness via compositing: lighten (positive) or darken (negative)
+      ctx.drawImage(img, sx, sy, sw, sh, (SIZE - dw) / 2, (SIZE - dh) / 2, dw, dh);
+      if (crop.brightness && crop.brightness !== 0) {
+        const b = Math.round(Math.abs(crop.brightness) * 2.55); // 0–100 → 0–255
+        ctx.globalCompositeOperation = crop.brightness > 0 ? "lighter" : "multiply";
+        ctx.fillStyle = crop.brightness > 0
+          ? `rgba(255,255,255,${b / 255})`
+          : `rgba(0,0,0,${b / 255})`;
+        ctx.fillRect(0, 0, SIZE, SIZE);
+      }
+      ctx.restore();
+
+      canvas.toBlob(
+        (b) =>
+          b ? b.arrayBuffer().then(resolve) : reject(new Error("Canvas toBlob failed")),
+        "image/jpeg",
+        0.85,
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load thumbnail image"));
+    };
+    img.src = url;
+  });
+}
+
 /** Create a black placeholder thumbnail with a music note for audio files */
 export async function createAudioFallbackThumbnail(): Promise<ArrayBuffer> {
   const canvas = document.createElement("canvas");

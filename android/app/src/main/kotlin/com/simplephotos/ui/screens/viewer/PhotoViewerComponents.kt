@@ -84,9 +84,8 @@ internal fun needsWebPreview(filename: String): String? {
         "dng", "nef", "arw", "raw" -> "jpg"
         // ICO — not natively supported by BitmapFactory
         "ico" -> "png"
-        // SVG — Coil can handle if coil-svg is present, but the /web
-        // endpoint provides a rasterised PNG for consistent rendering
-        "svg" -> "png"
+        // SVG — server rasterises to a 1080p JPEG via ImageMagick
+        "svg" -> "jpg"
         // Video containers not reliably playable by ExoPlayer
         "mkv", "avi", "wmv", "asf", "h264",
         "mpg", "mpeg", "3gp", "mov", "m4v" -> "mp4"
