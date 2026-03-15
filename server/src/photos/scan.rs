@@ -3,9 +3,19 @@
 //! `POST /api/admin/photos/scan` walks the storage directory tree, registers
 //! every unregistered media file as a plain photo, extracts EXIF metadata,
 //! generates JPEG thumbnails (via ImageMagick → FFmpeg fallback), and creates
-//! browser-compatible web previews for non-native formats (HEIC → JPEG,
-//! MKV → MP4, etc.). Video transcoding is deferred to the background
-//! conversion task in [`super::convert`].
+//! browser-compatible web previews for non-native image/audio formats.
+//!
+//! **Video transcoding** (MKV → MP4, AVI → MP4, etc.) is intentionally deferred
+//! to the background processing pipeline in [`super::convert`].  That pipeline
+//! runs three sequential phases after scan completes:
+//!   1. Generate thumbnails for ALL files
+//!   2. Convert flagged files to browser-friendly formats
+//!   3. Regenerate thumbnails for freshly converted files only
+//!
+//! **Original preservation**: Conversion never deletes the original file.
+//! The converted copy is stored separately in `.web_previews/`.  Both the
+//! original (`/photos/:id/file`) and the web-friendly version
+//! (`/photos/:id/web`) remain available for download.
 
 use std::path::Path;
 
@@ -388,6 +398,17 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
 /// POST /api/admin/photos/scan
 /// Scan the storage directory and register all unregistered media files as plain photos.
 /// This is the main "import" mechanism for plain mode.
+///
+/// For each new file: extracts EXIF metadata, generates a thumbnail, and
+/// creates web previews for non-native image/audio formats.  Video transcoding
+/// (MKV → MP4, AVI → MP4, etc.) is deferred to the background processing
+/// pipeline in [`super::convert`] which handles it after all thumbnails are
+/// generated.
+///
+/// Uses `INSERT OR IGNORE` for graceful handling of concurrent scans (e.g.
+/// the background autoscan running simultaneously).
+///
+/// Original files are **never modified or deleted** by this endpoint.
 pub async fn scan_and_register(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -477,8 +498,13 @@ pub async fn scan_and_register(
                     // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
                     let photo_hash = compute_photo_hash_streaming(&abs_path).await;
 
-                    sqlx::query(
-                        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                    // Use INSERT OR IGNORE to handle race conditions with concurrent
+                    // scans (e.g. background autoscan running simultaneously). The
+                    // UNIQUE index on (user_id, photo_hash) prevents duplicate content;
+                    // if a concurrent scan already registered this file, we skip it
+                    // gracefully instead of aborting the entire scan with a 500 error.
+                    let insert_result = sqlx::query(
+                        "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                          size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
@@ -499,7 +525,22 @@ pub async fn scan_and_register(
                     .bind(&now)
                     .bind(&photo_hash)
                     .execute(&state.pool)
-                    .await?;
+                    .await;
+
+                    match insert_result {
+                        Ok(result) if result.rows_affected() == 0 => {
+                            // UNIQUE conflict — file already registered by a concurrent scan.
+                            // Skip thumbnail/preview generation (the other scan or the
+                            // background converter will handle it).
+                            tracing::debug!(file = %rel_path, "Already registered (concurrent scan), skipping");
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::error!(file = %rel_path, error = %e, "Failed to register photo");
+                            continue;
+                        }
+                        Ok(_) => { /* inserted successfully — continue to thumbnail/preview gen */ }
+                    }
 
                     // Generate thumbnail using FFmpeg (or image crate for audio)
                     if has_ffmpeg || mime.starts_with("audio/") {
@@ -643,11 +684,12 @@ pub async fn scan_and_register(
         }
     }
 
-    // Trigger background conversion task — but only if no encryption
-    // migration is in progress.  During encryption, conversion would waste
-    // work on files that are about to be encrypted (and thus served via
-    // blobs, not disk previews).  The migration-done handler will trigger
-    // conversion once encryption finishes.
+    // Trigger the background processing pipeline — runs three sequential
+    // phases: thumbnails → conversion → post-conversion thumbnails.
+    // Skip the trigger if an encryption migration is in progress, since the
+    // migration-done handler will trigger the pipeline once encryption finishes.
+    // Original files are always preserved; the pipeline writes converted
+    // copies to `.web_previews/` without touching originals.
     let mig_status: String = sqlx::query_scalar(
         "SELECT status FROM encryption_migration WHERE id = 'singleton'",
     )
@@ -658,10 +700,10 @@ pub async fn scan_and_register(
     .unwrap_or_else(|| "idle".to_string());
 
     if mig_status == "idle" {
-        tracing::info!("[DIAG:SCAN] post-scan: mig_status=idle, sending convert notify");
+        tracing::info!("[DIAG:SCAN] post-scan: mig_status=idle, sending pipeline notify");
         state.convert_notify.notify_one();
     } else {
-        tracing::info!("[DIAG:SCAN] post-scan: mig_status='{}', skipping conversion trigger", mig_status);
+        tracing::info!("[DIAG:SCAN] post-scan: mig_status='{}', skipping pipeline trigger", mig_status);
     }
 
     Ok(Json(serde_json::json!({
