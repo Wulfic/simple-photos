@@ -1,20 +1,37 @@
-//! Background media conversion task.
+//! Background media processing pipeline (three-phase sequential design).
 //!
-//! Periodically scans for photos/videos/audio that need web-compatible previews
-//! but don't have them yet, and converts them in the background using low CPU
-//! priority (`nice -n 19`).
+//! ## Processing Order
 //!
-//! Video transcoding (MKV/AVI/WMV → MP4) is intentionally deferred to this
-//! background task rather than running during scan, since it can take minutes
-//! per file.
+//! Every cycle runs three strictly-ordered phases so that the gallery always
+//! shows thumbnails as early as possible:
 //!
-//! The task can also be woken immediately via a `Notify` handle (e.g. after a
-//! scan or upload completes).
+//! 1. **Phase 1 — Thumbnails**: Generate thumbnails for ALL files that are
+//!    missing them.  This includes both files that need no conversion (native
+//!    browser formats) and source files that *do* need conversion but whose
+//!    original can still produce a decent thumbnail (e.g. MKV frame-extract).
 //!
-//! **Encrypted photo support**: When the encryption key is available in
-//! `AppState` (stored temporarily during and after migration), the converter
-//! can decrypt encrypted blobs, convert the media, and re-encrypt with the
-//! web-compatible data. This makes conversion independent of encryption.
+//! 2. **Phase 2 — Conversion**: Transcode / convert every flagged file to a
+//!    browser/Android-friendly format (HEIC → JPEG, MKV → MP4, AIFF → MP3,
+//!    etc.) using low-priority FFmpeg (`nice -n 19`).  Original files are
+//!    **never deleted** — the converted copy lives in `.web_previews/` and
+//!    the original remains available via `GET /photos/:id/file`.
+//!
+//! 3. **Phase 3 — Post-Conversion Thumbnails**: For files that were just
+//!    converted in Phase 2, regenerate their thumbnail from the new
+//!    web-compatible preview if the existing thumbnail is missing or of poor
+//!    quality.  Only freshly-converted files are touched.
+//!
+//! ## Triggers
+//!
+//! The pipeline runs on a 60-second timer **and** can be woken immediately
+//! via a `Notify` handle (e.g. after a scan, upload, or migration completes).
+//!
+//! ## Encrypted photo support
+//!
+//! When the encryption key is available in `AppState` (stored temporarily
+//! during and after migration), the converter can decrypt encrypted blobs,
+//! convert the media, and re-encrypt with the web-compatible data.  This
+//! makes conversion independent of encryption.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,19 +53,284 @@ use crate::state::AppState;
 
 use super::scan::{needs_web_preview, generate_web_preview_bg, generate_thumbnail_file};
 
-/// Run a single conversion + thumbnail pass. Returns (converted, thumbnails_generated).
+/// Row type returned by the photos query shared across all three phases.
+type PhotoRow = (String, String, String, Option<String>, String, Option<String>, String);
+
+// ── Phase 1: Generate ALL missing thumbnails ────────────────────────────────
+
+/// Generate missing thumbnails for every photo.  This runs first so the
+/// gallery shows something useful before the (potentially slow) conversion
+/// phase begins.  Encrypted photos are skipped — their thumbnails are
+/// encrypted blobs created during migration.
+async fn phase_thumbnails(
+    photos: &[PhotoRow],
+    storage_root: &PathBuf,
+) -> u32 {
+    let mut generated = 0u32;
+    for (photo_id, file_path, _filename, thumb_path, mime_type, encrypted_blob_id, _user_id) in photos {
+        // Encrypted photos have their thumbnail data in encrypted blobs, not
+        // on-disk `.thumbnails/` files.  Skip them here.
+        if encrypted_blob_id.is_some() {
+            continue;
+        }
+
+        let tp = match thumb_path {
+            Some(tp) => tp,
+            None => continue,
+        };
+
+        let thumb_abs = storage_root.join(tp);
+        if tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
+            continue; // Already exists
+        }
+
+        let source_path = storage_root.join(file_path);
+        if !tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
+            continue; // Source file missing
+        }
+
+        if generate_thumbnail_file(&source_path, &thumb_abs, mime_type, None).await {
+            generated += 1;
+            tracing::debug!(photo_id = %photo_id, "Phase 1: generated thumbnail");
+        }
+    }
+    generated
+}
+
+// ── Phase 2: Convert flagged files to browser-friendly formats ──────────────
+
+/// Convert every file that needs a web preview but doesn't have one yet.
+/// Returns `(converted_count, ids_of_converted_files)`.
 ///
-/// When the encryption key is available, the converter can also process
-/// encrypted photos by decrypting the blob, converting the media, and
-/// re-encrypting with the web-compatible data.
+/// Original files are **never deleted**.  The converted copy is written to
+/// `.web_previews/{id}.web.{ext}` alongside the original.  Both remain
+/// available: `/photos/:id/file` serves the original and `/photos/:id/web`
+/// serves the web-compatible preview.
+///
+/// For encrypted photos with the key available, the converted data is also
+/// re-encrypted into a new blob so the client receives web-compatible media
+/// after decryption.
+async fn phase_convert(
+    photos: &[PhotoRow],
+    pool: &SqlitePool,
+    storage_root: &PathBuf,
+    encryption_key: &Arc<RwLock<Option<[u8; 32]>>>,
+    key_available: bool,
+) -> (u32, Vec<String>) {
+    let mut converted = 0u32;
+    let mut converted_ids: Vec<String> = Vec::new();
+
+    for (photo_id, file_path, filename, _thumb_path, _mime_type, encrypted_blob_id, user_id) in photos {
+        let is_encrypted = encrypted_blob_id.is_some();
+
+        // Only process files flagged for conversion
+        let preview_ext = match needs_web_preview(filename) {
+            Some(ext) => ext,
+            None => continue,
+        };
+
+        // ── Path A: Source file exists on disk → convert normally ────────
+        let source_path = storage_root.join(file_path);
+        if tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
+            let preview_path = storage_root.join(format!(
+                ".web_previews/{}.web.{}",
+                photo_id, preview_ext
+            ));
+
+            if !tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
+                tracing::info!(
+                    photo_id = %photo_id,
+                    filename = %filename,
+                    target_ext = preview_ext,
+                    encrypted = is_encrypted,
+                    "Phase 2: starting conversion (source on disk)"
+                );
+
+                if generate_web_preview_bg(&source_path, &preview_path, preview_ext).await {
+                    converted += 1;
+                    converted_ids.push(photo_id.clone());
+                    tracing::info!(
+                        photo_id = %photo_id,
+                        filename = %filename,
+                        "Phase 2: conversion complete (source on disk)"
+                    );
+
+                    // Re-encrypt the blob with converted data if encrypted
+                    if is_encrypted && key_available {
+                        if let Some(enc_id) = encrypted_blob_id.as_deref() {
+                            if let Err(e) = reencrypt_blob_with_converted_data(
+                                pool, storage_root, encryption_key, photo_id, user_id,
+                                enc_id, filename, &preview_path, preview_ext,
+                            ).await {
+                                tracing::warn!(
+                                    photo_id = %photo_id,
+                                    "Phase 2: re-encryption failed: {}", e
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        photo_id = %photo_id,
+                        filename = %filename,
+                        "Phase 2: conversion failed (source on disk)"
+                    );
+                }
+
+                // Small pause between conversions to avoid starving other tasks
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            } else if is_encrypted {
+                // Preview already exists on disk AND photo is encrypted.
+                // The migration already put web-compatible data in the blob,
+                // so mark as blob-converted to prevent false "pending" counts.
+                mark_blob_converted(pool, photo_id).await;
+                tracing::debug!(
+                    photo_id = %photo_id,
+                    "Phase 2: marked encrypted photo as converted (preview already on disk)"
+                );
+            }
+            continue;
+        }
+
+        // ── Path B: No source file on disk, but encrypted → temp-decrypt ─
+        if is_encrypted && key_available {
+            let Some(blob_id) = encrypted_blob_id.as_deref() else {
+                continue;
+            };
+
+            if is_blob_already_converted(pool, photo_id).await {
+                continue;
+            }
+
+            tracing::info!(
+                photo_id = %photo_id,
+                filename = %filename,
+                target_ext = preview_ext,
+                "Phase 2: starting conversion (temp-decrypt encrypted blob)"
+            );
+
+            match decrypt_convert_reencrypt(
+                pool, storage_root, encryption_key, photo_id, user_id,
+                blob_id, filename, preview_ext,
+            ).await {
+                Ok(true) => {
+                    converted += 1;
+                    converted_ids.push(photo_id.clone());
+                    tracing::info!(
+                        photo_id = %photo_id,
+                        filename = %filename,
+                        "Phase 2: conversion complete (re-encrypted blob)"
+                    );
+                }
+                Ok(false) => {
+                    tracing::warn!(
+                        photo_id = %photo_id,
+                        filename = %filename,
+                        "Phase 2: conversion skipped/failed (encrypted blob)"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        photo_id = %photo_id,
+                        filename = %filename,
+                        "Phase 2: decrypt/convert/reencrypt error: {}", e
+                    );
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    (converted, converted_ids)
+}
+
+// ── Phase 3: Post-conversion thumbnails (freshly converted only) ────────────
+
+/// Regenerate thumbnails for files that were just converted in Phase 2.
+/// The web-previewed file (e.g. the .mp4 from a .mkv) may yield a better
+/// thumbnail than the original exotic format.  Only files whose ID is in
+/// `converted_ids` are processed — everything else was already handled in
+/// Phase 1.
+async fn phase_post_conversion_thumbnails(
+    photos: &[PhotoRow],
+    storage_root: &PathBuf,
+    converted_ids: &[String],
+) -> u32 {
+    if converted_ids.is_empty() {
+        return 0;
+    }
+
+    let id_set: std::collections::HashSet<&str> =
+        converted_ids.iter().map(|s| s.as_str()).collect();
+
+    let mut generated = 0u32;
+    for (photo_id, _file_path, filename, thumb_path, mime_type, encrypted_blob_id, _user_id) in photos {
+        // Only freshly converted files
+        if !id_set.contains(photo_id.as_str()) {
+            continue;
+        }
+
+        // Skip encrypted photos — their thumbnails are in encrypted blobs
+        if encrypted_blob_id.is_some() {
+            continue;
+        }
+
+        let tp = match thumb_path {
+            Some(tp) => tp,
+            None => continue,
+        };
+
+        // Determine the web preview path for potential thumbnail source
+        let preview_ext = match needs_web_preview(filename) {
+            Some(ext) => ext,
+            None => continue, // shouldn't happen if ID is in converted_ids
+        };
+        let preview_path = storage_root.join(format!(
+            ".web_previews/{}.web.{}",
+            photo_id, preview_ext
+        ));
+
+        let thumb_abs = storage_root.join(tp);
+
+        // Use the web preview as the thumbnail source if it exists (better
+        // quality for converted formats), fall back to original.
+        let thumb_source = if tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
+            preview_path.clone()
+        } else {
+            continue; // No preview to generate thumbnail from
+        };
+
+        // Determine the preview mime type for thumbnail generation
+        let preview_mime = match preview_ext {
+            "jpg" => "image/jpeg",
+            "png" => "image/png",
+            "mp3" => "audio/mpeg",
+            "mp4" => "video/mp4",
+            _ => mime_type.as_str(),
+        };
+
+        if generate_thumbnail_file(&thumb_source, &thumb_abs, preview_mime, None).await {
+            generated += 1;
+            tracing::debug!(photo_id = %photo_id, "Phase 3: regenerated thumbnail from web preview");
+        }
+    }
+    generated
+}
+
+// ── Orchestrator: runs all three phases sequentially ────────────────────────
+
+/// Run one complete processing cycle (three sequential phases).
+///
+/// Returns `(thumbnails_phase1, converted, thumbnails_phase3)`.
 async fn run_conversion_pass(
     pool: &SqlitePool,
     storage_root: &PathBuf,
     encryption_key: &Arc<RwLock<Option<[u8; 32]>>>,
-) -> (u32, u32) {
-    // Skip conversion entirely while encryption migration is running.
-    // Converting during encryption is confusing (two overlapping banners)
-    // and wasteful — the converter will be triggered once migration finishes.
+) -> (u32, u32, u32) {
+    // Skip entirely while encryption migration is running.  Converting during
+    // encryption is confusing (two overlapping banners) and wasteful — the
+    // migration-done handler will trigger conversion once encryption finishes.
     let mig_status: String = sqlx::query_scalar(
         "SELECT status FROM encryption_migration WHERE id = 'singleton'",
     )
@@ -59,10 +341,10 @@ async fn run_conversion_pass(
     .unwrap_or_else(|| "idle".to_string());
     if mig_status == "encrypting" || mig_status == "decrypting" {
         tracing::info!("[DIAG:CONVERT] run_conversion_pass SKIPPED — migration in progress (status={})", mig_status);
-        return (0, 0);
+        return (0, 0, 0);
     }
 
-    // Log encrypted photos missing thumbnail blobs (diagnostic).
+    // Diagnostic: log encrypted photos missing thumbnail blobs
     let enc_missing: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL AND encrypted_thumb_blob_id IS NULL",
     )
@@ -76,21 +358,17 @@ async fn run_conversion_pass(
         );
     }
 
-    // Check if FFmpeg is available
+    // Check FFmpeg availability
     let has_ffmpeg = super::scan::ffmpeg_available_pub().await;
     if !has_ffmpeg {
         tracing::info!("[DIAG:CONVERT] run_conversion_pass SKIPPED — FFmpeg not available");
-        return (0, 0);
+        return (0, 0, 0);
     }
 
-    // Check if we have the encryption key available for encrypted blob processing
     let key_available = encryption_key.read().await.is_some();
 
-    // Fetch ALL photos — no pagination or user filter.
-    // This loads every row into memory on each 60-second cycle.
-    // For very large libraries (50k+ photos) consider adding a
-    // WHERE filter to skip already-converted rows or a LIMIT clause.
-    let photos: Vec<(String, String, String, Option<String>, String, Option<String>, String)> = match sqlx::query_as(
+    // Fetch all photos once — shared across all three phases
+    let photos: Vec<PhotoRow> = match sqlx::query_as(
         "SELECT id, file_path, filename, thumb_path, mime_type, encrypted_blob_id, user_id FROM photos",
     )
     .fetch_all(pool)
@@ -99,7 +377,7 @@ async fn run_conversion_pass(
         Ok(rows) => rows,
         Err(e) => {
             tracing::error!("[DIAG:CONVERT] DB query failed: {}", e);
-            return (0, 0);
+            return (0, 0, 0);
         }
     };
 
@@ -110,186 +388,33 @@ async fn run_conversion_pass(
         photos.len(), plain_count, enc_count, key_available
     );
 
-    let mut converted = 0u32;
-    let mut thumbnails_generated = 0u32;
-    for (photo_id, file_path, filename, thumb_path, mime_type, encrypted_blob_id, user_id) in &photos {
-        let is_encrypted = encrypted_blob_id.is_some();
-
-        // Determine if this format needs a web preview at all
-        let preview_ext = match needs_web_preview(filename) {
-            Some(ext) => ext,
-            None => {
-                // No conversion needed for this format.
-                // Still check plain photo thumbnails below.
-                if !is_encrypted {
-                    if let Some(tp) = thumb_path {
-                        let thumb_abs = storage_root.join(tp);
-                        if !tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
-                            let source_path = storage_root.join(file_path);
-                            if tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
-                                if generate_thumbnail_file(&source_path, &thumb_abs, mime_type, None).await {
-                                    thumbnails_generated += 1;
-                                    tracing::debug!(
-                                        photo_id = %photo_id,
-                                        "Background convert: generated missing thumbnail"
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-        };
-
-        // ── Path A: Source file exists on disk → convert normally ────────
-        let source_path = storage_root.join(file_path);
-        if tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
-            let preview_path = storage_root.join(format!(
-                ".web_previews/{}.web.{}",
-                photo_id, preview_ext
-            ));
-            if !tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
-                tracing::info!(
-                    photo_id = %photo_id,
-                    filename = %filename,
-                    target_ext = preview_ext,
-                    encrypted = is_encrypted,
-                    "Background convert: starting conversion (source on disk)"
-                );
-
-                if generate_web_preview_bg(&source_path, &preview_path, preview_ext).await {
-                    converted += 1;
-                    tracing::info!(
-                        photo_id = %photo_id,
-                        filename = %filename,
-                        "Background convert: conversion complete (source on disk)"
-                    );
-
-                    // If this photo is encrypted AND we have the key, also
-                    // re-encrypt the blob with the converted data so the
-                    // client gets web-compatible media after decryption.
-                    if is_encrypted && key_available {
-                        let Some(enc_id) = encrypted_blob_id.as_deref() else {
-                            tracing::error!(
-                                photo_id = %photo_id,
-                                "Background convert: is_encrypted=true but encrypted_blob_id is NULL — skipping re-encryption"
-                            );
-                            continue;
-                        };
-                        if let Err(e) = reencrypt_blob_with_converted_data(
-                            pool, storage_root, encryption_key, photo_id, user_id,
-                            enc_id, filename, &preview_path, preview_ext,
-                        ).await {
-                            tracing::warn!(
-                                photo_id = %photo_id,
-                                "Background convert: re-encryption failed: {}", e
-                            );
-                        }
-                    }
-                } else {
-                    tracing::warn!(
-                        photo_id = %photo_id,
-                        filename = %filename,
-                        "Background convert: conversion failed (source on disk)"
-                    );
-                }
-
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            } else if is_encrypted {
-                // Preview already exists on disk AND photo is encrypted.
-                // The migration already put web-compatible data in the blob,
-                // so mark this photo as blob-converted to prevent false
-                // "pending" counts in conversion_status().
-                mark_blob_converted(pool, photo_id).await;
-                tracing::debug!(
-                    photo_id = %photo_id,
-                    "Background convert: marked encrypted photo as converted (preview already on disk)"
-                );
-            }
-
-            // Generate thumbnail if missing — only for plain photos.
-            if !is_encrypted {
-                if let Some(tp) = thumb_path {
-                    let thumb_abs = storage_root.join(tp);
-                    if !tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
-                        if generate_thumbnail_file(&source_path, &thumb_abs, mime_type, None).await {
-                            thumbnails_generated += 1;
-                            tracing::debug!(
-                                photo_id = %photo_id,
-                                "Background convert: generated missing thumbnail"
-                            );
-                        }
-                    }
-                }
-            }
-            continue;
-        }
-
-        // ── Path B: No source file on disk, but encrypted → temp-decrypt ─
-        if is_encrypted && key_available {
-            let Some(blob_id) = encrypted_blob_id.as_deref() else {
-                tracing::error!(
-                    photo_id = %photo_id,
-                    "Background convert: is_encrypted=true but encrypted_blob_id is NULL — skipping"
-                );
-                continue;
-            };
-
-            // Check if this blob already contains converted data by looking
-            // at whether we previously marked it as converted.
-            let already_converted = is_blob_already_converted(pool, photo_id).await;
-            if already_converted {
-                continue;
-            }
-
-            tracing::info!(
-                photo_id = %photo_id,
-                filename = %filename,
-                target_ext = preview_ext,
-                "Background convert: starting conversion (temp-decrypt encrypted blob)"
-            );
-
-            match decrypt_convert_reencrypt(
-                pool, storage_root, encryption_key, photo_id, user_id,
-                blob_id, filename, preview_ext,
-            ).await {
-                Ok(true) => {
-                    converted += 1;
-                    tracing::info!(
-                        photo_id = %photo_id,
-                        filename = %filename,
-                        "Background convert: conversion complete (re-encrypted blob)"
-                    );
-                }
-                Ok(false) => {
-                    tracing::warn!(
-                        photo_id = %photo_id,
-                        filename = %filename,
-                        "Background convert: conversion failed (encrypted blob)"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        photo_id = %photo_id,
-                        filename = %filename,
-                        "Background convert: decrypt/convert/reencrypt error: {}", e
-                    );
-                }
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
+    // ── Phase 1: Generate ALL missing thumbnails ────────────────────────
+    let thumbs1 = phase_thumbnails(&photos, storage_root).await;
+    if thumbs1 > 0 {
+        tracing::info!("[DIAG:CONVERT] Phase 1 complete: generated {} thumbnails", thumbs1);
     }
 
-    if converted > 0 || thumbnails_generated > 0 {
+    // ── Phase 2: Convert flagged files ──────────────────────────────────
+    let (converted, converted_ids) =
+        phase_convert(&photos, pool, storage_root, encryption_key, key_available).await;
+    if converted > 0 {
+        tracing::info!("[DIAG:CONVERT] Phase 2 complete: converted {} files", converted);
+    }
+
+    // ── Phase 3: Post-conversion thumbnails (freshly converted only) ────
+    let thumbs3 = phase_post_conversion_thumbnails(&photos, storage_root, &converted_ids).await;
+    if thumbs3 > 0 {
+        tracing::info!("[DIAG:CONVERT] Phase 3 complete: regenerated {} thumbnails from converted files", thumbs3);
+    }
+
+    if thumbs1 > 0 || converted > 0 || thumbs3 > 0 {
         tracing::info!(
-            "Background convert: converted {} files, generated {} thumbnails this cycle",
-            converted, thumbnails_generated
+            "Processing pipeline complete: {} initial thumbnails, {} conversions, {} post-conversion thumbnails",
+            thumbs1, converted, thumbs3
         );
     }
 
-    (converted, thumbnails_generated)
+    (thumbs1, converted, thumbs3)
 }
 
 /// Check if an encrypted blob has already been converted.
@@ -447,7 +572,7 @@ async fn reencrypt_blob_with_converted_data(
     photo_id: &str,
     user_id: &str,
     blob_id: &str,
-    filename: &str,
+    _filename: &str,
     preview_path: &std::path::Path,
     preview_ext: &str,
 ) -> Result<(), String> {
@@ -601,16 +726,17 @@ async fn reencrypt_payload(
     Ok(())
 }
 
-/// Run the background conversion loop.
-/// Checks for unconverted files every `interval_secs` seconds, or immediately
-/// when notified via the `notify` handle.
+/// Run the background processing pipeline loop.
 ///
-/// The `active` flag is set while the converter has pending work, allowing the
-/// conversion-status endpoint to keep the client banner alive even if
-/// encryption changes the DB state mid-pass.
+/// Runs the three-phase pipeline (thumbnails → conversion → post-conversion
+/// thumbnails) every `interval_secs` seconds, or immediately when notified
+/// via the `notify` handle (e.g. after scan/migration completes).
 ///
-/// The `encryption_key` handle is checked each pass — when available, the
-/// converter can process encrypted blobs by decrypting, converting, and
+/// The `active` flag is set while the pipeline is working, allowing the
+/// conversion-status endpoint to show a progress banner in the UI.
+///
+/// The `encryption_key` handle is checked each cycle — when available, the
+/// pipeline can process encrypted blobs by decrypting, converting, and
 /// re-encrypting.
 pub async fn background_convert_task(
     pool: SqlitePool,
@@ -636,33 +762,29 @@ pub async fn background_convert_task(
             },
         }
 
-        // Mark active before the pass so the banner shows immediately
+        // Mark active before the pipeline so the banner shows immediately
         active.store(true, Ordering::Release);
 
-        let (converted, thumbs) = run_conversion_pass(&pool, &storage_root, &encryption_key).await;
+        // All three phases run sequentially inside run_conversion_pass.
+        // Phase 3 (post-conversion thumbnails) is handled internally — no
+        // separate "second pass" needed.
+        let (thumbs1, converted, thumbs3) =
+            run_conversion_pass(&pool, &storage_root, &encryption_key).await;
         tracing::info!(
-            "[DIAG:CONVERT] pass result: converted={}, thumbs={}, setting active={}",
-            converted, thumbs, converted > 0 || thumbs > 0
+            "[DIAG:CONVERT] pipeline result: thumbs_p1={}, converted={}, thumbs_p3={}, setting active={}",
+            thumbs1, converted, thumbs3, converted > 0 || thumbs1 > 0 || thumbs3 > 0
         );
 
-        if converted > 0 || thumbs > 0 {
-            // If we converted any files, run a second pass to generate
-            // thumbnails for the newly converted items (the web preview
-            // may now be usable as a thumbnail source).
-            if converted > 0 {
-                tracing::info!("Background convert: running second pass for thumbnails of converted files");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                run_conversion_pass(&pool, &storage_root, &encryption_key).await;
-            }
-        }
-
-        // Always clear the active flag after a pass completes.
+        // Always clear the active flag after the pipeline completes.
         active.store(false, Ordering::Release);
         tracing::info!("[DIAG:CONVERT] active flag cleared to false");
     }
 }
 
-/// Admin endpoint: trigger an immediate background conversion pass.
+/// Admin endpoint: trigger an immediate processing pipeline cycle.
+///
+/// Wakes the background task to run all three phases (thumbnails → conversion
+/// → post-conversion thumbnails) without waiting for the next timer tick.
 ///
 /// POST /admin/photos/convert
 pub async fn trigger_convert(
@@ -683,9 +805,9 @@ pub async fn trigger_convert(
 /// encrypted blobs that still contain raw (non-web-compatible) media data.
 ///
 /// This is used when encryption migration already completed but the blobs
-/// were not converted at the time (e.g. the converter was previously skipping
-/// during migration, or no FFmpeg was available). The key is stored temporarily
-/// in `AppState` for 30 minutes, during which the background converter will
+/// were not converted at the time (e.g. the pipeline was skipping during
+/// migration, or no FFmpeg was available).  The key is stored temporarily
+/// in `AppState` for 30 minutes, during which the background pipeline will
 /// decrypt, convert, and re-encrypt each blob.
 ///
 /// POST /admin/photos/reconvert
@@ -784,14 +906,18 @@ pub async fn trigger_reconvert(
     ))
 }
 
-/// Check how many files still need conversion or thumbnails for the current user.
+/// Check how many files still need processing for the current user.
 ///
 /// GET /photos/conversion-status
 ///
-/// Counts photos needing web-preview conversion and thumbnails.
-/// For encrypted photos, counts those whose blobs have not yet been
-/// re-encrypted with web-compatible data (tracked via `blob_converted_`
-/// markers in server_settings).
+/// Reports the number of photos pending in each pipeline phase:
+/// - `missing_thumbnails`: Phase 1 work remaining
+/// - `pending_conversions`: Phase 2 work remaining (browser-incompatible formats)
+/// - `pending_awaiting_key`: Encrypted files that need the key before conversion
+/// - `converting`: Whether the pipeline is currently active
+///
+/// Original files are always preserved after conversion.  The converted copy
+/// lives in `.web_previews/` and the original is served via `/photos/:id/file`.
 pub async fn conversion_status(
     State(state): State<AppState>,
     _auth: AuthUser,

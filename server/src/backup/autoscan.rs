@@ -1,9 +1,16 @@
 //! Automatic filesystem scanner that registers new media files into the database.
 //!
 //! Runs as a background task on a configurable interval and can also be
-//! triggered on-demand via `POST /api/admin/photos/auto-scan`. Files are
-//! assigned to the first admin user; duplicates are skipped by comparing
-//! relative `file_path` values against the `photos` table.
+//! triggered on-demand via `POST /api/admin/photos/auto-scan`.  Files are
+//! assigned to the first admin user; duplicates are handled gracefully with
+//! `INSERT OR IGNORE` to avoid race conditions with concurrent scans.
+//!
+//! After new files are registered, the scanner triggers the background
+//! processing pipeline in [`crate::photos::convert`] which runs three
+//! sequential phases: thumbnails → conversion → post-conversion thumbnails.
+//!
+//! In encrypted mode, newly registered files also trigger the encryption
+//! migration if the encryption key is available.
 
 use std::path::Path;
 
@@ -17,6 +24,8 @@ use uuid::Uuid;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
+use crate::photos::metadata::extract_media_metadata;
+use crate::photos::scan::{ffmpeg_available_pub, generate_thumbnail_file};
 use crate::state::AppState;
 
 /// Streaming SHA-256 hash — reads in 64 KB chunks to avoid loading entire file into memory.
@@ -307,6 +316,9 @@ async fn run_auto_scan(
     .map(|v| v == "true")
     .unwrap_or(false);
 
+    // Check FFmpeg availability for thumbnail/preview generation
+    let has_ffmpeg = ffmpeg_available_pub().await;
+
     // Get already-registered file paths
     let existing: Vec<String> = sqlx::query_scalar(
         "SELECT file_path FROM photos",
@@ -377,13 +389,23 @@ async fn run_auto_scan(
                     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
+                    // Extract dimensions, camera model, GPS, and date from file
+                    // (matches scan_and_register behavior so photos have full metadata)
+                    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
+                        extract_media_metadata(&abs_path);
+
+                    // Use EXIF taken_at if available, otherwise fall back to file modified time
+                    let final_taken_at = exif_taken.or(modified);
+
                     // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
                     let photo_hash = compute_photo_hash_streaming(&abs_path).await;
 
-                    if let Err(e) = sqlx::query(
-                        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                         size_bytes, width, height, taken_at, thumb_path, created_at, photo_hash) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)",
+                    // Use INSERT OR IGNORE to handle race conditions with concurrent
+                    // scans (e.g. explicit scan_and_register running simultaneously).
+                    let insert_result = sqlx::query(
+                        "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(&photo_id)
                     .bind(&admin_id)
@@ -392,15 +414,39 @@ async fn run_auto_scan(
                     .bind(&mime)
                     .bind(media_type)
                     .bind(size)
-                    .bind(&modified)
+                    .bind(img_w)
+                    .bind(img_h)
+                    .bind(&final_taken_at)
+                    .bind(exif_lat)
+                    .bind(exif_lon)
+                    .bind(&cam_model)
                     .bind(&thumb_rel)
                     .bind(&now)
                     .bind(&photo_hash)
                     .execute(pool)
-                    .await
-                    {
-                        tracing::error!("Autoscan: failed to register photo {}: {}", rel_path, e);
-                        continue;
+                    .await;
+
+                    match insert_result {
+                        Ok(result) if result.rows_affected() == 0 => {
+                            // Already registered by a concurrent scan — skip
+                            tracing::debug!(file = %rel_path, "Already registered (concurrent scan), skipping");
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::error!("Autoscan: failed to register photo {}: {}", rel_path, e);
+                            continue;
+                        }
+                        Ok(_) => { /* inserted successfully */ }
+                    }
+
+                    // Generate thumbnail (matches scan_and_register behavior)
+                    if has_ffmpeg || mime.starts_with("audio/") {
+                        let thumb_abs = storage_root.join(&thumb_rel);
+                        if generate_thumbnail_file(&abs_path, &thumb_abs, &mime, None).await {
+                            tracing::debug!(file = %rel_path, "Autoscan: generated thumbnail");
+                        } else {
+                            tracing::warn!(file = %rel_path, "Autoscan: failed to generate thumbnail");
+                        }
                     }
 
                     new_count += 1;
