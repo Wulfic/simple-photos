@@ -335,6 +335,23 @@ pub async fn download(
     let path = storage_root.join(&storage_path);
     let total_size = size_bytes as u64;
 
+    // ── If-None-Match → 304 (blobs are immutable, ETag = blob_id) ──────
+    let etag = format!("\"{}\"", blob_id);
+    if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+        if inm == etag || inm.trim_matches('"') == blob_id {
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header("ETag", HeaderValue::from_str(&etag)
+                    .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
+                .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
+                .body(Body::empty())
+                .map_err(|e| AppError::Internal(e.to_string()))?);
+        }
+    }
+
+    /// 64 KB stream buffer for blob file serving.
+    const BLOB_BUF: usize = 64 * 1024;
+
     // ── Parse Range header ─────────────────────────────────────────────────
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
         if let Some((start, end)) = parse_range_header(range_header, total_size) {
@@ -351,7 +368,7 @@ pub async fn download(
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
 
-            let stream = tokio_util::io::ReaderStream::new(file.take(length));
+            let stream = tokio_util::io::ReaderStream::with_capacity(file.take(length), BLOB_BUF);
             let body = Body::from_stream(stream);
 
             return Ok(Response::builder()
@@ -363,7 +380,7 @@ pub async fn download(
                 ).map_err(|e| AppError::Internal(format!("Invalid Content-Range header: {}", e)))?)
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
                 .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
-                .header("ETag", HeaderValue::from_str(&format!("\"{}\"", blob_id))
+                .header("ETag", HeaderValue::from_str(&etag)
                     .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()))?);
@@ -385,7 +402,7 @@ pub async fn download(
         _ => AppError::Internal(format!("Failed to open blob: {}", e)),
     })?;
 
-    let stream = tokio_util::io::ReaderStream::new(file);
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, BLOB_BUF);
     let body = Body::from_stream(stream);
 
     Ok(Response::builder()
@@ -395,7 +412,7 @@ pub async fn download(
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
         // Blobs are immutable (content-addressed by UUID) — cache aggressively
         .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
-        .header("ETag", HeaderValue::from_str(&format!("\"{}\"", blob_id))
+        .header("ETag", HeaderValue::from_str(&etag)
             .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
@@ -463,6 +480,7 @@ pub async fn delete(
 pub async fn download_thumb(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(blob_id): Path<String>,
 ) -> Result<Response, AppError> {
     // Validate blob_id format
@@ -507,7 +525,21 @@ pub async fn download_thumb(
         _ => AppError::Internal(format!("Failed to open thumbnail blob: {}", e)),
     })?;
 
-    let stream = tokio_util::io::ReaderStream::new(file);
+    // ── If-None-Match → 304 ────────────────────────────────────────────
+    let etag = format!("\"{}\"", thumb_blob_id);
+    if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+        if inm == etag || inm.trim_matches('"') == thumb_blob_id.as_str() {
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header("ETag", HeaderValue::from_str(&etag)
+                    .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
+                .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
+                .body(Body::empty())
+                .map_err(|e| AppError::Internal(e.to_string()))?);
+        }
+    }
+
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, 64 * 1024);
     let body = Body::from_stream(stream);
 
     Ok(Response::builder()
@@ -515,7 +547,7 @@ pub async fn download_thumb(
         .header("Content-Type", HeaderValue::from_static("application/octet-stream"))
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
-        .header("ETag", HeaderValue::from_str(&format!("\"{}\"", thumb_blob_id))
+        .header("ETag", HeaderValue::from_str(&etag)
             .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)

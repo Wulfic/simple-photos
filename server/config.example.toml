@@ -8,7 +8,7 @@ trust_proxy = false
 
 [database]
 path = "/data/db/simple-photos.db"
-max_connections = 5
+max_connections = 16
 
 [storage]
 # ── Storage root ─────────────────────────────────────────────────────────────

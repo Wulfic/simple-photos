@@ -367,8 +367,19 @@ async fn run_conversion_pass(
 
     let key_available = encryption_key.read().await.is_some();
 
+    // Check audio backup toggle — skip audio files when disabled
+    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|v| v == "true")
+    .unwrap_or(true); // default: enabled
+
     // Fetch all photos once — shared across all three phases
-    let photos: Vec<PhotoRow> = match sqlx::query_as(
+    let all_photos: Vec<PhotoRow> = match sqlx::query_as(
         "SELECT id, file_path, filename, thumb_path, mime_type, encrypted_blob_id, user_id FROM photos",
     )
     .fetch_all(pool)
@@ -379,6 +390,15 @@ async fn run_conversion_pass(
             tracing::error!("[DIAG:CONVERT] DB query failed: {}", e);
             return (0, 0, 0);
         }
+    };
+
+    // Filter out audio files when the toggle is off
+    let photos: Vec<PhotoRow> = if audio_backup_enabled {
+        all_photos
+    } else {
+        all_photos.into_iter()
+            .filter(|p| !p.4.starts_with("audio/"))
+            .collect()
     };
 
     let plain_count = photos.iter().filter(|p| p.5.is_none()).count();

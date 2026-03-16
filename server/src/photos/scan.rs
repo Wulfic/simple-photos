@@ -21,7 +21,6 @@ use std::path::Path;
 
 use axum::extract::State;
 use axum::Json;
-use chrono::Utc;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
@@ -33,6 +32,7 @@ use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::metadata::extract_media_metadata;
+use super::utils::{normalize_iso_timestamp, utc_now_iso};
 
 /// Streaming SHA-256 hash — reads in 64 KB chunks to avoid loading entire file into memory.
 /// Returns the first 12 hex chars of the hash.
@@ -432,8 +432,20 @@ pub async fn scan_and_register(
     .await?;
     let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
 
+    // Check audio backup toggle — skip audio files when disabled
+    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|v| v == "true")
+    .unwrap_or(true); // default: enabled
+
     // Scan recursively for media files
     let mut new_count = 0i64;
+    let mut skipped_audio = 0i64;
     let mut queue = vec![storage_root.clone()];
 
     while let Some(dir) = queue.pop() {
@@ -464,15 +476,6 @@ pub async fn scan_and_register(
                         continue; // Already registered
                     }
 
-                    let file_meta = entry.metadata().await.ok();
-                    let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-                    let modified = file_meta.and_then(|m| {
-                        m.modified().ok().map(|t| {
-                            let dt: chrono::DateTime<chrono::Utc> = t.into();
-                            dt.to_rfc3339()
-                        })
-                    });
-
                     let mime = mime_from_extension(&name).to_string();
                     let media_type = if mime.starts_with("video/") {
                         "video"
@@ -484,16 +487,35 @@ pub async fn scan_and_register(
                         "photo"
                     };
 
+                    // Skip audio files when the audio backup toggle is disabled
+                    if media_type == "audio" && !audio_backup_enabled {
+                        skipped_audio += 1;
+                        continue;
+                    }
+
+                    let file_meta = entry.metadata().await.ok();
+                    let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+                    let modified = file_meta.and_then(|m| {
+                        m.modified().ok().map(|t| {
+                            let dt: chrono::DateTime<chrono::Utc> = t.into();
+                            // Normalize to consistent ISO-8601 Z-suffix format
+                            normalize_iso_timestamp(&dt.to_rfc3339())
+                        })
+                    });
+
                     let photo_id = Uuid::new_v4().to_string();
-                    let now = Utc::now().to_rfc3339();
+                    let now = utc_now_iso();
                     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
                     // Extract dimensions, camera model, GPS, and date from file
                     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
                         extract_media_metadata(&abs_path);
 
-                    // Use EXIF taken_at if available, otherwise fall back to file modified time
-                    let final_taken_at = exif_taken.or(modified);
+                    // Use EXIF taken_at if available, otherwise fall back to file modified time.
+                    // Normalize both to consistent YYYY-MM-DDTHH:MM:SS.mmmZ format.
+                    let final_taken_at = exif_taken
+                        .map(|t| normalize_iso_timestamp(&t))
+                        .or(modified);
 
                     // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
                     let photo_hash = compute_photo_hash_streaming(&abs_path).await;
@@ -577,7 +599,7 @@ pub async fn scan_and_register(
         }
     }
 
-    tracing::info!("Scan complete: registered {} new photos", new_count);
+    tracing::info!("Scan complete: registered {} new photos (skipped {} audio)", new_count, skipped_audio);
 
     // ── Retroactively fill missing metadata for existing photos ──────────
     // Fix photos with 0×0 dimensions or missing camera_model/GPS/photo_hash
@@ -709,6 +731,7 @@ pub async fn scan_and_register(
     Ok(Json(serde_json::json!({
         "registered": new_count,
         "metadata_updated": fixed_count,
+        "skipped_audio": skipped_audio,
         "message": format!("{} new photos registered, {} metadata updated", new_count, fixed_count),
     })))
 }
