@@ -28,7 +28,8 @@ pub async fn get_storage(
 ) -> Result<Json<StorageResponse>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let root = state.storage_root.read().await;
+    // Lock-free read via ArcSwap — no async lock needed.
+    let root = state.storage_root.load();
     let path = root.display().to_string();
     Ok(Json(StorageResponse {
         storage_path: path,
@@ -97,10 +98,9 @@ pub async fn update_storage(
         })?;
     let _ = tokio::fs::remove_file(&test_file).await;
 
-    // Update in-memory storage root
+    // Atomically swap the storage root (lock-free for readers).
     {
-        let mut root = state.storage_root.write().await;
-        *root = new_path.clone();
+        state.storage_root.store(std::sync::Arc::new(new_path.clone()));
     }
 
     // Persist to config.toml
@@ -180,7 +180,7 @@ pub async fn browse_directory(
 
     let browse_path = match &query.path {
         Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => state.storage_root.read().await.clone(),
+        _ => (**state.storage_root.load()).clone(),
     };
 
     // Security: reject ".." traversal

@@ -21,8 +21,7 @@ use std::path::Path;
 
 use axum::extract::State;
 use axum::Json;
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
+use futures_util::TryStreamExt;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -32,23 +31,9 @@ use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::metadata::extract_media_metadata;
-use super::utils::{normalize_iso_timestamp, utc_now_iso};
+use super::utils::{normalize_iso_timestamp, utc_now_iso, compute_photo_hash_streaming};
 
-/// Streaming SHA-256 hash — reads in 64 KB chunks to avoid loading entire file into memory.
-/// Returns the first 12 hex chars of the hash.
-async fn compute_photo_hash_streaming(path: &Path) -> Option<String> {
-    let mut file = tokio::fs::File::open(path).await.ok()?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 65536]; // 64 KB chunks
-    loop {
-        let n = file.read(&mut buf).await.ok()?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Some(hex::encode(&hasher.finalize()[..6]))
-}
+// compute_photo_hash_streaming is now in utils.rs — imported above.
 
 /// Check if FFmpeg is available on the system (public for background convert task).
 pub async fn ffmpeg_available_pub() -> bool {
@@ -415,7 +400,8 @@ pub async fn scan_and_register(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
 
     // Check FFmpeg availability for thumbnail/preview generation
     let has_ffmpeg = ffmpeg_available().await;
@@ -423,14 +409,20 @@ pub async fn scan_and_register(
         tracing::warn!("FFmpeg not found — thumbnails and web previews will not be generated");
     }
 
-    // Get already-registered file paths
-    let existing: Vec<String> = sqlx::query_scalar(
-        "SELECT file_path FROM photos WHERE user_id = ?",
-    )
-    .bind(&auth.user_id)
-    .fetch_all(&state.pool)
-    .await?;
-    let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
+    // Build set of already-registered paths using a streaming cursor so we
+    // never hold the full Vec<String> + HashSet simultaneously in memory.
+    let mut existing_set = std::collections::HashSet::new();
+    {
+        let mut rows = sqlx::query_scalar::<_, String>(
+            "SELECT file_path FROM photos WHERE user_id = ?",
+        )
+        .bind(&auth.user_id)
+        .fetch(&state.pool);
+
+        while let Some(path) = rows.try_next().await? {
+            existing_set.insert(path);
+        }
+    }
 
     // Check audio backup toggle — skip audio files when disabled
     let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(

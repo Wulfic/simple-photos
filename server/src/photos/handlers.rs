@@ -21,7 +21,7 @@ use crate::sanitize;
 use crate::state::AppState;
 
 use super::models::*;
-use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
+use super::utils::{normalize_iso_timestamp, utc_now_iso};
 
 // ── Plain Photo Endpoints ─────────────────────────────────────────────────────
 
@@ -112,7 +112,8 @@ pub async fn register_photo(
         AppError::BadRequest(format!("Invalid file_path: {}", reason))
     })?;
 
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&req.file_path);
 
     // Verify the file actually exists
@@ -137,11 +138,11 @@ pub async fn register_photo(
         }
     });
 
-    // Compute content-based hash for cross-platform alignment
-    let file_bytes = tokio::fs::read(&full_path).await.map_err(|e| {
-        AppError::Internal(format!("Failed to read file for hashing: {}", e))
-    })?;
-    let photo_hash = compute_photo_hash(&file_bytes);
+    // Compute content-based hash using streaming I/O (64 KB chunks) so large
+    // files never need to be buffered entirely in memory.
+    let photo_hash = super::utils::compute_photo_hash_streaming(&full_path)
+        .await
+        .unwrap_or_default();
 
     // Generate thumbnail path (will be created by a separate endpoint/process)
     let thumb_filename = format!("{}.thumb.jpg", photo_id);
@@ -231,7 +232,8 @@ pub async fn serve_photo(
         AppError::NotFound
     })?;
 
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&file_path);
 
     tracing::debug!(
@@ -342,7 +344,8 @@ pub async fn serve_thumbnail(
     .ok_or(AppError::NotFound)?;
 
     let thumb_path = thumb_path.ok_or(AppError::NotFound)?;
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&thumb_path);
 
     // If thumbnail doesn't exist yet, return 202 Accepted to signal "pending"
@@ -422,7 +425,7 @@ pub async fn serve_web(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
 
     // Check for a pre-generated web preview (non-browser-native formats)
     if let Some(ext) = needs_web_preview(&filename) {
@@ -553,32 +556,28 @@ async fn serve_file_with_range(
 
 /// PUT /api/photos/:id/favorite
 /// Toggle the is_favorite flag on a photo.
+///
+/// **Performance:** Uses `RETURNING` (SQLite 3.35+) to get the new value in
+/// the same statement, eliminating a second SELECT round-trip.
 pub async fn toggle_favorite(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(photo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Toggle: set is_favorite = 1 - is_favorite (0→1, 1→0)
-    let rows = sqlx::query(
-        "UPDATE photos SET is_favorite = 1 - is_favorite WHERE id = ? AND user_id = ?",
+    // Toggle and return new value in a single statement (RETURNING, SQLite 3.35+).
+    // Eliminates a second SELECT query that was previously needed to read back
+    // the toggled value.
+    let new_fav: Option<bool> = sqlx::query_scalar(
+        "UPDATE photos SET is_favorite = 1 - is_favorite \
+         WHERE id = ? AND user_id = ? \
+         RETURNING is_favorite",
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
-    .execute(&state.pool)
-    .await?
-    .rows_affected();
-
-    if rows == 0 {
-        return Err(AppError::NotFound);
-    }
-
-    let is_favorite: bool = sqlx::query_scalar(
-        "SELECT is_favorite FROM photos WHERE id = ? AND user_id = ?",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await?;
+
+    let is_favorite = new_fav.ok_or(AppError::NotFound)?;
 
     Ok(Json(serde_json::json!({
         "id": photo_id,
@@ -642,7 +641,7 @@ pub async fn set_crop(
 
     if let Some((file_path, mime_type, thumb_path)) = photo {
         if let Some(thumb) = thumb_path {
-            let storage_root = state.storage_root.read().await.clone();
+            let storage_root = (**state.storage_root.load()).clone();
             let abs_file = storage_root.join(file_path);
             let abs_thumb = storage_root.join(&thumb);
             let crop_meta = req.crop_metadata.as_deref();

@@ -134,3 +134,62 @@ pub async fn delete_blob(root: &Path, storage_path: &str) -> Result<(), AppError
         Err(e) => Err(AppError::Internal(format!("Failed to delete blob: {}", e))),
     }
 }
+
+/// Streaming blob write — streams body chunks directly to disk while
+/// simultaneously computing the SHA-256 hash.  This avoids buffering the
+/// entire upload in memory, which matters for large video blobs (can be
+/// multiple gigabytes).
+///
+/// Returns `(relative_path, total_bytes, sha256_hex)`.
+///
+/// On I/O error the partially-written file is cleaned up automatically.
+pub async fn write_blob_streaming(
+    root: &Path,
+    user_id: &str,
+    blob_id: &str,
+    body: axum::body::Body,
+) -> Result<(String, u64, String), AppError> {
+    use http_body_util::BodyExt;
+    use sha2::{Digest, Sha256};
+
+    let path = blob_path(root, user_id, blob_id);
+
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to create blob directory: {}", e)))?;
+    }
+
+    let mut file = tokio::fs::File::create(&path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to create blob file: {}", e)))?;
+
+    let mut hasher = Sha256::new();
+    let mut total: u64 = 0;
+
+    // Consume the HTTP body frame-by-frame, writing each data chunk to disk
+    // and feeding it through the SHA-256 hasher in one pass.
+    let mut body = body;
+    while let Some(frame_result) = body.frame().await {
+        let frame = frame_result
+            .map_err(|e| AppError::Internal(format!("Body stream error: {}", e)))?;
+        if let Ok(chunk) = frame.into_data() {
+            total += chunk.len() as u64;
+            hasher.update(&chunk);
+            if let Err(e) = file.write_all(&chunk).await {
+                drop(file);
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(AppError::Internal(format!("Failed to write blob chunk: {}", e)));
+            }
+        }
+    }
+
+    if let Err(e) = file.flush().await {
+        drop(file);
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err(AppError::Internal(format!("Failed to flush blob: {}", e)));
+    }
+
+    let hash_hex = hex::encode(hasher.finalize());
+    Ok((relative_path(user_id, blob_id), total, hash_hex))
+}

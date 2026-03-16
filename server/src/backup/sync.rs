@@ -111,7 +111,7 @@ pub async fn trigger_sync(
 
     // Spawn the sync as a background task
     let pool = state.pool.clone();
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let api_key: Option<String> = sqlx::query_scalar(
         "SELECT api_key FROM backup_servers WHERE id = ?",
     )

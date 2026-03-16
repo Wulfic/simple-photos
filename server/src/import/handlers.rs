@@ -65,7 +65,7 @@ pub async fn import_metadata(
     let data_to_write = raw_json.clone();
 
     // Write the metadata file to storage_root/metadata/...
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let storage_path = blob_storage::write_metadata(
         &storage_root,
         &auth.user_id,
@@ -157,7 +157,7 @@ pub async fn batch_import_metadata(
     .unwrap_or_else(|| "plain".to_string());
 
     let is_encrypted = encryption_mode == "encrypted";
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
 
     let mut results = Vec::with_capacity(req.entries.len());
     let mut imported = 0usize;
@@ -376,7 +376,7 @@ pub async fn delete_photo_metadata(
     .fetch_all(&state.pool)
     .await?;
 
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     for path in paths.into_iter().flatten() {
         blob_storage::delete_metadata(&storage_root, &path).await.ok();
     }

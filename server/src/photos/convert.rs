@@ -858,7 +858,7 @@ pub async fn trigger_reconvert(
     .await?;
 
     if let Some((storage_path,)) = test_blob {
-        let storage_root = state.storage_root.read().await.clone();
+        let storage_root = (**state.storage_root.load()).clone();
         let test_data = storage::read_blob(&storage_root, &storage_path)
             .await
             .map_err(|e| AppError::Internal(format!("Read test blob: {}", e)))?;
@@ -942,7 +942,7 @@ pub async fn conversion_status(
     State(state): State<AppState>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let converting = state.conversion_active.load(Ordering::Acquire);
     let key_available = state.encryption_key.read().await.is_some();
 

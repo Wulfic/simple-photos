@@ -502,7 +502,8 @@ pub async fn permanent_delete(
 
     // Delete files from disk AFTER commit — a failure here is a minor storage
     // leak but preserves data integrity (the trash row is already gone).
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
 
     if can_delete_file {
         let full_path = storage_root.join(&file_path);
@@ -551,7 +552,8 @@ pub async fn empty_trash(
     // Build a list of files safe to delete (no other photo row references them).
     // We check within the transaction to avoid TOCTOU races.
     let mut files_to_delete: Vec<std::path::PathBuf> = Vec::new();
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
 
     for (file_path, thumb_path) in &items {
         let other_refs: i64 = sqlx::query_scalar(
@@ -626,7 +628,8 @@ pub async fn serve_trash_thumbnail(
     .ok_or(AppError::NotFound)?;
 
     let thumb_path = thumb_path.ok_or(AppError::NotFound)?;
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&thumb_path);
 
     if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {

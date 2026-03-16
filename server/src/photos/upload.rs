@@ -90,7 +90,7 @@ pub async fn upload_photo(
     }
 
     // Ensure unique filename if it already exists on disk (different content)
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let uploads_dir = storage_root.join("uploads");
     tokio::fs::create_dir_all(&uploads_dir).await.map_err(|e| {
         AppError::Internal(format!("Failed to create uploads directory: {}", e))

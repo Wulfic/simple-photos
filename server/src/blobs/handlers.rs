@@ -6,14 +6,12 @@
 //! audit logging.
 
 use axum::body::Body;
-use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
@@ -58,11 +56,15 @@ pub struct ListBlobsQuery {
 ///   content, used for cross-platform photo alignment
 ///
 /// Enforces per-user storage quota. Returns 201 with the new blob ID.
+///
+/// **Streaming:** The request body is streamed directly to disk in chunks
+/// while simultaneously computing the SHA-256 hash.  This avoids buffering
+/// multi-gigabyte video blobs entirely in server RAM.
 pub async fn upload(
     State(state): State<AppState>,
     auth: AuthUser,
     headers: HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> Result<(StatusCode, Json<BlobUploadResponse>), AppError> {
     let blob_type = headers
         .get("x-blob-type")
@@ -73,8 +75,7 @@ pub async fn upload(
     tracing::info!(
         user_id = %auth.user_id,
         blob_type = %blob_type,
-        body_size = body.len(),
-        "Blob upload started"
+        "Blob upload started (streaming)"
     );
 
     // Validate blob type against allowlist
@@ -104,42 +105,9 @@ pub async fn upload(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    let size = body.len() as i64;
-
-    if size == 0 {
-        tracing::warn!(user_id = %auth.user_id, "Blob upload rejected: empty body");
-        return Err(AppError::BadRequest("Empty blob body".into()));
-    }
-
-    if size > state.config.storage.max_blob_size_bytes as i64 {
-        tracing::warn!(
-            user_id = %auth.user_id,
-            size = size,
-            max = state.config.storage.max_blob_size_bytes,
-            "Blob upload rejected: payload too large"
-        );
-        return Err(AppError::PayloadTooLarge);
-    }
-
-    // ── Server-side integrity check ─────────────────────────────────────────
-    // If the client sent X-Client-Hash, compute SHA-256 of the body and compare.
-    // This catches silent corruption during transit or from proxy/CDN issues.
-    if let Some(ref expected_hash) = client_hash {
-        let computed_hash = hex::encode(Sha256::digest(&body));
-        if computed_hash != *expected_hash {
-            tracing::warn!(
-                user_id = auth.user_id,
-                expected = expected_hash,
-                computed = computed_hash,
-                "Blob integrity check failed — hash mismatch"
-            );
-            return Err(AppError::BadRequest(
-                "Blob integrity check failed: X-Client-Hash does not match uploaded data".into(),
-            ));
-        }
-    }
-
-    // Check quota
+    // ── Pre-flight quota check (fast reject using Content-Length header) ─────
+    // This avoids streaming the entire body only to reject it at the end.
+    // The final size is re-verified after streaming completes.
     let used: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM blobs WHERE user_id = ?")
             .bind(&auth.user_id)
@@ -152,16 +120,59 @@ pub async fn upload(
             .fetch_one(&state.pool)
             .await?;
 
-    if quota > 0 && used + size > quota {
+    if let Some(cl) = headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<i64>().ok()) {
+        if cl > state.config.storage.max_blob_size_bytes as i64 {
+            return Err(AppError::PayloadTooLarge);
+        }
+        if quota > 0 && used + cl > quota {
+            return Err(AppError::Forbidden("Storage quota exceeded".into()));
+        }
+    }
+
+    // ── Stream body to disk, computing SHA-256 incrementally ────────────────
+    let blob_id = Uuid::new_v4().to_string();
+    let storage_root = (**state.storage_root.load()).clone();
+    let (storage_path, actual_size, computed_hash) =
+        storage::write_blob_streaming(&storage_root, &auth.user_id, &blob_id, body).await?;
+
+    // ── Post-stream validation ──────────────────────────────────────────────
+    let cleanup = || async {
+        let _ = storage::delete_blob(&storage_root, &storage_path).await;
+    };
+
+    if actual_size == 0 {
+        cleanup().await;
+        return Err(AppError::BadRequest("Empty blob body".into()));
+    }
+
+    if actual_size as i64 > state.config.storage.max_blob_size_bytes as i64 {
+        cleanup().await;
+        return Err(AppError::PayloadTooLarge);
+    }
+
+    // Final quota check with actual streamed size
+    if quota > 0 && used + actual_size as i64 > quota {
+        cleanup().await;
         return Err(AppError::Forbidden("Storage quota exceeded".into()));
     }
 
-    let blob_id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
+    // Server-side integrity check — compare streamed SHA-256 against client hash
+    if let Some(ref expected_hash) = client_hash {
+        if computed_hash != *expected_hash {
+            tracing::warn!(
+                user_id = auth.user_id,
+                expected = expected_hash,
+                computed = computed_hash,
+                "Blob integrity check failed — hash mismatch"
+            );
+            cleanup().await;
+            return Err(AppError::BadRequest(
+                "Blob integrity check failed: X-Client-Hash does not match uploaded data".into(),
+            ));
+        }
+    }
 
-    let storage_root = state.storage_root.read().await.clone();
-    let storage_path =
-        storage::write_blob(&storage_root, &auth.user_id, &blob_id, &body).await?;
+    let now = Utc::now().to_rfc3339();
 
     sqlx::query(
         "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
@@ -170,7 +181,7 @@ pub async fn upload(
     .bind(&blob_id)
     .bind(&auth.user_id)
     .bind(&blob_type)
-    .bind(size)
+    .bind(actual_size as i64)
     .bind(&client_hash)
     .bind(&now)
     .bind(&storage_path)
@@ -186,7 +197,7 @@ pub async fn upload(
         Some(serde_json::json!({
             "blob_id": blob_id,
             "blob_type": blob_type,
-            "size_bytes": size
+            "size_bytes": actual_size
         })),
     )
     .await;
@@ -195,7 +206,7 @@ pub async fn upload(
         user_id = %auth.user_id,
         blob_id = %blob_id,
         blob_type = %blob_type,
-        size_bytes = size,
+        size_bytes = actual_size,
         "Blob upload completed successfully"
     );
 
@@ -204,7 +215,7 @@ pub async fn upload(
         Json(BlobUploadResponse {
             blob_id,
             upload_time: now,
-            size,
+            size: actual_size as i64,
         }),
     ))
 }
@@ -331,7 +342,8 @@ pub async fn download(
         return Err(AppError::Internal("Invalid storage path".into()));
     }
 
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     let path = storage_root.join(&storage_path);
     let total_size = size_bytes as u64;
 
@@ -439,7 +451,8 @@ pub async fn delete(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     storage::delete_blob(&storage_root, &storage_path).await?;
 
     // Wrap DB operations in a transaction for atomicity
@@ -477,6 +490,10 @@ pub async fn delete(
 ///
 /// This is a convenience endpoint that frees clients from tracking thumbnail
 /// blob IDs separately. Returns 404 if the photo has no thumbnail blob.
+///
+/// **Performance:** Uses a single JOIN query instead of two sequential queries
+/// (photos → blobs). This halves the round-trips to SQLite on every encrypted
+/// thumbnail request.
 pub async fn download_thumb(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -488,25 +505,16 @@ pub async fn download_thumb(
         return Err(AppError::BadRequest("Invalid blob ID format".into()));
     }
 
-    // Look up the photo's thumbnail blob ID via the photos table.
-    // The photo is identified by its `encrypted_blob_id` matching the given blob_id.
-    let thumb_blob_id: Option<String> = sqlx::query_scalar(
-        "SELECT encrypted_thumb_blob_id FROM photos \
-         WHERE encrypted_blob_id = ? AND user_id = ?",
+    // Single JOIN: look up both the thumbnail blob ID and its storage
+    // location in one query instead of two sequential round-trips.
+    // photos.encrypted_blob_id → photos.encrypted_thumb_blob_id → blobs row
+    let (thumb_blob_id, storage_path, size_bytes): (String, String, i64) = sqlx::query_as(
+        "SELECT b.id, b.storage_path, b.size_bytes \
+         FROM photos p \
+         JOIN blobs b ON b.id = p.encrypted_thumb_blob_id \
+         WHERE p.encrypted_blob_id = ? AND p.user_id = ?",
     )
     .bind(&blob_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?; // No photo found with this blob_id
-
-    let thumb_blob_id = thumb_blob_id.ok_or(AppError::NotFound)?; // Photo has no thumbnail blob
-
-    // Find the thumbnail blob's on-disk path
-    let (storage_path, size_bytes): (String, i64) = sqlx::query_as(
-        "SELECT storage_path, size_bytes FROM blobs WHERE id = ? AND user_id = ?",
-    )
-    .bind(&thumb_blob_id)
     .bind(&auth.user_id)
     .fetch_optional(&state.pool)
     .await?
@@ -517,7 +525,8 @@ pub async fn download_thumb(
         return Err(AppError::Internal("Invalid storage path".into()));
     }
 
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     let path = storage_root.join(&storage_path);
 
     let file = tokio::fs::File::open(&path).await.map_err(|e| match e.kind() {
