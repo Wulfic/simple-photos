@@ -87,8 +87,10 @@ impl AuditEvent {
     }
 }
 
-/// Write an audit log entry. This is fire-and-forget — audit logging should
-/// never cause a request to fail.
+/// Write an audit log entry.  The actual database INSERT is spawned onto
+/// the Tokio runtime so the calling handler returns **immediately** without
+/// blocking on the audit write.  This is pure fire-and-forget — audit
+/// logging should never slow down a user-facing request.
 ///
 /// Reads `trust_proxy` from the app config to decide whether `X-Forwarded-For`
 /// / `X-Real-IP` headers are trusted for IP extraction. This prevents spoofed
@@ -121,26 +123,32 @@ pub async fn log(
         user_agent
     };
 
-    let result = sqlx::query(
-        "INSERT INTO audit_log (id, event_type, user_id, ip_address, user_agent, details, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(event.as_str())
-    .bind(user_id)
-    .bind(&ip)
-    .bind(&user_agent)
-    .bind(&details_str)
-    .bind(&now)
-    .execute(&state.pool)
-    .await;
+    // Own the values that reference borrowed data so the spawned task is 'static.
+    let pool = state.pool.clone();
+    let event_str = event.as_str().to_string();
+    let user_id_owned = user_id.map(|s| s.to_string());
 
-    if let Err(e) = result {
-        // We intentionally swallow errors here — if the audit DB is broken, we
-        // still want requests to succeed. The tracing::error! ensures ops notice
-        // in server logs.
-        tracing::error!(event = event.as_str(), error = %e, "Failed to write audit log");
-    }
+    tokio::spawn(async move {
+        let result = sqlx::query(
+            "INSERT INTO audit_log (id, event_type, user_id, ip_address, user_agent, details, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&event_str)
+        .bind(&user_id_owned)
+        .bind(&ip)
+        .bind(&user_agent)
+        .bind(&details_str)
+        .bind(&now)
+        .execute(&pool)
+        .await;
+
+        if let Err(e) = result {
+            // Swallow errors — if the audit DB is broken, requests should still
+            // succeed.  The tracing::error! ensures ops notice in server logs.
+            tracing::error!(event = event_str.as_str(), error = %e, "Failed to write audit log");
+        }
+    });
 }
 
 /// Extract the client IP address from request headers.

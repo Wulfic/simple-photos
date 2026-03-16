@@ -16,8 +16,7 @@ use std::path::Path;
 
 use axum::extract::State;
 use axum::Json;
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
+use futures_util::TryStreamExt;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -25,22 +24,10 @@ use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
 use crate::photos::metadata::extract_media_metadata;
 use crate::photos::scan::{ffmpeg_available_pub, generate_thumbnail_file};
+use crate::photos::utils::compute_photo_hash_streaming;
 use crate::state::AppState;
 
-/// Streaming SHA-256 hash — reads in 64 KB chunks to avoid loading entire file into memory.
-async fn compute_photo_hash_streaming(path: &Path) -> Option<String> {
-    let mut file = tokio::fs::File::open(path).await.ok()?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 65536];
-    loop {
-        let n = file.read(&mut buf).await.ok()?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Some(hex::encode(&hasher.finalize()[..6]))
-}
+// compute_photo_hash_streaming is now in photos::utils — imported above.
 
 /// Background task: automatically scan the storage directory for new files
 /// every 24 hours (or when triggered by an API call).
@@ -108,7 +95,7 @@ pub async fn trigger_auto_scan(
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::setup::admin::require_admin(&state, &auth).await?;
     let pool = state.pool.clone();
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
 
     let count = run_auto_scan(&pool, &storage_root).await;
     tracing::info!("[DIAG:AUTOSCAN] On-demand scan complete: registered {} new files", count);
@@ -318,14 +305,19 @@ async fn run_auto_scan(
     // Check FFmpeg availability for thumbnail/preview generation
     let has_ffmpeg = ffmpeg_available_pub().await;
 
-    // Get already-registered file paths
-    let existing: Vec<String> = sqlx::query_scalar(
-        "SELECT file_path FROM photos",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
+    // Build set of already-registered paths using a streaming cursor so we
+    // never hold the full Vec<String> + HashSet simultaneously in memory.
+    let mut existing_set = std::collections::HashSet::new();
+    {
+        let mut rows = sqlx::query_scalar::<_, String>(
+            "SELECT file_path FROM photos",
+        )
+        .fetch(pool);
+
+        while let Some(path) = rows.try_next().await.unwrap_or(None) {
+            existing_set.insert(path);
+        }
+    }
     tracing::info!("[DIAG:AUTOSCAN] run_auto_scan: {} existing photos in DB, scanning {:?}", existing_set.len(), storage_root);
 
     let mut new_count = 0i64;

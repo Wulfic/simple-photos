@@ -3,6 +3,7 @@
 //! All fields use `Arc` (or are internally `Arc`-wrapped) so cloning the struct
 //! is cheap — Axum clones state into each handler invocation.
 
+use arc_swap::ArcSwap;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,8 +23,10 @@ pub struct AppState {
     /// In-memory per-IP rate limiters for auth endpoints (login, register, TOTP).
     pub rate_limiters: RateLimiters,
     /// Mutable storage root — can be changed at runtime via admin API.
-    /// Initialised from config.storage.root on startup.
-    pub storage_root: Arc<RwLock<PathBuf>>,
+    /// Uses ArcSwap for lock-free reads (only written by admin storage
+    /// update, which is extremely rare). Every handler reads this on
+    /// every request, so avoiding the async RwLock overhead matters.
+    pub storage_root: Arc<ArcSwap<PathBuf>>,
     /// Notify handle to wake the background conversion task immediately
     /// (e.g. after a scan or upload completes).
     pub convert_notify: Arc<Notify>,

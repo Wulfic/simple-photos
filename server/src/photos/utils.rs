@@ -2,6 +2,8 @@
 
 use chrono::{SecondsFormat, Utc};
 use sha2::{Digest, Sha256};
+use std::path::Path;
+use tokio::io::AsyncReadExt;
 
 /// Produce a UTC ISO-8601 timestamp with millisecond precision and Z suffix.
 /// Format: `2024-02-28T22:44:29.043Z`
@@ -42,4 +44,21 @@ pub fn normalize_iso_timestamp(ts: &str) -> String {
 pub fn compute_photo_hash(data: &[u8]) -> String {
     let digest = Sha256::digest(data);
     hex::encode(&digest[..6]) // 6 bytes → 12 hex chars (48-bit)
+}
+
+/// Streaming variant of [`compute_photo_hash`] — reads in 64 KB chunks so
+/// large files (videos, RAW photos) never need to be buffered entirely in
+/// memory.  Returns `None` only when the file cannot be opened or read.
+pub async fn compute_photo_hash_streaming(path: &Path) -> Option<String> {
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 65_536]; // 64 KB chunks
+    loop {
+        let n = file.read(&mut buf).await.ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(hex::encode(&hasher.finalize()[..6]))
 }

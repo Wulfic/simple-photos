@@ -243,7 +243,7 @@ pub async fn get_diagnostics(
     let pool = &state.pool;
 
     // ── Server info ───────────────────────────────────────────────────
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let server_info = ServerInfo {
         version: crate::VERSION.to_string(),
         uptime_seconds: uptime,

@@ -67,7 +67,8 @@ pub async fn get_storage_stats(
     // ── Filesystem-level stats ────────────────────────────────────────────
     // We read the storage root's filesystem via statvfs so the user sees
     // total disk capacity, free space, and can compute "other" usage.
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     let (fs_total, fs_free) = get_fs_stats(&storage_root);
 
     Ok(Json(StorageStatsResponse {

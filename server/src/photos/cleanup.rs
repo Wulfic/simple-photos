@@ -87,7 +87,8 @@ pub async fn cleanup_plain_files(
         ));
     }
 
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
 
     // Fetch all encrypted photos that still have plain originals
     let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(

@@ -195,7 +195,8 @@ pub async fn import_takeout(
     .unwrap_or_else(|| "plain".to_string());
 
     let is_encrypted = encryption_mode == "encrypted";
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
 
     // Collect all files
     let mut media_files: Vec<std::path::PathBuf> = Vec::new();

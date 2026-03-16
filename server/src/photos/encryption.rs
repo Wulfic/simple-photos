@@ -203,7 +203,8 @@ pub async fn set_encryption_mode(
     if req.mode == "encrypted" && parsed_key.is_some() {
         let key = parsed_key.unwrap();
         let pool = state.pool.clone();
-        let storage_root = state.storage_root.read().await.clone();
+        // Lock-free read via ArcSwap.
+        let storage_root = (**state.storage_root.load()).clone();
         let user_id = auth.user_id.clone();
         let convert_notify = state.convert_notify.clone();
         let encryption_key_store = state.encryption_key.clone();

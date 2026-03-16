@@ -132,7 +132,7 @@ pub async fn external_health(
     let db_ping_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     // Disk usage
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let (disk_total, disk_available) = disk_stats(&storage_root);
     let disk_used_percent = if disk_total > 0 {
         ((disk_total - disk_available) as f64 / disk_total as f64) * 100.0
@@ -181,7 +181,7 @@ pub async fn external_full(
     let pool = &state.pool;
 
     // ── Server info ───────────────────────────────────────────────────
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let server_info = ServerInfo {
         version: crate::VERSION.to_string(),
         uptime_seconds: uptime,
@@ -435,7 +435,7 @@ pub async fn external_storage(
     require_basic_auth_admin(&state, &headers).await?;
 
     let pool = &state.pool;
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
 
     // Storage
     let (dir_bytes, file_count) = dir_usage(&storage_root).await;

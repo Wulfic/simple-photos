@@ -120,7 +120,7 @@ pub async fn backup_download_photo(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&file_path);
 
     let file = tokio::fs::File::open(&full_path).await.map_err(|e| match e.kind() {
@@ -165,7 +165,7 @@ pub async fn backup_download_thumb(
 
     let thumb_path = thumb_path.ok_or(AppError::NotFound)?;
 
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&thumb_path);
 
     let file = tokio::fs::File::open(&full_path).await.map_err(|e| match e.kind() {
@@ -237,7 +237,7 @@ pub async fn backup_receive(
         }
     }
 
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&file_path);
 
     // Defense-in-depth: verify the resolved path is still within storage_root

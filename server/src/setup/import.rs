@@ -51,7 +51,7 @@ pub async fn import_scan(
 
     let scan_path = match &query.path {
         Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => state.storage_root.read().await.clone(),
+        _ => (**state.storage_root.load()).clone(),
     };
 
     let path_str = scan_path.display().to_string();

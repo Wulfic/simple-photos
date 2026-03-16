@@ -50,6 +50,7 @@ use std::sync::Arc;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::TraceLayer;
@@ -111,6 +112,9 @@ async fn main() -> anyhow::Result<()> {
     // 1. Purge expired/revoked refresh tokens
     // 2. Delete audit log entries older than 90 days
     // 3. Delete client diagnostic logs older than 14 days
+    //
+    // All three DELETEs run inside a single transaction to reduce SQLite
+    // WAL flushes from 3 → 1, cutting fsync overhead on each cycle.
     {
         let pool_clone = pool.clone();
         tokio::spawn(async move {
@@ -118,59 +122,58 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 interval.tick().await;
                 let now = chrono::Utc::now().to_rfc3339();
-                match sqlx::query(
-                    "DELETE FROM refresh_tokens WHERE expires_at < ? OR (revoked = 1 AND created_at < ?)",
-                )
-                .bind(&now)
-                .bind(&now)
-                .execute(&pool_clone)
-                .await
-                {
-                    Ok(result) => {
-                        if result.rows_affected() > 0 {
-                            tracing::info!(
-                                "Cleaned up {} expired/revoked refresh tokens",
-                                result.rows_affected()
-                            );
-                        }
-                    }
-                    Err(e) => tracing::error!("Failed to clean up tokens: {}", e),
-                }
+                let audit_cutoff = (chrono::Utc::now() - chrono::Duration::days(90)).to_rfc3339();
+                let log_cutoff = (chrono::Utc::now() - chrono::Duration::days(14)).to_rfc3339();
 
-                // Also clean up old audit log entries (keep 90 days)
-                let cutoff = (chrono::Utc::now() - chrono::Duration::days(90)).to_rfc3339();
-                match sqlx::query("DELETE FROM audit_log WHERE created_at < ?")
-                    .bind(&cutoff)
-                    .execute(&pool_clone)
-                    .await
-                {
-                    Ok(result) => {
-                        if result.rows_affected() > 0 {
-                            tracing::info!(
-                                "Cleaned up {} old audit log entries (> 90 days)",
-                                result.rows_affected()
-                            );
+                match pool_clone.begin().await {
+                    Ok(mut tx) => {
+                        // 1. Expired / revoked refresh tokens
+                        match sqlx::query(
+                            "DELETE FROM refresh_tokens WHERE expires_at < ? OR (revoked = 1 AND created_at < ?)",
+                        )
+                        .bind(&now)
+                        .bind(&now)
+                        .execute(&mut *tx)
+                        .await
+                        {
+                            Ok(r) if r.rows_affected() > 0 => {
+                                tracing::info!("Cleaned up {} expired/revoked refresh tokens", r.rows_affected());
+                            }
+                            Err(e) => tracing::error!("Failed to clean up tokens: {}", e),
+                            _ => {}
                         }
-                    }
-                    Err(e) => tracing::error!("Failed to clean up audit log: {}", e),
-                }
 
-                // Clean up old client diagnostic logs (keep 14 days)
-                let client_log_cutoff = (chrono::Utc::now() - chrono::Duration::days(14)).to_rfc3339();
-                match sqlx::query("DELETE FROM client_logs WHERE created_at < ?")
-                    .bind(&client_log_cutoff)
-                    .execute(&pool_clone)
-                    .await
-                {
-                    Ok(result) => {
-                        if result.rows_affected() > 0 {
-                            tracing::info!(
-                                "Cleaned up {} old client log entries (> 14 days)",
-                                result.rows_affected()
-                            );
+                        // 2. Audit log entries older than 90 days
+                        match sqlx::query("DELETE FROM audit_log WHERE created_at < ?")
+                            .bind(&audit_cutoff)
+                            .execute(&mut *tx)
+                            .await
+                        {
+                            Ok(r) if r.rows_affected() > 0 => {
+                                tracing::info!("Cleaned up {} old audit log entries (> 90 days)", r.rows_affected());
+                            }
+                            Err(e) => tracing::error!("Failed to clean up audit log: {}", e),
+                            _ => {}
+                        }
+
+                        // 3. Client diagnostic logs older than 14 days
+                        match sqlx::query("DELETE FROM client_logs WHERE created_at < ?")
+                            .bind(&log_cutoff)
+                            .execute(&mut *tx)
+                            .await
+                        {
+                            Ok(r) if r.rows_affected() > 0 => {
+                                tracing::info!("Cleaned up {} old client log entries (> 14 days)", r.rows_affected());
+                            }
+                            Err(e) => tracing::error!("Failed to clean up client logs: {}", e),
+                            _ => {}
+                        }
+
+                        if let Err(e) = tx.commit().await {
+                            tracing::error!("Housekeeping transaction commit failed: {}", e);
                         }
                     }
-                    Err(e) => tracing::error!("Failed to clean up client logs: {}", e),
+                    Err(e) => tracing::error!("Housekeeping: failed to begin transaction: {}", e),
                 }
             }
         });
@@ -249,7 +252,8 @@ async fn main() -> anyhow::Result<()> {
         pool,
         config: Arc::new(config.clone()),
         rate_limiters,
-        storage_root: Arc::new(tokio::sync::RwLock::new(config.storage.root.clone())),
+        // ArcSwap: lock-free atomic reads for the hot-path storage root.
+        storage_root: Arc::new(arc_swap::ArcSwap::from_pointee(config.storage.root.clone())),
         convert_notify,
         conversion_active,
         encryption_key,
@@ -468,6 +472,12 @@ async fn main() -> anyhow::Result<()> {
                 .allow_headers(Any),
         )
         .layer(TraceLayer::new_for_http())
+        // ── HTTP response compression (gzip + brotli) ────────────────────
+        // Compresses JSON API responses, HTML, and other text-based content.
+        // Binary blob/photo/video downloads are already opaque encrypted bytes
+        // or JPEG/MP4 (incompressible), so compression is a no-op on those.
+        // Placed outermost so it wraps all responses after other middleware.
+        .layer(CompressionLayer::new().gzip(true).br(true))
         .with_state(state);
 
     // Serve static web frontend if configured

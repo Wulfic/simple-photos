@@ -75,7 +75,8 @@ pub async fn duplicate_photo(
         let new_thumb_rel = format!(".thumbnails/{}", new_thumb_filename);
         new_thumb_path = Some(new_thumb_rel.clone());
 
-        let storage_root = state.storage_root.read().await.clone();
+        // Lock-free read via ArcSwap.
+        let storage_root = (**state.storage_root.load()).clone();
         let abs_file = storage_root.join(&original.file_path);
         let abs_new_thumb = storage_root.join(&new_thumb_rel);
         let crop_meta = meta.as_deref();

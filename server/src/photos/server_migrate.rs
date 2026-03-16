@@ -1111,7 +1111,8 @@ pub async fn start_migration(
 
     // Spawn the migration in the background
     let pool = state.pool.clone();
-    let storage_root = state.storage_root.read().await.clone();
+    // Lock-free read via ArcSwap.
+    let storage_root = (**state.storage_root.load()).clone();
     let user_id = auth.user_id.clone();
     let convert_notify = state.convert_notify.clone();
     let encryption_key_store = state.encryption_key.clone();

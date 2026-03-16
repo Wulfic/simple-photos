@@ -7,9 +7,13 @@
 //! - Referrer-Policy: prevent URL leakage
 //! - Strict-Transport-Security: force HTTPS
 //! - Permissions-Policy: disable unnecessary browser APIs
-//! - Cache-Control: prevent caching of sensitive API responses
+//! - Cache-Control: prevent caching of sensitive API responses (API only)
 //!
 //! Also adds a unique request ID header (X-Request-Id) for tracing.
+//!
+//! **Performance note:** Cache-Control is only applied to `/api/` and `/health`
+//! paths.  Static frontend assets (JS, CSS, images) served by `ServeDir` keep
+//! their own cache headers, avoiding unnecessary re-downloads on every page load.
 
 use axum::body::Body;
 use axum::http::{HeaderValue, Request};
@@ -27,8 +31,14 @@ use uuid::Uuid;
 /// For LAN-only HTTP deployments this is harmless, but once a browser
 /// visits over HTTPS it will refuse plain HTTP for 1 year.
 pub async fn security_headers(request: Request<Body>, next: Next) -> Response {
-    // Generate a request ID for tracing and correlation
-    let request_id = Uuid::new_v4().to_string();
+    // UUID v7: monotonic, time-sortable — cheaper than v4 (no CSPRNG call)
+    // and naturally sorts by creation time in logs/traces.
+    let request_id = Uuid::now_v7().to_string();
+
+    // Capture path before the request is consumed by `next.run()`.
+    // Used below to decide whether to apply no-store Cache-Control
+    // (API routes) or leave cache headers intact (static assets).
+    let path = request.uri().path().to_string();
 
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
@@ -82,15 +92,21 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response {
         ),
     );
 
-    // Prevent caching of API responses — may contain user data or tokens.
-    // CAVEAT: This middleware runs after ServeDir, so it also overwrites
-    // cache headers on static assets (JS/CSS/images), forcing browsers to
-    // re-download them every page load. A future improvement could skip
-    // the header for static file paths.
-    headers.insert(
-        "Cache-Control",
-        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
-    );
+    // ── Cache-Control: API-only no-store ─────────────────────────────────────
+    // Only apply `no-store` to API and health endpoints whose responses may
+    // contain user data or tokens.  Static frontend assets (JS, CSS, images,
+    // fonts) served by ServeDir/ServeFile keep their default long-lived cache
+    // headers — previously we stomped them with no-store, forcing browsers to
+    // re-download the entire frontend on every page load.
+    let is_api = path.starts_with("/api/") || path == "/health";
+    if is_api {
+        headers.insert(
+            "Cache-Control",
+            HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+        );
+    }
+    // Static assets: no Cache-Control override — ServeDir sets appropriate
+    // headers (or the browser uses heuristic caching for hashed filenames).
 
     // Request ID for tracing/debugging
     if let Ok(val) = HeaderValue::from_str(&request_id) {

@@ -95,7 +95,7 @@ pub async fn recover_from_backup(
     // Spawn recovery as a background task (guard moves into the task
     // so the lock is held for the full duration and released on drop).
     let pool = state.pool.clone();
-    let storage_root = state.storage_root.read().await.clone();
+    let storage_root = (**state.storage_root.load()).clone();
     let user_id = auth.user_id.clone();
     let recovery_id_clone = recovery_id.clone();
 
