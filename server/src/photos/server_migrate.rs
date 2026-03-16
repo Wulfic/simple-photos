@@ -486,8 +486,20 @@ async fn run_migration(
         *guard = Some(key);
         tracing::info!("[DIAG:SERVER_MIG] encryption key stored in AppState for background converter");
     }
+
+    // Check audio backup toggle — skip audio files when disabled
+    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|v| v == "true")
+    .unwrap_or(true); // default: enabled
+
     // Fetch all plain photos that haven't been encrypted yet
-    let photos: Vec<PlainPhotoRow> = match sqlx::query_as::<_, PlainPhotoRow>(
+    let all_photos: Vec<PlainPhotoRow> = match sqlx::query_as::<_, PlainPhotoRow>(
         "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, \
          width, height, duration_secs, taken_at, latitude, longitude, created_at \
          FROM photos WHERE user_id = ? AND encrypted_blob_id IS NULL \
@@ -504,6 +516,21 @@ async fn run_migration(
             progress.running.store(false, Ordering::Release);
             return;
         }
+    };
+
+    // Filter out audio files if the audio backup toggle is off
+    let photos: Vec<PlainPhotoRow> = if audio_backup_enabled {
+        all_photos
+    } else {
+        let before = all_photos.len();
+        let filtered: Vec<_> = all_photos.into_iter()
+            .filter(|p| p.media_type != "audio")
+            .collect();
+        let skipped = before - filtered.len();
+        if skipped > 0 {
+            tracing::info!("[DIAG:SERVER_MIG] skipped {} audio files (audio backup disabled)", skipped);
+        }
+        filtered
     };
 
     let total = photos.len() as u64;

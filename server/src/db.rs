@@ -24,7 +24,20 @@ pub async fn init_pool(config: &DatabaseConfig) -> anyhow::Result<SqlitePool> {
         // multi-handler web server where reads heavily outnumber writes.
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         // Enforce referential integrity so CASCADE deletes work correctly.
-        .foreign_keys(true);
+        .foreign_keys(true)
+        // Wait up to 5 s for a write-lock instead of failing immediately.
+        // Prevents "database is locked" under concurrent pipeline + serving.
+        .busy_timeout(std::time::Duration::from_secs(5))
+        // 16 MB page cache (negative = KB).  Keeps hot pages in memory so
+        // repeated photo-list / thumbnail queries don't hit disk.
+        .pragma("cache_size", "-16000")
+        // NORMAL sync: one fewer fsync per transaction — safe with WAL
+        // and gives a significant write throughput boost.
+        .pragma("synchronous", "NORMAL")
+        // Keep temp tables / indices in memory rather than a temp file.
+        .pragma("temp_store", "MEMORY")
+        // Enable memory-mapped I/O (256 MB) for faster reads of large DBs.
+        .pragma("mmap_size", "268435456");
 
     let pool = SqlitePoolOptions::new()
         .max_connections(config.max_connections)

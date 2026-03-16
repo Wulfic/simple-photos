@@ -181,11 +181,34 @@ pub async fn register_photo(
     ))
 }
 
+/// Stream buffer size for file serving — 64 KB per chunk instead of the
+/// default 4 KB.  Larger chunks reduce the number of syscalls and context
+/// switches, which is critical when serving large video files or many
+/// thumbnails concurrently.
+const STREAM_BUF_SIZE: usize = 64 * 1024;
+
+/// Check `If-None-Match` header against our ETag.  Returns `Some(304)` if
+/// the client already has the current version.
+fn check_etag(headers: &HeaderMap, etag: &str) -> Option<Response> {
+    if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+        if inm == etag || inm.trim_matches('"') == etag.trim_matches('"') {
+            return Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header("ETag", HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("")))
+                .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+                .body(Body::empty())
+                .ok();
+        }
+    }
+    None
+}
+
 /// GET /api/photos/:id/file
 /// Serve the **original** (unconverted) photo/video/audio file from disk.
 /// This always returns the original format — even after the background
 /// pipeline has generated a web-compatible copy in `.web_previews/`.
 /// Supports HTTP Range requests for video seeking and download resumption.
+/// Returns ETag for caching; responds with 304 Not Modified on cache hit.
 pub async fn serve_photo(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -241,6 +264,12 @@ pub async fn serve_photo(
         })
     };
 
+    // ── ETag / conditional response ─────────────────────────────────────
+    let etag = format!("\"{}-{}\"", photo_id, total_size);
+    if let Some(not_modified) = check_etag(&headers, &etag) {
+        return Ok(not_modified);
+    }
+
     // ── HTTP Range support ─────────────────────────────────────────────
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
         if let Some((start, end)) = crate::blobs::handlers::parse_range_header(range_header, total_size) {
@@ -252,7 +281,7 @@ pub async fn serve_photo(
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
 
-            let stream = tokio_util::io::ReaderStream::new(file.take(length));
+            let stream = tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
             let body = Body::from_stream(stream);
 
             return Ok(Response::builder()
@@ -263,6 +292,7 @@ pub async fn serve_photo(
                     &format!("bytes {}-{}/{}", start, end, total_size)
                 ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+                .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
                 .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()))?);
@@ -279,7 +309,7 @@ pub async fn serve_photo(
 
     // ── Full download ──────────────────────────────────────────────────
     let file = open_file().await?;
-    let stream = tokio_util::io::ReaderStream::new(file);
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
     let body = Body::from_stream(stream);
 
     Ok(Response::builder()
@@ -287,6 +317,7 @@ pub async fn serve_photo(
         .header("Content-Type", content_type)
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+        .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
         .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
@@ -294,9 +325,11 @@ pub async fn serve_photo(
 
 /// GET /api/photos/:id/thumb
 /// Serve the thumbnail for a plain-mode photo.
+/// Returns ETag for caching; responds with 304 Not Modified on cache hit.
 pub async fn serve_thumbnail(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
     let thumb_path: Option<String> = sqlx::query_scalar(
@@ -326,17 +359,25 @@ pub async fn serve_thumbnail(
     let meta = tokio::fs::metadata(&full_path).await.map_err(|e| {
         AppError::Internal(format!("Failed to read thumbnail: {}", e))
     })?;
+
+    // ETag for thumbnails — ID + file size on disk
+    let etag = format!("\"{}-thumb-{}\"", photo_id, meta.len());
+    if let Some(not_modified) = check_etag(&headers, &etag) {
+        return Ok(not_modified);
+    }
+
     let file = tokio::fs::File::open(&full_path).await.map_err(|e| {
         AppError::Internal(format!("Failed to open thumbnail: {}", e))
     })?;
 
-    let stream = tokio_util::io::ReaderStream::new(file);
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
     let body = Body::from_stream(stream);
 
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", HeaderValue::from_static("image/jpeg"))
         .header("Content-Length", HeaderValue::from(meta.len()))
+        .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
         .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
@@ -400,8 +441,9 @@ pub async fn serve_web(
                 _ => "application/octet-stream",
             };
 
+            let etag = format!("\"{}-web-{}\"", photo_id, total_size);
             return serve_file_with_range(
-                &preview_path, total_size, content_type, &headers,
+                &preview_path, total_size, content_type, &headers, Some(&etag),
             ).await;
         } else {
             // Web preview needed but not generated yet — return 202 to signal
@@ -419,18 +461,31 @@ pub async fn serve_web(
     let full_path = storage_root.join(&file_path);
     let content_type = mime_type.as_str();
 
-    serve_file_with_range(&full_path, size_bytes as u64, content_type, &headers).await
+    let etag = format!("\"{}-orig-{}\"", photo_id, size_bytes);
+    serve_file_with_range(&full_path, size_bytes as u64, content_type, &headers, Some(&etag)).await
 }
 
-/// Internal helper: serve a file with optional HTTP Range support.
+/// Internal helper: serve a file with optional HTTP Range + ETag support.
+/// `etag` is optional — if provided, the response includes the ETag header
+/// and If-None-Match is checked for 304 early-return.
 async fn serve_file_with_range(
     path: &std::path::Path,
     total_size: u64,
     content_type: &str,
     headers: &HeaderMap,
+    etag: Option<&str>,
 ) -> Result<Response, AppError> {
     let ct = HeaderValue::from_str(content_type)
         .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+
+    // ETag conditional check
+    if let Some(tag) = etag {
+        if let Some(not_modified) = check_etag(headers, tag) {
+            return Ok(not_modified);
+        }
+    }
+
+    let etag_hv = etag.and_then(|t| HeaderValue::from_str(t).ok());
 
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
         if let Some((start, end)) = crate::blobs::handlers::parse_range_header(range_header, total_size) {
@@ -445,10 +500,10 @@ async fn serve_file_with_range(
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
 
-            let stream = tokio_util::io::ReaderStream::new(file.take(length));
+            let stream = tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
             let body = Body::from_stream(stream);
 
-            return Ok(Response::builder()
+            let mut builder = Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", ct)
                 .header("Content-Length", HeaderValue::from(length))
@@ -456,8 +511,11 @@ async fn serve_file_with_range(
                     &format!("bytes {}-{}/{}", start, end, total_size)
                 ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
-                .body(body)
+                .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"));
+            if let Some(ref ev) = etag_hv {
+                builder = builder.header("ETag", ev.clone());
+            }
+            return Ok(builder.body(body)
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         } else {
             return Ok(Response::builder()
@@ -475,16 +533,19 @@ async fn serve_file_with_range(
         _ => AppError::Internal(format!("Failed to open file: {}", e)),
     })?;
 
-    let stream = tokio_util::io::ReaderStream::new(file);
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
     let body = Body::from_stream(stream);
 
-    Ok(Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", ct)
         .header("Content-Length", HeaderValue::from(total_size))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-        .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
-        .body(body)
+        .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"));
+    if let Some(ref ev) = etag_hv {
+        builder = builder.header("ETag", ev.clone());
+    }
+    Ok(builder.body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }
 

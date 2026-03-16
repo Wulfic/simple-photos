@@ -16,7 +16,6 @@ use std::path::Path;
 
 use axum::extract::State;
 use axum::Json;
-use chrono::Utc;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
@@ -89,7 +88,7 @@ pub async fn background_auto_scan_task(
 }
 
 async fn update_last_scan_time(pool: &sqlx::SqlitePool) {
-    let now = Utc::now().to_rfc3339();
+    let now = crate::photos::utils::utc_now_iso();
     let _ = sqlx::query(
         "INSERT INTO server_settings (key, value) VALUES ('last_auto_scan', ?) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -192,7 +191,7 @@ async fn auto_start_migration_if_needed(
     }
 
     // Start the migration (set DB status)
-    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let now = crate::photos::utils::utc_now_iso();
     if let Err(e) = sqlx::query(
         "UPDATE encryption_migration SET status = 'encrypting', total = ?, completed = 0, \
          started_at = ?, error = NULL WHERE id = 'singleton'",
@@ -365,7 +364,7 @@ async fn run_auto_scan(
                     let modified = file_meta.and_then(|m| {
                         m.modified().ok().map(|t| {
                             let dt: chrono::DateTime<chrono::Utc> = t.into();
-                            dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                            crate::photos::utils::normalize_iso_timestamp(&dt.to_rfc3339())
                         })
                     });
 
@@ -386,7 +385,7 @@ async fn run_auto_scan(
                     }
 
                     let photo_id = Uuid::new_v4().to_string();
-                    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    let now = crate::photos::utils::utc_now_iso();
                     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
                     // Extract dimensions, camera model, GPS, and date from file
@@ -394,8 +393,11 @@ async fn run_auto_scan(
                     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
                         extract_media_metadata(&abs_path);
 
-                    // Use EXIF taken_at if available, otherwise fall back to file modified time
-                    let final_taken_at = exif_taken.or(modified);
+                    // Use EXIF taken_at if available, otherwise fall back to file modified time.
+                    // Normalize to consistent YYYY-MM-DDTHH:MM:SS.mmmZ format.
+                    let final_taken_at = exif_taken
+                        .map(|t| crate::photos::utils::normalize_iso_timestamp(&t))
+                        .or(modified);
 
                     // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
                     let photo_hash = compute_photo_hash_streaming(&abs_path).await;
