@@ -479,7 +479,7 @@ pub async fn get_sync_logs(
          WHERE server_id = ? ORDER BY started_at DESC LIMIT 50",
     )
     .bind(&server_id)
-    .fetch_all(&state.read_pool)
+    .fetch_all(&state.pool)
     .await?;
 
     Ok(Json(logs))

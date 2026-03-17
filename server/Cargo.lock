@@ -2396,6 +2396,7 @@ dependencies = [
  "kamadak-exif",
  "libc",
  "num_cpus",
+ "percent-encoding",
  "rand 0.8.5",
  "reqwest",
  "rustls-pemfile",

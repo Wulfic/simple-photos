@@ -21,6 +21,7 @@ use std::collections::HashSet;
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
+use percent_encoding::{utf8_percent_encode, CONTROLS};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -424,10 +425,15 @@ async fn send_file(
     let hash = Sha256::digest(&file_data);
     let hash_hex = hex::encode(hash);
 
+    // Percent-encode non-ASCII characters in file_path so the header
+    // value stays within visible-ASCII (RFC 7230 §3.2.6).  The receiver
+    // will percent-decode before using the path.
+    let encoded_path = utf8_percent_encode(file_path, CONTROLS).to_string();
+
     let mut req = client
         .post(format!("{}/backup/receive", base_url))
         .header("X-Photo-Id", item_id)
-        .header("X-File-Path", file_path)
+        .header("X-File-Path", encoded_path.as_str())
         .header("X-Source", source)
         .header("X-Content-Hash", hash_hex.as_str())
         .body(file_data);
