@@ -18,6 +18,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, CONTROLS};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -137,8 +138,10 @@ pub async fn backup_download_photo(
         .body(body)
         .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?;
 
-    // Include the file_path so the caller knows where to store it
-    if let Ok(val) = HeaderValue::from_str(&file_path) {
+    // Include the file_path so the caller knows where to store it.
+    // Percent-encode non-ASCII chars so the header value stays valid ASCII.
+    let encoded_fp = utf8_percent_encode(&file_path, CONTROLS).to_string();
+    if let Ok(val) = HeaderValue::from_str(&encoded_fp) {
         response.headers_mut().insert("X-File-Path", val);
     }
 
@@ -210,10 +213,15 @@ pub async fn backup_receive(
         .ok_or_else(|| AppError::BadRequest("Missing X-Photo-Id header".into()))?
         .to_string();
 
-    let file_path = headers
+    let raw_file_path = headers
         .get("X-File-Path")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError::BadRequest("Missing X-File-Path header".into()))?
+        .ok_or_else(|| AppError::BadRequest("Missing X-File-Path header".into()))?;
+
+    // Percent-decode the path (the sync sender encodes non-ASCII chars)
+    let file_path = percent_decode_str(raw_file_path)
+        .decode_utf8()
+        .map_err(|e| AppError::BadRequest(format!("Invalid UTF-8 in X-File-Path: {}", e)))?
         .to_string();
 
     // Security: validate the file_path is a safe relative path (no traversal, no absolute)
