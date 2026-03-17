@@ -335,8 +335,11 @@ except Exception as e:
 #   wait_for_conversions "$API_URL" "$AUTH_HEADER" [max_wait_sec]
 wait_for_conversions() {
   local api="$1" auth="$2" max_wait="${3:-180}"
-  local interval=3
+  local interval=1
   local iterations=$(( max_wait / interval ))
+  local prev_thumbs="-1"
+  local stable_count=0
+  local stable_threshold=10  # Exit early if missing_thumbnails unchanged for N iterations
 
   for i in $(seq 1 "$iterations"); do
     local cs
@@ -354,6 +357,25 @@ wait_for_conversions() {
       pass "Conversions complete (waited ~$((i * interval))s)"
       return 0
     fi
+
+    # Detect stuck missing_thumbnails — if not converting and thumbs haven't
+    # changed for $stable_threshold iterations, these thumbnails are
+    # unfixable (corrupt/stub files). Exit early instead of waiting the full timeout.
+    if [[ "$pending" == "0" && "$converting" == "false" ]]; then
+      if [[ "$thumbs" == "$prev_thumbs" ]]; then
+        stable_count=$((stable_count + 1))
+        if (( stable_count >= stable_threshold )); then
+          warn "Conversions done but $thumbs unfixable missing thumbnails (stable for ${stable_threshold}s) — continuing"
+          return 0
+        fi
+      else
+        stable_count=0
+      fi
+    else
+      stable_count=0
+    fi
+    prev_thumbs="$thumbs"
+
     sleep "$interval"
   done
   warn "Conversions still running after ${max_wait}s — continuing"

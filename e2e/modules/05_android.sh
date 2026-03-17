@@ -821,8 +821,8 @@ hdr "Module 11: 2FA Backup Codes"
 
 # Rate limiter cooldown: TOTP limiter is 5 req/60s, login is 10/60s.
 # Modules 10-12 are TOTP-heavy — pause between them to avoid 429.
-log "  Rate limiter cooldown (12s)..."
-sleep 12
+log "  Rate limiter cooldown (8s)..."
+sleep 8
 
 if [[ -n "$TOTP_UID" && -n "${TOTP_SECRET:-}" ]]; then
   subhdr "Re-enable 2FA for Backup Code Testing"
@@ -930,8 +930,8 @@ fi
 hdr "Module 12: Admin 2FA Reset"
 
 # Rate limiter cooldown before the final 2FA test module
-log "  Rate limiter cooldown (12s)..."
-sleep 12
+log "  Rate limiter cooldown (8s)..."
+sleep 8
 
 if [[ -n "$TOTP_UID" ]]; then
   # Re-enable 2FA on the test user

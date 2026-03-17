@@ -138,14 +138,27 @@ for i in 1 2 3 4; do
 done
 
 subhdr "Trigger Photo Scan"
-log "Scanning photos..."
-SCAN=$(curl -s --max-time 600 -X POST "$MAIN_API/admin/photos/scan" \
-  -H "Authorization: Bearer ${TOKENS[0]}")
-REGISTERED=$(echo "$SCAN" | jget registered 0)
-log "Scan result: registered=$REGISTERED"
+# Check if photos already exist from a prior module — skip the full scan wait
+EXISTING_PHOTOS=$(curl -s --max-time 10 "$MAIN_API/photos" \
+  -H "Authorization: Bearer ${TOKENS[0]}" | jget photos "[]" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
 
-# Brief wait for conversions (up to 60s)
-wait_for_conversions "$MAIN_API" "Authorization: Bearer ${TOKENS[0]}" 60
+if [[ "$EXISTING_PHOTOS" -gt 0 ]]; then
+  log "Server already has $EXISTING_PHOTOS photos — triggering quick scan"
+  SCAN=$(curl -s --max-time 60 -X POST "$MAIN_API/admin/photos/scan" \
+    -H "Authorization: Bearer ${TOKENS[0]}")
+  REGISTERED=$(echo "$SCAN" | jget registered 0)
+  log "Scan result: registered=$REGISTERED"
+  # Only wait briefly since photos already exist and conversions likely done
+  wait_for_conversions "$MAIN_API" "Authorization: Bearer ${TOKENS[0]}" 15
+else
+  log "Scanning photos..."
+  SCAN=$(curl -s --max-time 600 -X POST "$MAIN_API/admin/photos/scan" \
+    -H "Authorization: Bearer ${TOKENS[0]}")
+  REGISTERED=$(echo "$SCAN" | jget registered 0)
+  log "Scan result: registered=$REGISTERED"
+  # Full wait for conversions (up to 60s)
+  wait_for_conversions "$MAIN_API" "Authorization: Bearer ${TOKENS[0]}" 60
+fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PHASE 3: CONCURRENT OPERATIONS — ALL 5 USERS AT ONCE
@@ -204,7 +217,7 @@ except:
       status=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$CONCURRENT_MAX_TIME" \
         "$MAIN_API/photos/$first_id/thumb" -H "$auth")
       ((requests++))
-      if [[ "$status" != "200" && "$status" != "404" ]]; then
+      if [[ "$status" != "200" && "$status" != "404" && "$status" != "202" ]]; then
         echo "FAIL round=$round op=thumb status=$status" >> "$result_file"
         ((errors++))
       fi

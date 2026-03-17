@@ -49,6 +49,36 @@ chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true
 
 echo "Data cleared."
 
+# Reset Docker backup instances (if running)
+DOCKER_DIR="$SCRIPT_DIR/docker-instances"
+if [[ -d "$DOCKER_DIR" ]]; then
+    echo "Resetting Docker backup instances..."
+    for i in 1 2 3; do
+        BACKUP_DATA="$DOCKER_DIR/backup-$i/data"
+        if [[ -d "$BACKUP_DATA" ]]; then
+            rm -rf "$BACKUP_DATA/db/"* "$BACKUP_DATA/storage/"* 2>/dev/null || true
+            echo "  backup-$i data wiped"
+        fi
+    done
+    # Restart containers so they pick up the clean state
+    if command -v docker &>/dev/null && docker compose -f "$DOCKER_DIR/docker-compose.yml" ps -q 2>/dev/null | grep -q .; then
+        echo "Restarting backup containers..."
+        docker compose -f "$DOCKER_DIR/docker-compose.yml" restart 2>/dev/null || true
+        # Wait for containers to become healthy
+        echo -n "Waiting for backup servers"
+        for attempt in $(seq 1 15); do
+            if curl -sf http://localhost:8081/health >/dev/null 2>&1 && \
+               curl -sf http://localhost:8082/health >/dev/null 2>&1 && \
+               curl -sf http://localhost:8083/health >/dev/null 2>&1; then
+                echo " ready!"
+                break
+            fi
+            echo -n "."
+            sleep 1
+        done
+    fi
+fi
+
 # Restart server as the real user (not root)
 LOG_FILE="/tmp/simple-photos-server.log"
 echo "Starting server as $RUN_USER (log: $LOG_FILE)..."

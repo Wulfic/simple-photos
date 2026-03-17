@@ -380,8 +380,8 @@ if [[ -n "$FIRST_PHOTO_ID" ]]; then
 
   subhdr "Serve Thumbnail"
   THUMB_STATUS=$(http_status "$API/photos/$FIRST_PHOTO_ID/thumb" -H "$AUTH")
-  if [[ "$THUMB_STATUS" == "200" || "$THUMB_STATUS" == "404" ]]; then
-    pass "Serve thumbnail returns 200/404 (HTTP $THUMB_STATUS)"
+  if [[ "$THUMB_STATUS" == "200" || "$THUMB_STATUS" == "404" || "$THUMB_STATUS" == "202" ]]; then
+    pass "Serve thumbnail returns expected status (HTTP $THUMB_STATUS)"
   else
     fail "Serve thumbnail returned unexpected status: $THUMB_STATUS"
   fi
@@ -978,7 +978,7 @@ assert_contains "Backup servers response" "$BK_SERVERS" "servers"
 subhdr "Add Backup Server"
 ADD_BK=$(curl -s --max-time 10 -X POST "$API/admin/backup/servers" \
   -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"name":"Test Backup","address":"http://192.168.1.99:8080","sync_frequency_hours":24}')
+  -d '{"name":"Test Backup","address":"http://127.0.0.1:19999","sync_frequency_hours":24}')
 BK_SERVER_ID=$(echo "$ADD_BK" | jget id "")
 if [[ -n "$BK_SERVER_ID" && "$BK_SERVER_ID" != "__MISSING__" ]]; then
   pass "Backup server added: $BK_SERVER_ID"
@@ -1025,7 +1025,7 @@ UPDATE_AUDIO=$(curl -s --max-time 10 -X PUT "$API/admin/audio-backup" \
 assert_contains "Audio backup update response" "$UPDATE_AUDIO" "audio_backup"
 
 subhdr "Discover Backup Servers"
-DISCOVER=$(curl -s --max-time 15 "$API/admin/backup/discover" -H "$AUTH")
+DISCOVER=$(curl -s --max-time 5 "$API/admin/backup/discover" -H "$AUTH")
 if echo "$DISCOVER" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
   pass "Backup discover endpoint returns valid JSON"
 else

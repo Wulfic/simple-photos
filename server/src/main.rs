@@ -222,6 +222,7 @@ async fn main() -> anyhow::Result<()> {
     let convert_notify = Arc::new(tokio::sync::Notify::new());
     let conversion_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let encryption_key: Arc<tokio::sync::RwLock<Option<[u8; 32]>>> = Arc::new(tokio::sync::RwLock::new(None));
+    let scan_lock: Arc<tokio::sync::Mutex<()>> = Arc::new(tokio::sync::Mutex::new(()));
     {
         let pool_clone = pool.clone();
         let read_pool_clone = read_pool.clone();
@@ -242,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
         let convert_notify_clone = convert_notify.clone();
         let encryption_key_clone = encryption_key.clone();
         let jwt_secret_clone = config.auth.jwt_secret.clone();
+        let scan_lock_clone = scan_lock.clone();
         tokio::spawn(async move {
             backup::autoscan::background_auto_scan_task(
                 pool_clone,
@@ -250,6 +252,7 @@ async fn main() -> anyhow::Result<()> {
                 convert_notify_clone,
                 encryption_key_clone,
                 jwt_secret_clone,
+                scan_lock_clone,
             ).await;
         });
     }
@@ -265,6 +268,7 @@ async fn main() -> anyhow::Result<()> {
         convert_notify,
         conversion_active,
         encryption_key,
+        scan_lock,
     };
 
     // Spawn background task to resume interrupted encryption migration on startup.

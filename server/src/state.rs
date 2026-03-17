@@ -48,4 +48,8 @@ pub struct AppState {
     /// convert media to web-compatible formats, and re-encrypt with the
     /// converted data. Cleared automatically after a grace period.
     pub encryption_key: Arc<RwLock<Option<[u8; 32]>>>,
+    /// Mutex to serialize scan operations (manual scan, auto-scan, background
+    /// autoscan).  Prevents concurrent scans from racing and creating
+    /// duplicate photo entries even when the DB UNIQUE constraint exists.
+    pub scan_lock: Arc<tokio::sync::Mutex<()>>,
 }

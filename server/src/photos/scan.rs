@@ -17,11 +17,14 @@
 //! original (`/photos/:id/file`) and the web-friendly version
 //! (`/photos/:id/web`) remain available for download.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use axum::extract::State;
 use axum::Json;
 use futures_util::TryStreamExt;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -35,6 +38,10 @@ use super::utils::{normalize_iso_timestamp, utc_now_iso, compute_photo_hash_stre
 
 // compute_photo_hash_streaming is now in utils.rs — imported above.
 
+/// Maximum concurrent file processing tasks during scan.
+/// Bounded to avoid fork-bombing the system with FFmpeg/ImageMagick subprocesses.
+const SCAN_PARALLELISM: usize = 4;
+
 /// Check if FFmpeg is available on the system (public for background convert task).
 pub async fn ffmpeg_available_pub() -> bool {
     ffmpeg_available().await
@@ -44,6 +51,7 @@ pub async fn ffmpeg_available_pub() -> bool {
 async fn ffmpeg_available() -> bool {
     tokio::process::Command::new("ffmpeg")
         .arg("-version")
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -105,6 +113,7 @@ pub async fn generate_thumbnail_file(
                 "85",
                 output_str,
             ])
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -118,6 +127,7 @@ pub async fn generate_thumbnail_file(
 
     // ── Video and image FFmpeg path ─────────────────────────────────────
     let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.stdin(std::process::Stdio::null());
     cmd.arg("-y");
 
     // For raw video streams (.hevc, .h264, .h265), force the demuxer format
@@ -200,6 +210,7 @@ pub async fn generate_thumbnail_file(
                 "85",
                 output_str,
             ])
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -272,6 +283,7 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
                 "-quality", "92",
                 output_str,
             ])
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -288,6 +300,7 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
             // Convert image to high-quality JPEG via FFmpeg
             let status = tokio::process::Command::new("nice")
                 .args(["-n", "19", "ffmpeg", "-y", "-i", input_str, "-q:v", "2", output_str])
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -298,6 +311,7 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
             // ICO → rasterized PNG via FFmpeg (or ImageMagick fallback below)
             let status = tokio::process::Command::new("nice")
                 .args(["-n", "19", "ffmpeg", "-y", "-i", input_str, output_str])
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -315,6 +329,7 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
                     "-b:a", "192k",
                     output_str,
                 ])
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -351,6 +366,7 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
 
             let status = tokio::process::Command::new("nice")
                 .args(&args)
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -368,6 +384,7 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
     if preview_ext == "jpg" || preview_ext == "png" {
         let magick_result = tokio::process::Command::new("convert")
             .args([input_str, "-quality", "92", output_str])
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
@@ -399,6 +416,11 @@ pub async fn scan_and_register(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&state, &auth).await?;
+
+    // Serialize scan operations to prevent concurrent scans from racing.
+    // The UNIQUE(user_id, file_path) constraint is the safety net, but the
+    // mutex avoids wasted work (duplicate metadata extraction, thumbnail gen).
+    let _scan_guard = state.scan_lock.lock().await;
 
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
@@ -435,8 +457,19 @@ pub async fn scan_and_register(
     .map(|v| v == "true")
     .unwrap_or(true); // default: enabled
 
-    // Scan recursively for media files
-    let mut new_count = 0i64;
+    // ── Phase 1: Collect all unregistered media files (fast directory walk) ──
+    // We collect candidates first without any heavy I/O so the walk is fast.
+    struct ScanCandidate {
+        abs_path: PathBuf,
+        rel_path: String,
+        name: String,
+        mime: String,
+        media_type: &'static str,
+        size: i64,
+        modified: Option<String>,
+    }
+
+    let mut candidates: Vec<ScanCandidate> = Vec::new();
     let mut skipped_audio = 0i64;
     let mut queue = vec![storage_root.clone()];
 
@@ -457,7 +490,6 @@ pub async fn scan_and_register(
                     queue.push(entry.path());
                 } else if ft.is_file() && is_media_file(&name) {
                     let abs_path = entry.path();
-                    // Normalize to forward slashes so DB paths are consistent across OS
                     let rel_path = abs_path
                         .strip_prefix(&storage_root)
                         .unwrap_or(&abs_path)
@@ -465,11 +497,11 @@ pub async fn scan_and_register(
                         .replace('\\', "/");
 
                     if existing_set.contains(&rel_path) {
-                        continue; // Already registered
+                        continue;
                     }
 
                     let mime = mime_from_extension(&name).to_string();
-                    let media_type = if mime.starts_with("video/") {
+                    let media_type: &'static str = if mime.starts_with("video/") {
                         "video"
                     } else if mime.starts_with("audio/") {
                         "audio"
@@ -479,7 +511,6 @@ pub async fn scan_and_register(
                         "photo"
                     };
 
-                    // Skip audio files when the audio backup toggle is disabled
                     if media_type == "audio" && !audio_backup_enabled {
                         skipped_audio += 1;
                         continue;
@@ -490,108 +521,128 @@ pub async fn scan_and_register(
                     let modified = file_meta.and_then(|m| {
                         m.modified().ok().map(|t| {
                             let dt: chrono::DateTime<chrono::Utc> = t.into();
-                            // Normalize to consistent ISO-8601 Z-suffix format
                             normalize_iso_timestamp(&dt.to_rfc3339())
                         })
                     });
 
-                    let photo_id = Uuid::new_v4().to_string();
-                    let now = utc_now_iso();
-                    let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
-
-                    // Extract dimensions, camera model, GPS, and date from file
-                    // (offloaded to spawn_blocking — blocking I/O + CPU)
-                    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
-                        extract_media_metadata_async(abs_path.clone()).await;
-
-                    // Use EXIF taken_at if available, otherwise fall back to file modified time.
-                    // Normalize both to consistent YYYY-MM-DDTHH:MM:SS.mmmZ format.
-                    let final_taken_at = exif_taken
-                        .map(|t| normalize_iso_timestamp(&t))
-                        .or(modified);
-
-                    // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
-                    let photo_hash = compute_photo_hash_streaming(&abs_path).await;
-
-                    // Use INSERT OR IGNORE to handle race conditions with concurrent
-                    // scans (e.g. background autoscan running simultaneously). The
-                    // UNIQUE index on (user_id, photo_hash) prevents duplicate content;
-                    // if a concurrent scan already registered this file, we skip it
-                    // gracefully instead of aborting the entire scan with a 500 error.
-                    let insert_result = sqlx::query(
-                        "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(&photo_id)
-                    .bind(&auth.user_id)
-                    .bind(&name)
-                    .bind(&rel_path)
-                    .bind(&mime)
-                    .bind(media_type)
-                    .bind(size)
-                    .bind(img_w)
-                    .bind(img_h)
-                    .bind(&final_taken_at)
-                    .bind(exif_lat)
-                    .bind(exif_lon)
-                    .bind(&cam_model)
-                    .bind(&thumb_rel)
-                    .bind(&now)
-                    .bind(&photo_hash)
-                    .execute(&state.pool)
-                    .await;
-
-                    match insert_result {
-                        Ok(result) if result.rows_affected() == 0 => {
-                            // UNIQUE conflict — file already registered by a concurrent scan.
-                            // Skip thumbnail/preview generation (the other scan or the
-                            // background converter will handle it).
-                            tracing::debug!(file = %rel_path, "Already registered (concurrent scan), skipping");
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::error!(file = %rel_path, error = %e, "Failed to register photo");
-                            continue;
-                        }
-                        Ok(_) => { /* inserted successfully — continue to thumbnail/preview gen */ }
-                    }
-
-                    // Generate thumbnail using FFmpeg (or image crate for audio)
-                    if has_ffmpeg || mime.starts_with("audio/") {
-                        let thumb_abs = storage_root.join(&thumb_rel);
-                        if generate_thumbnail_file(&abs_path, &thumb_abs, &mime, None).await {
-                            tracing::debug!(file = %rel_path, "Generated thumbnail");
-                        } else {
-                            tracing::warn!(file = %rel_path, "Failed to generate thumbnail");
-                        }
-                    }
-
-                    // Generate web preview for non-browser-native formats
-                    // Skip video transcoding during scan (too slow) — background task handles it
-                    if has_ffmpeg {
-                        if let Some(ext) = needs_web_preview(&name) {
-                            if ext != "mp4" {
-                                let preview_rel =
-                                    format!(".web_previews/{}.web.{}", photo_id, ext);
-                                let preview_abs = storage_root.join(&preview_rel);
-                                if generate_web_preview(&abs_path, &preview_abs, ext).await {
-                                    tracing::debug!(file = %rel_path, "Generated web preview");
-                                } else {
-                                    tracing::warn!(file = %rel_path, "Failed to generate web preview");
-                                }
-                            } else {
-                                tracing::debug!(file = %rel_path, "Video conversion deferred to background task");
-                            }
-                        }
-                    }
-
-                    new_count += 1;
+                    candidates.push(ScanCandidate {
+                        abs_path,
+                        rel_path,
+                        name,
+                        mime,
+                        media_type,
+                        size,
+                        modified,
+                    });
                 }
             }
         }
     }
 
+    tracing::info!("Scan phase 1: found {} unregistered media files", candidates.len());
+
+    // ── Phase 2: Register files in parallel (metadata, hash, DB insert, thumbnail) ──
+    let new_count = Arc::new(AtomicI64::new(0));
+    let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
+    let mut handles = Vec::with_capacity(candidates.len());
+
+    for candidate in candidates {
+        let sem = sem.clone();
+        let new_count = new_count.clone();
+        let pool = state.pool.clone();
+        let storage_root = storage_root.clone();
+        let user_id = auth.user_id.clone();
+        let has_ffmpeg = has_ffmpeg;
+
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await;
+
+            let photo_id = Uuid::new_v4().to_string();
+            let now = utc_now_iso();
+            let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
+
+            // Extract dimensions, camera model, GPS, and date from file
+            let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
+                extract_media_metadata_async(candidate.abs_path.clone()).await;
+
+            let final_taken_at = exif_taken
+                .map(|t| normalize_iso_timestamp(&t))
+                .or(candidate.modified);
+
+            // Compute content-based hash using streaming I/O
+            let photo_hash = compute_photo_hash_streaming(&candidate.abs_path).await;
+
+            let insert_result = sqlx::query(
+                "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                 size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&photo_id)
+            .bind(&user_id)
+            .bind(&candidate.name)
+            .bind(&candidate.rel_path)
+            .bind(&candidate.mime)
+            .bind(candidate.media_type)
+            .bind(candidate.size)
+            .bind(img_w)
+            .bind(img_h)
+            .bind(&final_taken_at)
+            .bind(exif_lat)
+            .bind(exif_lon)
+            .bind(&cam_model)
+            .bind(&thumb_rel)
+            .bind(&now)
+            .bind(&photo_hash)
+            .execute(&pool)
+            .await;
+
+            match insert_result {
+                Ok(result) if result.rows_affected() == 0 => {
+                    tracing::debug!(file = %candidate.rel_path, "Already registered (concurrent scan), skipping");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(file = %candidate.rel_path, error = %e, "Failed to register photo");
+                    return;
+                }
+                Ok(_) => {}
+            }
+
+            // Generate thumbnail
+            if has_ffmpeg || candidate.mime.starts_with("audio/") {
+                let thumb_abs = storage_root.join(&thumb_rel);
+                if generate_thumbnail_file(&candidate.abs_path, &thumb_abs, &candidate.mime, None).await {
+                    tracing::debug!(file = %candidate.rel_path, "Generated thumbnail");
+                } else {
+                    tracing::warn!(file = %candidate.rel_path, "Failed to generate thumbnail");
+                }
+            }
+
+            // Generate web preview for non-browser-native formats (skip video transcoding)
+            if has_ffmpeg {
+                if let Some(ext) = needs_web_preview(&candidate.name) {
+                    if ext != "mp4" {
+                        let preview_rel = format!(".web_previews/{}.web.{}", photo_id, ext);
+                        let preview_abs = storage_root.join(&preview_rel);
+                        if generate_web_preview(&candidate.abs_path, &preview_abs, ext).await {
+                            tracing::debug!(file = %candidate.rel_path, "Generated web preview");
+                        } else {
+                            tracing::warn!(file = %candidate.rel_path, "Failed to generate web preview");
+                        }
+                    }
+                }
+            }
+
+            new_count.fetch_add(1, Ordering::Relaxed);
+        }));
+    }
+
+    // Wait for all registration tasks to complete
+    for h in handles {
+        let _ = h.await;
+    }
+
+    let new_count = new_count.load(Ordering::Relaxed);
     tracing::info!("Scan complete: registered {} new photos (skipped {} audio)", new_count, skipped_audio);
 
     // ── Retroactively fill missing metadata for existing photos ──────────
@@ -604,52 +655,68 @@ pub async fn scan_and_register(
     .await
     .unwrap_or_default();
 
-    let mut fixed_count = 0i64;
-    for (pid, fpath) in &photos_needing_fix {
-        let abs = storage_root.join(fpath);
-        if !abs.exists() {
-            continue;
+    let fixed_count = Arc::new(AtomicI64::new(0));
+    {
+        let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
+        let mut handles = Vec::with_capacity(photos_needing_fix.len());
+
+        for (pid, fpath) in photos_needing_fix {
+            let abs = storage_root.join(&fpath);
+            if !abs.exists() {
+                continue;
+            }
+            let sem = sem.clone();
+            let pool = state.pool.clone();
+            let fixed_count = fixed_count.clone();
+
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                let (w, h, cam, lat, lon, taken) = extract_media_metadata_async(abs.clone()).await;
+                let file_hash = compute_photo_hash_streaming(&abs).await;
+
+                if w > 0 || h > 0 || cam.is_some() || lat.is_some() || file_hash.is_some() {
+                    sqlx::query(
+                        "UPDATE OR IGNORE photos SET width = CASE WHEN width = 0 THEN ? ELSE width END, \
+                         height = CASE WHEN height = 0 THEN ? ELSE height END, \
+                         camera_model = COALESCE(camera_model, ?), \
+                         latitude = COALESCE(latitude, ?), \
+                         longitude = COALESCE(longitude, ?), \
+                         taken_at = COALESCE(taken_at, ?), \
+                         photo_hash = COALESCE(photo_hash, ?) \
+                         WHERE id = ?",
+                    )
+                    .bind(w)
+                    .bind(h)
+                    .bind(&cam)
+                    .bind(lat)
+                    .bind(lon)
+                    .bind(&taken)
+                    .bind(&file_hash)
+                    .bind(&pid)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!(photo_id = %pid, error = %e, "Failed to update photo metadata during scan");
+                        e
+                    })
+                    .ok();
+                    fixed_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }));
         }
-        let (w, h, cam, lat, lon, taken) = extract_media_metadata_async(abs.clone()).await;
 
-        // Compute content hash if missing (streaming to avoid loading huge files into memory)
-        let file_hash = compute_photo_hash_streaming(&abs).await;
-
-        if w > 0 || h > 0 || cam.is_some() || lat.is_some() || file_hash.is_some() {
-            sqlx::query(
-                "UPDATE photos SET width = CASE WHEN width = 0 THEN ? ELSE width END, \
-                 height = CASE WHEN height = 0 THEN ? ELSE height END, \
-                 camera_model = COALESCE(camera_model, ?), \
-                 latitude = COALESCE(latitude, ?), \
-                 longitude = COALESCE(longitude, ?), \
-                 taken_at = COALESCE(taken_at, ?), \
-                 photo_hash = COALESCE(photo_hash, ?) \
-                 WHERE id = ?",
-            )
-            .bind(w)
-            .bind(h)
-            .bind(&cam)
-            .bind(lat)
-            .bind(lon)
-            .bind(&taken)
-            .bind(&file_hash)
-            .bind(pid)
-            .execute(&state.pool)
-            .await
-            .map_err(|e| {
-                tracing::warn!(photo_id = %pid, error = %e, "Failed to update photo metadata during scan");
-                e
-            })
-            .ok();
-            fixed_count += 1;
+        for h in handles {
+            let _ = h.await;
         }
     }
+    let fixed_count = fixed_count.load(Ordering::Relaxed);
 
     if fixed_count > 0 {
         tracing::info!("Updated metadata for {} existing photos", fixed_count);
     }
 
     // ── Generate missing thumbnails and web previews for existing photos ──
+    // Parallelized using the same semaphore pattern as Phase 2.
     if has_ffmpeg {
         let thumbs_to_gen: Vec<(String, String, String, String)> = sqlx::query_as(
             "SELECT id, file_path, thumb_path, mime_type FROM photos WHERE user_id = ? AND thumb_path IS NOT NULL",
@@ -659,43 +726,88 @@ pub async fn scan_and_register(
         .await
         .unwrap_or_default();
 
-        let mut thumb_count = 0i64;
-        let mut preview_count = 0i64;
+        // Collect work items that actually need generation
+        struct ThumbWork {
+            source_abs: PathBuf,
+            thumb_abs: Option<PathBuf>,
+            preview_abs: Option<PathBuf>,
+            mime: String,
+            preview_ext: Option<&'static str>,
+        }
+
+        let mut work_items: Vec<ThumbWork> = Vec::new();
         for (pid, fpath, tpath, mime) in &thumbs_to_gen {
             let abs = storage_root.join(fpath);
             if !abs.exists() {
                 continue;
             }
 
-            // Generate thumbnail if file doesn't exist yet
             let thumb_abs = storage_root.join(tpath);
-            if !thumb_abs.exists() {
-                if generate_thumbnail_file(&abs, &thumb_abs, mime, None).await {
-                    thumb_count += 1;
-                }
-            }
+            let need_thumb = !thumb_abs.exists();
 
-            // Generate web preview if needed and doesn't exist yet
-            // Skip video transcoding — background task handles those
             let filename = fpath.rsplit('/').next().unwrap_or(fpath);
-            if let Some(ext) = needs_web_preview(filename) {
+            let (need_preview, preview_abs, preview_ext) = if let Some(ext) = needs_web_preview(filename) {
                 if ext != "mp4" {
-                    let preview_abs =
-                        storage_root.join(format!(".web_previews/{}.web.{}", pid, ext));
-                    if !preview_abs.exists() {
-                        if generate_web_preview(&abs, &preview_abs, ext).await {
-                            preview_count += 1;
+                    let pa = storage_root.join(format!(".web_previews/{}.web.{}", pid, ext));
+                    (!pa.exists(), Some(pa), Some(ext))
+                } else {
+                    (false, None, None)
+                }
+            } else {
+                (false, None, None)
+            };
+
+            if need_thumb || need_preview {
+                work_items.push(ThumbWork {
+                    source_abs: abs,
+                    thumb_abs: if need_thumb { Some(thumb_abs) } else { None },
+                    preview_abs: if need_preview { preview_abs } else { None },
+                    mime: mime.clone(),
+                    preview_ext,
+                });
+            }
+        }
+
+        let thumb_count = Arc::new(AtomicI64::new(0));
+        let preview_count = Arc::new(AtomicI64::new(0));
+        let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
+        let mut handles = Vec::with_capacity(work_items.len());
+
+        for item in work_items {
+            let sem = sem.clone();
+            let tc = thumb_count.clone();
+            let pc = preview_count.clone();
+
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+
+                if let Some(thumb_abs) = item.thumb_abs {
+                    if generate_thumbnail_file(&item.source_abs, &thumb_abs, &item.mime, None).await {
+                        tc.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+
+                if let Some(preview_abs) = item.preview_abs {
+                    if let Some(ext) = item.preview_ext {
+                        if generate_web_preview(&item.source_abs, &preview_abs, ext).await {
+                            pc.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }
-            }
+            }));
         }
 
-        if thumb_count > 0 {
-            tracing::info!("Generated {} missing thumbnails", thumb_count);
+        for h in handles {
+            let _ = h.await;
         }
-        if preview_count > 0 {
-            tracing::info!("Generated {} missing web previews", preview_count);
+
+        let tc = thumb_count.load(Ordering::Relaxed);
+        let pc = preview_count.load(Ordering::Relaxed);
+        if tc > 0 {
+            tracing::info!("Generated {} missing thumbnails", tc);
+        }
+        if pc > 0 {
+            tracing::info!("Generated {} missing web previews", pc);
         }
     }
 
