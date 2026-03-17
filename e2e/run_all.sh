@@ -57,6 +57,7 @@ declare -a MODULE_REGISTRY=(
   "backup:02_backup.sh:Backup server tests (sync, recovery, multi-backup)"
   "ssl:03_ssl.sh:SSL/TLS certificate management tests"
   "concurrent:04_concurrent.sh:Concurrent multi-user stress tests"
+  "android:05_android.sh:Android client API compatibility tests"
 )
 
 # ── Parse Arguments ──────────────────────────────────────────────────────────
