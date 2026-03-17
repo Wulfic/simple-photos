@@ -12,7 +12,7 @@ use crate::media::mime_from_extension;
 use crate::sanitize;
 use crate::state::AppState;
 
-use super::metadata::extract_media_metadata_from_bytes;
+use super::metadata::extract_media_metadata_from_bytes_async;
 use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 
 /// POST /api/photos/upload
@@ -67,7 +67,7 @@ pub async fn upload_photo(
     )
     .bind(&auth.user_id)
     .bind(&photo_hash)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?;
 
     if let Some((eid, efn, efp, esz, ehash)) = existing {
@@ -128,9 +128,9 @@ pub async fn upload_photo(
     let now = utc_now_iso();
     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
-    // Extract metadata from the uploaded bytes
+    // Extract metadata from the uploaded bytes (offloaded to spawn_blocking — CPU-bound EXIF parsing)
     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
-        extract_media_metadata_from_bytes(&body, &final_filename);
+        extract_media_metadata_from_bytes_async(body.to_vec(), final_filename.clone()).await;
 
     let final_taken_at = exif_taken
         .map(|t| normalize_iso_timestamp(&t))

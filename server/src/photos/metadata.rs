@@ -8,11 +8,18 @@
 //! Both extract: image dimensions (via `imagesize`), camera make/model, GPS
 //! coordinates, and `DateTimeOriginal` (via the `exif` crate).
 
+/// Metadata tuple returned by both extraction functions.
+pub(crate) type MediaMetadata = (i64, i64, Option<String>, Option<f64>, Option<f64>, Option<String>);
+
 /// Extract image dimensions, camera model, and GPS coordinates from a file.
 /// Returns (width, height, camera_model, latitude, longitude, taken_at).
+///
+/// **Blocking:** Uses `std::fs::File::open` and CPU-bound EXIF parsing.
+/// Callers on the tokio runtime should use [`extract_media_metadata_async`]
+/// instead, which wraps this in `spawn_blocking`.
 pub(crate) fn extract_media_metadata(
     file_path: &std::path::Path,
-) -> (i64, i64, Option<String>, Option<f64>, Option<f64>, Option<String>) {
+) -> MediaMetadata {
     let mut width: i64 = 0;
     let mut height: i64 = 0;
     let mut camera_model: Option<String> = None;
@@ -197,4 +204,27 @@ pub(crate) fn extract_media_metadata_from_bytes(
 
     let _ = filename; // suppress unused warning
     (width, height, camera_model, latitude, longitude, taken_at)
+}
+
+// ── Async wrappers ──────────────────────────────────────────────────────────
+
+/// Async wrapper around [`extract_media_metadata`] that offloads the blocking
+/// file I/O and EXIF parsing to a `spawn_blocking` thread.
+pub(crate) async fn extract_media_metadata_async(
+    file_path: std::path::PathBuf,
+) -> MediaMetadata {
+    tokio::task::spawn_blocking(move || extract_media_metadata(&file_path))
+        .await
+        .unwrap_or_else(|_| (0, 0, None, None, None, None))
+}
+
+/// Async wrapper around [`extract_media_metadata_from_bytes`] that offloads
+/// the CPU-bound EXIF parsing to a `spawn_blocking` thread.
+pub(crate) async fn extract_media_metadata_from_bytes_async(
+    data: Vec<u8>,
+    filename: String,
+) -> MediaMetadata {
+    tokio::task::spawn_blocking(move || extract_media_metadata_from_bytes(&data, &filename))
+        .await
+        .unwrap_or_else(|_| (0, 0, None, None, None, None))
 }

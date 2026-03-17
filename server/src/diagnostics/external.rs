@@ -66,7 +66,7 @@ async fn require_basic_auth_admin(
         "SELECT id, password_hash, COALESCE(role, 'user') FROM users WHERE username = ?",
     )
     .bind(username)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?;
 
     let (user_id, password_hash, role) = match row {
@@ -121,7 +121,7 @@ pub async fn external_health(
     let (start_instant, started_at) = server_start();
     let uptime = start_instant.elapsed().as_secs();
 
-    let pool = &state.pool;
+    let pool = &state.read_pool;
 
     // DB ping
     let t0 = Instant::now();
@@ -178,9 +178,15 @@ pub async fn external_full(
 
     let (start_instant, started_at) = server_start();
     let uptime = start_instant.elapsed().as_secs();
-    let pool = &state.pool;
+    let pool = &state.read_pool;
 
     // ── Server info ───────────────────────────────────────────────────
+    // Offload /proc reads to spawn_blocking (they do blocking I/O)
+    let (rss_bytes, cpu_secs) = tokio::task::spawn_blocking(|| {
+        (read_rss_bytes(), read_cpu_seconds())
+    })
+    .await
+    .unwrap_or((0, 0.0));
     let storage_root = (**state.storage_root.load()).clone();
     let server_info = ServerInfo {
         version: crate::VERSION.to_string(),
@@ -188,8 +194,8 @@ pub async fn external_full(
         rust_version: env!("CARGO_PKG_RUST_VERSION", "unknown").to_string(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
-        memory_rss_bytes: read_rss_bytes(),
-        cpu_seconds: read_cpu_seconds(),
+        memory_rss_bytes: rss_bytes,
+        cpu_seconds: cpu_secs,
         pid: std::process::id(),
         storage_root: storage_root.display().to_string(),
         db_path: state.config.database.path.display().to_string(),
@@ -434,7 +440,7 @@ pub async fn external_storage(
 ) -> Result<Json<ExternalStorageResponse>, AppError> {
     require_basic_auth_admin(&state, &headers).await?;
 
-    let pool = &state.pool;
+    let pool = &state.read_pool;
     let storage_root = (**state.storage_root.load()).clone();
 
     // Storage
@@ -499,7 +505,7 @@ pub async fn external_audit(
 ) -> Result<Json<ExternalAuditResponse>, AppError> {
     require_basic_auth_admin(&state, &headers).await?;
 
-    let pool = &state.pool;
+    let pool = &state.read_pool;
     let now = chrono::Utc::now();
     let h24 = (now - chrono::Duration::hours(24)).to_rfc3339();
     let d7 = (now - chrono::Duration::days(7)).to_rfc3339();

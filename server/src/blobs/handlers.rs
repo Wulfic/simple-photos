@@ -111,13 +111,13 @@ pub async fn upload(
     let used: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM blobs WHERE user_id = ?")
             .bind(&auth.user_id)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await?;
 
     let quota: i64 =
         sqlx::query_scalar("SELECT storage_quota_bytes FROM users WHERE id = ?")
             .bind(&auth.user_id)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await?;
 
     if let Some(cl) = headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<i64>().ok()) {
@@ -249,7 +249,7 @@ pub async fn list(
             .bind(blob_type)
             .bind(after)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await?
         } else {
             sqlx::query_as::<_, BlobRecord>(
@@ -260,7 +260,7 @@ pub async fn list(
             .bind(&auth.user_id)
             .bind(blob_type)
             .bind(limit + 1)
-            .fetch_all(&state.pool)
+            .fetch_all(&state.read_pool)
             .await?
         }
     } else if let Some(ref after) = params.after {
@@ -272,7 +272,7 @@ pub async fn list(
         .bind(&auth.user_id)
         .bind(after)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await?
     } else {
         sqlx::query_as::<_, BlobRecord>(
@@ -282,7 +282,7 @@ pub async fn list(
         )
         .bind(&auth.user_id)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await?
     };
 
@@ -321,7 +321,7 @@ pub async fn download(
     )
     .bind(&blob_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
@@ -516,7 +516,7 @@ pub async fn download_thumb(
     )
     .bind(&blob_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
 

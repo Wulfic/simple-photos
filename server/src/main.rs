@@ -58,7 +58,13 @@ use tower_http::trace::TraceLayer;
 use crate::ratelimit::RateLimiters;
 use crate::state::AppState;
 
-#[tokio::main]
+/// Tokio multi-threaded runtime with a floor of 4 worker threads.
+///
+/// On machines with fewer than 4 cores (e.g. Raspberry Pi, small VPS), the
+/// default `num_cpus` worker count is too low — a single `spawn_blocking`
+/// call or CPU-bound operation can starve the request pipeline. The floor
+/// ensures adequate parallelism for concurrent uploads + gallery serving.
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> anyhow::Result<()> {
     // Initialize structured logging. Uses RUST_LOG env var if set
     // (e.g. RUST_LOG=debug), otherwise defaults to "info" level.
@@ -101,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::fs::create_dir_all(config.storage.root.join("logs/app")).await?;
     tracing::info!("Storage subdirectories initialized: blobs/, metadata/, logs/server/, logs/app/");
 
-    let pool = db::init_pool(&config.database).await?;
+    let (pool, read_pool) = db::init_pools(&config.database).await?;
 
     // Initialize in-memory per-IP rate limiters for auth endpoints,
     // and start a background task that evicts stale entries every 5 min.
@@ -218,12 +224,13 @@ async fn main() -> anyhow::Result<()> {
     let encryption_key: Arc<tokio::sync::RwLock<Option<[u8; 32]>>> = Arc::new(tokio::sync::RwLock::new(None));
     {
         let pool_clone = pool.clone();
+        let read_pool_clone = read_pool.clone();
         let storage_root_clone = config.storage.root.clone();
         let notify_clone = convert_notify.clone();
         let active_clone = conversion_active.clone();
         let key_clone = encryption_key.clone();
         tokio::spawn(async move {
-            photos::convert::background_convert_task(pool_clone, storage_root_clone, 60, notify_clone, active_clone, key_clone).await;
+            photos::convert::background_convert_task(pool_clone, read_pool_clone, storage_root_clone, 60, notify_clone, active_clone, key_clone).await;
         });
     }
 
@@ -250,6 +257,7 @@ async fn main() -> anyhow::Result<()> {
     // Build shared application state — cloned (via Arc) into every Axum handler.
     let state = AppState {
         pool,
+        read_pool,
         config: Arc::new(config.clone()),
         rate_limiters,
         // ArcSwap: lock-free atomic reads for the hot-path storage root.

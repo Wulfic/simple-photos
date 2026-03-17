@@ -103,8 +103,12 @@ pub async fn update_storage(
         state.storage_root.store(std::sync::Arc::new(new_path.clone()));
     }
 
-    // Persist to config.toml
-    if let Err(e) = update_config_toml_storage(&req.path) {
+    // Persist to config.toml (blocking I/O — offload to spawn_blocking)
+    let path_clone = req.path.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || update_config_toml_storage(&path_clone))
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
+    {
         tracing::warn!("Failed to persist storage path to config.toml: {}", e);
     }
 

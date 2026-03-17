@@ -55,7 +55,7 @@ pub async fn list_trash(
         .bind(&auth.user_id)
         .bind(after)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await?
     } else {
         sqlx::query_as::<_, TrashItem>(
@@ -67,7 +67,7 @@ pub async fn list_trash(
         )
         .bind(&auth.user_id)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await?
     };
 
@@ -623,7 +623,7 @@ pub async fn serve_trash_thumbnail(
     )
     .bind(&trash_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
 

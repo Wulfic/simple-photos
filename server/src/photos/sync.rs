@@ -72,7 +72,7 @@ pub async fn encrypted_sync(
         .bind(&auth.user_id)
         .bind(after)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await?
     } else {
         sqlx::query_as::<_, EncryptedSyncRecord>(
@@ -86,7 +86,7 @@ pub async fn encrypted_sync(
         )
         .bind(&auth.user_id)
         .bind(limit + 1)
-        .fetch_all(&state.pool)
+        .fetch_all(&state.read_pool)
         .await?
     };
 

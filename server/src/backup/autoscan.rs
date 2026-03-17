@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
-use crate::photos::metadata::extract_media_metadata;
+use crate::photos::metadata::extract_media_metadata_async;
 use crate::photos::scan::{ffmpeg_available_pub, generate_thumbnail_file};
 use crate::photos::utils::compute_photo_hash_streaming;
 use crate::state::AppState;
@@ -383,7 +383,7 @@ async fn run_auto_scan(
                     // Extract dimensions, camera model, GPS, and date from file
                     // (matches scan_and_register behavior so photos have full metadata)
                     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
-                        extract_media_metadata(&abs_path);
+                        extract_media_metadata_async(abs_path.clone()).await;
 
                     // Use EXIF taken_at if available, otherwise fall back to file modified time.
                     // Normalize to consistent YYYY-MM-DDTHH:MM:SS.mmmZ format.

@@ -45,8 +45,20 @@ pub struct ServerConfig {
 pub struct DatabaseConfig {
     /// Path to the SQLite database file (created if missing).
     pub path: PathBuf,
-    /// Maximum number of connections in the pool (default: 5).
+    /// Maximum number of connections in the write pool (default: 5).
+    /// SQLite allows only 1 concurrent writer, so this controls how many
+    /// write connections can pipeline behind the write lock. Clamped to 2..=8.
     pub max_connections: u32,
+    /// Maximum number of connections in the read-only pool (default: 32).
+    /// Read connections use `PRAGMA query_only = 1` and serve all SELECT
+    /// queries in request handlers.  Higher values improve read parallelism
+    /// during upload/backup bursts.
+    #[serde(default = "default_read_pool_max_connections")]
+    pub read_pool_max_connections: u32,
+}
+
+fn default_read_pool_max_connections() -> u32 {
+    32
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -209,6 +221,11 @@ impl AppConfig {
             config.database.max_connections = v
                 .parse()
                 .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_DATABASE_MAX_CONNECTIONS"))?;
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_DATABASE_READ_POOL_MAX_CONNECTIONS") {
+            config.database.read_pool_max_connections = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_DATABASE_READ_POOL_MAX_CONNECTIONS"))?;
         }
 
         // Storage — accepts local paths AND mounted network shares (SMB/NFS/SSHFS)

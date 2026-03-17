@@ -83,7 +83,7 @@ pub async fn list_photos(
         }
     }
 
-    let photos = query.fetch_all(&state.pool).await?;
+    let photos = query.fetch_all(&state.read_pool).await?;
 
     let next_cursor = if photos.len() as i64 > limit {
         photos.last().map(|p| p.taken_at.clone().unwrap_or_else(|| p.created_at.clone()))
@@ -221,7 +221,7 @@ pub async fn serve_photo(
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or_else(|| {
         tracing::warn!(
@@ -339,7 +339,7 @@ pub async fn serve_thumbnail(
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
@@ -421,7 +421,7 @@ pub async fn serve_web(
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
