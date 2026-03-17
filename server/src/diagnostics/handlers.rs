@@ -149,7 +149,7 @@ pub async fn get_diagnostics_config(
 ) -> Result<Json<DiagnosticsConfig>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let config = read_diagnostics_config(&state.pool).await;
+    let config = read_diagnostics_config(&state.read_pool).await;
     Ok(Json(config))
 }
 
@@ -183,7 +183,7 @@ pub async fn update_diagnostics_config(
         .await?;
     }
 
-    let config = read_diagnostics_config(&state.pool).await;
+    let config = read_diagnostics_config(&state.read_pool).await;
     Ok(Json(config))
 }
 
@@ -223,7 +223,7 @@ pub async fn get_diagnostics(
     let uptime = start_instant.elapsed().as_secs();
 
     // Check if diagnostics collection is enabled
-    let config = read_diagnostics_config(&state.pool).await;
+    let config = read_diagnostics_config(&state.read_pool).await;
 
     if !config.diagnostics_enabled {
         // Return lightweight response — no expensive disk walks or table scans
@@ -239,10 +239,17 @@ pub async fn get_diagnostics(
         return Ok(Json(resp).into_response());
     }
 
-    // Parallelise independent DB queries
-    let pool = &state.pool;
+    // Parallelise independent DB queries — use read pool for all diagnostics
+    // SELECTs so they never contend with uploads/backup writes.
+    let pool = &state.read_pool;
 
     // ── Server info ───────────────────────────────────────────────────
+    // Offload /proc reads to spawn_blocking (they do blocking I/O)
+    let (rss_bytes, cpu_secs) = tokio::task::spawn_blocking(|| {
+        (read_rss_bytes(), read_cpu_seconds())
+    })
+    .await
+    .unwrap_or((0, 0.0));
     let storage_root = (**state.storage_root.load()).clone();
     let server_info = ServerInfo {
         version: crate::VERSION.to_string(),
@@ -250,8 +257,8 @@ pub async fn get_diagnostics(
         rust_version: env!("CARGO_PKG_RUST_VERSION", "unknown").to_string(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
-        memory_rss_bytes: read_rss_bytes(),
-        cpu_seconds: read_cpu_seconds(),
+        memory_rss_bytes: rss_bytes,
+        cpu_seconds: cpu_secs,
         pid: std::process::id(),
         storage_root: storage_root.display().to_string(),
         db_path: state.config.database.path.display().to_string(),
@@ -631,7 +638,7 @@ pub async fn list_audit_logs(
     for b in &binds {
         count_query = count_query.bind(b);
     }
-    let total: i64 = count_query.fetch_one(&state.pool).await.unwrap_or(0);
+    let total: i64 = count_query.fetch_one(&state.read_pool).await.unwrap_or(0);
 
     // Fetch rows with optional username join
     let sql = format!(
@@ -650,7 +657,7 @@ pub async fn list_audit_logs(
     }
     query = query.bind(limit + 1);
 
-    let rows = query.fetch_all(&state.pool).await?;
+    let rows = query.fetch_all(&state.read_pool).await?;
 
     let has_more = rows.len() as i64 > limit;
     let entries: Vec<AuditLogEntry> = rows

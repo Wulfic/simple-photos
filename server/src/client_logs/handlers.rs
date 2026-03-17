@@ -176,7 +176,7 @@ pub async fn list_logs(
     }
     query = query.bind(limit + 1); // fetch one extra to detect next page
 
-    let rows = query.fetch_all(&state.pool).await?;
+    let rows = query.fetch_all(&state.read_pool).await?;
 
     let has_more = rows.len() as i64 > limit;
     let entries: Vec<ClientLogRecord> = rows

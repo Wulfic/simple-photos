@@ -16,8 +16,16 @@ use crate::ratelimit::RateLimiters;
 /// Shared state for all request handlers and background tasks.
 #[derive(Clone)]
 pub struct AppState {
-    /// SQLite connection pool — shared across all handlers and background tasks.
+    /// SQLite **write** connection pool — used for INSERT/UPDATE/DELETE
+    /// operations and transactions.  Limited connections because SQLite
+    /// allows only one concurrent writer.
     pub pool: SqlitePool,
+    /// SQLite **read-only** connection pool — used for SELECT queries in
+    /// request handlers.  Has many more connections than the write pool and
+    /// uses `PRAGMA query_only = 1` to guarantee no accidental writes.
+    /// This separation ensures gallery reads are never starved by concurrent
+    /// uploads/backups writing to the database.
+    pub read_pool: SqlitePool,
     /// Immutable server configuration loaded at startup.
     pub config: Arc<AppConfig>,
     /// In-memory per-IP rate limiters for auth endpoints (login, register, TOTP).

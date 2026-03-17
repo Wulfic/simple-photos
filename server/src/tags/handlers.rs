@@ -25,7 +25,7 @@ pub async fn list_tags(
         "SELECT DISTINCT tag FROM photo_tags WHERE user_id = ? ORDER BY tag ASC",
     )
     .bind(&auth.user_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     Ok(Json(TagListResponse {
@@ -44,7 +44,7 @@ pub async fn get_photo_tags(
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     Ok(Json(PhotoTagsResponse {
@@ -202,7 +202,7 @@ pub async fn search_photos(
         q = q.bind(val);
     }
 
-    let rows: Vec<SearchRow> = q.fetch_all(&state.pool).await?;
+    let rows: Vec<SearchRow> = q.fetch_all(&state.read_pool).await?;
 
     // Batch-load tags for all results in a single query (avoids N+1).
     // Build a dynamic `WHERE photo_id IN (?, ?, ...)` clause.
@@ -222,7 +222,7 @@ pub async fn search_photos(
         }
         tags_q = tags_q.bind(&auth.user_id);
 
-        let tag_rows: Vec<(String, String)> = tags_q.fetch_all(&state.pool).await?;
+        let tag_rows: Vec<(String, String)> = tags_q.fetch_all(&state.read_pool).await?;
         for (pid, tag) in tag_rows {
             tags_by_photo.entry(pid).or_default().push(tag);
         }

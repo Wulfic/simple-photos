@@ -53,17 +53,24 @@ class SimplePhotosApplication : Application(), Configuration.Provider, ImageLoad
         // Composable), Hilt has already injected okHttpClient in onCreate().
         // Using the authenticated OkHttpClient is essential — without it,
         // Coil makes unauthenticated requests and all images return 401.
+        //
+        // Memory cache sizing: 25% of max heap (Coil's recommended default).
+        // This is typically 48–128 MB depending on device.  At 256×256 ARGB
+        // thumbnails (~256 KB each), that holds 200–500 thumbnails in memory.
+        // Full-resolution viewer images are selectively evicted when a video
+        // starts (see onVideoUriReady) — thumbnails stay warm so the gallery
+        // grid repopulates instantly when the user navigates back.
+        val cacheSize = (Runtime.getRuntime().maxMemory() / 4).coerceIn(
+            16L * 1024 * 1024,   // floor: 16 MB
+            128L * 1024 * 1024   // ceiling: 128 MB
+        )
         return ImageLoader.Builder(this)
             .crossfade(true)
             .okHttpClient(okHttpClient)
-            // Cap the in-memory bitmap cache at 16 MB. We clear this
-            // cache whenever a video starts playing (see onVideoUriReady)
-            // so the heap freed here is immediately available for the
-            // video decoder's output buffers.
             .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
             .memoryCache {
                 coil.memory.MemoryCache.Builder(this)
-                    .maxSizeBytes(16 * 1024 * 1024) // 16 MB
+                    .maxSizeBytes(cacheSize.toInt())
                     .build()
             }
             .components {

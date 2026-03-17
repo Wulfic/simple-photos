@@ -22,7 +22,7 @@ pub async fn get_encryption_settings(
     let mode: String = sqlx::query_scalar(
         "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .unwrap_or_else(|| "plain".to_string());
 
@@ -30,7 +30,7 @@ pub async fn get_encryption_settings(
         sqlx::query_as(
             "SELECT status, total, completed, error FROM encryption_migration WHERE id = 'singleton'",
         )
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await?
         .unwrap_or_else(|| ("idle".to_string(), 0, 0, None));
 
@@ -94,7 +94,7 @@ pub async fn set_encryption_mode(
     let current: String = sqlx::query_scalar(
         "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .unwrap_or_else(|| "plain".to_string());
 
@@ -108,7 +108,7 @@ pub async fn set_encryption_mode(
     let mig_status: String = sqlx::query_scalar(
         "SELECT status FROM encryption_migration WHERE id = 'singleton'",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .unwrap_or_else(|| "idle".to_string());
 
@@ -336,7 +336,7 @@ pub async fn mark_photo_encrypted(
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await?;
 
     if !exists {
@@ -349,7 +349,7 @@ pub async fn mark_photo_encrypted(
     )
     .bind(&req.blob_id)
     .bind(&auth.user_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await?;
 
     if !blob_exists {
@@ -364,7 +364,7 @@ pub async fn mark_photo_encrypted(
             )
             .bind(thumb_id)
             .bind(&auth.user_id)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await?;
 
             if !thumb_exists {

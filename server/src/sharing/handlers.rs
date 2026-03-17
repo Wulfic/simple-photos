@@ -74,7 +74,7 @@ pub async fn list_shared_albums(
     )
     .bind(&auth.user_id)
     .bind(&auth.user_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     let mut albums = Vec::with_capacity(rows.len());
@@ -82,7 +82,7 @@ pub async fn list_shared_albums(
         let owner_username: String =
             sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
                 .bind(&owner_user_id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(&state.read_pool)
                 .await?
                 .unwrap_or_else(|| "unknown".to_string());
 
@@ -90,14 +90,14 @@ pub async fn list_shared_albums(
             "SELECT COUNT(*) FROM shared_album_photos WHERE album_id = ?",
         )
         .bind(&id)
-        .fetch_one(&state.pool)
+        .fetch_one(&state.read_pool)
         .await?;
 
         let member_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM shared_album_members WHERE album_id = ?",
         )
         .bind(&id)
-        .fetch_one(&state.pool)
+        .fetch_one(&state.read_pool)
         .await?;
 
         albums.push(SharedAlbumInfo {
@@ -161,7 +161,7 @@ pub async fn delete_shared_album(
     let owner: Option<String> =
         sqlx::query_scalar("SELECT owner_user_id FROM shared_albums WHERE id = ?")
             .bind(&album_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await?;
 
     let owner_id = owner.ok_or(AppError::NotFound)?;
@@ -187,7 +187,7 @@ pub async fn list_members(
     auth: AuthUser,
     Path(album_id): Path<String>,
 ) -> Result<Json<Vec<SharedAlbumMember>>, AppError> {
-    require_album_access(&state.pool, &album_id, &auth.user_id).await?;
+    require_album_access(&state.read_pool, &album_id, &auth.user_id).await?;
 
     let members = sqlx::query_as::<_, SharedAlbumMember>(
         r#"
@@ -199,7 +199,7 @@ pub async fn list_members(
         "#,
     )
     .bind(&album_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     Ok(Json(members))
@@ -220,7 +220,7 @@ pub async fn add_member(
     let owner: Option<String> =
         sqlx::query_scalar("SELECT owner_user_id FROM shared_albums WHERE id = ?")
             .bind(&album_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await?;
 
     let owner_id = owner.ok_or(AppError::NotFound)?;
@@ -237,7 +237,7 @@ pub async fn add_member(
     let user_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)")
             .bind(&req.user_id)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await?;
 
     if !user_exists {
@@ -279,7 +279,7 @@ pub async fn remove_member(
     let owner: Option<String> =
         sqlx::query_scalar("SELECT owner_user_id FROM shared_albums WHERE id = ?")
             .bind(&album_id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&state.read_pool)
             .await?;
 
     let owner_id = owner.ok_or(AppError::NotFound)?;
@@ -306,13 +306,13 @@ pub async fn list_shared_photos(
     auth: AuthUser,
     Path(album_id): Path<String>,
 ) -> Result<Json<Vec<SharedAlbumPhoto>>, AppError> {
-    require_album_access(&state.pool, &album_id, &auth.user_id).await?;
+    require_album_access(&state.read_pool, &album_id, &auth.user_id).await?;
 
     let photos = sqlx::query_as::<_, SharedAlbumPhoto>(
         "SELECT id, photo_ref, ref_type, added_at FROM shared_album_photos WHERE album_id = ? ORDER BY added_at ASC",
     )
     .bind(&album_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     Ok(Json(photos))
@@ -329,7 +329,7 @@ pub async fn add_photo(
     Path(album_id): Path<String>,
     Json(req): Json<AddPhotoRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    require_album_access(&state.pool, &album_id, &auth.user_id).await?;
+    require_album_access(&state.read_pool, &album_id, &auth.user_id).await?;
 
     if req.ref_type != "plain" && req.ref_type != "blob" {
         return Err(AppError::BadRequest(
@@ -368,7 +368,7 @@ pub async fn remove_photo(
     auth: AuthUser,
     Path((album_id, photo_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
-    require_album_access(&state.pool, &album_id, &auth.user_id).await?;
+    require_album_access(&state.read_pool, &album_id, &auth.user_id).await?;
 
     sqlx::query("DELETE FROM shared_album_photos WHERE album_id = ? AND id = ?")
         .bind(&album_id)
@@ -392,7 +392,7 @@ pub async fn list_users_for_sharing(
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT id, username FROM users ORDER BY username ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     let users: Vec<serde_json::Value> = rows

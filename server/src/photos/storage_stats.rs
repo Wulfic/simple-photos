@@ -24,7 +24,7 @@ pub async fn get_storage_stats(
          FROM blobs WHERE user_id = ? GROUP BY blob_type",
     )
     .bind(&auth.user_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     let mut photo_bytes: i64 = 0;
@@ -58,7 +58,7 @@ pub async fn get_storage_stats(
         "SELECT COALESCE(SUM(size_bytes), 0), COUNT(*) FROM photos WHERE user_id = ?",
     )
     .bind(&auth.user_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await?;
 
     let plain_bytes = plain_row.0;

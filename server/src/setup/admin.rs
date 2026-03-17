@@ -88,9 +88,12 @@ pub async fn create_user(
     }
 
     let user_id = Uuid::new_v4().to_string();
-    let password_hash =
-        bcrypt::hash(&req.password, state.config.auth.bcrypt_cost)
-            .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+    let password_clone = req.password.clone();
+    let cost = state.config.auth.bcrypt_cost;
+    let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&password_clone, cost))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
@@ -295,9 +298,12 @@ pub async fn admin_reset_password(
     // Validate password strength (shared rules with auth::validation)
     crate::auth::validation::validate_password(&req.new_password)?;
 
-    let password_hash =
-        bcrypt::hash(&req.new_password, state.config.auth.bcrypt_cost)
-            .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+    let password_clone = req.new_password.clone();
+    let cost = state.config.auth.bcrypt_cost;
+    let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&password_clone, cost))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
 
     let result = sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
         .bind(&password_hash)

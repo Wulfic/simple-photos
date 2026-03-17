@@ -94,8 +94,15 @@ pub async fn update_ssl(
         }
     }
 
-    // Persist to config.toml
-    update_config_toml_ssl(req.enabled, req.cert_path.as_deref(), req.key_path.as_deref())?;
+    // Persist to config.toml (blocking I/O — offload to spawn_blocking)
+    let ssl_enabled = req.enabled;
+    let ssl_cert = req.cert_path.clone();
+    let ssl_key = req.key_path.clone();
+    tokio::task::spawn_blocking(move || {
+        update_config_toml_ssl(ssl_enabled, ssl_cert.as_deref(), ssl_key.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
 
     audit::log(
         &state,

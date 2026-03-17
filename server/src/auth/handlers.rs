@@ -51,16 +51,21 @@ pub async fn register(
         .await?;
 
     if existing.is_some() {
-        // Security: timing-safe — do a dummy hash so timing is the same
-        let _ = bcrypt::hash("dummy_password_for_timing", state.config.auth.bcrypt_cost);
+        // Security: timing-safe — do a dummy hash so timing is the same.
+        // Offloaded to the blocking threadpool so the tokio worker is free.
+        let cost = state.config.auth.bcrypt_cost;
+        let _ = tokio::task::spawn_blocking(move || bcrypt::hash("dummy_password_for_timing", cost))
+            .await;
         return Err(AppError::Conflict("Username already taken".into()));
     }
 
     let user_id = Uuid::new_v4().to_string();
-    let password_hash =
-        bcrypt::hash(&req.password, state.config.auth.bcrypt_cost).map_err(|e| {
-            AppError::Internal(format!("Failed to hash password: {}", e))
-        })?;
+    let password_clone = req.password.clone();
+    let cost = state.config.auth.bcrypt_cost;
+    let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&password_clone, cost))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
@@ -117,10 +122,12 @@ pub async fn login(
     let user = match user {
         Some(u) => u,
         None => {
-            let _ = bcrypt::verify(
-                &req.password,
-                "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK",
-            );
+            // Timing-safe: always do a password check even if user doesn't exist.
+            // Offloaded to blocking threadpool.
+            let pw = req.password.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                bcrypt::verify(&pw, "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK")
+            }).await;
             audit::log(
                 &state,
                 AuditEvent::LoginFailure,
@@ -137,7 +144,11 @@ pub async fn login(
 
     check_account_lockout(&state, &user.id).await?;
 
-    let valid = bcrypt::verify(&req.password, &user.password_hash)
+    let pw = req.password.clone();
+    let hash = user.password_hash.clone();
+    let valid = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, &hash))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
         .map_err(|e| AppError::Internal(format!("bcrypt error: {}", e)))?;
 
     if !valid {
@@ -652,7 +663,11 @@ pub async fn change_password(
     .fetch_one(&state.pool)
     .await?;
 
-    let valid = bcrypt::verify(&req.current_password, &current_hash)
+    let pw = req.current_password.clone();
+    let hash = current_hash.clone();
+    let valid = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, &hash))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
         .map_err(|e| AppError::Internal(format!("bcrypt error: {}", e)))?;
 
     if !valid {
@@ -667,7 +682,11 @@ pub async fn change_password(
         return Err(AppError::Unauthorized("Current password is incorrect".into()));
     }
 
-    let new_hash = bcrypt::hash(&req.new_password, state.config.auth.bcrypt_cost)
+    let new_pw = req.new_password.clone();
+    let cost = state.config.auth.bcrypt_cost;
+    let new_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&new_pw, cost))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
         .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
 
     // Begin transaction — UPDATE password + revoke tokens must be atomic.
@@ -724,7 +743,11 @@ pub async fn verify_password(
     .fetch_one(&state.pool)
     .await?;
 
-    let valid = bcrypt::verify(&req.password, &current_hash)
+    let pw = req.password.clone();
+    let hash = current_hash.clone();
+    let valid = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, &hash))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
         .map_err(|e| AppError::Internal(format!("bcrypt error: {}", e)))?;
 
     if !valid {

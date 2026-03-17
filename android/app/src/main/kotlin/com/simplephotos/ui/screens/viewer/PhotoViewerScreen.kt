@@ -496,16 +496,17 @@ fun PhotoViewerScreen(
                             sharedPlayerConverting = needsWebPreview(filename) != null
                             activeVideoUri = uri
 
-                            // Free Coil's in-memory bitmap cache — the cached
-                            // photo bitmaps are invisible while a video plays
-                            // and just waste heap that the codec needs.
-                            context.imageLoader.memoryCache?.clear()
-
-                            // Hint the GC to reclaim soft references / finalizer
-                            // -queued bitmaps before the codec allocates its
-                            // output buffers.
-                            @Suppress("ExplicitGarbageCollection")
-                            System.gc()
+                            // Evict only full-resolution viewer images from Coil's
+                            // memory cache (URLs ending in /web).  Gallery thumbnails
+                            // (URLs ending in /thumb, keyed at 256px) are preserved
+                            // so they display instantly when the user navigates back.
+                            context.imageLoader.memoryCache?.let { cache ->
+                                val keysToRemove = cache.keys.filter { key ->
+                                    val data = key.key
+                                    data.contains("/web") || data.contains("/file")
+                                }
+                                keysToRemove.forEach { cache.remove(it) }
+                            }
 
                             // Don't call stop() first — it releases the MediaCodec,
                             // then prepare() allocates a new one.  The old native

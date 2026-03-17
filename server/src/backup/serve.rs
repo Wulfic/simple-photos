@@ -71,7 +71,7 @@ pub async fn backup_list_photos(
          p.latitude, p.longitude, p.thumb_path, p.created_at \
          FROM photos p ORDER BY p.created_at ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     Ok(Json(photos))
@@ -89,7 +89,7 @@ pub async fn backup_list_trash(
     let rows: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT id, file_path, size_bytes FROM trash_items ORDER BY deleted_at ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     let items: Vec<serde_json::Value> = rows
@@ -116,7 +116,7 @@ pub async fn backup_download_photo(
         "SELECT file_path, mime_type FROM photos WHERE id = ?",
     )
     .bind(&photo_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
@@ -159,7 +159,7 @@ pub async fn backup_download_thumb(
         "SELECT thumb_path FROM photos WHERE id = ?",
     )
     .bind(&photo_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
@@ -263,7 +263,7 @@ pub async fn backup_receive(
     let admin_id: String = sqlx::query_scalar(
         "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))?;
 

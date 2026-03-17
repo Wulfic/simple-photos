@@ -35,7 +35,7 @@ pub async fn list_backup_servers(
          last_sync_status, last_sync_error, enabled, created_at \
          FROM backup_servers ORDER BY created_at ASC",
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     Ok(Json(BackupServerListResponse { servers }))
@@ -63,7 +63,7 @@ pub async fn add_backup_server(
         "SELECT COUNT(*) > 0 FROM backup_servers WHERE address = ?",
     )
     .bind(&address)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await?;
 
     if exists {
@@ -119,7 +119,7 @@ pub async fn update_backup_server(
         "SELECT COUNT(*) > 0 FROM backup_servers WHERE id = ?",
     )
     .bind(&server_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.read_pool)
     .await?;
 
     if !exists {
@@ -218,7 +218,7 @@ pub async fn check_backup_server_status(
         "SELECT address FROM backup_servers WHERE id = ?",
     )
     .bind(&server_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
@@ -361,7 +361,7 @@ pub async fn get_backup_mode(
     let mode: String = sqlx::query_scalar(
         "SELECT value FROM server_settings WHERE key = 'backup_mode'",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .unwrap_or_else(|| "primary".to_string());
 
@@ -373,7 +373,7 @@ pub async fn get_backup_mode(
         sqlx::query_scalar::<_, Option<String>>(
             "SELECT value FROM server_settings WHERE key = 'backup_api_key'",
         )
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await?
         .flatten()
     } else {
@@ -448,7 +448,7 @@ pub async fn set_backup_mode(
         sqlx::query_scalar::<_, Option<String>>(
             "SELECT value FROM server_settings WHERE key = 'backup_api_key'",
         )
-        .fetch_optional(&state.pool)
+        .fetch_optional(&state.read_pool)
         .await?
         .flatten()
     } else {
@@ -479,7 +479,7 @@ pub async fn get_sync_logs(
          WHERE server_id = ? ORDER BY started_at DESC LIMIT 50",
     )
     .bind(&server_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.read_pool)
     .await?;
 
     Ok(Json(logs))
@@ -496,7 +496,7 @@ pub async fn get_audio_backup_setting(
     let enabled: String = sqlx::query_scalar(
         "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
     )
-    .fetch_optional(&state.pool)
+    .fetch_optional(&state.read_pool)
     .await?
     .unwrap_or_else(|| "false".to_string());
 

@@ -30,7 +30,7 @@ use crate::media::{is_media_file, mime_from_extension};
 use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
-use super::metadata::extract_media_metadata;
+use super::metadata::extract_media_metadata_async;
 use super::utils::{normalize_iso_timestamp, utc_now_iso, compute_photo_hash_streaming};
 
 // compute_photo_hash_streaming is now in utils.rs — imported above.
@@ -500,8 +500,9 @@ pub async fn scan_and_register(
                     let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
 
                     // Extract dimensions, camera model, GPS, and date from file
+                    // (offloaded to spawn_blocking — blocking I/O + CPU)
                     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
-                        extract_media_metadata(&abs_path);
+                        extract_media_metadata_async(abs_path.clone()).await;
 
                     // Use EXIF taken_at if available, otherwise fall back to file modified time.
                     // Normalize both to consistent YYYY-MM-DDTHH:MM:SS.mmmZ format.
@@ -609,7 +610,7 @@ pub async fn scan_and_register(
         if !abs.exists() {
             continue;
         }
-        let (w, h, cam, lat, lon, taken) = extract_media_metadata(&abs);
+        let (w, h, cam, lat, lon, taken) = extract_media_metadata_async(abs.clone()).await;
 
         // Compute content hash if missing (streaming to avoid loading huge files into memory)
         let file_hash = compute_photo_hash_streaming(&abs).await;

@@ -103,9 +103,12 @@ pub async fn init(
 
     // ── Create user ─────────────────────────────────────────────────────────
     let user_id = Uuid::new_v4().to_string();
-    let password_hash =
-        bcrypt::hash(&req.password, state.config.auth.bcrypt_cost)
-            .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+    let password_clone = req.password.clone();
+    let cost = state.config.auth.bcrypt_cost;
+    let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&password_clone, cost))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
@@ -161,7 +164,7 @@ pub async fn discover(
     // Guard: only works when no users exist
     let user_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.read_pool)
             .await?;
 
     if user_count > 0 {
@@ -292,9 +295,12 @@ pub async fn pair(
 
     // ── Create local admin with the same credentials ─────────────────────
     let user_id = Uuid::new_v4().to_string();
-    let password_hash =
-        bcrypt::hash(&req.password, state.config.auth.bcrypt_cost)
-            .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+    let password_clone = req.password.clone();
+    let cost = state.config.auth.bcrypt_cost;
+    let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&password_clone, cost))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(

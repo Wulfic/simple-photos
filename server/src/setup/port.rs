@@ -61,11 +61,15 @@ pub async fn update_port(
         ));
     }
 
-    // Persist to config.toml
-    update_config_toml_port(req.port).map_err(|e| {
-        tracing::error!("Failed to update port in config.toml: {}", e);
-        AppError::Internal(format!("Failed to save port configuration: {}", e))
-    })?;
+    // Persist to config.toml (blocking I/O — offload to spawn_blocking)
+    let port = req.port;
+    tokio::task::spawn_blocking(move || update_config_toml_port(port))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
+        .map_err(|e| {
+            tracing::error!("Failed to update port in config.toml: {}", e);
+            AppError::Internal(format!("Failed to save port configuration: {}", e))
+        })?;
 
     audit::log(
         &state,
