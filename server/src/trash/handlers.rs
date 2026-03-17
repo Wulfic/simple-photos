@@ -402,6 +402,17 @@ pub async fn restore_from_trash(
 
         let now = Utc::now().to_rfc3339();
 
+        // Remove any row a scan may have re-registered for this file while
+        // it was in the trash — prevents duplicate file_path entries.
+        sqlx::query(
+            "DELETE FROM photos WHERE user_id = ? AND file_path = ? AND id != ?",
+        )
+        .bind(&auth.user_id)
+        .bind(&item.file_path)
+        .bind(&item.id)
+        .execute(&mut *tx)
+        .await?;
+
         // Re-insert into photos (restoring all metadata for a lossless round-trip)
         sqlx::query(
             "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \

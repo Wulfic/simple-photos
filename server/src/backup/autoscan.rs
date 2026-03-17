@@ -38,6 +38,7 @@ pub async fn background_auto_scan_task(
     convert_notify: std::sync::Arc<tokio::sync::Notify>,
     encryption_key_store: std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
     jwt_secret: String,
+    scan_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 ) {
     if interval_secs == 0 {
         tracing::info!("Background auto-scan disabled (interval = 0)");
@@ -47,7 +48,13 @@ pub async fn background_auto_scan_task(
     // Run an initial scan shortly after startup
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     tracing::info!("[DIAG:AUTOSCAN] Running startup auto-scan...");
-    let count = run_auto_scan(&pool, &storage_root).await;
+    // Use try_lock so background autoscan skips if a manual scan is already running.
+    let count = if let Ok(_guard) = scan_lock.try_lock() {
+        run_auto_scan(&pool, &storage_root).await
+    } else {
+        tracing::info!("[DIAG:AUTOSCAN] Startup scan skipped — another scan is in progress");
+        0
+    };
     tracing::info!("[DIAG:AUTOSCAN] Startup auto-scan complete: registered {} new files", count);
     if count > 0 {
         auto_start_migration_if_needed(
@@ -63,7 +70,12 @@ pub async fn background_auto_scan_task(
     loop {
         interval.tick().await;
 
-        let count = run_auto_scan(&pool, &storage_root).await;
+        let count = if let Ok(_guard) = scan_lock.try_lock() {
+            run_auto_scan(&pool, &storage_root).await
+        } else {
+            tracing::info!("[DIAG:AUTOSCAN] Interval scan skipped — another scan is in progress");
+            0
+        };
         tracing::info!("[DIAG:AUTOSCAN] Interval auto-scan complete: registered {} new files", count);
         if count > 0 {
             auto_start_migration_if_needed(
@@ -94,6 +106,10 @@ pub async fn trigger_auto_scan(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::setup::admin::require_admin(&state, &auth).await?;
+
+    // Serialize with other scan operations (manual scan, background autoscan).
+    let _scan_guard = state.scan_lock.lock().await;
+
     let pool = state.pool.clone();
     let storage_root = (**state.storage_root.load()).clone();
 
