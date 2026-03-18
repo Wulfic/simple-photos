@@ -6,7 +6,12 @@
 use serde::{Deserialize, Serialize};
 
 /// Database row for the `users` table.
+///
+/// `created_at` and `storage_quota_bytes` are selected by `sqlx::FromRow` for
+/// completeness — they're used by admin endpoints and audit logging even if
+/// not read in the auth handlers themselves.
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct User {
     pub id: String,
     pub username: String,

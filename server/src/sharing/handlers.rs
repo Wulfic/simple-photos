@@ -1,4 +1,14 @@
 //! Shared album handlers — create, manage members, add/remove photos.
+//!
+//! Shared albums allow users to collaborate on photo collections:
+//! - Owner creates an album and adds members (other registered users).
+//! - Members can view all photos in the album.
+//! - Owner and members can add/remove photos they own.
+//! - Only the owner can delete the album or manage membership.
+//!
+//! Authorization is enforced per-endpoint: viewers cannot modify,
+//! non-members cannot access, and the owner role is checked for
+//! destructive operations.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;

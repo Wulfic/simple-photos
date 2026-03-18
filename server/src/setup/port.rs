@@ -1,4 +1,13 @@
 //! Server port configuration and restart endpoints.
+//!
+//! - `GET  /api/admin/port`      — current listener port.
+//! - `PUT  /api/admin/port`      — update port in `config.toml` (takes
+//!   effect after restart).
+//! - `POST /api/admin/restart`   — graceful server restart via
+//!   `std::process::Command::new(std::env::current_exe())`.
+//!
+//! On Linux the restart uses `exec` to replace the process in-place;
+//! on other platforms a child process is spawned and the parent exits.
 
 use axum::extract::State;
 use axum::http::HeaderMap;

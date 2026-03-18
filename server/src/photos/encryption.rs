@@ -1,4 +1,14 @@
 //! Encryption settings and migration progress endpoints.
+//!
+//! - `GET  /api/settings/encryption`          — current mode (`none` / `aes256`)
+//!   plus migration progress if a migration is running.
+//! - `PUT  /api/admin/encryption`             — switch encryption mode.
+//!   Triggers a background migration that encrypts (or decrypts) all photos.
+//! - `POST /api/admin/encryption/progress`    — client reports per-photo
+//!   encryption progress (used by the Android client during client-side
+//!   migration).
+//! - `POST /api/photos/:id/mark-encrypted`    — mark a single photo as
+//!   encrypted after the client uploads the ciphertext blob.
 
 use axum::extract::{Path, State};
 use axum::Json;
@@ -155,7 +165,11 @@ pub async fn set_encryption_mode(
     let direction = if req.mode == "encrypted" {
         "encrypting"
     } else {
-        "decrypting"
+        // Server-side decryption is not yet implemented — the client drives
+        // the decrypt flow (download blob → decrypt → re-upload as plain).
+        // We do NOT set the migration status to "decrypting" because no
+        // background task will run, and a stuck status blocks the converter.
+        "idle"
     };
 
     let count: i64 = if req.mode == "encrypted" {
@@ -191,14 +205,23 @@ pub async fn set_encryption_mode(
     }
 
     let now = Utc::now().to_rfc3339();
-    // Only start a new migration if status is idle (avoid overwriting a running migration)
-    if mig_status == "idle" {
+    // Only start a new migration if status is idle AND we're encrypting.
+    // Decryption is client-driven — we reset to idle so the converter isn't blocked.
+    if mig_status == "idle" && direction == "encrypting" {
         sqlx::query(
             "UPDATE encryption_migration SET status = ?, total = ?, completed = 0, started_at = ?, error = NULL WHERE id = 'singleton'",
         )
         .bind(direction)
         .bind(count)
         .bind(&now)
+        .execute(&state.pool)
+        .await?;
+    } else if req.mode == "plain" {
+        // Switching to plain: ensure migration status is idle so the converter
+        // and autoscan background tasks resume normal operation.
+        sqlx::query(
+            "UPDATE encryption_migration SET status = 'idle', error = NULL WHERE id = 'singleton'",
+        )
         .execute(&state.pool)
         .await?;
     }

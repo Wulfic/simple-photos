@@ -3,7 +3,10 @@
  * and password management.
  *
  * Maps to server routes: `POST /api/auth/*`, `PUT /api/auth/password`,
- * `GET /api/auth/2fa/status`.
+ * `POST /api/auth/2fa/*`.
+ *
+ * Note: `GET /api/auth/2fa/status` exists on the server but is not wrapped
+ * here — 2FA status is inferred from the login response and user list.
  */
 import { request } from "./core";
 import type {

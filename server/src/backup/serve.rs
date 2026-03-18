@@ -20,7 +20,6 @@ use axum::Json;
 use chrono::Utc;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, CONTROLS};
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::sanitize;

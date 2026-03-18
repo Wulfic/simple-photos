@@ -165,7 +165,7 @@ pub async fn soft_delete_photo(
         .execute(&mut *tx)
         .await?;
 
-    tx.commit().await?;;
+    tx.commit().await?;
 
     tracing::info!(
         "Photo {} moved to trash (expires {})",
@@ -287,7 +287,7 @@ pub async fn soft_delete_blob(
         .execute(&mut *tx)
         .await?;
 
-    tx.commit().await?;;
+    tx.commit().await?;
 
     tracing::info!(
         "Encrypted blob {} moved to trash (expires {})",
@@ -811,6 +811,7 @@ struct TrashPhotoRow {
 /// Row type for restoring encrypted blob items from trash.
 /// Extended in migration 020 to preserve hash fields for dedup/integrity.
 #[derive(Debug, sqlx::FromRow)]
+#[allow(dead_code)] // All fields selected by sqlx::FromRow for complete row mapping; mime_type used in future restore path.
 struct TrashBlobRow {
     file_path: String,
     mime_type: String,

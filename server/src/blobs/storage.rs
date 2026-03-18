@@ -68,6 +68,10 @@ pub async fn write_metadata(
 }
 
 /// Read metadata from disk.
+///
+/// Currently unused — metadata is read via import handlers that decrypt
+/// inline.  Kept as a public utility for future direct-read use cases.
+#[allow(dead_code)]
 pub async fn read_metadata(root: &Path, storage_path: &str) -> Result<Vec<u8>, AppError> {
     let path = root.join(storage_path);
     tokio::fs::read(&path)

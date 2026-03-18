@@ -12,7 +12,7 @@
 //! In encrypted mode, newly registered files also trigger the encryption
 //! migration if the encryption key is available.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;

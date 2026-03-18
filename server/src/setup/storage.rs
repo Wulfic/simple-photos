@@ -1,4 +1,12 @@
 //! Storage and directory browsing admin endpoints.
+//!
+//! - `GET  /api/admin/storage`   — current storage root and quota settings.
+//! - `PUT  /api/admin/storage`   — update storage root (writes to both
+//!   `config.toml` and the runtime `ArcSwap<PathBuf>`).
+//! - `GET  /api/admin/browse`    — list directories on the server filesystem
+//!   so the admin can pick a storage root from the web UI.
+//!
+//! Path traversal attacks are blocked by `sanitize::validate_relative_path()`.
 
 use axum::extract::State;
 use axum::http::HeaderMap;

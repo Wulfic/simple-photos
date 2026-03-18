@@ -42,7 +42,7 @@ USER="testadmin"
 PASS='TestPass123!'
 USER2="testuser2"
 PASS2='SecondUser1!'
-SLOG="/tmp/simple-photos-server.log"
+SLOG="${TMPDIR:-/tmp}/simple-photos-server.log"
 
 # ── Color helpers ────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -998,7 +998,7 @@ hdr "Module 13: Blob Management"
 
 subhdr "Upload Blob"
 # Create a small test file to upload
-TEST_BLOB="/tmp/e2e_test_blob.bin"
+TEST_BLOB="${TMPDIR:-/tmp}/e2e_test_blob.bin"
 dd if=/dev/urandom of="$TEST_BLOB" bs=1024 count=4 status=none 2>/dev/null
 TEST_HASH=$(sha256sum "$TEST_BLOB" | cut -d' ' -f1)
 

@@ -197,6 +197,7 @@ struct PlainPhotoRow {
     file_path: String,
     mime_type: String,
     media_type: String,
+    #[allow(dead_code)] // Selected by sqlx::FromRow for completeness; may be used in future migration progress reporting.
     size_bytes: i64,
     width: i64,
     height: i64,
@@ -597,7 +598,7 @@ async fn run_migration(
             let completed = progress_clone.completed.fetch_add(1, Ordering::Relaxed) + 1;
 
             // Update DB progress every item (so polling clients always see fresh data)
-            let total = progress_clone.total.load(Ordering::Relaxed);
+            let _total = progress_clone.total.load(Ordering::Relaxed);
             let _ = sqlx::query(
                 "UPDATE encryption_migration SET completed = ? WHERE id = 'singleton'",
             )

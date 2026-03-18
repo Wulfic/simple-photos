@@ -528,6 +528,7 @@ fi
 module_timer_stop > /dev/null
 print_summary "Concurrent E2E"
 
-# Exit with total errors (concurrent failures + setup/assertion failures)
-COMBINED_EXIT=$((TOTAL_ERRORS + FAILURES))
-exit "$COMBINED_EXIT"
+# Exit with assertion failure count for consistency with other modules.
+# TOTAL_ERRORS is logged above for visibility but individual HTTP errors
+# are already rolled up into per-user FAILURES via fail().
+exit "$FAILURES"
