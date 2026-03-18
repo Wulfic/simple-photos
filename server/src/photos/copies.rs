@@ -1,4 +1,14 @@
 //! Photo duplication and edit copy management endpoints.
+//!
+//! **Duplicate photo** (`POST /api/photos/:id/duplicate`):
+//! Creates a new `photos` row that shares the same underlying file.
+//! Used by the "Save Copy" feature in the editor — the copy has its
+//! own metadata (crop, favorites, tags) but no extra disk usage.
+//!
+//! **Edit copies** (`POST/GET/DELETE /api/photos/:id/copies`):
+//! Lightweight metadata-only "versions" stored as JSON in the `edit_copies`
+//! table. Each copy records crop parameters, filters, etc. without
+//! duplicating the file or photos row.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;

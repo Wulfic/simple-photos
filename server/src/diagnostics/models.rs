@@ -185,7 +185,10 @@ pub struct AuditLogParams {
 
 // ── Server log listing models ─────────────────────────────────────────────
 
+/// Prepared for future server log file viewer endpoint.
+/// Not yet constructed — kept as a placeholder for the log viewer feature.
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct ServerLogEntry {
     pub timestamp: String,
     pub level: String,

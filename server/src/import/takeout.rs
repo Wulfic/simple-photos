@@ -1,7 +1,18 @@
 //! Google Photos Takeout directory scanning and bulk import.
+//!
+//! Google Takeout exports photos into per-album directories with sidecar
+//! `.json` files containing metadata (timestamps, geo-location, description).
+//!
+//! - `GET  /api/admin/import/google-photos/scan`  — recursively scan a
+//!   Takeout directory, returning discovered photos with their sidecar metadata.
+//! - `POST /api/admin/import/google-photos`       — import discovered photos
+//!   into Simple Photos, applying sidecar metadata and generating thumbnails.
+//!
+//! Both endpoints are admin-only. The scan path is validated against path
+//! traversal via `sanitize::validate_relative_path()`.
 
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;

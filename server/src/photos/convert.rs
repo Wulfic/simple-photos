@@ -1096,7 +1096,7 @@ pub async fn conversion_status(
     // This avoids loading all rows and checking the filesystem for each.
     // We still need filesystem checks for conversion status, but we can
     // use a smarter SQL filter to limit the set.
-    let missing_thumbnails_base: i64 = sqlx::query_scalar(
+    let _missing_thumbnails_base: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos \
          WHERE user_id = ? AND encrypted_blob_id IS NULL AND thumb_path IS NOT NULL",
     )

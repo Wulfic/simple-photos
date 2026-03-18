@@ -10,7 +10,7 @@ set -eo pipefail
 
 BASE="http://localhost:8080"
 API="$BASE/api"
-RESULTS_DIR="/tmp/concurrent_test_results"
+RESULTS_DIR="${TMPDIR:-/tmp}/concurrent_test_results"
 MAX_TIME=30   # Per-request timeout in seconds
 ROUNDS=5      # Number of rounds each user performs
 
@@ -308,7 +308,7 @@ except:
     fi
 
     # ---- 5. Blob upload + list + download ----
-    blob_file="/tmp/concurrent_blob_${user_idx}_${round}.bin"
+    blob_file="${TMPDIR:-/tmp}/concurrent_blob_${user_idx}_${round}.bin"
     dd if=/dev/urandom of="$blob_file" bs=1024 count=2 status=none 2>/dev/null
     blob_hash=$(sha256sum "$blob_file" | cut -d' ' -f1)
 

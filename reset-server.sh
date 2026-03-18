@@ -80,7 +80,7 @@ if [[ -d "$DOCKER_DIR" ]]; then
 fi
 
 # Restart server as the real user (not root)
-LOG_FILE="/tmp/simple-photos-server.log"
+LOG_FILE="${TMPDIR:-/tmp}/simple-photos-server.log"
 echo "Starting server as $RUN_USER (log: $LOG_FILE)..."
 if [[ "$RUN_USER" != "$(id -un)" ]]; then
     # We're root via sudo — drop privileges and cd to SERVER_DIR so relative

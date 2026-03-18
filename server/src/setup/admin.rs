@@ -1,4 +1,12 @@
 //! Admin user management and role checking utilities.
+//!
+//! Provides:
+//! - `require_admin()` — guard used by all admin-only endpoints to verify
+//!   the caller has the `admin` role.
+//! - CRUD user management: create, list, delete users and change roles.
+//! - Password resets and 2FA setup/reset on behalf of other users.
+//!
+//! All mutating operations write to the audit log for traceability.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};

@@ -14,7 +14,12 @@ pub const DISCOVERY_PORT: u16 = 41820;
 const MAGIC: &[u8; 4] = b"SPBK";
 
 /// A server discovered via UDP broadcast.
+///
+/// `api_key_required` is populated from the broadcast packet so the
+/// discovery UI can show a lock icon — currently the field is parsed
+/// but not consumed in Rust (the web UI reads the JSON serialization).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BroadcastInfo {
     pub address: String,
     pub name: String,
