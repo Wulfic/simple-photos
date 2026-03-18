@@ -172,19 +172,24 @@ export default function CompleteStep({
               // This ensures the server knows about photos and can start migration
               // immediately — no race condition with background scan.
               try {
-                await api.admin.scanAndRegister();
+                const scanResult = await api.admin.scanAndRegister();
+                console.log("[Setup] Scan complete:", scanResult);
                 // After scan, trigger immediate conversion for thumbnails/previews
                 api.admin.triggerConvert().catch(() => {});
-              } catch {
-                // Non-critical: if scan fails, autoscan will catch files later
+              } catch (scanErr) {
+                console.warn("[Setup] Scan failed — autoscan will catch files later:", scanErr);
               }
 
               // Set the encryption mode on the server, including the encryption
               // key so the server can run migration autonomously (even if the
               // browser is closed immediately after this point).
+              // Re-read sp_key immediately before sending to ensure it's available.
               const keyHex = encryptionMode === "encrypted"
                 ? sessionStorage.getItem("sp_key") ?? undefined
                 : undefined;
+              if (encryptionMode === "encrypted" && !keyHex) {
+                console.error("[Setup] Encryption key missing from sessionStorage! Key derivation may have failed.");
+              }
               await api.encryption.setMode(encryptionMode, keyHex);
             } catch (err: unknown) {
               // Non-fatal: mode may already be set or endpoint unavailable

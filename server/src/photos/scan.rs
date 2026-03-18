@@ -829,6 +829,17 @@ pub async fn scan_and_register(
     if mig_status == "idle" {
         tracing::info!("[DIAG:SCAN] post-scan: mig_status=idle, sending pipeline notify");
         state.convert_notify.notify_one();
+
+        // After registering new photos, check if encryption migration needs to
+        // start. This handles the race condition where setMode("encrypted") was
+        // called before any photos existed, and now photos have arrived.
+        crate::backup::autoscan::try_start_migration_after_scan(
+            &state.pool,
+            &storage_root,
+            &state.convert_notify,
+            &state.encryption_key,
+            &state.config.auth.jwt_secret,
+        ).await;
     } else {
         tracing::info!("[DIAG:SCAN] post-scan: mig_status='{}', skipping pipeline trigger", mig_status);
     }

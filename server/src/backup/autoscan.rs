@@ -56,11 +56,12 @@ pub async fn background_auto_scan_task(
         0
     };
     tracing::info!("[DIAG:AUTOSCAN] Startup auto-scan complete: registered {} new files", count);
-    if count > 0 {
-        auto_start_migration_if_needed(
-            &pool, &storage_root, &convert_notify, &encryption_key_store, &jwt_secret,
-        ).await;
-    }
+    // Always check migration — even when count == 0, there may be unencrypted
+    // photos from a previous scan that still need migration (e.g. setMode was
+    // called before the initial scan finished).
+    auto_start_migration_if_needed(
+        &pool, &storage_root, &convert_notify, &encryption_key_store, &jwt_secret,
+    ).await;
     update_last_scan_time(&pool).await;
 
     // Then scan on a configurable interval
@@ -77,11 +78,11 @@ pub async fn background_auto_scan_task(
             0
         };
         tracing::info!("[DIAG:AUTOSCAN] Interval auto-scan complete: registered {} new files", count);
-        if count > 0 {
-            auto_start_migration_if_needed(
-                &pool, &storage_root, &convert_notify, &encryption_key_store, &jwt_secret,
-            ).await;
-        }
+        // Always check migration — even when count == 0, there may be unencrypted
+        // photos that need migration due to timing gaps between scan and setMode.
+        auto_start_migration_if_needed(
+            &pool, &storage_root, &convert_notify, &encryption_key_store, &jwt_secret,
+        ).await;
         update_last_scan_time(&pool).await;
     }
 }
@@ -115,15 +116,15 @@ pub async fn trigger_auto_scan(
 
     let count = run_auto_scan(&pool, &storage_root).await;
     tracing::info!("[DIAG:AUTOSCAN] On-demand scan complete: registered {} new files", count);
-    if count > 0 {
-        auto_start_migration_if_needed(
-            &pool,
-            &storage_root,
-            &state.convert_notify,
-            &state.encryption_key,
-            &state.config.auth.jwt_secret,
-        ).await;
-    }
+    // Always check migration — even when count == 0, there may be unencrypted
+    // photos that need migration (e.g. setMode was called before scan finished).
+    auto_start_migration_if_needed(
+        &pool,
+        &storage_root,
+        &state.convert_notify,
+        &state.encryption_key,
+        &state.config.auth.jwt_secret,
+    ).await;
 
     // Update last scan time
     update_last_scan_time(&pool).await;
@@ -136,6 +137,20 @@ pub async fn trigger_auto_scan(
 
 /// If the server is in "encrypted" mode with an idle migration and there are
 /// unencrypted plain photos, automatically start the encryption migration.
+/// Public entry point for `scan_and_register` (and any other caller) to trigger
+/// the same migration-check logic that the background autoscan uses.
+/// This ensures that on-demand scans also detect newly-registered photos that
+/// need encryption migration.
+pub async fn try_start_migration_after_scan(
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+    convert_notify: &std::sync::Arc<tokio::sync::Notify>,
+    encryption_key_store: &std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
+    jwt_secret: &str,
+) {
+    auto_start_migration_if_needed(pool, storage_root, convert_notify, encryption_key_store, jwt_secret).await;
+}
+
 /// This resolves a race condition on fresh setup where the mode is set before
 /// the initial scan registers any files.
 ///
