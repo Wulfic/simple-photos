@@ -12,8 +12,10 @@
 //! In encrypted mode, newly registered files also trigger the encryption
 //! migration if the encryption key is available.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use axum::extract::State;
 use axum::Json;
 use futures_util::TryStreamExt;
@@ -30,10 +32,14 @@ use crate::state::AppState;
 // compute_photo_hash_streaming is now in photos::utils — imported above.
 
 /// Background task: automatically scan the storage directory for new files
-/// every 24 hours (or when triggered by an API call).
+/// on a configurable interval (or when triggered by an API call).
+///
+/// Reads the **current** storage root from `ArcSwap` on every iteration so
+/// that runtime storage-path changes (via the setup wizard or admin API) are
+/// picked up immediately — no server restart required.
 pub async fn background_auto_scan_task(
     pool: sqlx::SqlitePool,
-    storage_root: std::path::PathBuf,
+    storage_root: Arc<ArcSwap<PathBuf>>,
     interval_secs: u64,
     convert_notify: std::sync::Arc<tokio::sync::Notify>,
     encryption_key_store: std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
@@ -48,9 +54,11 @@ pub async fn background_auto_scan_task(
     // Run an initial scan shortly after startup
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     tracing::info!("[DIAG:AUTOSCAN] Running startup auto-scan...");
+    // Read current storage root from ArcSwap (respects runtime changes).
+    let root = (**storage_root.load()).clone();
     // Use try_lock so background autoscan skips if a manual scan is already running.
     let count = if let Ok(_guard) = scan_lock.try_lock() {
-        run_auto_scan(&pool, &storage_root).await
+        run_auto_scan(&pool, &root).await
     } else {
         tracing::info!("[DIAG:AUTOSCAN] Startup scan skipped — another scan is in progress");
         0
@@ -60,7 +68,7 @@ pub async fn background_auto_scan_task(
     // photos from a previous scan that still need migration (e.g. setMode was
     // called before the initial scan finished).
     auto_start_migration_if_needed(
-        &pool, &storage_root, &convert_notify, &encryption_key_store, &jwt_secret,
+        &pool, &root, &convert_notify, &encryption_key_store, &jwt_secret,
     ).await;
     update_last_scan_time(&pool).await;
 
@@ -71,8 +79,10 @@ pub async fn background_auto_scan_task(
     loop {
         interval.tick().await;
 
+        // Re-read storage root each iteration — the admin may have changed it.
+        let root = (**storage_root.load()).clone();
         let count = if let Ok(_guard) = scan_lock.try_lock() {
-            run_auto_scan(&pool, &storage_root).await
+            run_auto_scan(&pool, &root).await
         } else {
             tracing::info!("[DIAG:AUTOSCAN] Interval scan skipped — another scan is in progress");
             0
@@ -81,7 +91,7 @@ pub async fn background_auto_scan_task(
         // Always check migration — even when count == 0, there may be unencrypted
         // photos that need migration due to timing gaps between scan and setMode.
         auto_start_migration_if_needed(
-            &pool, &storage_root, &convert_notify, &encryption_key_store, &jwt_secret,
+            &pool, &root, &convert_notify, &encryption_key_store, &jwt_secret,
         ).await;
         update_last_scan_time(&pool).await;
     }

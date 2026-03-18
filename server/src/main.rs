@@ -235,10 +235,13 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn background task for auto-scanning storage directory
+    // Spawn background task for auto-scanning storage directory.
+    // Passes the ArcSwap<PathBuf> so the task always reads the *current*
+    // storage root — respecting runtime changes via the setup wizard.
+    let storage_root_swap = Arc::new(arc_swap::ArcSwap::from_pointee(config.storage.root.clone()));
     {
         let pool_clone = pool.clone();
-        let storage_root_clone = config.storage.root.clone();
+        let storage_swap_clone = storage_root_swap.clone();
         let scan_interval = config.scan.auto_scan_interval_secs;
         let convert_notify_clone = convert_notify.clone();
         let encryption_key_clone = encryption_key.clone();
@@ -247,7 +250,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             backup::autoscan::background_auto_scan_task(
                 pool_clone,
-                storage_root_clone,
+                storage_swap_clone,
                 scan_interval,
                 convert_notify_clone,
                 encryption_key_clone,
@@ -258,13 +261,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Build shared application state — cloned (via Arc) into every Axum handler.
+    // Reuse the same ArcSwap that was passed to the background autoscan task
+    // so runtime storage-path changes are visible everywhere atomically.
     let state = AppState {
         pool,
         read_pool,
         config: Arc::new(config.clone()),
         rate_limiters,
-        // ArcSwap: lock-free atomic reads for the hot-path storage root.
-        storage_root: Arc::new(arc_swap::ArcSwap::from_pointee(config.storage.root.clone())),
+        storage_root: storage_root_swap,
         convert_notify,
         conversion_active,
         encryption_key,
