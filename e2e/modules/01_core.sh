@@ -940,12 +940,105 @@ rm -f "$TEST_BLOB"
 # ══════════════════════════════════════════════════════════════════════════════
 hdr "Module 14: Encryption Settings"
 
-subhdr "Get Encryption Settings"
+subhdr "Get Encryption Settings (defaults)"
 ENC=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
 assert_json "Default mode is plain" "$ENC" "encryption_mode" "plain"
 assert_json "Migration status is idle" "$ENC" "migration_status" "idle"
 assert_contains "Migration total field present" "$ENC" "migration_total"
 assert_contains "Migration completed field present" "$ENC" "migration_completed"
+
+# ── Test: Enable encrypted mode WITH a key ────────────────────────────────
+# Use a deterministic 32-byte test key (hex-encoded).
+TEST_KEY_HEX="aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
+
+subhdr "Set Encryption Mode → encrypted (with key)"
+SET_ENC=$(curl -s --max-time 30 -X PUT "$API/admin/encryption" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d "{\"mode\":\"encrypted\",\"key_hex\":\"$TEST_KEY_HEX\"}")
+assert_contains "setMode response contains encrypted" "$SET_ENC" "encrypted"
+
+# Verify mode changed
+ENC2=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
+assert_json "Mode is now encrypted" "$ENC2" "encryption_mode" "encrypted"
+
+# ── Wait for migration to complete (if photos exist) ──────────────────────
+subhdr "Wait for Encryption Migration"
+MIG_TOTAL=$(echo "$SET_ENC" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('migration_items',0))" 2>/dev/null || echo "0")
+if [[ "$MIG_TOTAL" -gt 0 ]]; then
+  log "Migration started for $MIG_TOTAL items, waiting for completion..."
+  MIG_DONE=false
+  for i in $(seq 1 60); do
+    sleep 2
+    MIG_STATUS=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
+    STATUS_VAL=$(echo "$MIG_STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('migration_status','unknown'))" 2>/dev/null || echo "unknown")
+    COMPLETED=$(echo "$MIG_STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('migration_completed',0))" 2>/dev/null || echo "0")
+    if [[ "$STATUS_VAL" == "idle" && "$COMPLETED" -gt 0 ]]; then
+      MIG_DONE=true
+      pass "Encryption migration completed ($COMPLETED/$MIG_TOTAL items) in ~$((i * 2))s"
+      break
+    elif [[ "$STATUS_VAL" == "encrypting" ]]; then
+      log "  Migration in progress: $COMPLETED/$MIG_TOTAL ($STATUS_VAL) [$i/60]"
+    else
+      log "  Migration status: $STATUS_VAL, completed: $COMPLETED [$i/60]"
+    fi
+  done
+  if ! $MIG_DONE; then
+    fail "Encryption migration did not complete within 120s (status=$STATUS_VAL, $COMPLETED/$MIG_TOTAL)"
+  fi
+
+  # Verify encrypted photos via encrypted-sync
+  subhdr "Verify Encrypted Photos via encrypted-sync"
+  ENC_PHOTOS=$(curl -s --max-time 10 "$API/photos/encrypted-sync" -H "$AUTH")
+  ENC_COUNT=$(echo "$ENC_PHOTOS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('photos',[])))" 2>/dev/null || echo "0")
+  if [[ "$ENC_COUNT" -gt 0 ]]; then
+    pass "encrypted-sync returns $ENC_COUNT encrypted photos after migration"
+  else
+    fail "encrypted-sync returned 0 photos after migration (expected $MIG_TOTAL)"
+  fi
+else
+  log "No photos to migrate — verifying mode was set correctly"
+  pass "Encryption mode set to encrypted (0 items to migrate — will start when photos arrive)"
+fi
+
+# ── Test: Switch back to plain ─────────────────────────────────────────────
+subhdr "Set Encryption Mode → plain (decrypt)"
+SET_PLAIN=$(curl -s --max-time 30 -X PUT "$API/admin/encryption" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d "{\"mode\":\"plain\",\"key_hex\":\"$TEST_KEY_HEX\"}")
+assert_contains "setMode response contains plain" "$SET_PLAIN" "plain"
+
+# Wait for decryption migration if needed
+PLAIN_MIG_TOTAL=$(echo "$SET_PLAIN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('migration_items',0))" 2>/dev/null || echo "0")
+if [[ "$PLAIN_MIG_TOTAL" -gt 0 ]]; then
+  log "Decryption migration started for $PLAIN_MIG_TOTAL items, waiting..."
+  PLAIN_DONE=false
+  for i in $(seq 1 60); do
+    sleep 2
+    PLAIN_STATUS=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
+    PLAIN_S=$(echo "$PLAIN_STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('migration_status','unknown'))" 2>/dev/null || echo "unknown")
+    PLAIN_C=$(echo "$PLAIN_STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('migration_completed',0))" 2>/dev/null || echo "0")
+    if [[ "$PLAIN_S" == "idle" && "$PLAIN_C" -gt 0 ]]; then
+      PLAIN_DONE=true
+      pass "Decryption migration completed ($PLAIN_C/$PLAIN_MIG_TOTAL items) in ~$((i * 2))s"
+      break
+    fi
+  done
+  if ! $PLAIN_DONE; then
+    fail "Decryption migration did not complete within 120s (status=$PLAIN_S)"
+  fi
+fi
+
+# Verify we're back to plain
+ENC_FINAL=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
+assert_json "Mode restored to plain" "$ENC_FINAL" "encryption_mode" "plain"
+
+# Verify plain photos list works again
+PLAIN_PHOTOS=$(curl -s --max-time 10 "$API/photos" -H "$AUTH")
+if echo "$PLAIN_PHOTOS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'photos' in d" 2>/dev/null; then
+  pass "Plain photo listing works after round-trip encryption"
+else
+  warn "Plain photo listing after decryption: ${PLAIN_PHOTOS:0:200}"
+fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODULE 15: STORAGE STATS & CLEANUP

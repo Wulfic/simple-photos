@@ -118,8 +118,11 @@ pub async fn set_encryption_mode(
         ));
     }
 
-    // If a key is provided, validate and persist it (wrapped by the JWT secret)
+    // If a key is provided, validate and persist it (wrapped by the JWT secret).
+    // The key MUST be provided when switching to encrypted mode so the server can
+    // run migration autonomously (even after the browser closes).
     let parsed_key: Option<[u8; 32]> = if let Some(ref key_hex) = req.key_hex {
+        tracing::info!("[CRYPTO] Received encryption key from client (len={})", key_hex.len());
         let key = crate::crypto::parse_key_hex(key_hex)
             .map_err(|e| AppError::BadRequest(e))?;
         crate::crypto::store_wrapped_key(&state.pool, &key, &state.config.auth.jwt_secret)
@@ -130,8 +133,15 @@ pub async fn set_encryption_mode(
             let mut guard = state.encryption_key.write().await;
             *guard = Some(key);
         }
+        tracing::info!("[CRYPTO] Encryption key persisted and loaded into memory");
         Some(key)
     } else {
+        if req.mode == "encrypted" {
+            tracing::warn!(
+                "[CRYPTO] set_encryption_mode('encrypted') called WITHOUT key_hex! \
+                 Migration will only work if a wrapped key already exists in the DB."
+            );
+        }
         None
     };
 
