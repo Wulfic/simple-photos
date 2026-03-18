@@ -282,6 +282,40 @@ assert_contains "Storage path returned" "$STORAGE" "storage_path"
 CURRENT_STORAGE=$(echo "$STORAGE" | jget storage_path "")
 log "Current storage: $CURRENT_STORAGE"
 
+subhdr "Update Storage (PUT round-trip)"
+# Read the current storage path from the server — this is whatever the user
+# configured via the setup wizard or config.toml.  We do NOT hardcode a path;
+# instead we exercise the PUT endpoint by writing the same value back and
+# confirming it persists.
+if [[ -n "$CURRENT_STORAGE" && "$CURRENT_STORAGE" != "__MISSING__" ]]; then
+  SET_STORAGE=$(curl -s --max-time 10 -X PUT "$API/admin/storage" \
+    -H "$AUTH" -H 'Content-Type: application/json' \
+    -d "{\"path\":\"$CURRENT_STORAGE\"}")
+  assert_json "Storage PUT returns correct path" "$SET_STORAGE" "storage_path" "$CURRENT_STORAGE"
+  log "Storage confirmed via PUT: $(echo "$SET_STORAGE" | jget storage_path '')"
+
+  # Verify the change persisted by re-reading
+  STORAGE_VERIFY=$(curl -s --max-time 10 "$API/admin/storage" -H "$AUTH")
+  VERIFIED_PATH=$(echo "$STORAGE_VERIFY" | jget storage_path "")
+  if [[ "$VERIFIED_PATH" == "$CURRENT_STORAGE" ]]; then
+    pass "Storage path persisted after PUT: $VERIFIED_PATH"
+  else
+    fail "Storage path mismatch after PUT: expected '$CURRENT_STORAGE', got '$VERIFIED_PATH'"
+  fi
+else
+  fail "Cannot test storage PUT — initial GET returned no storage_path"
+fi
+
+subhdr "Set Storage — Reject Path Traversal"
+TRAVERSAL_STATUS=$(http_status -X PUT "$API/admin/storage" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"path":"/tmp/../etc/shadow"}')
+if [[ "$TRAVERSAL_STATUS" == "400" ]]; then
+  pass "Path traversal correctly rejected (HTTP 400)"
+else
+  fail "Path traversal should return 400, got $TRAVERSAL_STATUS"
+fi
+
 subhdr "Browse Directory"
 BROWSE=$(curl -s --max-time 10 "$API/admin/browse?path=/" -H "$AUTH")
 assert_contains "Browse returns directories" "$BROWSE" "directories"
@@ -318,10 +352,56 @@ except:
     print('0')
 " 2>/dev/null)
 
-if [[ "$PHOTO_COUNT" -gt 0 ]]; then
-  pass "Photos found in database: $PHOTO_COUNT"
+# Count the expected media files by scanning the configured storage root for
+# files whose extensions match the server's MEDIA_EXTENSIONS list.  This makes
+# the test independent of the chosen directory — it adapts automatically.
+MEDIA_EXT_PATTERN='\.(jpg|jpeg|png|gif|webp|avif|heic|heif|bmp|tiff|tif|svg|dng|cr2|nef|arw|raw|ico|cur|hdr|mp4|mov|mkv|webm|avi|3gp|m4v|wmv|asf|h264|mpg|mpeg|mp3|aiff|flac|ogg|wav|wma)$'
+EXPECTED_MEDIA=$(find "$CURRENT_STORAGE" -type f -not -path '*/\.*' 2>/dev/null \
+  | grep -ciE "$MEDIA_EXT_PATTERN" || echo 0)
+log "Expected media files in storage root: $EXPECTED_MEDIA"
+
+# Allow a tolerance window: the server might skip audio files when audio
+# backup is disabled, and may skip files it can't stat.  We accept ±30%.
+if [[ "$EXPECTED_MEDIA" -gt 0 ]]; then
+  TOLERANCE_LOW=$(( EXPECTED_MEDIA * 70 / 100 ))
+  TOLERANCE_HIGH=$(( EXPECTED_MEDIA * 130 / 100 ))
+  # Ensure the floor is at least 1
+  [[ "$TOLERANCE_LOW" -lt 1 ]] && TOLERANCE_LOW=1
 else
-  warn "No photos found after scan (ensure storage root has media files)"
+  TOLERANCE_LOW=0
+  TOLERANCE_HIGH=0
+fi
+
+if [[ "$PHOTO_COUNT" -ge "$TOLERANCE_LOW" && "$PHOTO_COUNT" -le "$TOLERANCE_HIGH" ]]; then
+  pass "Photo count in expected range ($TOLERANCE_LOW-$TOLERANCE_HIGH): $PHOTO_COUNT"
+elif [[ "$PHOTO_COUNT" -gt "$TOLERANCE_HIGH" ]]; then
+  fail "OVERSCAN: $PHOTO_COUNT photos found (expected $TOLERANCE_LOW-$TOLERANCE_HIGH based on $EXPECTED_MEDIA files in storage root). Scan may be reading files outside the configured directory!"
+elif [[ "$PHOTO_COUNT" -gt 0 ]]; then
+  warn "Photo count ($PHOTO_COUNT) below expected range ($TOLERANCE_LOW-$TOLERANCE_HIGH)"
+else
+  fail "No photos found after scan (ensure storage root '$CURRENT_STORAGE' has media files)"
+fi
+
+# Verify every scanned file_path is relative (no absolute paths) and does not
+# escape the storage root.  This catches both parent-directory leaks and
+# path-traversal issues regardless of which directory was configured.
+BAD_PATHS=$(echo "$PHOTOS_LIST" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    photos = d.get('photos', []) if isinstance(d, dict) else d
+    bad = [p.get('file_path','') for p in photos
+           if p.get('file_path','').startswith('/')
+           or '..' in p.get('file_path','')]
+    print(len(bad))
+except:
+    print('0')
+" 2>/dev/null)
+
+if [[ "$BAD_PATHS" -eq 0 ]]; then
+  pass "All scanned file paths are relative and safe"
+else
+  fail "Found $BAD_PATHS file(s) with absolute or path-traversal file_path values"
 fi
 
 subhdr "Conversion Status"
