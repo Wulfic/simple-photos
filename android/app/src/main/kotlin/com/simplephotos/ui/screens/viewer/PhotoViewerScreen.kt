@@ -725,7 +725,7 @@ fun PhotoViewerScreen(
                         )
                     }
                     if (currentPhoto != null) {
-                        if (isPlainMode && currentPhoto.serverPhotoId != null) {
+                        if (currentPhoto.serverPhotoId != null) {
                             IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_star),

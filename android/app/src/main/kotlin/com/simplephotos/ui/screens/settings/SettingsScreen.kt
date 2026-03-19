@@ -465,6 +465,13 @@ class SettingsViewModel @Inject constructor(
                 }
                 audioBackupEnabled = res.audioBackupEnabled
                 message = res.message
+
+                // When enabling audio backup, trigger a server-side scan so
+                // existing audio files in the storage directory get registered
+                // immediately instead of waiting for the next autoscan cycle.
+                if (res.audioBackupEnabled) {
+                    withContext(Dispatchers.IO) { api.scanAndRegister() }
+                }
             } catch (e: Exception) {
                 error = "Failed to update audio backup: ${e.message}"
             }
@@ -537,7 +544,21 @@ class SettingsViewModel @Inject constructor(
                 }
                 val withLocal = synced.filter { it.localPath != null }
                 freeableCount = withLocal.size
-                freeableBytes = withLocal.sumOf { it.sizeBytes ?: 0L }
+                // Query actual on-device file sizes via ContentResolver
+                // instead of relying on sizeBytes (which may be null for
+                // locally-discovered photos or stale for server-synced ones).
+                freeableBytes = withContext(Dispatchers.IO) {
+                    withLocal.sumOf { photo ->
+                        try {
+                            val uri = android.net.Uri.parse(photo.localPath)
+                            appContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                                pfd.statSize
+                            } ?: photo.sizeBytes ?: 0L
+                        } catch (_: Exception) {
+                            photo.sizeBytes ?: 0L
+                        }
+                    }
+                }
             } catch (_: Exception) {
                 freeableCount = 0
                 freeableBytes = 0L

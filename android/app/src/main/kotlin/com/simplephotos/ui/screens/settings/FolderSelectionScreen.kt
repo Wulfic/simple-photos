@@ -65,6 +65,12 @@ class FolderSelectionViewModel @Inject constructor(
         private set
     var enabledBucketIds by mutableStateOf<Set<Long>>(emptySet())
         private set
+    /** Snapshot of enabled IDs when the screen was loaded — used to diff
+     *  changes on exit and only persist the delta. */
+    private var originalEnabledBucketIds: Set<Long> = emptySet()
+    /** True while the deferred save is being written. */
+    var saving by mutableStateOf(false)
+        private set
     var loading by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
@@ -112,6 +118,7 @@ class FolderSelectionViewModel @Inject constructor(
 
                 // Get currently enabled bucket IDs
                 enabledBucketIds = backupFolderRepository.getEnabledBucketIds().toSet()
+                originalEnabledBucketIds = enabledBucketIds
                 android.util.Log.i("FolderSelection", "scanFolders: ${enabledBucketIds.size} folders enabled, bucketIds=$enabledBucketIds")
 
                 // Post-scan heuristic: detect the Android 14 platform bug
@@ -154,6 +161,7 @@ class FolderSelectionViewModel @Inject constructor(
 
                 deviceFolders = backupFolderRepository.resetAndRescan()
                 enabledBucketIds = backupFolderRepository.getEnabledBucketIds().toSet()
+                originalEnabledBucketIds = enabledBucketIds
 
                 android.util.Log.i("FolderSelection", "resetAndRescan: found ${deviceFolders.size} folders, ${enabledBucketIds.size} enabled")
 
@@ -180,26 +188,49 @@ class FolderSelectionViewModel @Inject constructor(
     }
 
     fun toggleFolder(folder: DeviceFolder) {
+        // Only update in-memory state — changes are persisted when
+        // the user leaves the screen via applyPendingChanges().
         val isCurrentlyEnabled = folder.bucketId in enabledBucketIds
-        val newEnabled = !isCurrentlyEnabled
+        enabledBucketIds = if (isCurrentlyEnabled) {
+            enabledBucketIds - folder.bucketId
+        } else {
+            enabledBucketIds + folder.bucketId
+        }
+    }
 
+    /**
+     * Persist any folder toggle changes to the DB and trigger sync for
+     * newly-enabled folders. Called when the user navigates away.
+     */
+    fun applyPendingChanges() {
+        val newlyEnabled = enabledBucketIds - originalEnabledBucketIds
+        val newlyDisabled = originalEnabledBucketIds - enabledBucketIds
+        if (newlyEnabled.isEmpty() && newlyDisabled.isEmpty()) return
+
+        saving = true
         viewModelScope.launch {
             try {
-                backupFolderRepository.setFolderEnabled(folder, newEnabled)
-                enabledBucketIds = if (newEnabled) {
-                    enabledBucketIds + folder.bucketId
-                } else {
-                    enabledBucketIds - folder.bucketId
+                // Persist all changes to the DB
+                for (folder in deviceFolders) {
+                    if (folder.bucketId in newlyEnabled || folder.bucketId in newlyDisabled) {
+                        val enabled = folder.bucketId in enabledBucketIds
+                        backupFolderRepository.setFolderEnabled(folder, enabled)
+                    }
                 }
 
-                // When a folder is newly enabled, scan ALL its existing photos
-                // and immediately trigger a backup so they get uploaded.
-                if (newEnabled) {
-                    syncRepository.fullScanForBuckets(listOf(folder.bucketId))
+                // Scan and trigger backup for newly-enabled folders
+                if (newlyEnabled.isNotEmpty()) {
+                    syncRepository.fullScanForBuckets(newlyEnabled.toList())
                     SyncScheduler.triggerNow(appContext)
                 }
+
+                originalEnabledBucketIds = enabledBucketIds
+                android.util.Log.i("FolderSelection",
+                    "applyPendingChanges: enabled=${newlyEnabled.size}, disabled=${newlyDisabled.size}")
             } catch (e: Exception) {
-                error = "Failed to update folder: ${e.message}"
+                error = "Failed to save folder changes: ${e.message}"
+            } finally {
+                saving = false
             }
         }
     }
@@ -212,6 +243,16 @@ fun FolderSelectionScreen(
     viewModel: FolderSelectionViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
+
+    // Persist pending folder toggle changes when the user leaves this screen.
+    DisposableEffect(Unit) {
+        onDispose { viewModel.applyPendingChanges() }
+    }
+
+    val handleBack = {
+        viewModel.applyPendingChanges()
+        onBack()
+    }
 
     // ── Direct system permission checks (NOT Accompanist) ──────────────
     // This avoids the Accompanist 0.34.0 bug on Android 14+ where
@@ -253,7 +294,7 @@ fun FolderSelectionScreen(
             TopAppBar(
                 title = { Text("Backup Folders") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { handleBack() }) {
                         Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", modifier = Modifier.size(24.dp))
                     }
                 },

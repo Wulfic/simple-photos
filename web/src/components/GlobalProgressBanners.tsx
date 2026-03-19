@@ -146,8 +146,8 @@ export default function GlobalProgressBanners() {
   const migrationBusy = migrationActive && migrationTotal > 0;
 
   // Apply minimum-display behavior
-  const [showConversion, conversionDone] = useMinimumDisplay(conversionBusy);
-  const [showMigration, migrationDone] = useMinimumDisplay(migrationBusy);
+  const [showConversion, conversionDone, hideConversion] = useMinimumDisplay(conversionBusy);
+  const [showMigration, migrationDone, hideMigration] = useMinimumDisplay(migrationBusy);
 
   const totalConversionItems = conversionPending + conversionMissingThumbs;
   const conversionEta = useETA(totalConversionItems);
@@ -193,11 +193,20 @@ export default function GlobalProgressBanners() {
     <div className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 w-80 pointer-events-none">
       {/* ── Conversion card ─────────────────────────────────────────── */}
       {showConversion && (
-        <div className={`pointer-events-auto rounded-xl shadow-lg shadow-black/10 dark:shadow-black/30 p-3 transition-colors duration-500 ${
+        <div className={`pointer-events-auto rounded-xl shadow-lg shadow-black/10 dark:shadow-black/30 p-3 transition-colors duration-500 relative ${
           conversionDone
             ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700"
             : "bg-white dark:bg-gray-800 border border-amber-200 dark:border-amber-700"
         }`}>
+          <button
+            onClick={hideConversion}
+            className="absolute top-1.5 left-1.5 w-5 h-5 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-200/60 dark:hover:bg-gray-600/60 transition-colors"
+            title="Dismiss"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
           <div className="flex items-center gap-2.5">
             {conversionDone ? (
               <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -249,11 +258,20 @@ export default function GlobalProgressBanners() {
 
       {/* ── Migration card ──────────────────────────────────────────── */}
       {showMigration && (
-        <div className={`pointer-events-auto rounded-xl shadow-lg shadow-black/10 dark:shadow-black/30 p-3 transition-colors duration-500 ${
+        <div className={`pointer-events-auto rounded-xl shadow-lg shadow-black/10 dark:shadow-black/30 p-3 transition-colors duration-500 relative ${
           migrationDone
             ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700"
             : "bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-700"
         }`}>
+          <button
+            onClick={hideMigration}
+            className="absolute top-1.5 left-1.5 w-5 h-5 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-200/60 dark:hover:bg-gray-600/60 transition-colors"
+            title="Dismiss"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
           {migrationDone ? (
             <div className="flex items-center gap-2.5">
               <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
