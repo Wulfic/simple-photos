@@ -287,22 +287,108 @@ pub async fn discover_servers(
         })
         .collect();
 
-    // Brute-force HTTP probe on common LAN subnets as fallback.
-    // WARNING: This is slow — up to 3 subnets × 254 hosts × 3 ports = 2,286
-    // sequential requests, each with a 2s timeout. Worst case ~76 min.
-    // The UDP broadcast above usually finds servers instantly; this path
-    // only fires for missed broadcasts or cross-subnet discovery.
     let our_port = state.config.server.port;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 
-    let subnets = ["192.168.1", "192.168.0", "10.0.0"];
-    let ports = [our_port, 8080, 3000];
-    let existing_addrs: std::collections::HashSet<String> =
+    let mut existing_addrs: std::collections::HashSet<String> =
         discovered.iter().map(|d| d.address.clone()).collect();
 
+    // ── Phase 1: Probe localhost on likely backup ports ───────────────────
+    // Docker containers port-mapped to the host appear on 127.0.0.1.
+    // This is fast (only a handful of requests) and catches the common case.
+    let mut local_ports: Vec<u16> = Vec::new();
+    // Ports adjacent to the server's own port (e.g. 8081-8089 when server is 8080)
+    let base = (our_port / 10) * 10; // floor to nearest 10
+    for p in base..=(base + 9) {
+        if p != our_port {
+            local_ports.push(p);
+        }
+    }
+    // Also always check common server ports
+    for &p in &[3000u16, 3001, 3002, 3003, 8080, 8081, 8082, 8083, 8443] {
+        if p != our_port && !local_ports.contains(&p) {
+            local_ports.push(p);
+        }
+    }
+
+    // Probe localhost ports concurrently
+    let mut local_futures = Vec::new();
+    for &port in &local_ports {
+        let addr = format!("127.0.0.1:{}", port);
+        if existing_addrs.contains(&addr) {
+            continue;
+        }
+        let url = format!("http://{}/health", addr);
+        let c = client.clone();
+        local_futures.push(async move {
+            match c.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                        if body.get("service").and_then(|s| s.as_str())
+                            == Some("simple-photos")
+                        {
+                            let name = body
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("Unknown")
+                                .to_string();
+                            let version = body
+                                .get("version")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            return Some(DiscoveredServer {
+                                // Use localhost so the caller can connect from the host
+                                address: format!("localhost:{}", port),
+                                name,
+                                version,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+            None
+        });
+    }
+
+    let local_results = futures_util::future::join_all(local_futures).await;
+    for result in local_results.into_iter().flatten() {
+        existing_addrs.insert(result.address.clone());
+        discovered.push(result);
+    }
+
+    // ── Phase 2: Derive actual subnet from server's base_url ─────────────
+    // Parse the server's own IP from its configured base_url so we scan
+    // the correct subnet instead of only hardcoded ones.
+    let mut subnets: Vec<String> = Vec::new();
+    if let Ok(url) = reqwest::Url::parse(&state.config.server.base_url) {
+        if let Some(host) = url.host_str() {
+            // Extract the first 3 octets for a /24 subnet scan
+            let parts: Vec<&str> = host.split('.').collect();
+            if parts.len() == 4 {
+                let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
+                subnets.push(subnet);
+            }
+        }
+    }
+    // Add common fallback subnets that aren't already covered
+    for s in &["192.168.1", "192.168.0", "10.0.0"] {
+        if !subnets.iter().any(|existing| existing == s) {
+            subnets.push(s.to_string());
+        }
+    }
+
+    // ── Phase 3: LAN subnet scan (concurrent, with concurrency limit) ────
+    let ports = [our_port, 8080, 8081, 8082, 8083, 3000];
+
+    // Use a semaphore to limit concurrent connections and avoid flooding
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(50));
+
+    let mut lan_futures = Vec::new();
     for subnet in &subnets {
         for host_id in 1..=254u8 {
             let ip = format!("{}.{}", subnet, host_id);
@@ -312,35 +398,45 @@ pub async fn discover_servers(
                     continue;
                 }
                 let url = format!("http://{}/health", addr);
-                let client = client.clone();
-                match client.get(&url).send().await {
-                    Ok(resp) if resp.status().is_success() => {
-                        if let Ok(body) = resp.json::<serde_json::Value>().await {
-                            if body.get("service").and_then(|s| s.as_str())
-                                == Some("simple-photos")
-                            {
-                                let name = body
-                                    .get("name")
-                                    .and_then(|n| n.as_str())
-                                    .unwrap_or("Unknown")
-                                    .to_string();
-                                let version = body
-                                    .get("version")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown")
-                                    .to_string();
-                                discovered.push(DiscoveredServer {
-                                    address: addr,
-                                    name,
-                                    version,
-                                });
+                let c = client.clone();
+                let permit = sem.clone();
+                lan_futures.push(async move {
+                    let _permit = permit.acquire().await.ok()?;
+                    match c.get(&url).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                if body.get("service").and_then(|s| s.as_str())
+                                    == Some("simple-photos")
+                                {
+                                    let name = body
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("Unknown")
+                                        .to_string();
+                                    let version = body
+                                        .get("version")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string();
+                                    return Some(DiscoveredServer {
+                                        address: addr,
+                                        name,
+                                        version,
+                                    });
+                                }
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
-                }
+                    None
+                });
             }
         }
+    }
+
+    let lan_results = futures_util::future::join_all(lan_futures).await;
+    for result in lan_results.into_iter().flatten() {
+        discovered.push(result);
     }
 
     Ok(Json(DiscoverResponse {

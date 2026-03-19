@@ -5,7 +5,7 @@
  * (fetching blob IDs then decrypting thumbnails from IDB), and mode-switching
  * between main gallery and backup server views.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { decrypt, hasCryptoKey } from "../crypto/crypto";
@@ -98,6 +98,41 @@ export function useGalleryData(): GalleryDataResult {
   // Gate: only expose encrypted photos after the first server sync
   const encryptedPhotos = encryptedDataReady ? rawEncryptedPhotos : undefined;
 
+  // ── Periodic secure-blob-ID refresh ─────────────────────────────────────
+  // Photos may be moved to/from secure galleries on other devices. Refresh
+  // the set every few seconds so the main gallery hides/shows them promptly.
+  const securePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function startSecureBlobIdPolling() {
+    if (securePollRef.current) return;
+    securePollRef.current = setInterval(async () => {
+      try {
+        const res = await api.secureGalleries.secureBlobIds();
+        const fresh = new Set(res.blob_ids);
+        setSecureBlobIds((prev) => {
+          // Only update state if the set actually changed (avoids re-renders)
+          if (prev.size !== fresh.size) return fresh;
+          for (const id of fresh) {
+            if (!prev.has(id)) return fresh;
+          }
+          return prev;
+        });
+      } catch {
+        // Non-critical — ignore transient failures
+      }
+    }, 5_000);
+  }
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (securePollRef.current) {
+        clearInterval(securePollRef.current);
+        securePollRef.current = null;
+      }
+    };
+  }, []);
+
   // ── Initialization ──────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -119,6 +154,10 @@ export function useGalleryData(): GalleryDataResult {
         } catch {
           // Secure galleries may not be available — ignore
         }
+
+        // Start periodic refresh of secureBlobIds so photos moved to/from
+        // secure galleries on other devices are reflected without a full reload.
+        startSecureBlobIdPolling();
 
         // Fire auto-scan in the background — don't block photo loading.
         // When it completes, reload photos so newly scanned files appear.

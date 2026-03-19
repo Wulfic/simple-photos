@@ -194,8 +194,20 @@ async fn phase_convert(
             None => continue,
         };
 
+        // Guard: empty file_path resolves to the storage root directory
+        // itself, which passes try_exists but is not a valid source file.
+        // Encrypted-only photos have file_path = "" — they must go through
+        // the encrypted-blob path below, not the disk conversion path.
         let source_path = storage_root.join(file_path);
-        if tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
+        let source_is_file = if file_path.is_empty() {
+            false
+        } else {
+            match tokio::fs::metadata(&source_path).await {
+                Ok(m) => m.is_file(),
+                Err(_) => false,
+            }
+        };
+        if source_is_file {
             let preview_path = storage_root.join(format!(
                 ".web_previews/{}.web.{}",
                 photo_id, preview_ext
@@ -609,12 +621,19 @@ async fn mark_blob_converted(pool: &SqlitePool, photo_id: &str) {
 /// Once marked, the background pipeline skips this photo on subsequent cycles.
 /// The marker uses `server_settings` with key `conv_failed_{photo_id}`.
 async fn mark_conversion_failed(pool: &SqlitePool, photo_id: &str) {
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, 'true')",
     )
     .bind(format!("conv_failed_{}", photo_id))
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::error!(
+            photo_id = photo_id,
+            error = %e,
+            "Failed to persist conversion-failed marker — photo will be retried next cycle"
+        );
+    }
 }
 
 /// Check whether a photo's conversion has been marked as permanently failed.

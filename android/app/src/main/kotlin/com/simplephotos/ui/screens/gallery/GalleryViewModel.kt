@@ -170,6 +170,14 @@ class GalleryViewModel @Inject constructor(
                         migrationTotal = es.migrationTotal
                         migrationCompleted = es.migrationCompleted
                     }
+                    // Refresh secure gallery blob IDs so photos moved to/from
+                    // secure galleries on other devices are hidden/shown promptly.
+                    try {
+                        val freshIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
+                        if (freshIds != secureBlobIds) {
+                            secureBlobIds = freshIds
+                        }
+                    } catch (_: Exception) { /* endpoint unavailable — keep existing set */ }
                 } catch (_: Exception) { /* server unreachable — skip this tick */ }
                 delay(3_000)
             }
