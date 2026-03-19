@@ -159,6 +159,7 @@ pub async fn generate_thumbnail_file(
             let cw = meta.get("width").and_then(|v| v.as_f64()).unwrap_or(1.0);
             let ch = meta.get("height").and_then(|v| v.as_f64()).unwrap_or(1.0);
             let brightness = meta.get("brightness").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let rotate = meta.get("rotate").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
             // Apply brightness if non-zero (ffmpeg eq=brightness expects -1.0 to 1.0)
             if brightness != 0.0 {
@@ -170,6 +171,12 @@ pub async fn generate_thumbnail_file(
             // Apply crop if not default (using relative inputs iw/ih)
             if cx > 0.0 || cy > 0.0 || cw < 1.0 || ch < 1.0 {
                 vf_filters.push_str(&format!("crop=iw*{}:ih*{}:iw*{}:ih*{},", cw, ch, cx, cy));
+            }
+
+            // Apply rotation if non-zero
+            if rotate != 0.0 {
+                // FFmpeg rotate filter takes radians. Positive is clockwise.
+                vf_filters.push_str(&format!("rotate={}*PI/180:ow='rotw({}*PI/180)':oh='roth({}*PI/180)',", rotate, rotate, rotate));
             }
         }
     }

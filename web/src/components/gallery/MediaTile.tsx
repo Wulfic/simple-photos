@@ -5,6 +5,8 @@ import type { CachedPhoto } from "../../db";
 import useLongPress from "../../hooks/useLongPress";
 import { thumbnailSrc, formatDuration } from "../../utils/gallery";
 
+import { getThumbnailStyle } from "../../utils/thumbnailCss";
+
 export interface MediaTileProps {
   photo: CachedPhoto;
   onClick: () => void;
@@ -57,7 +59,7 @@ export default function MediaTile({ photo, onClick, onLongPress, selectionMode, 
     >
       {src ? (
         <>
-          <img src={src} alt={photo.filename} className="w-full h-full object-cover" loading="lazy" />
+          <img src={src} alt={photo.filename} className="w-full h-full object-cover" loading="lazy" style={getThumbnailStyle(photo.cropData)} />
           {/* Filename overlay — only for audio files */}
           {photo.mediaType === "audio" && (
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-1 pb-0.5 pt-3 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">

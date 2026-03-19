@@ -314,6 +314,20 @@ pub async fn report_migration_progress(
             .await?;
         }
 
+        let db_mode: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
+        )
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or(Some("plain".to_string()));
+
+        let db_mode = db_mode.unwrap_or_else(|| "plain".to_string());
+        
+        if db_mode == "encrypted" {
+            let storage_root = (**state.storage_root.load()).clone();
+            let _ = crate::photos::cleanup::cleanup_plain_files_internal(&state.pool, &auth.user_id, &storage_root).await;
+        }
+
         // 5-second delay before triggering the converter — ensures all DB
         // writes from the migration have fully settled.
         let notify = state.convert_notify.clone();
