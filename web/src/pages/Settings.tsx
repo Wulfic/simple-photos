@@ -102,17 +102,52 @@ export default function Settings() {
     }
   }, []);
 
+  // Auto-discover and register backup servers on the LAN.
+  // Called when the DB has no backup servers yet — discovers via UDP + HTTP,
+  // auto-adds any found, then reloads the list.
+  const [discovering, setDiscovering] = useState(false);
+  const autoDiscoverBackupServers = useCallback(async () => {
+    setDiscovering(true);
+    try {
+      const disc = await api.backup.discover();
+      if (disc.servers.length === 0) return;
+      // Auto-add each discovered server that isn't already registered
+      for (const srv of disc.servers) {
+        try {
+          await api.backup.addServer({
+            name: srv.name || `Backup (${srv.address})`,
+            address: srv.address,
+            sync_frequency_hours: 24,
+          });
+        } catch {
+          // Duplicate or unreachable — skip silently
+        }
+      }
+      // Reload the list so the UI reflects newly added servers
+      const updated = await api.backup.listServers();
+      setBackupServers(updated.servers);
+    } catch {
+      // Discovery not available or failed — ignore
+    } finally {
+      setDiscovering(false);
+    }
+  }, [setBackupServers]);
+
   // Load backup servers on mount
   const loadBackupServers = useCallback(async () => {
     try {
       const res = await api.backup.listServers();
       setBackupServers(res.servers);
+      // If no servers in DB yet, try auto-discovery
+      if (res.servers.length === 0) {
+        autoDiscoverBackupServers();
+      }
     } catch {
       // Ignore if backup isn't configured
     } finally {
       setBackupLoaded(true);
     }
-  }, [setBackupServers, setBackupLoaded]);
+  }, [setBackupServers, setBackupLoaded, autoDiscoverBackupServers]);
 
   // Fetch encryption settings and backup servers on mount
   useEffect(() => {
@@ -605,9 +640,23 @@ export default function Settings() {
         ) : backupServers.length === 0 ? (
           <div className="text-center py-4 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
             <p className="text-gray-400 text-sm">No backup servers configured.</p>
-            <p className="text-xs text-gray-400 mt-1 mb-3">
-              Auto-detection didn't find any servers. You can add one manually below.
-            </p>
+            {discovering ? (
+              <p className="text-xs text-blue-400 mt-1 mb-3 flex items-center justify-center gap-2">
+                <span className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                Scanning network for backup servers…
+              </p>
+            ) : (
+              <p className="text-xs text-gray-400 mt-1 mb-1">
+                No servers found on the local network.
+              </p>
+            )}
+            <button
+              onClick={autoDiscoverBackupServers}
+              disabled={discovering}
+              className="text-xs text-blue-500 hover:underline disabled:opacity-50 mb-2"
+            >
+              {discovering ? "Scanning…" : "Re-scan network"}
+            </button>
           </div>
         ) : !showRecoverWarning ? (
           <button

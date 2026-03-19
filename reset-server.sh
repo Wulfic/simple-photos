@@ -20,8 +20,15 @@ pkill -9 -f simple-photos-server 2>/dev/null && sleep 2 || true
 echo "Wiping database..."
 rm -f "$SERVER_DIR/data/db/"*
 
-# Wipe internal storage
-rm -rf "$SERVER_DIR/data/storage/"*/*
+# Clean server-managed subdirectories under internal storage, preserving any
+# manually placed test/sample files (e.g. existing.jpg in the root).
+echo "Cleaning internal storage (server-managed dirs only)..."
+for subdir in blobs metadata logs .thumbnails .web_previews; do
+    if [[ -d "$SERVER_DIR/data/storage/$subdir" ]]; then
+        echo "  Removing $SERVER_DIR/data/storage/$subdir/..."
+        rm -rf "$SERVER_DIR/data/storage/$subdir"
+    fi
+done
 
 # Read storage root from config.toml (the external photo storage location)
 CONFIG_FILE="$SERVER_DIR/config.toml"
