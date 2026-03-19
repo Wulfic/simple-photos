@@ -99,8 +99,14 @@ fun GalleryScreen(
     var showAlbumPicker by remember { mutableStateOf(false) }
     val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
+    // Filter out photos that live in a secure gallery
+    val visiblePhotos = remember(photos, viewModel.secureBlobIds) {
+        if (viewModel.secureBlobIds.isEmpty()) photos
+        else photos.filter { it.serverBlobId == null || it.serverBlobId !in viewModel.secureBlobIds }
+    }
+
     // Build day-grouped grid items
-    val gridItems = remember(photos) { buildGridItems(groupPhotosByDay(photos)) }
+    val gridItems = remember(visiblePhotos) { buildGridItems(groupPhotosByDay(visiblePhotos)) }
 
     val pickMediaLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -138,7 +144,7 @@ fun GalleryScreen(
                             )
                             Spacer(Modifier.width(8.dp))
                             TextButton(
-                                onClick = { viewModel.selectAll(photos) },
+                                onClick = { viewModel.selectAll(visiblePhotos) },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Text("Select All", fontSize = 12.sp)
@@ -155,7 +161,7 @@ fun GalleryScreen(
                                 Text("Album", fontSize = 12.sp)
                             }
                             Button(
-                                onClick = { viewModel.deleteSelectedPhotos(photos) },
+                                onClick = { viewModel.deleteSelectedPhotos(visiblePhotos) },
                                 enabled = viewModel.selectedIds.isNotEmpty(),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
@@ -231,7 +237,7 @@ fun GalleryScreen(
                     Text(err, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
                 }
 
-                if (photos.isEmpty() && !viewModel.isSyncing && viewModel.dataReady) {
+                if (visiblePhotos.isEmpty() && !viewModel.isSyncing && viewModel.dataReady) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("No photos yet", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -239,7 +245,7 @@ fun GalleryScreen(
                             Text("Tap + to add photos or grant permissions for auto-backup", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 32.dp))
                         }
                     }
-                } else if (!viewModel.dataReady || (photos.isEmpty() && viewModel.isSyncing)) {
+                } else if (!viewModel.dataReady || (visiblePhotos.isEmpty() && viewModel.isSyncing)) {
                     // Show loading until the first server sync completes.
                     // This prevents flashing stale photos from a previous user session.
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -296,6 +302,19 @@ fun GalleryScreen(
                 }
             }
             PullToRefreshContainer(state = pullToRefreshState, modifier = Modifier.align(Alignment.TopCenter))
+
+            // ── Floating progress banners (conversion / migration) ──────
+            ActivityProgressBanners(
+                conversionPending = viewModel.conversionPending,
+                conversionMissingThumbs = viewModel.conversionMissingThumbs,
+                conversionActive = viewModel.conversionActive,
+                migrationStatus = viewModel.migrationStatus,
+                migrationTotal = viewModel.migrationTotal,
+                migrationCompleted = viewModel.migrationCompleted,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 80.dp) // above the FAB
+            )
         }
     }
 
@@ -581,6 +600,118 @@ private fun MediaTile(
             ) {
                 if (isSelected) {
                     Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                }
+            }
+        }
+    }
+}
+
+// ── Activity Progress Banners ───────────────────────────────────────────────
+// Floating cards showing conversion and encryption migration progress,
+// matching the web's GlobalProgressBanners component.
+
+@Composable
+private fun ActivityProgressBanners(
+    conversionPending: Int,
+    conversionMissingThumbs: Int,
+    conversionActive: Boolean,
+    migrationStatus: String,
+    migrationTotal: Long,
+    migrationCompleted: Long,
+    modifier: Modifier = Modifier
+) {
+    val showConversion = conversionPending > 0 || conversionMissingThumbs > 0 || conversionActive
+    val migrationActive = migrationStatus == "encrypting" || migrationStatus == "decrypting"
+    val showMigration = migrationActive && migrationTotal > 0
+
+    if (!showConversion && !showMigration) return
+
+    Column(
+        modifier = modifier.width(260.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // ── Conversion banner ───────────────────────────────────────────
+        if (showConversion) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                shadowElevation = 4.dp,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = Color(0xFFD97706) // amber-600
+                    )
+                    Column {
+                        Text(
+                            "Converting media\u2026",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        val parts = mutableListOf<String>()
+                        if (conversionPending > 0) parts += "$conversionPending file${if (conversionPending != 1) "s" else ""} pending"
+                        if (conversionMissingThumbs > 0) parts += "$conversionMissingThumbs thumbnail${if (conversionMissingThumbs != 1) "s" else ""}"
+                        if (parts.isEmpty()) parts += "Processing in background\u2026"
+                        Text(
+                            parts.joinToString(", "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── Migration banner ────────────────────────────────────────────
+        if (showMigration) {
+            val migPct = if (migrationTotal > 0) ((migrationCompleted.toFloat() / migrationTotal) * 100).toInt().coerceAtMost(100) else 0
+            val action = if (migrationStatus == "encrypting") "Encrypting" else "Decrypting"
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                shadowElevation = 4.dp,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = Color(0xFF3B82F6) // blue-500
+                        )
+                        Text(
+                            "$action\u2026 $migrationCompleted/$migrationTotal",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            "$migPct%",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF3B82F6)
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { migPct / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = Color(0xFF3B82F6),
+                        trackColor = Color(0xFF3B82F6).copy(alpha = 0.15f)
+                    )
                 }
             }
         }

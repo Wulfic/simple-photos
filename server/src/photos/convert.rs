@@ -201,6 +201,10 @@ async fn phase_convert(
                 photo_id, preview_ext
             ));
             if !tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
+                // Skip files whose conversion has permanently failed
+                if is_conversion_failed(pool, photo_id).await {
+                    continue;
+                }
                 disk_work.push(DiskWork {
                     photo_id: photo_id.clone(),
                     filename: filename.clone(),
@@ -220,7 +224,9 @@ async fn phase_convert(
         // Path B: encrypted-only (no source on disk)
         if is_encrypted && key_available {
             if let Some(blob_id) = encrypted_blob_id.as_deref() {
-                if !is_blob_already_converted(pool, photo_id).await {
+                if !is_blob_already_converted(pool, photo_id).await
+                    && !is_conversion_failed(pool, photo_id).await
+                {
                     enc_work.push(EncWork {
                         photo_id: photo_id.clone(),
                         filename: filename.clone(),
@@ -290,6 +296,8 @@ async fn phase_convert(
                     filename = %item.filename,
                     "Phase 2: conversion failed (source on disk)"
                 );
+                // Mark as failed so we don't retry every 60-second cycle
+                mark_conversion_failed(&pool, &item.photo_id).await;
             }
         }));
     }
@@ -328,6 +336,7 @@ async fn phase_convert(
                     filename = %item.filename,
                     "Phase 2: conversion skipped/failed (encrypted blob)"
                 );
+                mark_conversion_failed(pool, &item.photo_id).await;
             }
             Err(e) => {
                 tracing::error!(
@@ -335,6 +344,7 @@ async fn phase_convert(
                     filename = %item.filename,
                     "Phase 2: decrypt/convert/reencrypt error: {}", e
                 );
+                mark_conversion_failed(pool, &item.photo_id).await;
             }
         }
     }
@@ -592,6 +602,32 @@ async fn mark_blob_converted(pool: &SqlitePool, photo_id: &str) {
         // every background cycle — wasteful but not data-corrupting.
         tracing::warn!(photo_id = photo_id, error = %e, "Failed to mark blob as converted");
     }
+}
+
+/// Mark a photo's conversion as permanently failed.
+///
+/// Once marked, the background pipeline skips this photo on subsequent cycles.
+/// The marker uses `server_settings` with key `conv_failed_{photo_id}`.
+async fn mark_conversion_failed(pool: &SqlitePool, photo_id: &str) {
+    let _ = sqlx::query(
+        "INSERT OR REPLACE INTO server_settings (key, value) VALUES (?, 'true')",
+    )
+    .bind(format!("conv_failed_{}", photo_id))
+    .execute(pool)
+    .await;
+}
+
+/// Check whether a photo's conversion has been marked as permanently failed.
+async fn is_conversion_failed(pool: &SqlitePool, photo_id: &str) -> bool {
+    sqlx::query_scalar::<_, String>(
+        "SELECT value FROM server_settings WHERE key = ?",
+    )
+    .bind(format!("conv_failed_{}", photo_id))
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .is_some()
 }
 
 /// Decrypt an encrypted blob, extract the media payload, convert it to a
@@ -1206,6 +1242,11 @@ pub async fn conversion_status(
         let preview_exists = preview_results[i].as_ref().copied().unwrap_or(false);
         if preview_exists {
             continue; // Already converted
+        }
+
+        // Skip items whose conversion permanently failed
+        if is_conversion_failed(&state.read_pool, &c.photo_id).await {
+            continue;
         }
 
         if c.is_encrypted {

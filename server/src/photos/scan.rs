@@ -181,6 +181,13 @@ pub async fn generate_thumbnail_file(
         }
     }
 
+    // Normalize sample aspect ratio (SAR) before scaling.  Many .3gp and
+    // other legacy video files use non-square pixels (anamorphic encoding).
+    // Without this, the 256×256 scale produces a squished thumbnail because
+    // it operates on raw pixel dimensions rather than display dimensions.
+    if mime.starts_with("video/") {
+        vf_filters.push_str("scale=iw*sar:ih,setsar=1,");
+    }
     vf_filters.push_str("scale=256:256:force_original_aspect_ratio=decrease,pad=256:256:(ow-iw)/2:(oh-ih)/2:black");
 
     cmd.args(["-i", input_str])

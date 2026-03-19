@@ -51,4 +51,8 @@ class SecureGalleryRepository @Inject constructor(
     /** Add a blob to a secure gallery. */
     suspend fun addItem(galleryId: String, blobId: String): SecureGalleryAddItemResponse =
         api.addSecureGalleryItem(galleryId, SecureGalleryAddItemRequest(blobId))
+
+    /** Return all blob IDs that belong to any secure gallery for the current user. */
+    suspend fun getSecureBlobIds(): Set<String> =
+        try { api.getSecureBlobIds().blobIds.toSet() } catch (_: Exception) { emptySet() }
 }

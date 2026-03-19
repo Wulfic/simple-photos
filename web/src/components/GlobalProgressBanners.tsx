@@ -152,6 +152,26 @@ export default function GlobalProgressBanners() {
   const totalConversionItems = conversionPending + conversionMissingThumbs;
   const conversionEta = useETA(totalConversionItems);
 
+  // ── Stuck detection: if pending count hasn't decreased for ~30s ────────
+  const stallCountRef = useRef(0);
+  const prevPendingRef = useRef(totalConversionItems);
+  const [conversionStalled, setConversionStalled] = useState(false);
+
+  useEffect(() => {
+    if (totalConversionItems === 0) {
+      stallCountRef.current = 0;
+      setConversionStalled(false);
+    } else if (totalConversionItems >= prevPendingRef.current && conversionBusy) {
+      stallCountRef.current += 1;
+      // 10 polls × 3s interval = ~30 seconds with no progress
+      if (stallCountRef.current >= 10) setConversionStalled(true);
+    } else {
+      stallCountRef.current = 0;
+      setConversionStalled(false);
+    }
+    prevPendingRef.current = totalConversionItems;
+  }, [totalConversionItems, conversionBusy]);
+
   // ── Diagnostic logging ────────────────────────────────────────────────
   const prevDiagRef = useRef("");
   const diagKey = `cb=${conversionBusy}|ma=${migrationActive}|sc=${showConversion}|cd=${conversionDone}|mb=${migrationBusy}|sm=${showMigration}|md=${migrationDone}|cp=${conversionPending}|cak=${conversionAwaitingKey}|ct=${conversionMissingThumbs}|ca=${conversionActive}`;
@@ -213,6 +233,11 @@ export default function GlobalProgressBanners() {
                   {conversionEta && (
                     <p className="text-xs font-mono text-amber-500/90 dark:text-amber-300/90">
                       {conversionEta}
+                    </p>
+                  )}
+                  {conversionStalled && (
+                    <p className="text-xs text-red-500 dark:text-red-400 mt-0.5">
+                      ⚠ Conversion may be stuck — some files might not be convertible
                     </p>
                   )}
                 </div>
