@@ -116,6 +116,21 @@ class PhotoRepository @Inject constructor(
         return (prefs[KEY_SERVER_URL] ?: "http://localhost:8080").trimEnd('/')
     }
 
+    /**
+     * Fetch conversion pipeline status from the server.
+     * Returns null if the server is unreachable.
+     */
+    suspend fun getConversionStatus(): com.simplephotos.data.remote.dto.ConversionStatusResponse? {
+        return try { api.getConversionStatus() } catch (_: Exception) { null }
+    }
+
+    /**
+     * Fetch encryption settings including migration progress.
+     */
+    suspend fun getEncryptionSettings(): com.simplephotos.data.remote.dto.EncryptionSettingsResponse? {
+        return try { api.getEncryptionSettings() } catch (_: Exception) { null }
+    }
+
     suspend fun deletePhoto(photo: PhotoEntity) {
         // Delete from server based on mode
         val mode = getEncryptionMode()

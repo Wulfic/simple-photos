@@ -155,6 +155,11 @@ pub struct AddGalleryItemRequest {
 }
 
 /// POST /api/galleries/secure/{id}/items — add a blob to a secure gallery.
+///
+/// Creates an **independent copy** of the blob for the secure album rather
+/// than sharing a reference to the original.  This ensures each secure album
+/// folder has its own blob namespace, preventing mix-ups between main-gallery
+/// and secure-album data.
 pub async fn add_gallery_item(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -173,20 +178,96 @@ pub async fn add_gallery_item(
         return Err(AppError::NotFound);
     }
 
-    let blob_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM blobs WHERE id = ? AND user_id = ?",
+    // Fetch original blob metadata
+    let original: Option<(String, String, i64, Option<String>, String, Option<String>)> =
+        sqlx::query_as(
+            "SELECT id, blob_type, size_bytes, client_hash, storage_path, content_hash \
+             FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(&req.blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?;
+
+    let (_orig_id, blob_type, size_bytes, client_hash, storage_path, content_hash) =
+        original.ok_or_else(|| AppError::BadRequest("Blob not found".into()))?;
+
+    // Clone: read the original blob data from disk, write a new copy under a fresh ID
+    let storage_root = (**state.storage_root.load()).clone();
+    let blob_data = crate::blobs::storage::read_blob(&storage_root, &storage_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read source blob: {}", e)))?;
+
+    let new_blob_id = Uuid::new_v4().to_string();
+    let new_storage_path = crate::blobs::storage::write_blob(
+        &storage_root, &auth.user_id, &new_blob_id, &blob_data,
     )
-    .bind(&req.blob_id)
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to write cloned blob: {}", e)))?;
+
+    let now = Utc::now().to_rfc3339();
+
+    // Insert the cloned blob record
+    sqlx::query(
+        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&new_blob_id)
     .bind(&auth.user_id)
-    .fetch_one(&state.pool)
+    .bind(&blob_type)
+    .bind(size_bytes)
+    .bind(&client_hash)
+    .bind(&now)
+    .bind(&new_storage_path)
+    .bind(&content_hash)
+    .execute(&state.pool)
     .await?;
 
-    if blob_count == 0 {
-        return Err(AppError::BadRequest("Blob not found".into()));
+    // Also clone the thumbnail blob if one exists (via photos.encrypted_thumb_blob_id)
+    let thumb_blob_id: Option<String> = sqlx::query_scalar(
+        "SELECT encrypted_thumb_blob_id FROM photos WHERE encrypted_blob_id = ?",
+    )
+    .bind(&req.blob_id)
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(ref orig_thumb_id) = thumb_blob_id {
+        let thumb_meta: Option<(String, i64, Option<String>, String)> = sqlx::query_as(
+            "SELECT blob_type, size_bytes, client_hash, storage_path FROM blobs WHERE id = ?",
+        )
+        .bind(orig_thumb_id)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((tb_type, tb_size, tb_hash, tb_path)) = thumb_meta {
+            if let Ok(thumb_data) = crate::blobs::storage::read_blob(&storage_root, &tb_path).await {
+                let new_thumb_id = Uuid::new_v4().to_string();
+                if let Ok(new_thumb_path) = crate::blobs::storage::write_blob(
+                    &storage_root, &auth.user_id, &new_thumb_id, &thumb_data,
+                ).await {
+                    let _ = sqlx::query(
+                        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+                    )
+                    .bind(&new_thumb_id)
+                    .bind(&auth.user_id)
+                    .bind(&tb_type)
+                    .bind(tb_size)
+                    .bind(&tb_hash)
+                    .bind(&now)
+                    .bind(&new_thumb_path)
+                    .execute(&state.pool)
+                    .await;
+                }
+            }
+        }
     }
 
     let item_id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
 
     sqlx::query(
         "INSERT OR IGNORE INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) \
@@ -194,14 +275,17 @@ pub async fn add_gallery_item(
     )
     .bind(&item_id)
     .bind(&gallery_id)
-    .bind(&req.blob_id)
+    .bind(&new_blob_id)
     .bind(&now)
     .execute(&state.pool)
     .await?;
 
     Ok((
         StatusCode::CREATED,
-        Json(serde_json::json!({ "item_id": item_id })),
+        Json(serde_json::json!({
+            "item_id": item_id,
+            "new_blob_id": new_blob_id,
+        })),
     ))
 }
 

@@ -20,12 +20,15 @@ import com.simplephotos.data.repository.AuthRepository
 import com.simplephotos.data.repository.BackupFolderRepository
 import com.simplephotos.data.repository.DiagnosticRepository
 import com.simplephotos.data.repository.PhotoRepository
+import com.simplephotos.data.repository.SecureGalleryRepository
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_THUMBNAIL_SIZE
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -75,6 +78,7 @@ class GalleryViewModel @Inject constructor(
     private val diagnosticRepository: DiagnosticRepository,
     private val albumRepository: AlbumRepository,
     private val backupFolderRepository: BackupFolderRepository,
+    private val secureGalleryRepository: SecureGalleryRepository,
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val photos = photoRepository.getAllPhotos()
@@ -104,6 +108,24 @@ class GalleryViewModel @Inject constructor(
     var thumbnailSize by mutableStateOf("normal")
         private set
 
+    // Blob IDs that belong to secure galleries — filtered from the main gallery
+    var secureBlobIds by mutableStateOf(emptySet<String>())
+        private set
+
+    // ── Conversion & migration status (polled every 3 seconds) ────
+    var conversionPending by mutableStateOf(0)
+        private set
+    var conversionMissingThumbs by mutableStateOf(0)
+        private set
+    var conversionActive by mutableStateOf(false)
+        private set
+    var migrationStatus by mutableStateOf("idle")
+        private set
+    var migrationTotal by mutableStateOf(0L)
+        private set
+    var migrationCompleted by mutableStateOf(0L)
+        private set
+
     // ── Multi-select state ────────────────────────────────────────
     var selectedIds by mutableStateOf(emptySet<String>())
         private set
@@ -125,6 +147,31 @@ class GalleryViewModel @Inject constructor(
                 thumbnailSize = prefs[KEY_THUMBNAIL_SIZE] ?: "normal"
             } catch (e: Exception) {
                 error = "Init failed: ${e.message}"
+            }
+        }
+        // Start periodic polling for conversion & migration status (every 3s)
+        startActivityPolling()
+    }
+
+    /** Poll the server every 3 seconds for conversion/migration progress. */
+    private fun startActivityPolling() {
+        viewModelScope.launch {
+            while (isActive) {
+                try {
+                    // Conversion status
+                    withContext(Dispatchers.IO) { photoRepository.getConversionStatus() }?.let { cs ->
+                        conversionPending = cs.pendingConversions
+                        conversionMissingThumbs = cs.missingThumbnails
+                        conversionActive = cs.converting
+                    }
+                    // Encryption migration status
+                    withContext(Dispatchers.IO) { photoRepository.getEncryptionSettings() }?.let { es ->
+                        migrationStatus = es.migrationStatus
+                        migrationTotal = es.migrationTotal
+                        migrationCompleted = es.migrationCompleted
+                    }
+                } catch (_: Exception) { /* server unreachable — skip this tick */ }
+                delay(3_000)
             }
         }
     }
@@ -346,6 +393,10 @@ class GalleryViewModel @Inject constructor(
                 val imported = withContext(Dispatchers.IO) { photoRepository.syncFromServer() }
                 // Also sync albums from server (downloads manifests created on web)
                 try { withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() } } catch (_: Exception) {}
+                // Fetch blob IDs in secure galleries so they can be hidden from the main grid
+                try {
+                    secureBlobIds = withContext(Dispatchers.IO) { secureGalleryRepository.getSecureBlobIds() }
+                } catch (_: Exception) {}
                 lastSyncResult = if (imported > 0) "Synced $imported new items" else "Up to date"
             } catch (e: Exception) { error = "Sync failed: ${e.message}" } finally { isSyncing = false; dataReady = true }
         }

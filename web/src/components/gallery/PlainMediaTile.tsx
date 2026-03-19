@@ -22,6 +22,9 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
   const [isQueued, setIsQueued] = useState(false);
   const tileRef = useRef<HTMLDivElement>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef(0);
+  /** Max retries before giving up (18 × 10s = 3 minutes). */
+  const MAX_THUMB_RETRIES = 18;
 
   useEffect(() => {
     const el = tileRef.current;
@@ -65,10 +68,12 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
         // 202 = thumbnail pending (conversion/generation in progress)
         if (res.status === 202) {
           setIsQueued(true);
-          // Retry after 10 seconds
-          retryTimerRef.current = setTimeout(() => {
-            if (!cancelled) fetchThumb();
-          }, 10_000);
+          retryCountRef.current += 1;
+          if (retryCountRef.current < MAX_THUMB_RETRIES) {
+            retryTimerRef.current = setTimeout(() => {
+              if (!cancelled) fetchThumb();
+            }, 10_000);
+          }
           return;
         }
 
@@ -86,9 +91,12 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
         // Thumbnail load failed — treat as queued if we don't have one yet
         if (!cancelled && !thumbSrc) {
           setIsQueued(true);
-          retryTimerRef.current = setTimeout(() => {
-            if (!cancelled) fetchThumb();
-          }, 10_000);
+          retryCountRef.current += 1;
+          if (retryCountRef.current < MAX_THUMB_RETRIES) {
+            retryTimerRef.current = setTimeout(() => {
+              if (!cancelled) fetchThumb();
+            }, 10_000);
+          }
         }
       }
     }
