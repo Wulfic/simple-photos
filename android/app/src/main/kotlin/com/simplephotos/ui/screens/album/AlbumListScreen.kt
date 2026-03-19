@@ -327,9 +327,7 @@ fun AlbumListScreen(
 
             // Build combined list: smart albums pinned at top, then user albums
             val smartAlbumEntries = buildList {
-                if (viewModel.encryptionMode == "plain") {
-                    add(Triple("smart-favorites", "Favorites", viewModel.favoritesCount))
-                }
+                add(Triple("smart-favorites", "Favorites", viewModel.favoritesCount))
                 add(Triple("smart-photos", "Photos", viewModel.photosCount))
                 add(Triple("smart-gifs", "GIFs", viewModel.gifsCount))
                 add(Triple("smart-videos", "Videos", viewModel.videosCount))

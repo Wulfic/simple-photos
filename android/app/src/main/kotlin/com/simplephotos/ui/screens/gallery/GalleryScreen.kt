@@ -99,6 +99,17 @@ fun GalleryScreen(
     var showAlbumPicker by remember { mutableStateOf(false) }
     val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
+    // Banner dismiss state — hides the banner UI without stopping the operation.
+    // Resets when a new batch of work starts (pending count transitions from 0).
+    var conversionBannerDismissed by remember { mutableStateOf(false) }
+    var migrationBannerDismissed by remember { mutableStateOf(false) }
+
+    // Auto-reset dismissed state when work restarts
+    val conversionBusy = viewModel.conversionPending > 0 || viewModel.conversionMissingThumbs > 0 || viewModel.conversionActive
+    val migrationBusy = (viewModel.migrationStatus == "encrypting" || viewModel.migrationStatus == "decrypting") && viewModel.migrationTotal > 0
+    LaunchedEffect(conversionBusy) { if (conversionBusy && conversionBannerDismissed) conversionBannerDismissed = false }
+    LaunchedEffect(migrationBusy) { if (migrationBusy && migrationBannerDismissed) migrationBannerDismissed = false }
+
     // Filter out photos that live in a secure gallery
     val visiblePhotos = remember(photos, viewModel.secureBlobIds) {
         if (viewModel.secureBlobIds.isEmpty()) photos
@@ -311,6 +322,10 @@ fun GalleryScreen(
                 migrationStatus = viewModel.migrationStatus,
                 migrationTotal = viewModel.migrationTotal,
                 migrationCompleted = viewModel.migrationCompleted,
+                conversionDismissed = conversionBannerDismissed,
+                migrationDismissed = migrationBannerDismissed,
+                onDismissConversion = { conversionBannerDismissed = true },
+                onDismissMigration = { migrationBannerDismissed = true },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = 80.dp) // above the FAB
@@ -618,11 +633,15 @@ private fun ActivityProgressBanners(
     migrationStatus: String,
     migrationTotal: Long,
     migrationCompleted: Long,
+    conversionDismissed: Boolean = false,
+    migrationDismissed: Boolean = false,
+    onDismissConversion: () -> Unit = {},
+    onDismissMigration: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val showConversion = conversionPending > 0 || conversionMissingThumbs > 0 || conversionActive
+    val showConversion = !conversionDismissed && (conversionPending > 0 || conversionMissingThumbs > 0 || conversionActive)
     val migrationActive = migrationStatus == "encrypting" || migrationStatus == "decrypting"
-    val showMigration = migrationActive && migrationTotal > 0
+    val showMigration = !migrationDismissed && migrationActive && migrationTotal > 0
 
     if (!showConversion && !showMigration) return
 
@@ -637,34 +656,47 @@ private fun ActivityProgressBanners(
                 shadowElevation = 4.dp,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = Color(0xFFD97706) // amber-600
-                    )
-                    Column {
-                        Text(
-                            "Converting media\u2026",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
+                Box {
+                    Row(
+                        modifier = Modifier.padding(start = 12.dp, top = 12.dp, end = 28.dp, bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = Color(0xFFD97706) // amber-600
                         )
-                        val parts = mutableListOf<String>()
-                        if (conversionPending > 0) parts += "$conversionPending file${if (conversionPending != 1) "s" else ""} pending"
-                        if (conversionMissingThumbs > 0) parts += "$conversionMissingThumbs thumbnail${if (conversionMissingThumbs != 1) "s" else ""}"
-                        if (parts.isEmpty()) parts += "Processing in background\u2026"
-                        Text(
-                            parts.joinToString(", "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 11.sp
-                        )
+                        Column {
+                            Text(
+                                "Converting media\u2026",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            val parts = mutableListOf<String>()
+                            if (conversionPending > 0) parts += "$conversionPending file${if (conversionPending != 1) "s" else ""} pending"
+                            if (conversionMissingThumbs > 0) parts += "$conversionMissingThumbs thumbnail${if (conversionMissingThumbs != 1) "s" else ""}"
+                            if (parts.isEmpty()) parts += "Processing in background\u2026"
+                            Text(
+                                parts.joinToString(", "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp
+                            )
+                        }
                     }
+                    // Dismiss X button (top-right corner)
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .size(16.dp)
+                            .clickable(onClick = onDismissConversion)
+                    )
                 }
             }
         }
@@ -678,39 +710,52 @@ private fun ActivityProgressBanners(
                 shadowElevation = 4.dp,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = Color(0xFF3B82F6) // blue-500
-                        )
-                        Text(
-                            "$action\u2026 $migrationCompleted/$migrationTotal",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            "$migPct%",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium,
-                            color = Color(0xFF3B82F6)
+                Box {
+                    Column(modifier = Modifier.padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 12.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFF3B82F6) // blue-500
+                            )
+                            Text(
+                                "$action\u2026 $migrationCompleted/$migrationTotal",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                "$migPct%",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF3B82F6)
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        LinearProgressIndicator(
+                            progress = { migPct / 100f },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            color = Color(0xFF3B82F6),
+                            trackColor = Color(0xFF3B82F6).copy(alpha = 0.15f)
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
-                    LinearProgressIndicator(
-                        progress = { migPct / 100f },
+                    // Dismiss X button (top-right corner)
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .clip(RoundedCornerShape(2.dp)),
-                        color = Color(0xFF3B82F6),
-                        trackColor = Color(0xFF3B82F6).copy(alpha = 0.15f)
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .size(16.dp)
+                            .clickable(onClick = onDismissMigration)
                     )
                 }
             }

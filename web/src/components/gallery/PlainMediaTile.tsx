@@ -25,6 +25,8 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
   const retryCountRef = useRef(0);
   /** Max retries before giving up (18 × 10s = 3 minutes). */
   const MAX_THUMB_RETRIES = 18;
+  /** Track current photo ID so we can reset retry counter on change. */
+  const prevPhotoIdRef = useRef(photo.id);
 
   useEffect(() => {
     const el = tileRef.current;
@@ -45,6 +47,11 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
   // Fetch thumbnail with cache-first strategy, retries on 202 (pending)
   useEffect(() => {
     if (!visible) return;
+    // Reset retry counter when the photo changes (virtualized list reuse)
+    if (photo.id !== prevPhotoIdRef.current) {
+      retryCountRef.current = 0;
+      prevPhotoIdRef.current = photo.id;
+    }
     let cancelled = false;
 
     async function fetchThumb() {
@@ -73,6 +80,9 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
             retryTimerRef.current = setTimeout(() => {
               if (!cancelled) fetchThumb();
             }, 10_000);
+          } else {
+            // Give up — show filename fallback instead of perpetual spinner
+            setIsQueued(false);
           }
           return;
         }
@@ -96,6 +106,9 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
             retryTimerRef.current = setTimeout(() => {
               if (!cancelled) fetchThumb();
             }, 10_000);
+          } else {
+            // Give up — show filename fallback instead of perpetual spinner
+            setIsQueued(false);
           }
         }
       }

@@ -223,49 +223,10 @@ pub async fn add_gallery_item(
     .execute(&state.pool)
     .await?;
 
-    // Also clone the thumbnail blob if one exists (via photos.encrypted_thumb_blob_id)
-    let thumb_blob_id: Option<String> = sqlx::query_scalar(
-        "SELECT encrypted_thumb_blob_id FROM photos WHERE encrypted_blob_id = ?",
-    )
-    .bind(&req.blob_id)
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
-
-    if let Some(ref orig_thumb_id) = thumb_blob_id {
-        let thumb_meta: Option<(String, i64, Option<String>, String)> = sqlx::query_as(
-            "SELECT blob_type, size_bytes, client_hash, storage_path FROM blobs WHERE id = ?",
-        )
-        .bind(orig_thumb_id)
-        .fetch_optional(&state.pool)
-        .await
-        .ok()
-        .flatten();
-
-        if let Some((tb_type, tb_size, tb_hash, tb_path)) = thumb_meta {
-            if let Ok(thumb_data) = crate::blobs::storage::read_blob(&storage_root, &tb_path).await {
-                let new_thumb_id = Uuid::new_v4().to_string();
-                if let Ok(new_thumb_path) = crate::blobs::storage::write_blob(
-                    &storage_root, &auth.user_id, &new_thumb_id, &thumb_data,
-                ).await {
-                    let _ = sqlx::query(
-                        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
-                    )
-                    .bind(&new_thumb_id)
-                    .bind(&auth.user_id)
-                    .bind(&tb_type)
-                    .bind(tb_size)
-                    .bind(&tb_hash)
-                    .bind(&now)
-                    .bind(&new_thumb_path)
-                    .execute(&state.pool)
-                    .await;
-                }
-            }
-        }
-    }
+    // Note: we do NOT clone the thumbnail blob.  Thumbnails are fetched via
+    // the `photos` table's `encrypted_thumb_blob_id`, which still references
+    // the original thumbnail.  Cloning it would create an orphaned blob
+    // since `encrypted_gallery_items` has no `thumb_blob_id` column.
 
     let item_id = Uuid::new_v4().to_string();
 
