@@ -6,6 +6,8 @@ import { getCachedThumbnail, cacheThumbnail, formatDuration, type PlainPhoto } f
 import { api } from "../../api/client";
 import { useAuthStore } from "../../store/auth";
 
+import { getThumbnailStyle } from "../../utils/thumbnailCss";
+
 export interface PlainMediaTileProps {
   photo: PlainPhoto;
   onClick: () => void;
@@ -117,6 +119,7 @@ export default function PlainMediaTile({ photo, onClick, onLongPress, selectionM
             alt={photo.filename}
             className="w-full h-full object-cover"
             loading="lazy"
+            style={getThumbnailStyle(photo.crop_metadata)}
           />
           {/* Filename overlay — only for audio files */}
           {photo.media_type === "audio" && (

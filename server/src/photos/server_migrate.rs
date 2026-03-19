@@ -539,6 +539,28 @@ async fn run_migration(
         {
             tracing::error!("Failed to finalize zero-photo migration status: {}", e);
         }
+
+        // ===================================
+        // AUTOMATED CLEANUP
+        // ===================================
+        let db_mode: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or(Some("plain".to_string()));
+
+        let db_mode = db_mode.unwrap_or_else(|| "plain".to_string());
+        
+        if db_mode == "encrypted" {
+                tracing::info!("[DIAG:SERVER_MIG] Encrypted mode confirmed. Running automatic cleanup for plaintext files...");
+                if let Err(e) = crate::photos::cleanup::cleanup_plain_files_internal(&pool, &user_id, &storage_root).await {
+                    tracing::error!(error = ?e, "[DIAG:SERVER_MIG] Automatic cleanup of plain files failed");
+                } else {
+                    tracing::info!("[DIAG:SERVER_MIG] Automatic plain-file cleanup completed successfully.");
+                }
+        }
+
         tracing::info!("[DIAG:SERVER_MIG] 0 photos to encrypt, set idle, triggering converter");
         convert_notify.notify_one();
         return;
@@ -778,6 +800,29 @@ async fn run_migration(
         tracing::error!("Failed to finalize migration status: {}", e);
     }
 
+    // ===================================
+    // AUTOMATED CLEANUP
+    // ===================================
+    // Once migration completes, immediately purge the unencrypted
+    // originals so Encrypted Mode actually respects its data-at-rest claims.
+    let db_mode: Option<String> = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap_or(Some("plain".to_string()));
+
+    let db_mode = db_mode.unwrap_or_else(|| "plain".to_string());
+    
+    if db_mode == "encrypted" {
+            tracing::info!("[DIAG:SERVER_MIG] Encrypted mode confirmed. Running automatic cleanup for plaintext files...");
+            if let Err(e) = crate::photos::cleanup::cleanup_plain_files_internal(&pool, &user_id, &storage_root).await {
+                tracing::error!(error = ?e, "[DIAG:SERVER_MIG] Automatic cleanup of plain files failed");
+            } else {
+                tracing::info!("[DIAG:SERVER_MIG] Automatic plain-file cleanup completed successfully.");
+            }
+    }
+
     tracing::info!(
         "[DIAG:SERVER_MIG] migration finalized, set idle, triggering converter in 5s"
     );
@@ -862,6 +907,20 @@ pub async fn run_migration_from_stored_key(
         )
         .execute(&pool)
         .await;
+
+        let db_mode: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap_or(Some("plain".to_string()));
+
+        let db_mode = db_mode.unwrap_or_else(|| "plain".to_string());
+        
+        if db_mode == "encrypted" {
+            let _ = crate::photos::cleanup::cleanup_plain_files_internal(&pool, &user_id, &storage_root).await;
+        }
+
         return;
     }
 
@@ -1087,6 +1146,21 @@ pub async fn start_migration(
         )
         .execute(&state.pool)
         .await?;
+
+        let db_mode: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
+        )
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or(Some("plain".to_string()));
+
+        let db_mode = db_mode.unwrap_or_else(|| "plain".to_string());
+
+        if db_mode == "encrypted" {
+            let storage_root = (**state.storage_root.load()).clone();
+            let _ = crate::photos::cleanup::cleanup_plain_files_internal(&state.pool, &auth.user_id, &storage_root).await;
+        }
+
         return Ok(Json(StartMigrationResponse {
             message: "No photos to migrate.".into(),
             total: 0,

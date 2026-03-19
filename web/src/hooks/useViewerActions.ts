@@ -153,19 +153,11 @@ export default function useViewerActions({
             }
           }
 
-          // ── Edited thumbnail ───────────────────────────────────────
-          // Apply crop/brightness/rotation to the original's cached
-          // thumbnail so the gallery shows the edits at a glance.
-          let editedThumb = original.thumbnailData;
-          if (meta && original.thumbnailData) {
-            try {
-              editedThumb = await applyEditsToThumbnail(original.thumbnailData, meta);
-            } catch {
-              // Non-fatal — fall back to the original thumbnail
-            }
-          }
+          // Re-use original thumbnail; the UI applies cropData via CSS
 
-          const copyId = crypto.randomUUID();
+          const copyId = typeof crypto.randomUUID === "function"
+            ? crypto.randomUUID()
+            : Date.now().toString(36) + Math.random().toString(36).substring(2);
           await db.photos.put({
             ...original,
             blobId: copyId,
@@ -173,7 +165,7 @@ export default function useViewerActions({
             filename: copyFilename,
             cropData: metaJson ?? undefined,
             takenAt: Date.now(),
-            thumbnailData: editedThumb,
+            thumbnailData: original.thumbnailData,
             serverPhotoId: serverCopyId,
           });
         }

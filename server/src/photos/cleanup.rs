@@ -90,6 +90,26 @@ pub async fn cleanup_plain_files(
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
 
+    let (cleaned, errors) = cleanup_plain_files_internal(&state.pool, &auth.user_id, &storage_root).await?;
+
+    Ok(Json(serde_json::json!({
+        "cleaned": cleaned,
+        "errors": errors,
+        "message": format!(
+            "Cleaned up {} file{}{}.",
+            cleaned,
+            if cleaned != 1 { "s" } else { "" },
+            if errors > 0 { format!(", {} error(s)", errors) } else { String::new() },
+        ),
+    })))
+}
+
+/// Internal function to execute cleanup logic (also used automatically after migration).
+pub async fn cleanup_plain_files_internal(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+    storage_root: &std::path::Path,
+) -> Result<(u32, u32), AppError> {
     // Fetch all encrypted photos that still have plain originals
     let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT id, file_path, thumb_path \
@@ -97,15 +117,12 @@ pub async fn cleanup_plain_files(
          WHERE user_id = ? AND encrypted_blob_id IS NOT NULL \
            AND file_path IS NOT NULL AND file_path != ''",
     )
-    .bind(&auth.user_id)
-    .fetch_all(&state.pool)
+    .bind(user_id)
+    .fetch_all(pool)
     .await?;
 
     if rows.is_empty() {
-        return Ok(Json(serde_json::json!({
-            "cleaned": 0,
-            "message": "Nothing to clean up.",
-        })));
+        return Ok((0, 0));
     }
 
     let mut cleaned = 0u32;
@@ -155,33 +172,24 @@ pub async fn cleanup_plain_files(
              WHERE id = ? AND user_id = ?",
         )
         .bind(photo_id)
-        .bind(&auth.user_id)
-        .execute(&state.pool)
+        .bind(user_id)
+        .execute(pool)
         .await?;
 
         cleaned += 1;
     }
 
     // Try to remove empty parent directories left behind
-    cleanup_empty_dirs(&storage_root).await;
+    cleanup_empty_dirs(storage_root).await;
 
     tracing::info!(
-        user_id = %auth.user_id,
+        user_id = %user_id,
         cleaned = cleaned,
         errors = errors,
         "Plain file cleanup completed"
     );
 
-    Ok(Json(serde_json::json!({
-        "cleaned": cleaned,
-        "errors": errors,
-        "message": format!(
-            "Cleaned up {} file{}{}.",
-            cleaned,
-            if cleaned != 1 { "s" } else { "" },
-            if errors > 0 { format!(", {} error(s)", errors) } else { String::new() },
-        ),
-    })))
+    Ok((cleaned, errors))
 }
 
 /// Walk the storage root and remove any empty directories (except the root
