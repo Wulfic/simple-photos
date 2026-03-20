@@ -5,23 +5,23 @@
 -- 018_audio_backup_setting, 019_diagnostics_config, 021_encryption_key_persistence.
 
 -- ── Server Settings ─────────────────────────────────────────────────────────
-CREATE TABLE server_settings (
+CREATE TABLE IF NOT EXISTS server_settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
 -- Default settings (encryption mode is implicit — always encrypted)
-INSERT INTO server_settings (key, value) VALUES ('trash_retention_days', '30');
-INSERT INTO server_settings (key, value) VALUES ('backup_mode', 'primary');
-INSERT INTO server_settings (key, value) VALUES ('last_auto_scan', '');
-INSERT INTO server_settings (key, value) VALUES ('audio_backup_enabled', 'false');
-INSERT INTO server_settings (key, value) VALUES ('diagnostics_enabled', 'true');
-INSERT INTO server_settings (key, value) VALUES ('client_diagnostics_enabled', 'true');
+INSERT OR IGNORE INTO server_settings (key, value) VALUES ('trash_retention_days', '30');
+INSERT OR IGNORE INTO server_settings (key, value) VALUES ('backup_mode', 'primary');
+INSERT OR IGNORE INTO server_settings (key, value) VALUES ('last_auto_scan', '');
+INSERT OR IGNORE INTO server_settings (key, value) VALUES ('audio_backup_enabled', 'false');
+INSERT OR IGNORE INTO server_settings (key, value) VALUES ('diagnostics_enabled', 'true');
+INSERT OR IGNORE INTO server_settings (key, value) VALUES ('client_diagnostics_enabled', 'true');
 -- encryption_key_wrapped and encryption_key_active are stored at runtime
 -- via the store-key endpoint; no default INSERT needed.
 
 -- ── Backup Servers & Sync Log ───────────────────────────────────────────────
-CREATE TABLE backup_servers (
+CREATE TABLE IF NOT EXISTS backup_servers (
     id                   TEXT PRIMARY KEY,
     name                 TEXT NOT NULL,
     address              TEXT NOT NULL UNIQUE,
@@ -34,7 +34,7 @@ CREATE TABLE backup_servers (
     created_at           TEXT NOT NULL
 );
 
-CREATE TABLE backup_sync_log (
+CREATE TABLE IF NOT EXISTS backup_sync_log (
     id            TEXT PRIMARY KEY,
     server_id     TEXT NOT NULL REFERENCES backup_servers(id) ON DELETE CASCADE,
     started_at    TEXT NOT NULL,
@@ -45,10 +45,10 @@ CREATE TABLE backup_sync_log (
     error         TEXT,
     details       TEXT NOT NULL DEFAULT '{}'
 );
-CREATE INDEX idx_sync_log_server ON backup_sync_log(server_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_sync_log_server ON backup_sync_log(server_id, started_at);
 
 -- ── Client Logs ─────────────────────────────────────────────────────────────
-CREATE TABLE client_logs (
+CREATE TABLE IF NOT EXISTS client_logs (
     id         TEXT PRIMARY KEY,
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE client_logs (
     client_ts  TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-CREATE INDEX idx_client_logs_user    ON client_logs(user_id);
-CREATE INDEX idx_client_logs_session ON client_logs(session_id);
-CREATE INDEX idx_client_logs_level   ON client_logs(level);
-CREATE INDEX idx_client_logs_created ON client_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_client_logs_user    ON client_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_client_logs_session ON client_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_client_logs_level   ON client_logs(level);
+CREATE INDEX IF NOT EXISTS idx_client_logs_created ON client_logs(created_at);
