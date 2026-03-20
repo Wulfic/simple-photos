@@ -468,6 +468,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))
+        .route("/api/discover/info", get(health::handlers::discover_info))
         .nest("/api", api_routes)
         // Security headers on all responses
         .layer(axum::middleware::from_fn(security::security_headers))
@@ -533,12 +534,12 @@ async fn main() -> anyhow::Result<()> {
 
         tracing::info!("Server ready (HTTPS)");
         axum_server::bind_rustls(addr, rustls_config)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
     } else {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!("Server ready");
-        axum::serve(listener, app).await?;
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     }
 
     Ok(())

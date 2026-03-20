@@ -284,6 +284,7 @@ pub async fn discover_servers(
             address: b.address,
             name: b.name,
             version: b.version,
+            api_key: None, // UDP broadcast doesn't carry the API key
         })
         .collect();
 
@@ -321,10 +322,48 @@ pub async fn discover_servers(
         if existing_addrs.contains(&addr) {
             continue;
         }
-        let url = format!("http://{}/health", addr);
+        // Try /api/discover/info first — it's a loopback-only endpoint that
+        // returns the backup mode and API key, enabling zero-touch registration
+        // of Docker containers and other co-located backup instances.
+        let info_url = format!("http://{}/api/discover/info", addr);
+        let health_url = format!("http://{}/health", addr);
         let c = client.clone();
         local_futures.push(async move {
-            match c.get(&url).send().await {
+            // ── Primary probe: /api/discover/info ─────────────────────────
+            if let Ok(resp) = c.get(&info_url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                        if body.get("service").and_then(|s| s.as_str())
+                            == Some("simple-photos")
+                        {
+                            let name = body
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("Unknown")
+                                .to_string();
+                            let version = body
+                                .get("version")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            // Only present when the remote server is in backup mode
+                            let api_key = body
+                                .get("api_key")
+                                .and_then(|k| k.as_str())
+                                .filter(|k| !k.is_empty())
+                                .map(|k| k.to_string());
+                            return Some(DiscoveredServer {
+                                address: format!("localhost:{}", port),
+                                name,
+                                version,
+                                api_key,
+                            });
+                        }
+                    }
+                }
+            }
+            // ── Fallback probe: /health (older servers) ───────────────────
+            match c.get(&health_url).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         if body.get("service").and_then(|s| s.as_str())
@@ -341,10 +380,10 @@ pub async fn discover_servers(
                                 .unwrap_or("unknown")
                                 .to_string();
                             return Some(DiscoveredServer {
-                                // Use localhost so the caller can connect from the host
                                 address: format!("localhost:{}", port),
                                 name,
                                 version,
+                                api_key: None,
                             });
                         }
                     }
@@ -422,6 +461,7 @@ pub async fn discover_servers(
                                         address: addr,
                                         name,
                                         version,
+                                        api_key: None, // LAN-discovered servers require manual API key entry
                                     });
                                 }
                             }

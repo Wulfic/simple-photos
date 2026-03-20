@@ -105,6 +105,8 @@ export const backupApi = {
         address: string;
         name: string;
         version: string;
+        /** API key returned for localhost backup-mode servers via /api/discover/info */
+        api_key?: string;
       }>;
     }>("/admin/backup/discover"),
 

@@ -20,18 +20,33 @@ function useMinimumDisplay(
   const [visible, setVisible] = useState(false);
   const showSinceRef = useRef<number | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks whether the user manually dismissed this banner.
+  const isDismissedRef = useRef(false);
+  // Tracks previous active value so we can detect genuine false→true transitions.
+  const prevActiveRef = useRef(false);
 
   const forceHide = () => {
     if (hideTimerRef.current) {
       clearTimeout(hideTimerRef.current);
       hideTimerRef.current = null;
     }
+    isDismissedRef.current = true;
     setVisible(false);
     showSinceRef.current = null;
   };
 
   useEffect(() => {
+    const wasActive = prevActiveRef.current;
+    prevActiveRef.current = active;
+
     if (active) {
+      // Only reset the dismissed state on a genuine new job start (false→true).
+      // This prevents brief polling flickers (true→false→true) from resurfacing
+      // a banner the user already dismissed.
+      if (!wasActive) {
+        isDismissedRef.current = false;
+      }
+      if (isDismissedRef.current) return;
       // Work started — show immediately, record start time
       if (hideTimerRef.current) {
         clearTimeout(hideTimerRef.current);
@@ -44,17 +59,22 @@ function useMinimumDisplay(
       const elapsed = Date.now() - showSinceRef.current;
       const remaining = Math.max(0, minMs - elapsed);
       if (remaining === 0) {
-        // Minimum time already met — hide now
-        forceHide();
+        if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+        setVisible(false);
+        showSinceRef.current = null;
       } else {
-        // Keep visible for the remaining minimum time
-        hideTimerRef.current = setTimeout(forceHide, remaining);
+        hideTimerRef.current = setTimeout(() => {
+          hideTimerRef.current = null;
+          setVisible(false);
+          showSinceRef.current = null;
+        }, remaining);
       }
     }
     return () => {
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     };
-  }, [active, minMs, visible]); 
+  }, [active, minMs, visible]);
 
   return [visible, visible && !active, forceHide];
 }
@@ -200,14 +220,14 @@ export default function GlobalProgressBanners() {
         }`}>
           <button
             onClick={hideConversion}
-            className="absolute top-1.5 left-1.5 w-5 h-5 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-200/60 dark:hover:bg-gray-600/60 transition-colors"
+            className="absolute top-2 right-2 w-6 h-6 z-10 flex items-center justify-center rounded-full text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors bg-white/50 dark:bg-black/50 backdrop-blur-sm"
             title="Dismiss"
           >
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 pr-5">
             {conversionDone ? (
               <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -265,15 +285,15 @@ export default function GlobalProgressBanners() {
         }`}>
           <button
             onClick={hideMigration}
-            className="absolute top-1.5 left-1.5 w-5 h-5 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-200/60 dark:hover:bg-gray-600/60 transition-colors"
+            className="absolute top-2 right-2 w-6 h-6 z-10 flex items-center justify-center rounded-full text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors bg-white/50 dark:bg-black/50 backdrop-blur-sm"
             title="Dismiss"
           >
-            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
           {migrationDone ? (
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5 pr-5">
               <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
@@ -283,7 +303,7 @@ export default function GlobalProgressBanners() {
             </div>
           ) : (
             <>
-              <div className="flex items-center gap-2.5 mb-2">
+              <div className="flex items-center gap-2.5 mb-2 pr-5">
                 <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
                 <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
                   {migAction}… {migrationCompleted}/{migrationTotal}
