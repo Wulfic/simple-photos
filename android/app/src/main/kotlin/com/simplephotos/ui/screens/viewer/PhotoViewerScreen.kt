@@ -2,8 +2,8 @@
  * Full-screen photo/video viewer with horizontal paging.
  *
  * Supports pinch-to-zoom, swipe navigation, share/download/delete actions,
- * photo info panel, tag management, crop editing, and both plain-mode
- * (authenticated URL) and encrypted-mode (decrypt-to-memory) rendering.
+ * photo info panel, tag management, crop editing, and encrypted-mode
+ * (decrypt-to-memory) rendering.
  */
 package com.simplephotos.ui.screens.viewer
 
@@ -211,19 +211,7 @@ fun PhotoViewerScreen(
         }
     }
 
-    // Load tags and favorite when page changes (plain mode only)
-    val isPlainMode = viewModel.encryptionMode == "plain"
-    LaunchedEffect(pagerState.currentPage) {
-        val photo = viewModel.allPhotos.getOrNull(pagerState.currentPage)
-        if (isPlainMode && photo?.serverPhotoId != null) {
-            viewModel.loadTagsForPhoto(photo.serverPhotoId)
-            viewModel.loadFavoriteForPhoto(photo.serverPhotoId)
-        }
-    }
 
-    // Tag input state
-    var showTagInput by remember { mutableStateOf(false) }
-    var tagInputText by remember { mutableStateOf("") }
 
     // Controls overlay visibility — tap photo to toggle
     var showOverlay by remember { mutableStateOf(true) }
@@ -473,7 +461,6 @@ fun PhotoViewerScreen(
             ) {
                 PhotoPageContent(
                     photo = photo,
-                    encryptionMode = viewModel.encryptionMode,
                     serverBaseUrl = viewModel.serverBaseUrl,
                     viewModel = viewModel,
                     okHttpClient = viewModel.okHttpClient,
@@ -849,99 +836,6 @@ fun PhotoViewerScreen(
                                     tint = Color.White,
                                     modifier = Modifier.size(12.dp)
                                 )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Tag bar overlay (bottom) ───────────────────────────────────
-        if (isPlainMode && currentPhoto?.serverPhotoId != null) {
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showOverlay,
-                enter = androidx.compose.animation.fadeIn(),
-                exit = androidx.compose.animation.fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                Surface(
-                    color = Color.Black.copy(alpha = 0.6f),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            viewModel.currentTags.forEach { tag ->
-                                Surface(
-                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                                    color = Color(0xFF1E40AF).copy(alpha = 0.4f)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(tag, color = Color(0xFF93C5FD), fontSize = 12.sp)
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            "✕",
-                                            color = Color(0xFF93C5FD),
-                                            fontSize = 10.sp,
-                                            modifier = Modifier.clickable {
-                                                viewModel.removeTag(currentPhoto.serverPhotoId!!, tag)
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            if (showTagInput) {
-                                OutlinedTextField(
-                                    value = tagInputText,
-                                    onValueChange = { if (it.length <= 100) tagInputText = it },
-                                    modifier = Modifier
-                                        .width(120.dp)
-                                        .height(36.dp),
-                                    placeholder = { Text("tag", fontSize = 12.sp, color = Color.Gray) },
-                                    singleLine = true,
-                                    textStyle = LocalTextStyle.current.copy(fontSize = 12.sp, color = Color.White),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = Color(0xFF3B82F6),
-                                        unfocusedBorderColor = Color.Gray,
-                                        cursorColor = Color.White
-                                    )
-                                )
-                                TextButton(onClick = {
-                                    if (tagInputText.isNotBlank()) {
-                                        viewModel.addTag(currentPhoto.serverPhotoId!!, tagInputText)
-                                        tagInputText = ""
-                                    }
-                                }) {
-                                    Text("Add", color = Color(0xFF60A5FA), fontSize = 12.sp)
-                                }
-                                TextButton(onClick = { showTagInput = false; tagInputText = "" }) {
-                                    Text("✕", color = Color.Gray, fontSize = 12.sp)
-                                }
-                            } else {
-                                Surface(
-                                    modifier = Modifier.clickable { showTagInput = true },
-                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                                    color = Color.Transparent,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f))
-                                ) {
-                                    Text(
-                                        "+ Tag",
-                                        color = Color.Gray,
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
                             }
                         }
                     }

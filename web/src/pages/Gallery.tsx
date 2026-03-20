@@ -1,12 +1,12 @@
 /**
  * Main gallery page — displays the user's photo/video grid.
  *
- * Supports both plain-mode (server thumbnails) and encrypted-mode
- * (client-decrypted thumbnails from IndexedDB). Delegates data loading
- * to useGalleryData, encryption migration to useGalleryMigration, and
+ * All photos are encrypted (client-side AES-256-GCM). During auto-migration,
+ * unencrypted photos on disk may temporarily appear as plain tiles until the
+ * server completes encryption. Delegates data loading to useGalleryData and
  * file upload to useGalleryUpload.
  */
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
@@ -16,7 +16,6 @@ import { type PlainPhoto } from "../utils/gallery";
 import MediaTile from "../components/gallery/MediaTile";
 import PlainMediaTile from "../components/gallery/PlainMediaTile";
 import { useGalleryData } from "../hooks/useGalleryData";
-import { useGalleryMigration } from "../hooks/useGalleryMigration";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
 import { useActivityStore, setConversionDoneCallback } from "../store/activity";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
@@ -29,20 +28,9 @@ export default function Gallery() {
   // ── Core data hook ──────────────────────────────────────────────────────
   const {
     mode, loading, error, setError, plainPhotos, encryptedPhotos,
-    secureBlobIds, migrationStatus, migrationTotal, migrationCompleted,
-    setMigrationStatus, setMigrationTotal, setMigrationCompleted,
+    secureBlobIds,
     loadPlainPhotos, loadEncryptedPhotos,
   } = useGalleryData();
-
-  // ── Encryption migration ────────────────────────────────────────────────
-  useGalleryMigration({
-    migrationStatus,
-    setMigrationStatus,
-    setMigrationTotal,
-    setMigrationCompleted,
-    loadEncryptedPhotos,
-    loadPlainPhotos,
-  });
 
   // ── Upload ──────────────────────────────────────────────────────────────
   const {
@@ -50,7 +38,6 @@ export default function Gallery() {
   } = useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, setError });
 
   // ── Read global activity store (banners rendered by GlobalProgressBanners) ──
-  const { migrationStatus: globalMigStatus } = useActivityStore();
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   // When conversion finishes, refresh the gallery to pick up new thumbnails
@@ -58,21 +45,6 @@ export default function Gallery() {
     setConversionDoneCallback(() => loadPlainPhotos());
     return () => setConversionDoneCallback(null);
   }, []);
-
-  // When migration finishes (transitions from encrypting/decrypting → idle),
-  // reload encrypted photos. Use a ref to track previous status so we don't
-  // fire on the initial "idle" before polling even starts.
-  const prevMigStatusRef = useRef(globalMigStatus);
-  useEffect(() => {
-    const prev = prevMigStatusRef.current;
-    prevMigStatusRef.current = globalMigStatus;
-    if (
-      globalMigStatus === "idle" &&
-      (prev === "encrypting" || prev === "decrypting")
-    ) {
-      loadEncryptedPhotos();
-    }
-  }, [globalMigStatus]);
 
   // ── Multi-select state (mobile long-press) ─────────────────────────────
   const [selectionMode, setSelectionMode] = useState(false);
@@ -94,14 +66,15 @@ export default function Gallery() {
     setSelectionMode(false);
     setSelectedIds(new Set());
   }
-  /** Delete all selected photos/blobs. Plain mode hard-deletes; encrypted
-   *  mode soft-deletes to trash (30-day recovery window), mirroring the
-   *  single-photo delete behavior in the Viewer. */
+  /** Delete all selected photos/blobs. Uses encrypted soft-delete (trash with
+   *  30-day recovery window). Plain photos during auto-migration are hard-deleted. */
   async function deleteSelected() {
     if (selectedIds.size === 0) return;
+    const plainIdSet = new Set(plainPhotos.map(p => p.id));
     try {
       for (const id of selectedIds) {
-        if (mode === "plain") {
+        if (plainIdSet.has(id)) {
+          // Plain photo (not yet encrypted) — hard-delete
           await api.photos.delete(id);
         } else {
           // Encrypted mode: soft-delete to trash with client metadata
@@ -141,8 +114,8 @@ export default function Gallery() {
           await db.photos.delete(id);
         }
       }
-      if (mode === "plain") await loadPlainPhotos();
-      else await loadEncryptedPhotos();
+      await loadPlainPhotos();
+      await loadEncryptedPhotos();
     } catch { /* ignore */ }
     clearSelection();
   }
@@ -175,8 +148,7 @@ export default function Gallery() {
     return dateFormatter.format(d);
   }
 
-  // Group plain photos by day — always compute, regardless of mode.
-  // Plain photos may exist alongside encrypted mode (auto-scanned files, migration).
+  // Group plain photos by day — auto-scanned files or in-progress migration.
   type PlainDayGroup = { key: string; label: string; photos: PlainPhoto[] };
   const plainDayGroups: PlainDayGroup[] = (() => {
     if (filteredPlainPhotos.length === 0) return [];
@@ -275,8 +247,7 @@ export default function Gallery() {
           </div>
         )}
 
-        {/* Plain photo tiles — shown in plain mode, during migration, or when
-             auto-scanned files exist in encrypted mode */}
+        {/* Plain photo tiles — auto-scanned files on disk not yet encrypted */}
         {plainDayGroups.length > 0 && plainDayGroups.map((group) => {
           // Compute global start index for this group (for photo viewer navigation)
           let groupStartIdx = 0;

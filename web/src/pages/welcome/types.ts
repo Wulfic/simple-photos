@@ -10,7 +10,6 @@ export type WizardStep =
   | "admin-2fa"
   | "storage"
   | "ssl"
-  | "encryption"
   | "users"
   | "user-2fa"
   | "android"

@@ -79,9 +79,6 @@ class AlbumViewModel @Inject constructor(
     var serverBaseUrl by mutableStateOf("")
         private set
 
-    var encryptionMode by mutableStateOf("plain")
-        private set
-
     /** Photo counts for smart/default albums */
     var totalCount by mutableStateOf(0)
         private set
@@ -117,7 +114,6 @@ class AlbumViewModel @Inject constructor(
             // Load server config
             try {
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
-                encryptionMode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
             } catch (_: Exception) {}
             // Sync album manifests from server (picks up web-created albums)
             try {
@@ -355,7 +351,6 @@ fun AlbumListScreen(
                                         count = item.count,
                                         coverPhoto = viewModel.smartAlbumCoverPhotos[item.id],
                                         serverBaseUrl = viewModel.serverBaseUrl,
-                                        encryptionMode = viewModel.encryptionMode,
                                         onClick = { onAlbumClick(item.id) }
                                     )
                                 }
@@ -364,7 +359,6 @@ fun AlbumListScreen(
                                         album = item.album,
                                         coverPhoto = viewModel.albumCoverPhotos[item.album.localId],
                                         serverBaseUrl = viewModel.serverBaseUrl,
-                                        encryptionMode = viewModel.encryptionMode,
                                         onClick = { onAlbumClick(item.album.localId) }
                                     )
                                 }
@@ -540,7 +534,6 @@ private fun AlbumCard(
     album: AlbumEntity,
     coverPhoto: PhotoEntity? = null,
     serverBaseUrl: String = "",
-    encryptionMode: String = "plain",
     onClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -558,8 +551,6 @@ private fun AlbumCard(
                 if (coverPhoto != null) {
                     // Determine thumbnail source
                     val thumbModel: Any? = when {
-                        encryptionMode == "plain" && coverPhoto.serverPhotoId != null ->
-                            "$serverBaseUrl/api/photos/${coverPhoto.serverPhotoId}/thumb"
                         coverPhoto.thumbnailPath != null -> java.io.File(coverPhoto.thumbnailPath!!)
                         coverPhoto.localPath != null -> coverPhoto.localPath
                         else -> null
@@ -620,7 +611,6 @@ private fun SmartAlbumCard(
     count: Int,
     coverPhoto: PhotoEntity? = null,
     serverBaseUrl: String = "",
-    encryptionMode: String = "plain",
     onClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -641,8 +631,6 @@ private fun SmartAlbumCard(
             ) {
                 if (coverPhoto != null) {
                     val thumbModel: Any? = when {
-                        encryptionMode == "plain" && coverPhoto.serverPhotoId != null ->
-                            "$serverBaseUrl/api/photos/${coverPhoto.serverPhotoId}/thumb"
                         coverPhoto.thumbnailPath != null -> java.io.File(coverPhoto.thumbnailPath!!)
                         coverPhoto.localPath != null -> coverPhoto.localPath
                         else -> null

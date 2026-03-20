@@ -84,8 +84,7 @@ class AlbumDetailViewModel @Inject constructor(
 
     var serverBaseUrl by mutableStateOf("")
         private set
-    var encryptionMode by mutableStateOf("plain")
-        private set
+
 
     // ── Multi-select state ────────────────────────────────────────
     var selectedIds by mutableStateOf(emptySet<String>())
@@ -97,7 +96,6 @@ class AlbumDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 serverBaseUrl = photoRepository.getServerBaseUrl()
-                encryptionMode = photoRepository.getEncryptionMode()
             } catch (_: Exception) {}
         }
         if (isSmartAlbum) loadSmartAlbum() else loadAlbum()
@@ -173,7 +171,7 @@ class AlbumDetailViewModel @Inject constructor(
                 try {
                     album?.let { albumRepository.syncAlbum(it) }
                 } catch (_: Exception) {
-                    // Sync may fail in plain mode — album data is still stored locally
+                    // Sync may fail — album data is still stored locally
                 }
                 showAddPanel = false
                 loadAlbum()
@@ -407,7 +405,6 @@ fun AlbumDetailScreen(
                                     AddPhotoTile(
                                         photo = photo,
                                         serverBaseUrl = viewModel.serverBaseUrl,
-                                        encryptionMode = viewModel.encryptionMode,
                                         isSelected = selected,
                                         onClick = { viewModel.toggleSelection(photo.localId) }
                                     )
@@ -487,7 +484,6 @@ fun AlbumDetailScreen(
                                 AlbumPhotoTile(
                                     photo = photo,
                                     serverBaseUrl = viewModel.serverBaseUrl,
-                                    encryptionMode = viewModel.encryptionMode,
                                     isSelectionMode = viewModel.isSelectionMode,
                                     isSelected = photo.localId in viewModel.selectedIds,
                                     onTap = {
@@ -538,7 +534,6 @@ fun AlbumDetailScreen(
 private fun AddPhotoTile(
     photo: PhotoEntity,
     serverBaseUrl: String,
-    encryptionMode: String,
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
@@ -551,8 +546,6 @@ private fun AddPhotoTile(
             .clickable(onClick = onClick)
     ) {
         val imageModel: Any? = when {
-            encryptionMode == "plain" && photo.serverPhotoId != null ->
-                "$serverBaseUrl/api/photos/${photo.serverPhotoId}/thumb"
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> photo.localPath
             else -> null
@@ -609,7 +602,6 @@ private fun AddPhotoTile(
 private fun AlbumPhotoTile(
     photo: PhotoEntity,
     serverBaseUrl: String,
-    encryptionMode: String,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onTap: () -> Unit,
@@ -627,8 +619,6 @@ private fun AlbumPhotoTile(
             )
     ) {
         val imageModel: Any? = when {
-            encryptionMode == "plain" && photo.serverPhotoId != null ->
-                "$serverBaseUrl/api/photos/${photo.serverPhotoId}/thumb"
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> photo.localPath
             else -> null

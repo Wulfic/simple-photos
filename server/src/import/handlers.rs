@@ -41,15 +41,8 @@ pub async fn import_metadata(
         req.blob_id.clone(),
     );
 
-    // Determine whether encryption mode is active
-    let encryption_mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or_else(|| "plain".to_string());
-
-    let is_encrypted = encryption_mode == "encrypted";
+    // Server always operates in encrypted mode
+    let is_encrypted = true;
 
     // Serialize the full Google Photos JSON for archival in the metadata/ dir
     let raw_json = serde_json::to_vec_pretty(&req.metadata)
@@ -147,14 +140,8 @@ pub async fn batch_import_metadata(
         ));
     }
 
-    let encryption_mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or_else(|| "plain".to_string());
-
-    let is_encrypted = encryption_mode == "encrypted";
+    // Server always operates in encrypted mode
+    let is_encrypted = true;
     let storage_root = (**state.storage_root.load()).clone();
 
     let mut results = Vec::with_capacity(req.entries.len());

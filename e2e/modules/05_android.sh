@@ -276,6 +276,7 @@ done
 subhdr "EncryptionSettingsResponse Shape"
 ENC_RESP=$(curl -s --max-time "$CURL_MAX_TIME" "$API/settings/encryption" -H "$AUTH")
 assert_contains "Encryption settings has 'encryption_mode'" "$ENC_RESP" "encryption_mode"
+assert_json "Encryption mode is always encrypted" "$ENC_RESP" "encryption_mode" "encrypted"
 
 subhdr "ScanResponse Shape"
 SCAN_RESP=$(curl -s --max-time "$CURL_MAX_TIME" -X POST "$API/admin/photos/scan" -H "$AUTH")

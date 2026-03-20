@@ -163,7 +163,7 @@ export default function SslStep({ setStep, setError, error }: SslStepProps) {
         <button
           onClick={() => {
             setError("");
-            setStep("encryption");
+            setStep("users");
           }}
           className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
         >

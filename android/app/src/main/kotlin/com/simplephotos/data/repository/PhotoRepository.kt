@@ -15,7 +15,6 @@ import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
 import com.simplephotos.data.remote.dto.DuplicatePhotoResponse
 import com.simplephotos.data.remote.dto.FavoriteToggleResponse
-import com.simplephotos.data.remote.dto.PlainPhotoRecord
 import com.simplephotos.data.remote.dto.SetCropRequest
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -33,13 +32,12 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Central photo/video management: upload (plain and encrypted modes), download,
- * decrypt, sync from server, and local cache management.
+ * Central photo/video management: upload (encrypted), download, decrypt,
+ * sync from server, and local cache management.
  *
- * In encrypted mode, media is wrapped in a JSON envelope (`{v, filename, data,
- * ...}`) and encrypted with AES-256-GCM before upload. In plain mode, raw
- * bytes are sent directly. The repository also handles content-hash dedup
- * and server-side filename cross-matching.
+ * Media is wrapped in a JSON envelope (`{v, filename, data, ...}`) and
+ * encrypted with AES-256-GCM before upload. The repository also handles
+ * content-hash dedup.
  */
 @Singleton
 class PhotoRepository @Inject constructor(
@@ -80,9 +78,6 @@ class PhotoRepository @Inject constructor(
     private val thumbnailDir: File
         get() = File(context.filesDir, "thumbnails").also { it.mkdirs() }
 
-    /** Cached encryption mode — refreshed on each sync. */
-    private var cachedEncryptionMode: String? = null
-
     /** Short content-based hash: first 12 hex chars of SHA-256.
      *  Deterministic fingerprint for cross-platform alignment. */
     private fun computeContentHash(data: ByteArray): String =
@@ -93,20 +88,6 @@ class PhotoRepository @Inject constructor(
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
 
     suspend fun insertPhoto(photo: PhotoEntity) = db.photoDao().insert(photo)
-
-    /**
-     * Get the encryption mode from server (cached per session).
-     */
-    suspend fun getEncryptionMode(): String {
-        cachedEncryptionMode?.let { return it }
-        return try {
-            val settings = api.getEncryptionSettings()
-            cachedEncryptionMode = settings.encryptionMode
-            settings.encryptionMode
-        } catch (_: Exception) {
-            "plain" // default to plain if we can't reach the server
-        }
-    }
 
     /**
      * Get the base URL for building image URLs (for Coil).
@@ -124,60 +105,20 @@ class PhotoRepository @Inject constructor(
         return try { api.getConversionStatus() } catch (_: Exception) { null }
     }
 
-    /**
-     * Fetch encryption settings including migration progress.
-     */
-    suspend fun getEncryptionSettings(): com.simplephotos.data.remote.dto.EncryptionSettingsResponse? {
-        return try { api.getEncryptionSettings() } catch (_: Exception) { null }
-    }
-
     suspend fun deletePhoto(photo: PhotoEntity) {
-        // Delete from server based on mode
-        val mode = getEncryptionMode()
-        if (mode == "plain") {
-            photo.serverPhotoId?.let { photoId ->
-                try { api.deletePhoto(photoId) } catch (_: Exception) {}
-            }
-        } else {
-            photo.serverBlobId?.let { blobId ->
-                try { api.deleteBlob(blobId) } catch (_: Exception) {}
-            }
-            photo.thumbnailBlobId?.let { blobId ->
-                try { api.deleteBlob(blobId) } catch (_: Exception) {}
-            }
+        // Delete encrypted blobs from server
+        photo.serverBlobId?.let { blobId ->
+            try { api.deleteBlob(blobId) } catch (_: Exception) {}
+        }
+        photo.thumbnailBlobId?.let { blobId ->
+            try { api.deleteBlob(blobId) } catch (_: Exception) {}
         }
         // Delete cached thumbnail
         photo.thumbnailPath?.let { File(it).delete() }
         db.photoDao().delete(photo)
     }
 
-    // ── Plain-mode upload ────────────────────────────────────────────────
-
-    /**
-     * Upload a photo in plain mode — send raw file bytes to the server.
-     */
-    suspend fun uploadPhotoPlain(photo: PhotoEntity, photoData: ByteArray) {
-        db.photoDao().updateSyncStatus(photo.localId, SyncStatus.UPLOADING)
-        try {
-            val body = photoData.toRequestBody("application/octet-stream".toMediaType())
-            android.util.Log.d("PhotoRepository", "uploadPhotoPlain: sending ${photoData.size} bytes, filename=${photo.filename}, mime=${photo.mimeType}")
-            val result = api.uploadPhoto(body, photo.filename, photo.mimeType)
-            android.util.Log.d("PhotoRepository", "uploadPhotoPlain: server returned photoId=${result.photoId}, sizeBytes=${result.sizeBytes}")
-
-            db.photoDao().markSyncedPlain(photo.localId, result.photoId)
-        } catch (e: retrofit2.HttpException) {
-            val errorBody = e.response()?.errorBody()?.string()
-            android.util.Log.e("PhotoRepository", "uploadPhotoPlain HTTP ${e.code()}: $errorBody", e)
-            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
-            throw e
-        } catch (e: Exception) {
-            android.util.Log.e("PhotoRepository", "uploadPhotoPlain failed: ${e.message}", e)
-            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
-            throw e
-        }
-    }
-
-    // ── Encrypted-mode upload ────────────────────────────────────────────
+    // ── Encrypted upload ─────────────────────────────────────────────────
 
     /**
      * Upload a photo/GIF/video with its thumbnail (encrypted mode).
@@ -271,21 +212,6 @@ class PhotoRepository @Inject constructor(
         val response = api.downloadBlob(blobId)
         val encrypted = response.bytes()
         return crypto.decrypt(encrypted)
-    }
-
-    /**
-     * Download a plain-mode photo/video file from the server and stream it
-     * directly to [outputFile].  Uses `@Streaming` on the Retrofit call so
-     * the response body is never buffered entirely in memory — safe for
-     * multi-hundred-MB videos that would OOM with `response.bytes()`.
-     */
-    suspend fun downloadPlainPhotoToFile(photoId: String, outputFile: File) {
-        val response = api.photoFile(photoId)
-        response.byteStream().use { input ->
-            outputFile.outputStream().buffered().use { output ->
-                input.copyTo(output, bufferSize = 8192)
-            }
-        }
     }
 
     /**
@@ -409,121 +335,10 @@ class PhotoRepository @Inject constructor(
         }
     }
 
-    /**
-     * Collect all filenames currently known on the server (plain mode).
-     * Used by BackupWorker to skip uploading photos that already exist remotely.
-     */
-    suspend fun getServerFilenames(): Set<String> {
-        val filenames = mutableSetOf<String>()
-        var after: String? = null
-        try {
-            do {
-                val result = api.listPhotos(after = after, limit = 500)
-                for (p in result.photos) filenames.add(p.filename)
-                after = result.nextCursor
-            } while (after != null)
-        } catch (_: Exception) { /* network error — return what we have */ }
-        return filenames
-    }
-
     // ── Sync from server ─────────────────────────────────────────────────
 
-    /**
-     * Pull photos from the server.
-     * Checks encryption mode and uses the appropriate API.
-     */
-    suspend fun syncFromServer(): Int {
-        val mode = getEncryptionMode()
-        return if (mode == "encrypted") {
-            syncFromServerEncrypted()
-        } else {
-            syncFromServerPlain()
-        }
-    }
-
-    /**
-     * Sync plain-mode photos from the server.
-     * Fetches photo metadata and stores references in local DB.
-     * Actual image data is loaded on-demand via authenticated URLs.
-     *
-     * Cross-matches by filename: if a local PENDING photo already exists
-     * on the server, we link it (set serverPhotoId, mark SYNCED) instead
-     * of creating a duplicate entry.
-     */
-    private suspend fun syncFromServerPlain(): Int {
-        var imported = 0
-        var after: String? = null
-        android.util.Log.i("PhotoRepository", "syncFromServerPlain: starting sync")
-
-        do {
-            val listResult = api.listPhotos(after = after, limit = 100)
-            android.util.Log.d("PhotoRepository", "syncFromServerPlain: fetched page with ${listResult.photos.size} photos, nextCursor=${listResult.nextCursor}")
-
-            for (photo in listResult.photos) {
-                // Skip if we already have this server photo ID tracked
-                if (db.photoDao().getByServerPhotoId(photo.id) != null) continue
-
-                // Skip server-side duplicates: if the filename looks like a
-                // rename suffix (e.g. "IMG_001_1.jpg") and we already have
-                // the base file tracked, don't create a second Room entry.
-                val baseFilename = stripRenameSuffix(photo.filename)
-                if (baseFilename != photo.filename) {
-                    // This is a renamed duplicate — skip it entirely
-                    continue
-                }
-
-                // Cross-match: check if we have a local photo with the same
-                // filename that hasn't been uploaded yet. If so, link it to
-                // this server record instead of inserting a new row.
-                val existingLocal = db.photoDao().getSyncedByFilename(photo.filename)
-                    ?: run {
-                        // Also check PENDING/FAILED local photos by filename
-                        val pending = db.photoDao().getByStatus(SyncStatus.PENDING) +
-                                      db.photoDao().getByStatus(SyncStatus.FAILED)
-                        pending.firstOrNull { it.filename == photo.filename }
-                    }
-
-                if (existingLocal != null && existingLocal.serverPhotoId == null) {
-                    // Link existing local entry to the server record
-                    db.photoDao().markSyncedPlain(existingLocal.localId, photo.id)
-                    imported++
-                    continue
-                }
-
-                val localId = java.util.UUID.randomUUID().toString()
-                val serverTimestamp = photo.takenAt ?: photo.createdAt
-                val takenAtMs = parseIsoToEpochMs(serverTimestamp)
-                android.util.Log.d("PhotoRepository", "syncFromServerPlain: importing '${photo.filename}' serverTs='$serverTimestamp' → takenAtMs=$takenAtMs")
-
-                val entity = PhotoEntity(
-                    localId = localId,
-                    serverPhotoId = photo.id,
-                    filename = photo.filename,
-                    takenAt = takenAtMs,
-                    mimeType = photo.mimeType,
-                    mediaType = photo.mediaType,
-                    width = photo.width.toInt(),
-                    height = photo.height.toInt(),
-                    durationSecs = photo.durationSecs?.toFloat(),
-                    latitude = photo.latitude,
-                    longitude = photo.longitude,
-                    sizeBytes = photo.sizeBytes,
-                    syncStatus = SyncStatus.SYNCED,
-                    isFavorite = photo.isFavorite,
-                    cropMetadata = photo.cropMetadata,
-                    cameraModel = photo.cameraModel,
-                    photoHash = photo.photoHash
-                )
-                db.photoDao().insert(entity)
-                imported++
-            }
-
-            after = listResult.nextCursor
-        } while (after != null)
-
-        android.util.Log.i("PhotoRepository", "syncFromServerPlain: finished — imported $imported photos")
-        return imported
-    }
+    /** Pull photos from the server (always encrypted). */
+    suspend fun syncFromServer(): Int = syncFromServerEncrypted()
 
     /**
      * Pull encrypted-mode photos from the server using the lightweight sync
@@ -614,21 +429,6 @@ class PhotoRepository @Inject constructor(
      */
     suspend fun updateCropMetadata(localId: String, cropMetadata: String?) {
         db.photoDao().updateCropMetadata(localId, cropMetadata)
-    }
-
-    /**
-     * Strip server-side rename suffixes (e.g. "IMG_001_1.jpg" → "IMG_001.jpg").
-     * The server appends `_N` before the extension when a filename collision
-     * occurs on disk. We detect this pattern so the client can skip importing
-     * these server-created duplicates.
-     */
-    private fun stripRenameSuffix(filename: String): String {
-        val dot = filename.lastIndexOf('.')
-        if (dot <= 0) return filename
-        val stem = filename.substring(0, dot)
-        val ext = filename.substring(dot)
-        val match = Regex("^(.+)_\\d+$").find(stem) ?: return filename
-        return match.groupValues[1] + ext
     }
 
     /**

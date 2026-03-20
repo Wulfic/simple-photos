@@ -102,13 +102,10 @@ fun GalleryScreen(
     // Banner dismiss state — hides the banner UI without stopping the operation.
     // Resets when a new batch of work starts (pending count transitions from 0).
     var conversionBannerDismissed by remember { mutableStateOf(false) }
-    var migrationBannerDismissed by remember { mutableStateOf(false) }
 
     // Auto-reset dismissed state when work restarts
     val conversionBusy = viewModel.conversionPending > 0 || viewModel.conversionMissingThumbs > 0 || viewModel.conversionActive
-    val migrationBusy = (viewModel.migrationStatus == "encrypting" || viewModel.migrationStatus == "decrypting") && viewModel.migrationTotal > 0
     LaunchedEffect(conversionBusy) { if (conversionBusy && conversionBannerDismissed) conversionBannerDismissed = false }
-    LaunchedEffect(migrationBusy) { if (migrationBusy && migrationBannerDismissed) migrationBannerDismissed = false }
 
     // Filter out photos that live in a secure gallery
     val visiblePhotos = remember(photos, viewModel.secureBlobIds) {
@@ -296,7 +293,6 @@ fun GalleryScreen(
                                         MediaTile(
                                             photo = item.photo,
                                             serverBaseUrl = viewModel.serverBaseUrl,
-                                            encryptionMode = viewModel.encryptionMode,
                                             isSelectionMode = viewModel.isSelectionMode,
                                             isSelected = item.photo.localId in viewModel.selectedIds,
                                             onTap = {
@@ -319,13 +315,8 @@ fun GalleryScreen(
                 conversionPending = viewModel.conversionPending,
                 conversionMissingThumbs = viewModel.conversionMissingThumbs,
                 conversionActive = viewModel.conversionActive,
-                migrationStatus = viewModel.migrationStatus,
-                migrationTotal = viewModel.migrationTotal,
-                migrationCompleted = viewModel.migrationCompleted,
                 conversionDismissed = conversionBannerDismissed,
-                migrationDismissed = migrationBannerDismissed,
                 onDismissConversion = { conversionBannerDismissed = true },
-                onDismissMigration = { migrationBannerDismissed = true },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 16.dp, bottom = 80.dp) // above the FAB
@@ -494,7 +485,6 @@ private fun AlbumPickerDialog(
 private fun MediaTile(
     photo: PhotoEntity,
     serverBaseUrl: String,
-    encryptionMode: String,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onTap: () -> Unit,
@@ -510,8 +500,6 @@ private fun MediaTile(
             )
     ) {
         val imageModel: Any? = when {
-            encryptionMode == "plain" && photo.serverPhotoId != null ->
-                "$serverBaseUrl/api/photos/${photo.serverPhotoId}/thumb"
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> photo.localPath
             else -> null
@@ -630,20 +618,13 @@ private fun ActivityProgressBanners(
     conversionPending: Int,
     conversionMissingThumbs: Int,
     conversionActive: Boolean,
-    migrationStatus: String,
-    migrationTotal: Long,
-    migrationCompleted: Long,
     conversionDismissed: Boolean = false,
-    migrationDismissed: Boolean = false,
     onDismissConversion: () -> Unit = {},
-    onDismissMigration: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val showConversion = !conversionDismissed && (conversionPending > 0 || conversionMissingThumbs > 0 || conversionActive)
-    val migrationActive = migrationStatus == "encrypting" || migrationStatus == "decrypting"
-    val showMigration = !migrationDismissed && migrationActive && migrationTotal > 0
 
-    if (!showConversion && !showMigration) return
+    if (!showConversion) return
 
     Column(
         modifier = modifier.width(260.dp),
@@ -696,66 +677,6 @@ private fun ActivityProgressBanners(
                             .padding(4.dp)
                             .size(16.dp)
                             .clickable(onClick = onDismissConversion)
-                    )
-                }
-            }
-        }
-
-        // ── Migration banner ────────────────────────────────────────────
-        if (showMigration) {
-            val migPct = if (migrationTotal > 0) ((migrationCompleted.toFloat() / migrationTotal) * 100).toInt().coerceAtMost(100) else 0
-            val action = if (migrationStatus == "encrypting") "Encrypting" else "Decrypting"
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                shadowElevation = 4.dp,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh
-            ) {
-                Box {
-                    Column(modifier = Modifier.padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 12.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = Color(0xFF3B82F6) // blue-500
-                            )
-                            Text(
-                                "$action\u2026 $migrationCompleted/$migrationTotal",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                "$migPct%",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Medium,
-                                color = Color(0xFF3B82F6)
-                            )
-                        }
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { migPct / 100f },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(4.dp)
-                                .clip(RoundedCornerShape(2.dp)),
-                            color = Color(0xFF3B82F6),
-                            trackColor = Color(0xFF3B82F6).copy(alpha = 0.15f)
-                        )
-                    }
-                    // Dismiss X button (top-right corner)
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Dismiss",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(4.dp)
-                            .size(16.dp)
-                            .clickable(onClick = onDismissMigration)
                     )
                 }
             }

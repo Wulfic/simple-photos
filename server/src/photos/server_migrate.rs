@@ -1,56 +1,26 @@
 //! Server-side parallel encryption migration.
 //!
-//! When the encryption mode is switched from "plain" to "encrypted", this module
-//! handles the heavy lifting entirely server-side. The client sends the AES-256
-//! key once (over HTTPS), and the server reads every plain photo from disk,
-//! generates a thumbnail, encrypts both payloads, writes the blobs, and updates
+//! On startup, if any photos have `encrypted_blob_id IS NULL`, this module
+//! auto-migrates them: reads the plain file from disk, generates a thumbnail,
+//! encrypts both payloads with AES-256-GCM, writes the blobs, and updates
 //! the DB — all in parallel across available CPU cores.
 //!
-//! ## Endpoints
-//!
-//! - `POST /api/admin/encryption/migrate`  — start the migration (accepts key)
-//! - `GET  /api/admin/encryption/migrate/stream` — SSE progress stream
+//! The server always operates in encrypted mode. This module exists to
+//! handle upgrades from older plain-mode installs and to catch any newly
+//! imported plain files that haven't been encrypted yet.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use axum::body::Body;
-use axum::extract::State;
-use axum::http::HeaderValue;
-use axum::response::Response;
-use axum::Json;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-use crate::auth::middleware::AuthUser;
 use crate::blobs::storage;
 use crate::crypto;
-use crate::error::AppError;
-use crate::setup::admin::require_admin;
-use crate::state::AppState;
 
 use super::scan::{needs_web_preview, generate_web_preview_bg, generate_thumbnail_file};
-
-// ── Request / response types ────────────────────────────────────────────────
-
-/// Request body for `POST /api/admin/encryption/migrate`.
-/// Starts a server-side parallel encryption migration for all plain photos.
-#[derive(Debug, Deserialize)]
-pub struct StartMigrationRequest {
-    /// Hex-encoded AES-256 key (64 hex chars).
-    pub key_hex: String,
-}
-
-/// Response body for `POST /api/admin/encryption/migrate`.
-/// Returned immediately when the migration task is spawned.
-#[derive(Debug, Serialize)]
-pub struct StartMigrationResponse {
-    pub message: String,
-    pub total: i64,
-}
 
 // ── Shared migration progress (lock-free) ───────────────────────────────────
 
@@ -530,17 +500,7 @@ async fn run_migration(
 
     if total == 0 {
         progress.running.store(false, Ordering::Release);
-        // Mark migration complete in DB
-        if let Err(e) = sqlx::query(
-            "UPDATE encryption_migration SET status = 'idle', completed = total, error = NULL WHERE id = 'singleton'",
-        )
-        .execute(&pool)
-        .await
-        {
-            tracing::error!("Failed to finalize zero-photo migration status: {}", e);
-        }
-
-        tracing::info!("[DIAG:SERVER_MIG] 0 photos to encrypt, set idle, triggering converter");
+        tracing::info!("[DIAG:SERVER_MIG] 0 photos to encrypt, triggering converter");
         convert_notify.notify_one();
         return;
     }
@@ -596,16 +556,7 @@ async fn run_migration(
                 }
             }
 
-            let completed = progress_clone.completed.fetch_add(1, Ordering::Relaxed) + 1;
-
-            // Update DB progress every item (so polling clients always see fresh data)
-            let _total = progress_clone.total.load(Ordering::Relaxed);
-            let _ = sqlx::query(
-                "UPDATE encryption_migration SET completed = ? WHERE id = 'singleton'",
-            )
-            .bind(completed as i64)
-            .execute(&pool_clone)
-            .await;
+            let _completed = progress_clone.completed.fetch_add(1, Ordering::Relaxed) + 1;
         });
 
         handles.push(handle);
@@ -769,18 +720,12 @@ async fn run_migration(
         None
     };
 
-    if let Err(e) = sqlx::query(
-        "UPDATE encryption_migration SET status = 'idle', completed = total, error = ? WHERE id = 'singleton'",
-    )
-    .bind(&error_msg)
-    .execute(&pool)
-    .await
-    {
-        tracing::error!("Failed to finalize migration status: {}", e);
+    if let Some(ref err) = error_msg {
+        tracing::warn!("[DIAG:SERVER_MIG] migration finished with errors: {}", err);
     }
 
     tracing::info!(
-        "[DIAG:SERVER_MIG] migration finalized, set idle, triggering converter in 5s"
+        "[DIAG:SERVER_MIG] migration finalized, triggering converter in 5s"
     );
 
     // 5-second delay before triggering the converter — ensures all DB writes
@@ -857,13 +802,7 @@ pub async fn run_migration_from_stored_key(
     };
 
     if count == 0 {
-        tracing::info!("[SERVER_MIG] No photos to migrate, marking idle");
-        let _ = sqlx::query(
-            "UPDATE encryption_migration SET status = 'idle', completed = total, error = NULL WHERE id = 'singleton'",
-        )
-        .execute(&pool)
-        .await;
-
+        tracing::info!("[SERVER_MIG] No photos to migrate");
         return;
     }
 
@@ -894,13 +833,13 @@ pub async fn run_migration_from_stored_key(
 
 /// Resume an interrupted encryption migration on server startup.
 ///
-/// Checks if:
-/// 1. The encryption mode is "encrypted"
-/// 2. The migration status is "encrypting" (i.e. it was interrupted)
-/// 3. A wrapped encryption key is stored in the DB
-///
-/// If all conditions are met, loads the key and resumes the migration
+/// Checks if any unencrypted photos exist and a wrapped encryption key
+/// is stored in the DB. If so, loads the key and resumes the migration
 /// automatically — no client interaction needed.
+///
+/// This handles upgrades from older plain-mode installs: the migration 024
+/// force-sets mode to "encrypted", and this function picks up the remaining
+/// unencrypted photos.
 pub async fn resume_migration_on_startup(
     pool: sqlx::SqlitePool,
     storage_root: std::path::PathBuf,
@@ -911,34 +850,7 @@ pub async fn resume_migration_on_startup(
     // Wait a few seconds for the system to settle after startup
     tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
-    // Check encryption mode
-    let mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "plain".to_string());
-
-    if mode != "encrypted" {
-        tracing::debug!("[STARTUP_MIG] Encryption mode is '{}', no migration resume needed", mode);
-        return;
-    }
-
-    // Check migration status
-    let status: String = sqlx::query_scalar(
-        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "idle".to_string());
-
-    // Also check if there are unencrypted photos even if status is "idle"
-    // (handles the case where mode was set but scan hadn't found files yet).
-    // Uses a global count — `run_migration_from_stored_key` will re-query per-user.
+    // Check if there are unencrypted photos that need migration
     let unencrypted_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
     )
@@ -946,10 +858,9 @@ pub async fn resume_migration_on_startup(
     .await
     .unwrap_or(0);
 
-    if status != "encrypting" && unencrypted_count == 0 {
+    if unencrypted_count == 0 {
         tracing::debug!(
-            "[STARTUP_MIG] Migration status='{}', unencrypted={}, no resume needed",
-            status, unencrypted_count
+            "[STARTUP_MIG] All photos encrypted, no migration needed"
         );
         return;
     }
@@ -958,13 +869,11 @@ pub async fn resume_migration_on_startup(
     let key = match crypto::load_wrapped_key(&pool, &jwt_secret).await {
         Ok(Some(k)) => k,
         Ok(None) => {
-            if status == "encrypting" || unencrypted_count > 0 {
-                tracing::warn!(
-                    "[STARTUP_MIG] Migration pending (status={}, unencrypted={}) but no stored key found. \
-                     A client must provide the key via PUT /api/admin/encryption or POST /api/admin/encryption/migrate.",
-                    status, unencrypted_count
-                );
-            }
+            tracing::warn!(
+                "[STARTUP_MIG] {} unencrypted photos found but no stored key. \
+                 A client must log in to provide the encryption key.",
+                unencrypted_count
+            );
             return;
         }
         Err(e) => {
@@ -996,19 +905,6 @@ pub async fn resume_migration_on_startup(
         }
     };
 
-    // If status is idle but there are unencrypted photos, set status to encrypting
-    if status == "idle" && unencrypted_count > 0 {
-        let now = chrono::Utc::now().to_rfc3339();
-        let _ = sqlx::query(
-            "UPDATE encryption_migration SET status = 'encrypting', total = ?, completed = 0, \
-             started_at = ?, error = NULL WHERE id = 'singleton'",
-        )
-        .bind(unencrypted_count)
-        .bind(&now)
-        .execute(&pool)
-        .await;
-    }
-
     tracing::info!(
         "[STARTUP_MIG] Resuming encryption migration on startup: {} unencrypted photos",
         unencrypted_count
@@ -1026,168 +922,5 @@ pub async fn resume_migration_on_startup(
     .await;
 }
 
-// ── HTTP handlers ───────────────────────────────────────────────────────────
-
-/// POST /api/admin/encryption/migrate
-///
-/// Starts a server-side encryption migration. The client sends the AES-256 key
-/// (hex-encoded, 64 chars) over HTTPS. The server does all the work locally.
-pub async fn start_migration(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Json(req): Json<StartMigrationRequest>,
-) -> Result<Json<StartMigrationResponse>, AppError> {
-    require_admin(&state, &auth).await?;
-
-    // Parse & validate key
-    let key = crypto::parse_key_hex(&req.key_hex)
-        .map_err(|e| AppError::BadRequest(e))?;
-
-    // Persist the key (wrapped) so the server can resume after restart
-    crypto::store_wrapped_key(&state.pool, &key, &state.config.auth.jwt_secret)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to persist encryption key: {}", e)))?;
-
-    // Check that encryption mode is "encrypted" and migration is in progress
-    let mig_status: String = sqlx::query_scalar(
-        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or_else(|| "idle".to_string());
-
-    if mig_status != "encrypting" {
-        return Err(AppError::BadRequest(
-            "No active encryption migration. Set encryption mode to 'encrypted' first.".into(),
-        ));
-    }
-
-    // Check if a migration is already running in-process
-    {
-        let guard = progress_store().read().await;
-        if let Some(ref p) = *guard {
-            if p.running.load(Ordering::Acquire) {
-                return Err(AppError::Conflict(
-                    "A server-side migration is already running.".into(),
-                ));
-            }
-        }
-    }
-
-    // Count items to migrate
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE user_id = ? AND encrypted_blob_id IS NULL",
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
-
-    if count == 0 {
-        // Nothing to do — mark idle
-        sqlx::query(
-            "UPDATE encryption_migration SET status = 'idle', completed = total, error = NULL WHERE id = 'singleton'",
-        )
-        .execute(&state.pool)
-        .await?;
-
-        return Ok(Json(StartMigrationResponse {
-            message: "No photos to migrate.".into(),
-            total: 0,
-        }));
-    }
-
-    // Set up progress tracker
-    let progress = Arc::new(MigrationProgress::new(count as u64));
-    {
-        let mut guard = progress_store().write().await;
-        *guard = Some(progress.clone());
-    }
-
-    // Spawn the migration in the background
-    let pool = state.pool.clone();
-    // Lock-free read via ArcSwap.
-    let storage_root = (**state.storage_root.load()).clone();
-    let user_id = auth.user_id.clone();
-    let convert_notify = state.convert_notify.clone();
-    let encryption_key_store = state.encryption_key.clone();
-    let jwt_secret = state.config.auth.jwt_secret.clone();
-    tokio::spawn(async move {
-        run_migration(key, user_id, pool, storage_root, progress, convert_notify, encryption_key_store, Some(jwt_secret)).await;
-    });
-
-    Ok(Json(StartMigrationResponse {
-        message: format!("Server-side migration started for {} photos.", count),
-        total: count,
-    }))
-}
-
-/// GET /api/admin/encryption/migrate/stream
-///
-/// Server-Sent Events stream that pushes migration progress every 500ms.
-/// Format: `data: {"completed":N,"total":N,"succeeded":N,"failed":N,"current_file":"...","done":bool}\n\n`
-pub async fn migration_stream(
-    State(state): State<AppState>,
-    auth: AuthUser,
-) -> Result<Response, AppError> {
-    require_admin(&state, &auth).await?;
-
-    let progress = {
-        let guard = progress_store().read().await;
-        guard.clone()
-    };
-
-    let stream = async_stream::stream! {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        loop {
-            interval.tick().await;
-
-            let (completed, total, succeeded, failed, running, current_file, last_error) =
-                if let Some(ref p) = progress {
-                    (
-                        p.completed.load(Ordering::Relaxed),
-                        p.total.load(Ordering::Relaxed),
-                        p.succeeded.load(Ordering::Relaxed),
-                        p.failed.load(Ordering::Relaxed),
-                        p.running.load(Ordering::Acquire),
-                        p.current_file.read().await.clone(),
-                        p.last_error.read().await.clone(),
-                    )
-                } else {
-                    // No migration running — send a "done" event and stop
-                    let msg = serde_json::json!({
-                        "completed": 0, "total": 0, "succeeded": 0, "failed": 0,
-                        "current_file": "", "done": true, "last_error": "",
-                    });
-                    yield Ok::<_, std::convert::Infallible>(
-                        format!("data: {}\n\n", msg)
-                    );
-                    break;
-                };
-
-            let done = !running;
-            let msg = serde_json::json!({
-                "completed": completed,
-                "total": total,
-                "succeeded": succeeded,
-                "failed": failed,
-                "current_file": current_file,
-                "done": done,
-                "last_error": last_error,
-            });
-
-            yield Ok::<_, std::convert::Infallible>(format!("data: {}\n\n", msg));
-
-            if done {
-                break;
-            }
-        }
-    };
-
-    let body = Body::from_stream(stream);
-    Ok(Response::builder()
-        .header("Content-Type", HeaderValue::from_static("text/event-stream"))
-        .header("Cache-Control", HeaderValue::from_static("no-cache"))
-        .header("Connection", HeaderValue::from_static("keep-alive"))
-        .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
-}
+// (HTTP handlers for start_migration and migration_stream removed —
+//  the server always auto-migrates on startup; no client-driven migration needed.)

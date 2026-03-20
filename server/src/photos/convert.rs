@@ -475,18 +475,18 @@ async fn run_conversion_pass(
     encryption_key: &Arc<RwLock<Option<[u8; 32]>>>,
 ) -> (u32, u32, u32) {
     // Skip entirely while encryption migration is running.  Converting during
-    // encryption is confusing (two overlapping banners) and wasteful — the
-    // migration-done handler will trigger conversion once encryption finishes.
-    let mig_status: String = sqlx::query_scalar(
-        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
+    // encryption is wasteful — the migration pipeline triggers conversion once
+    // encryption finishes.
+    let unencrypted_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
     )
-    .fetch_optional(read_pool)
+    .fetch_one(read_pool)
     .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "idle".to_string());
-    if mig_status == "encrypting" || mig_status == "decrypting" {
-        tracing::info!("[DIAG:CONVERT] run_conversion_pass SKIPPED — migration in progress (status={})", mig_status);
+    .unwrap_or(0);
+    // Use a threshold: if there are many unencrypted photos, a migration is
+    // likely in progress. A few stragglers (< 3) are fine to ignore.
+    if unencrypted_count > 2 {
+        tracing::info!("[DIAG:CONVERT] run_conversion_pass SKIPPED — {} unencrypted photos (migration likely in progress)", unencrypted_count);
         return (0, 0, 0);
     }
 
@@ -1126,65 +1126,19 @@ pub async fn conversion_status(
     let converting = state.conversion_active.load(Ordering::Acquire);
     let key_available = state.encryption_key.read().await.is_some();
 
-    // ── Check encryption mode (read_pool — these are read-only) ─────────
-    let enc_mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "plain".to_string());
-
-    let mig_status: String = sqlx::query_scalar(
-        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "idle".to_string());
-
-    let migration_running = mig_status == "encrypting" || mig_status == "decrypting";
-
-    // ── Count missing thumbnails via SQL (plain photos with thumb_path) ──
-    // This avoids loading all rows and checking the filesystem for each.
-    // We still need filesystem checks for conversion status, but we can
-    // use a smarter SQL filter to limit the set.
-    let _missing_thumbnails_base: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos \
-         WHERE user_id = ? AND encrypted_blob_id IS NULL AND thumb_path IS NOT NULL",
+    // ── Check if a migration is in progress (unencrypted photos exist) ────
+    let unencrypted_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE user_id = ? AND encrypted_blob_id IS NULL",
     )
     .bind(&_auth.user_id)
     .fetch_one(&state.read_pool)
     .await
     .unwrap_or(0);
 
-    // For the missing thumbnail count, we still need filesystem checks since
-    // the DB doesn't track whether the file exists. But we can do this more
-    // efficiently by only checking the relevant subset.
-    let thumb_rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, thumb_path FROM photos \
-         WHERE user_id = ? AND encrypted_blob_id IS NULL AND thumb_path IS NOT NULL \
-         LIMIT 10000",
-    )
-    .bind(&_auth.user_id)
-    .fetch_all(&state.read_pool)
-    .await?;
+    let migration_running = unencrypted_count > 0;
 
+    // ── Count missing thumbnails (plain photos still awaiting migration) ──
     let mut missing_thumbnails = 0u32;
-    // Batch filesystem checks using concurrent tasks
-    let mut thumb_checks = Vec::with_capacity(thumb_rows.len());
-    for (_id, tp) in &thumb_rows {
-        let path = storage_root.join(tp);
-        thumb_checks.push(tokio::fs::try_exists(path));
-    }
-    let thumb_results = futures_util::future::join_all(thumb_checks).await;
-    for exists in thumb_results {
-        if !exists.unwrap_or(false) {
-            missing_thumbnails += 1;
-        }
-    }
 
     // ── Check photos needing web-preview conversion ─────────────────────
     // Only fetch photos whose filename extension matches needs_web_preview.
@@ -1286,18 +1240,14 @@ pub async fn conversion_status(
         }
     }
 
-    // ── Encrypted-mode: count photos missing encrypted thumbnail blobs ──
-    let enc_missing_thumbs: i64 = if enc_mode == "encrypted" {
-        sqlx::query_scalar(
-            "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL AND encrypted_thumb_blob_id IS NULL AND user_id = ?",
-        )
-        .bind(&_auth.user_id)
-        .fetch_one(&state.read_pool)
-        .await
-        .unwrap_or(0)
-    } else {
-        0
-    };
+    // ── Count photos missing encrypted thumbnail blobs ──────────────────
+    let enc_missing_thumbs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL AND encrypted_thumb_blob_id IS NULL AND user_id = ?",
+    )
+    .bind(&_auth.user_id)
+    .fetch_one(&state.read_pool)
+    .await
+    .unwrap_or(0);
 
     if !migration_running && enc_missing_thumbs > 0 {
         missing_thumbnails += enc_missing_thumbs as u32;
@@ -1305,8 +1255,8 @@ pub async fn conversion_status(
 
     if pending_conversions > 0 || pending_awaiting_key > 0 || missing_thumbnails > 0 || converting || enc_missing_thumbs > 0 {
         tracing::info!(
-            "[DIAG:STATUS] conversion-status: pending={}, awaiting_key={}, thumbs={}, converting={}, total_photos={}, enc_mode={}, mig_status={}, enc_missing_thumbs={}, key_available={}",
-            pending_conversions, pending_awaiting_key, missing_thumbnails, converting, convertible_photos.len(), enc_mode, mig_status, enc_missing_thumbs, key_available
+            "[DIAG:STATUS] conversion-status: pending={}, awaiting_key={}, thumbs={}, converting={}, total_photos={}, enc_missing_thumbs={}, key_available={}",
+            pending_conversions, pending_awaiting_key, missing_thumbnails, converting, convertible_photos.len(), enc_missing_thumbs, key_available
         );
     }
 

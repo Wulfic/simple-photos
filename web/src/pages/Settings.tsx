@@ -33,14 +33,7 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
 
   // ── Encryption state ─────────────────────────────────────────────────────
-  const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted">("plain");
-  const [migrationStatus, setMigrationStatus] = useState("idle");
-  const [migrationTotal, setMigrationTotal] = useState(0);
-  const [migrationCompleted, setMigrationCompleted] = useState(0);
-  const [migrationError, setMigrationError] = useState<string | null>(null);
   const [encryptionLoading, setEncryptionLoading] = useState(true);
-  const [togglingEncryption, setTogglingEncryption] = useState(false);
-  const [showEncryptionWarning, setShowEncryptionWarning] = useState(false);
 
   // ── Backup recovery state ────────────────────────────────────────────────
   const [showRecoverWarning, setShowRecoverWarning] = useState(false);
@@ -93,14 +86,10 @@ export default function Settings() {
 
   const loadEncryptionSettings = useCallback(async () => {
     try {
-      const res = await api.encryption.getSettings();
-      setEncryptionMode(res.encryption_mode as "plain" | "encrypted");
-      setMigrationStatus(res.migration_status);
-      setMigrationTotal(res.migration_total);
-      setMigrationCompleted(res.migration_completed);
-      setMigrationError(res.migration_error);
+      // Server always returns "encrypted" — we just need to confirm it's reachable
+      await api.encryption.getSettings();
     } catch {
-      // Settings might not exist yet (pre-migration)
+      // Settings endpoint may not be available yet
     } finally {
       setEncryptionLoading(false);
     }
@@ -180,37 +169,7 @@ export default function Settings() {
     }
   }
 
-  // Poll migration progress when a migration is active (drives the toggle state)
-  useEffect(() => {
-    if (migrationStatus !== "encrypting" && migrationStatus !== "decrypting") return;
-    const interval = setInterval(loadEncryptionSettings, 3000);
-    return () => {
-      clearInterval(interval);
-    };
-  }, [migrationStatus, loadEncryptionSettings]);
-
-  async function handleToggleEncryption() {
-    setShowEncryptionWarning(false);
-    setTogglingEncryption(true);
-    setError("");
-    try {
-      const newMode = encryptionMode === "plain" ? "encrypted" : "plain";
-      // Send the encryption key with the mode change so the server can
-      // run migration autonomously (even if the browser is closed).
-      const keyHex = newMode === "encrypted"
-        ? sessionStorage.getItem("sp_key") ?? undefined
-        : undefined;
-      const res = await api.encryption.setMode(newMode, keyHex);
-      setEncryptionMode(newMode);
-      setSuccess(res.message);
-      // Reload to get migration status
-      await loadEncryptionSettings();
-    } catch (err: unknown) {
-      setError(getErrorMessage(err));
-    } finally {
-      setTogglingEncryption(false);
-    }
-  }
+  // Encryption is always on — no migration polling or toggle needed
 
   async function handleRecover() {
     if (backupServers.length === 0) return;
@@ -416,87 +375,28 @@ export default function Settings() {
           <div className="text-gray-400 text-sm">Loading encryption settings…</div>
         ) : (
           <div className="space-y-4">
-            {/* Toggle switch */}
-            <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-green-100 dark:bg-green-900/40 rounded-full flex items-center justify-center">
+                <svg className="w-5 h-5 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+                </svg>
+              </div>
               <div>
                 <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  End-to-End Encryption
+                  End-to-End Encryption Active
                 </h3>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {encryptionMode === "encrypted"
-                    ? "Photos are encrypted — only you can view them."
-                    : "Photos are stored as regular files on disk."}
+                  All photos are encrypted with AES-256-GCM — only you can view them.
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  if (migrationStatus !== "idle") return;
-                  setShowEncryptionWarning(true);
-                }}
-                disabled={togglingEncryption || migrationStatus !== "idle"}
-                className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
-                  encryptionMode === "encrypted" ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
-                }`}
-                role="switch"
-                aria-checked={encryptionMode === "encrypted"}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    encryptionMode === "encrypted" ? "translate-x-6" : "translate-x-1"
-                  }`}
-                />
-              </button>
             </div>
-
-            {/* Migration progress is shown via GlobalProgressBanners at the top of the page */}
-
-            {/* Migration error */}
-            {migrationError && (
-              <div className="bg-red-50 dark:bg-red-900/30 rounded-lg p-3">
-                <p className="text-sm text-red-600 dark:text-red-400">
-                  Migration error: {migrationError}
-                </p>
-              </div>
-            )}
-
-            {/* Toggle confirmation warning */}
-            {showEncryptionWarning && (
-              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
-                <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">
-                  ⚠️ {encryptionMode === "plain" ? "Enable Encryption?" : "Disable Encryption?"}
-                </h4>
-                <p className="text-sm text-amber-700 dark:text-amber-400 mb-3">
-                  This process can take a significant amount of time depending on your library size.
-                  It will run in the background — you can continue using the app while it processes.
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleToggleEncryption}
-                    disabled={togglingEncryption}
-                    className={`px-4 py-2 rounded-md text-sm text-white disabled:opacity-50 ${
-                      encryptionMode === "plain"
-                        ? "bg-amber-600 hover:bg-amber-700"
-                        : "bg-blue-600 hover:bg-blue-700"
-                    }`}
-                  >
-                    {togglingEncryption ? "Switching…" : "Confirm"}
-                  </button>
-                  <button
-                    onClick={() => setShowEncryptionWarning(false)}
-                    className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         )}
       </section>
       )}
 
-      {/* ── Cleanup Backed-Up Photos (encrypted mode only, when there are files) ── */}
-      {encryptionMode === "encrypted" && !encryptionLoading && cleanableCount > 0 && (
+      {/* ── Cleanup Backed-Up Photos (when there are files to clean) ── */}
+      {!encryptionLoading && cleanableCount > 0 && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Clean Up Original Files</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
@@ -568,8 +468,8 @@ export default function Settings() {
         </section>
       )}
 
-      {/* ── Re-convert Encrypted Media (encrypted mode, migration idle) ───── */}
-      {isAdmin && encryptionMode === "encrypted" && !encryptionLoading && migrationStatus === "idle" && (
+      {/* ── Re-convert Encrypted Media ───── */}
+      {isAdmin && !encryptionLoading && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Re-convert Encrypted Media</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">

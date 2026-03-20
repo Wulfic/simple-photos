@@ -50,6 +50,9 @@ export default function Login() {
         storeSetUsername(username);
         // Derive encryption key from the login password
         await deriveKey(password, username);
+        // Persist the key server-side so autoscan/migration work autonomously
+        const k = sessionStorage.getItem("sp_key");
+        if (k) api.encryption.storeKey(k).catch(() => {});
         navigate("/gallery");
       } else {
         const res = await api.auth.login(username, password);
@@ -63,6 +66,9 @@ export default function Login() {
           storeSetUsername(username);
           // Derive encryption key from the login password
           await deriveKey(password, username);
+          // Persist the key server-side so autoscan/migration work autonomously
+          const k2 = sessionStorage.getItem("sp_key");
+          if (k2) api.encryption.storeKey(k2).catch(() => {});
           navigate("/gallery");
         }
       }

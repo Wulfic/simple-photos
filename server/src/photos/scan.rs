@@ -827,36 +827,20 @@ pub async fn scan_and_register(
 
     // Trigger the background processing pipeline — runs three sequential
     // phases: thumbnails → conversion → post-conversion thumbnails.
-    // Skip the trigger if an encryption migration is in progress, since the
-    // migration-done handler will trigger the pipeline once encryption finishes.
     // Original files are always preserved; the pipeline writes converted
     // copies to `.web_previews/` without touching originals.
-    let mig_status: String = sqlx::query_scalar(
-        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "idle".to_string());
+    tracing::info!("[DIAG:SCAN] post-scan: sending pipeline notify");
+    state.convert_notify.notify_one();
 
-    if mig_status == "idle" {
-        tracing::info!("[DIAG:SCAN] post-scan: mig_status=idle, sending pipeline notify");
-        state.convert_notify.notify_one();
-
-        // After registering new photos, check if encryption migration needs to
-        // start. This handles the race condition where setMode("encrypted") was
-        // called before any photos existed, and now photos have arrived.
-        crate::backup::autoscan::try_start_migration_after_scan(
-            &state.pool,
-            &storage_root,
-            &state.convert_notify,
-            &state.encryption_key,
-            &state.config.auth.jwt_secret,
-        ).await;
-    } else {
-        tracing::info!("[DIAG:SCAN] post-scan: mig_status='{}', skipping pipeline trigger", mig_status);
-    }
+    // After registering new photos, check if encryption migration needs to
+    // start (for any newly discovered unencrypted files).
+    crate::backup::autoscan::try_start_migration_after_scan(
+        &state.pool,
+        &storage_root,
+        &state.convert_notify,
+        &state.encryption_key,
+        &state.config.auth.jwt_secret,
+    ).await;
 
     Ok(Json(serde_json::json!({
         "registered": new_count,

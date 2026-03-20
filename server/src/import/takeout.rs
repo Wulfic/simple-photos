@@ -198,14 +198,8 @@ pub async fn import_takeout(
         AppError::BadRequest(format!("Cannot resolve path '{}': {}", req.path, e))
     })?;
 
-    let encryption_mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or_else(|| "plain".to_string());
-
-    let is_encrypted = encryption_mode == "encrypted";
+    // Server always operates in encrypted mode
+    let is_encrypted = true;
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
 

@@ -1,9 +1,9 @@
 /**
  * Hook for uploading files from the Gallery page.
  *
- * Handles thumbnail generation, optional AES-256-GCM encryption (in encrypted
- * mode), SHA-256 dedup hashing, blob upload, and photo registration. Tracks
- * upload progress and errors for UI display.
+ * Handles thumbnail generation, AES-256-GCM encryption, SHA-256 dedup
+ * hashing, blob upload, and photo registration. Tracks upload progress
+ * and errors for UI display.
  */
 import { useCallback, useRef, useState } from "react";
 import { api } from "../api/client";
@@ -45,9 +45,7 @@ export interface UploadDeps {
 /**
  * Handles file upload for the Gallery page.
  *
- * In plain mode, the selected files are ignored — instead, a server-side
- * scan registers files already placed in the storage directory.
- * In encrypted mode, each selected file is encrypted client-side and
+ * Each selected file is encrypted client-side (AES-256-GCM) and
  * uploaded through the blob API.
  */
 export function useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, setError }: UploadDeps) {
@@ -57,31 +55,7 @@ export function useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, s
   const { startTask, endTask } = useProcessingStore();
 
   const handleUpload = useCallback(async (files: FileList) => {
-    if (mode === "plain") {
-      // In plain mode, files must already be in the storage directory.
-      // Trigger a server-side scan to register them.
-      setUploading(true);
-      startTask("upload");
-      setError("");
-      try {
-        const res = await api.admin.scanAndRegister();
-        if (res.registered > 0) {
-          await loadPlainPhotos();
-        } else {
-          setError("No new files found. Place files in the storage directory first.");
-        }
-        // Trigger immediate conversion for any files needing web previews/thumbnails
-        api.admin.triggerConvert().catch(() => {});
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Scan failed");
-      } finally {
-        setUploading(false);
-        endTask("upload");
-      }
-      return;
-    }
-
-    // Encrypted mode: encrypt and upload
+    // Encrypt and upload
     setUploading(true);
     startTask("upload");
     setError("");

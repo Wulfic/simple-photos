@@ -1,11 +1,11 @@
 # Simple Photos
 
-A self-hosted photo & video library with optional end-to-end encryption, multi-device backup, and a unified web + Android experience.
+A self-hosted photo & video library with always-on end-to-end encryption, multi-device backup, and a unified web + Android experience.
 
 ## Features
 
 - **Self-hosted** — runs on your own server, your data stays yours
-- **End-to-end encryption** — optional AES-256-GCM encryption with client-side key derivation
+- **End-to-end encryption** — always-on AES-256-GCM encryption with client-side key derivation
 - **Multi-platform** — Web (React/TypeScript) and Android (Kotlin/Compose) clients
 - **Photo & video support** — JPEG, PNG, HEIC, GIF, MP4, WebM, and more
 - **Albums** — organize photos into albums with optional sharing between users

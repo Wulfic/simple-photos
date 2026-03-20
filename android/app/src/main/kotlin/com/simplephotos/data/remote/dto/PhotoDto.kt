@@ -43,11 +43,7 @@ data class PhotoUploadResponse(
 // ── Encryption settings ──────────────────────────────────────────────────────
 
 data class EncryptionSettingsResponse(
-    @SerializedName("encryption_mode") val encryptionMode: String,
-    @SerializedName("migration_status") val migrationStatus: String,
-    @SerializedName("migration_total") val migrationTotal: Long,
-    @SerializedName("migration_completed") val migrationCompleted: Long,
-    @SerializedName("migration_error") val migrationError: String?
+    @SerializedName("encryption_mode") val encryptionMode: String
 )
 
 // ── Encrypted-mode sync (lightweight manifest from photos table) ─────────────
@@ -183,10 +179,10 @@ data class TwoFactorStatusResponse(
     @SerializedName("totp_enabled") val totpEnabled: Boolean
 )
 
-// ── Encryption mode ──────────────────────────────────────────────────────────
+// ── Encryption key ───────────────────────────────────────────────────────────
 
-data class SetEncryptionModeRequest(val mode: String)
-data class SetEncryptionModeResponse(val message: String)
+data class StoreEncryptionKeyRequest(val key: String)
+data class StoreEncryptionKeyResponse(val message: String)
 
 // ── Cleanup plain files ──────────────────────────────────────────────────────
 
