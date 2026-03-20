@@ -1,13 +1,11 @@
 //! Photo management — the core of Simple Photos.
 //!
-//! Supports two operational modes:
-//! - **Plain mode** — files live on disk; thumbnails and web previews are
-//!   generated server-side via FFmpeg / ImageMagick.
-//! - **Encrypted mode** — files are stored as opaque blobs (see [`crate::blobs`]);
-//!   the server never sees cleartext media.
+//! All media is encrypted — files are stored as opaque blobs (see [`crate::blobs`]);
+//! the server never sees cleartext media.  The photos table and on-disk files
+//! are used only by the autoscan/conversion pipeline.
 //!
 //! Key sub-modules:
-//! - [`handlers`]        — List, serve, favorite, and crop endpoints for plain photos.
+//! - [`handlers`]        — List, serve, favorite, and crop endpoints for photos.
 //! - [`upload`]          — Mobile client upload with content-hash deduplication.
 //! - [`scan`]            — Filesystem scan, thumbnail & web-preview generation.
 //! - [`convert`]         — Background media conversion task (MKV→MP4, HEIC→JPEG, etc.).

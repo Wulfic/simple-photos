@@ -413,7 +413,7 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
 
 /// POST /api/admin/photos/scan
 /// Scan the storage directory and register all unregistered media files as plain photos.
-/// This is the main "import" mechanism for plain mode.
+/// This is the main "import" mechanism for photos scanned from disk.
 ///
 /// For each new file: extracts EXIF metadata, generates a thumbnail, and
 /// creates web previews for non-native image/audio formats.  Video transcoding

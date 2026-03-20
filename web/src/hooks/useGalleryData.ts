@@ -1,9 +1,8 @@
 /**
  * Hook for loading and managing gallery data in encrypted mode.
  *
- * Handles cursor-based pagination, date-group detection, encrypted sync
- * (fetching blob IDs then decrypting thumbnails from IDB), and loading
- * plain photos that may exist during auto-migration.
+ * Handles cursor-based pagination, date-group detection, and encrypted sync
+ * (fetching blob IDs then decrypting thumbnails from IDB).
  */
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -16,7 +15,7 @@ import {
   mediaTypeFromMime,
 } from "../db";
 import { base64ToArrayBuffer } from "../utils/media";
-import { type PlainPhoto, fetchAllPages } from "../utils/gallery";
+import { fetchAllPages } from "../utils/gallery";
 import { useLiveQuery } from "dexie-react-hooks";
 
 // ── Encrypted payload shapes (shared with upload hook) ───────────────────────
@@ -52,27 +51,23 @@ export interface GalleryDataResult {
   loading: boolean;
   error: string;
   setError: (msg: string) => void;
-  plainPhotos: PlainPhoto[];
   /** Encrypted-mode photos from IndexedDB (live query, auto-updates).
    *  Returns undefined until the first server sync completes to prevent
    *  flashing stale data from a previous user's session. */
   encryptedPhotos: CachedPhoto[] | undefined;
   secureBlobIds: Set<string>;
-  loadPlainPhotos: () => Promise<void>;
   loadEncryptedPhotos: () => Promise<void>;
 }
 
 /**
  * Core data hook for the Gallery page.
  *
- * Always operates in encrypted mode. Loads both encrypted photos (from
- * IndexedDB) and plain photos (server-side, may exist during auto-migration).
+ * Always operates in encrypted mode. Loads encrypted photos from IndexedDB.
  */
 export function useGalleryData(): GalleryDataResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [mode, setMode] = useState<EncryptionMode | null>(null);
-  const [plainPhotos, setPlainPhotos] = useState<PlainPhoto[]>([]);
   const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
 
@@ -148,9 +143,6 @@ export function useGalleryData(): GalleryDataResult {
         const reloadAfterScan = async () => {
           try {
             await loadEncryptedPhotos();
-            // Also load plain photos — auto-scanned files may exist on disk
-            // before the encryption pipeline processes them.
-            await loadPlainPhotos();
           } catch {
             // Non-critical — ignore transient failures
           }
@@ -166,10 +158,6 @@ export function useGalleryData(): GalleryDataResult {
           return;
         }
         await loadEncryptedPhotos();
-        // Always load plain photos too — auto-scanned files on disk appear as
-        // plain photos even in encrypted mode, and the conversion-status banner
-        // needs them to be loaded for tile display.
-        await loadPlainPhotos();
       } catch (err) {
         console.error("Failed to initialize gallery:", err);
         setError("Failed to load gallery. Please try again.");
@@ -177,39 +165,10 @@ export function useGalleryData(): GalleryDataResult {
     }
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentionally runs once on mount.
-    // All dependencies (loadPlainPhotos, loadEncryptedPhotos, navigate) are stable
-    // callbacks/functions defined in this hook. Including them would cause infinite
-    // re-fetches because the loaders update state that the effect closes over.
+    // All dependencies (loadEncryptedPhotos, navigate) are stable callbacks/functions
+    // defined in this hook. Including them would cause infinite re-fetches because
+    // the loaders update state that the effect closes over.
   }, []);
-
-  // ── Load plain-mode photos from server ─────────────────────────────────
-
-  async function loadPlainPhotos() {
-    setLoading(true);
-    try {
-      const allPhotos: PlainPhoto[] = [];
-      let cursor: string | undefined;
-      do {
-        const res = await api.photos.list({ after: cursor, limit: 200 });
-        allPhotos.push(...res.photos);
-        cursor = res.next_cursor ?? undefined;
-      } while (cursor);
-
-      setPlainPhotos(allPhotos.sort((a, b) => {
-        // Sort by taken_at descending, fallback to created_at
-        // Secondary sort by filename ASC for deterministic ordering (matches server + app)
-        const aDate = a.taken_at || a.created_at;
-        const bDate = b.taken_at || b.created_at;
-        const dateCmp = bDate.localeCompare(aDate);
-        if (dateCmp !== 0) return dateCmp;
-        return (a.filename || "").localeCompare(b.filename || "");
-      }));
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load photos");
-    } finally {
-      setLoading(false);
-    }
-  }
 
   // ── Load encrypted-mode photos from blobs + IndexedDB ──────────────────
 
@@ -380,10 +339,8 @@ export function useGalleryData(): GalleryDataResult {
     loading,
     error,
     setError,
-    plainPhotos,
     encryptedPhotos,
     secureBlobIds,
-    loadPlainPhotos,
     loadEncryptedPhotos,
   };
 }

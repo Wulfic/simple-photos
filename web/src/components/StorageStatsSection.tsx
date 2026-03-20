@@ -8,8 +8,6 @@ export interface StorageStats {
   video_count: number;
   other_blob_bytes: number;
   other_blob_count: number;
-  plain_bytes: number;
-  plain_count: number;
   user_total_bytes: number;
   fs_total_bytes: number;
   fs_free_bytes: number;
@@ -37,13 +35,10 @@ export default function StorageStatsSection({
   const otherUsage = Math.max(0, fsUsed - stats.user_total_bytes);
 
   // Percentages for the stacked bar
-  const pctPhotos = (stats.photo_bytes + stats.plain_bytes) / stats.fs_total_bytes * 100;
+  const pctPhotos = stats.photo_bytes / stats.fs_total_bytes * 100;
   const pctVideos = stats.video_bytes / stats.fs_total_bytes * 100;
   const pctYou = stats.other_blob_bytes / stats.fs_total_bytes * 100;
   const pctOther = otherUsage / stats.fs_total_bytes * 100;
-
-  const totalPhotoCount = stats.photo_count + stats.plain_count;
-  const totalPhotoBytes = stats.photo_bytes + stats.plain_bytes;
 
   return (
     <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
@@ -53,7 +48,7 @@ export default function StorageStatsSection({
       <div className="w-full h-5 rounded-full overflow-hidden flex bg-gray-200 dark:bg-gray-700 mb-3">
         {pctPhotos > 0 && (
           <div className="bg-blue-500 h-full transition-all" style={{ width: `${pctPhotos}%` }}
-            title={`Photos: ${formatBytes(totalPhotoBytes)}`} />
+            title={`Photos: ${formatBytes(stats.photo_bytes)}`} />
         )}
         {pctVideos > 0 && (
           <div className="bg-purple-500 h-full transition-all" style={{ width: `${pctVideos}%` }}
@@ -76,7 +71,7 @@ export default function StorageStatsSection({
           <span className="w-3 h-3 rounded-full bg-blue-500 inline-block flex-shrink-0" />
           <span className="text-gray-600 dark:text-gray-400">Photos</span>
           <span className="ml-auto font-medium text-gray-900 dark:text-gray-100">
-            {formatBytes(totalPhotoBytes)}
+            {formatBytes(stats.photo_bytes)}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -109,8 +104,8 @@ export default function StorageStatsSection({
           <span className="font-medium text-gray-900 dark:text-gray-100">{formatBytes(stats.user_total_bytes)}</span>
         </div>
         <div className="flex justify-between text-xs">
-          <span className="text-gray-400 dark:text-gray-500 pl-3">Photos &amp; GIFs ({totalPhotoCount})</span>
-          <span className="text-gray-500 dark:text-gray-400">{formatBytes(totalPhotoBytes)}</span>
+          <span className="text-gray-400 dark:text-gray-500 pl-3">Photos &amp; GIFs ({stats.photo_count})</span>
+          <span className="text-gray-500 dark:text-gray-400">{formatBytes(stats.photo_bytes)}</span>
         </div>
         <div className="flex justify-between text-xs">
           <span className="text-gray-400 dark:text-gray-500 pl-3">Videos ({stats.video_count})</span>

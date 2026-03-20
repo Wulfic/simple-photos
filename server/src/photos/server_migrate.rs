@@ -761,7 +761,7 @@ async fn run_migration(
 // ── Public entry points for autonomous migration ────────────────────────────
 
 /// Start a server-side migration with the given key and user ID.
-/// Called from `set_encryption_mode` (when key_hex is provided) and from
+/// Called from the encryption settings endpoint (when key_hex is provided) and from
 /// `resume_migration_on_startup` (when a stored key is found on boot).
 ///
 /// This is the main entry point that makes migration fully server-autonomous:

@@ -53,17 +53,6 @@ pub async fn get_storage_stats(
 
     let user_total_bytes = photo_bytes + video_bytes + other_blob_bytes;
 
-    // ── Also count plain-mode files for the user ──────────────────────────
-    let plain_row: (i64, i64) = sqlx::query_as(
-        "SELECT COALESCE(SUM(size_bytes), 0), COUNT(*) FROM photos WHERE user_id = ?",
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.read_pool)
-    .await?;
-
-    let plain_bytes = plain_row.0;
-    let plain_count = plain_row.1;
-
     // ── Filesystem-level stats ────────────────────────────────────────────
     // We read the storage root's filesystem via statvfs so the user sees
     // total disk capacity, free space, and can compute "other" usage.
@@ -78,9 +67,7 @@ pub async fn get_storage_stats(
         video_count,
         other_blob_bytes,
         other_blob_count,
-        plain_bytes,
-        plain_count,
-        user_total_bytes: user_total_bytes + plain_bytes,
+        user_total_bytes,
         fs_total_bytes: fs_total,
         fs_free_bytes: fs_free,
     }))
@@ -100,11 +87,7 @@ pub struct StorageStatsResponse {
     pub other_blob_bytes: i64,
     /// Count of other blobs
     pub other_blob_count: i64,
-    /// Total bytes of plain-mode files for this user
-    pub plain_bytes: i64,
-    /// Count of plain-mode files
-    pub plain_count: i64,
-    /// Combined total: blobs + plain files for this user
+    /// Combined total of all blobs for this user
     pub user_total_bytes: i64,
     /// Filesystem total capacity in bytes
     pub fs_total_bytes: i64,

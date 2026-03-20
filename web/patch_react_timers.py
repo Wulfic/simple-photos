@@ -81,13 +81,6 @@ old_jsx = """      {showConversion && !bypassConversionDisplay && ("""
 new_jsx = """      {showConversion && ("""
 content = content.replace(old_jsx, new_jsx)
 
-# Also fix the decryption typo fallback
-old_mig = """                {migrationStatus === "decrypting" ? "Decryption" : "Encryption"} complete
-              </p>"""
-new_mig = """                {encryptionMode === "plain" ? "Decryption" : "Encryption"} complete
-              </p>"""
-content = content.replace(old_mig, new_mig)
-
 
 with open("web/src/components/GlobalProgressBanners.tsx", "w") as f:
     f.write(content)

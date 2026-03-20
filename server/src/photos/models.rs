@@ -30,7 +30,7 @@ pub struct Photo {
     pub photo_hash: Option<String>,
 }
 
-/// Paginated list of plain-mode photos returned by `GET /api/photos`.
+/// Paginated list of photos returned by `GET /api/photos`.
 #[derive(Debug, Serialize)]
 pub struct PhotoListResponse {
     pub photos: Vec<PhotoRecord>,

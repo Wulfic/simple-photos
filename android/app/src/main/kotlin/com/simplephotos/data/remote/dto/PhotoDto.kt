@@ -1,12 +1,12 @@
 /**
- * Photo DTOs — plain-mode photo records, upload/register payloads, encrypted
- * sync responses, favorites, crop metadata, and edit copies.
+ * Photo DTOs — photo records, upload/register payloads, encrypted sync
+ * responses, favorites, crop metadata, and edit copies.
  */
 package com.simplephotos.data.remote.dto
 
 import com.google.gson.annotations.SerializedName
 
-// ── Plain-mode photo models ──────────────────────────────────────────────────
+// ── Photo models ─────────────────────────────────────────────────────────────
 
 data class PlainPhotoRecord(
     val id: String,
@@ -80,8 +80,6 @@ data class StorageStatsResponse(
     @SerializedName("video_count") val videoCount: Long,
     @SerializedName("other_blob_bytes") val otherBlobBytes: Long,
     @SerializedName("other_blob_count") val otherBlobCount: Long,
-    @SerializedName("plain_bytes") val plainBytes: Long,
-    @SerializedName("plain_count") val plainCount: Long,
     @SerializedName("user_total_bytes") val userTotalBytes: Long,
     @SerializedName("fs_total_bytes") val fsTotalBytes: Long,
     @SerializedName("fs_free_bytes") val fsFreeBytes: Long

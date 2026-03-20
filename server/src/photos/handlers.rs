@@ -1,4 +1,4 @@
-//! Plain-mode photo management endpoints.
+//! Photo management endpoints (photos table — used by autoscan and conversion pipeline).
 //!
 //! Covers listing (paginated, sorted by `taken_at`), registration from
 //! on-disk files, serving originals / thumbnails / web-previews,
@@ -39,7 +39,7 @@ pub struct PhotoListQuery {
 }
 
 /// GET /api/photos
-/// List plain-mode photos for the authenticated user.
+/// List photos in the photos table for the authenticated user.
 pub async fn list_photos(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -326,7 +326,7 @@ pub async fn serve_photo(
 }
 
 /// GET /api/photos/:id/thumb
-/// Serve the thumbnail for a plain-mode photo.
+/// Serve the thumbnail for a photo.
 /// Returns ETag for caching; responds with 304 Not Modified on cache hit.
 pub async fn serve_thumbnail(
     State(state): State<AppState>,

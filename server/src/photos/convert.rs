@@ -547,11 +547,11 @@ async fn run_conversion_pass(
             .collect()
     };
 
-    let plain_count = photos.iter().filter(|p| p.5.is_none()).count();
+    let unencrypted_count = photos.iter().filter(|p| p.5.is_none()).count();
     let enc_count = photos.iter().filter(|p| p.5.is_some()).count();
     tracing::info!(
-        "[DIAG:CONVERT] run_conversion_pass — {} photos ({} plain, {} encrypted, key_available={})",
-        photos.len(), plain_count, enc_count, key_available
+        "[DIAG:CONVERT] run_conversion_pass — {} photos ({} unencrypted, {} encrypted, key_available={})",
+        photos.len(), unencrypted_count, enc_count, key_available
     );
 
     // ── Phase 1: Generate ALL missing thumbnails ────────────────────────

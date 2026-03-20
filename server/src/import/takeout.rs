@@ -273,7 +273,7 @@ pub async fn import_takeout(
             // Already imported, just use the existing ID for metadata pairing
             eid
         } else {
-            // Register the photo in plain mode
+            // Register the photo in the photos table
             let rel_path = media_path
                 .strip_prefix(&storage_root)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))

@@ -381,7 +381,6 @@ pub async fn get_diagnostics(
             .fetch_one(pool)
             .await
             .unwrap_or(0);
-    let plain_count = total_photos - encrypted_count;
     let total_file_bytes: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")
             .fetch_one(pool)
@@ -428,7 +427,6 @@ pub async fn get_diagnostics(
     let photo_stats = PhotoStats {
         total_photos,
         encrypted_count,
-        plain_count,
         total_file_bytes,
         total_thumb_bytes,
         photos_with_thumbs,

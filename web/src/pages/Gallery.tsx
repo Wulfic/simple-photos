@@ -1,23 +1,18 @@
 /**
  * Main gallery page — displays the user's photo/video grid.
  *
- * All photos are encrypted (client-side AES-256-GCM). During auto-migration,
- * unencrypted photos on disk may temporarily appear as plain tiles until the
- * server completes encryption. Delegates data loading to useGalleryData and
- * file upload to useGalleryUpload.
+ * All photos are encrypted (client-side AES-256-GCM). Delegates data loading
+ * to useGalleryData and file upload to useGalleryUpload.
  */
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
-import { type PlainPhoto } from "../utils/gallery";
 import MediaTile from "../components/gallery/MediaTile";
-import PlainMediaTile from "../components/gallery/PlainMediaTile";
 import { useGalleryData } from "../hooks/useGalleryData";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
-import { useActivityStore, setConversionDoneCallback } from "../store/activity";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -27,24 +22,18 @@ export default function Gallery() {
 
   // ── Core data hook ──────────────────────────────────────────────────────
   const {
-    mode, loading, error, setError, plainPhotos, encryptedPhotos,
+    mode, loading, error, setError, encryptedPhotos,
     secureBlobIds,
-    loadPlainPhotos, loadEncryptedPhotos,
+    loadEncryptedPhotos,
   } = useGalleryData();
 
   // ── Upload ──────────────────────────────────────────────────────────────
   const {
     uploading, uploadProgress, inputRef, handleDrop, handleFileInput,
-  } = useGalleryUpload({ mode, loadPlainPhotos, loadEncryptedPhotos, setError });
+  } = useGalleryUpload({ mode, loadEncryptedPhotos, setError });
 
   // ── Read global activity store (banners rendered by GlobalProgressBanners) ──
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
-
-  // When conversion finishes, refresh the gallery to pick up new thumbnails
-  useEffect(() => {
-    setConversionDoneCallback(() => loadPlainPhotos());
-    return () => setConversionDoneCallback(null);
-  }, []);
 
   // ── Multi-select state (mobile long-press) ─────────────────────────────
   const [selectionMode, setSelectionMode] = useState(false);
@@ -67,63 +56,53 @@ export default function Gallery() {
     setSelectedIds(new Set());
   }
   /** Delete all selected photos/blobs. Uses encrypted soft-delete (trash with
-   *  30-day recovery window). Plain photos during auto-migration are hard-deleted. */
+   *  30-day recovery window). */
   async function deleteSelected() {
     if (selectedIds.size === 0) return;
-    const plainIdSet = new Set(plainPhotos.map(p => p.id));
     try {
       for (const id of selectedIds) {
-        if (plainIdSet.has(id)) {
-          // Plain photo (not yet encrypted) — hard-delete
-          await api.photos.delete(id);
-        } else {
-          // Encrypted mode: soft-delete to trash with client metadata
-          const cached = await db.photos.get(id);
-          const result = await api.blobs.softDelete(id, {
-            thumbnail_blob_id: cached?.thumbnailBlobId,
-            filename: cached?.filename ?? "unknown",
-            mime_type: cached?.mimeType ?? "application/octet-stream",
-            media_type: cached?.mediaType,
-            size_bytes: 0,
-            width: cached?.width,
-            height: cached?.height,
-            duration_secs: cached?.duration,
-            taken_at: cached?.takenAt
-              ? new Date(cached.takenAt).toISOString()
-              : undefined,
+        // Encrypted mode: soft-delete to trash with client metadata
+        const cached = await db.photos.get(id);
+        const result = await api.blobs.softDelete(id, {
+          thumbnail_blob_id: cached?.thumbnailBlobId,
+          filename: cached?.filename ?? "unknown",
+          mime_type: cached?.mimeType ?? "application/octet-stream",
+          media_type: cached?.mediaType,
+          size_bytes: 0,
+          width: cached?.width,
+          height: cached?.height,
+          duration_secs: cached?.duration,
+          taken_at: cached?.takenAt
+            ? new Date(cached.takenAt).toISOString()
+            : undefined,
+        });
+        // Cache in local trash table for the Trash page thumbnail grid
+        if (cached) {
+          await db.trash.put({
+            trashId: result.trash_id,
+            blobId: id,
+            thumbnailBlobId: cached.thumbnailBlobId,
+            filename: cached.filename,
+            mimeType: cached.mimeType,
+            mediaType: cached.mediaType,
+            width: cached.width,
+            height: cached.height,
+            takenAt: cached.takenAt,
+            deletedAt: Date.now(),
+            expiresAt: result.expires_at,
+            thumbnailData: cached.thumbnailData,
+            duration: cached.duration,
+            albumIds: cached.albumIds ?? [],
           });
-          // Cache in local trash table for the Trash page thumbnail grid
-          if (cached) {
-            await db.trash.put({
-              trashId: result.trash_id,
-              blobId: id,
-              thumbnailBlobId: cached.thumbnailBlobId,
-              filename: cached.filename,
-              mimeType: cached.mimeType,
-              mediaType: cached.mediaType,
-              width: cached.width,
-              height: cached.height,
-              takenAt: cached.takenAt,
-              deletedAt: Date.now(),
-              expiresAt: result.expires_at,
-              thumbnailData: cached.thumbnailData,
-              duration: cached.duration,
-              albumIds: cached.albumIds ?? [],
-            });
-          }
-          await db.photos.delete(id);
         }
+        await db.photos.delete(id);
       }
-      await loadPlainPhotos();
       await loadEncryptedPhotos();
     } catch { /* ignore */ }
     clearSelection();
   }
 
   // ── Filter out photos in secure galleries (private) ─────────────────────
-  const filteredPlainPhotos = secureBlobIds.size > 0
-    ? plainPhotos.filter((p) => !secureBlobIds.has(p.id))
-    : plainPhotos;
   const filteredPhotos = secureBlobIds.size > 0
     ? encryptedPhotos?.filter((p) => !secureBlobIds.has(p.blobId))
     : encryptedPhotos;
@@ -148,22 +127,6 @@ export default function Gallery() {
     return dateFormatter.format(d);
   }
 
-  // Group plain photos by day — auto-scanned files or in-progress migration.
-  type PlainDayGroup = { key: string; label: string; photos: PlainPhoto[] };
-  const plainDayGroups: PlainDayGroup[] = (() => {
-    if (filteredPlainPhotos.length === 0) return [];
-    const groups = new Map<string, PlainDayGroup>();
-    for (const photo of filteredPlainPhotos) {
-      const ts = photo.taken_at || photo.created_at;
-      const dk = dayKey(ts);
-      if (!groups.has(dk)) {
-        groups.set(dk, { key: dk, label: dayLabel(ts), photos: [] });
-      }
-      groups.get(dk)!.photos.push(photo);
-    }
-    return Array.from(groups.values());
-  })();
-
   // Group encrypted photos by day
   type EncryptedDayGroup = { key: string; label: string; photos: CachedPhoto[] };
   const encryptedDayGroups: EncryptedDayGroup[] = (() => {
@@ -179,9 +142,7 @@ export default function Gallery() {
     return Array.from(groups.values());
   })();
 
-  const hasContent =
-    filteredPlainPhotos.length > 0 ||
-    (filteredPhotos && filteredPhotos.length > 0);
+  const hasContent = filteredPhotos && filteredPhotos.length > 0;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -246,51 +207,6 @@ export default function Gallery() {
             </p>
           </div>
         )}
-
-        {/* Plain photo tiles — auto-scanned files on disk not yet encrypted */}
-        {plainDayGroups.length > 0 && plainDayGroups.map((group) => {
-          // Compute global start index for this group (for photo viewer navigation)
-          let groupStartIdx = 0;
-          for (const g of plainDayGroups) {
-            if (g.key === group.key) break;
-            groupStartIdx += g.photos.length;
-          }
-          return (
-            <div key={group.key}>
-              <div className="flex items-center gap-2 py-2 mt-2 first:mt-0">
-                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-                  {group.label}
-                </h3>
-                <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
-                <span className="text-xs text-gray-400 dark:text-gray-500">
-                  {group.photos.length}
-                </span>
-              </div>
-              <div className={gridClasses}>
-                {group.photos.map((photo, localIdx) => {
-                  const globalIdx = groupStartIdx + localIdx;
-                  return (
-                    <PlainMediaTile
-                      key={photo.id}
-                      photo={photo}
-                      selectionMode={selectionMode}
-                      isSelected={selectedIds.has(photo.id)}
-                      onClick={() => {
-                        if (selectionMode) toggleSelect(photo.id);
-                        else navigate(`/photo/plain/${photo.id}`, {
-                          state: { photoIds: filteredPlainPhotos.map(p => p.id), currentIndex: globalIdx },
-                        });
-                      }}
-                      onLongPress={() => {
-                        if (!selectionMode) enterSelectionMode(photo.id);
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
 
         {/* Encrypted mode tiles — grouped by day */}
         {mode === "encrypted" && encryptedDayGroups.map((group) => {

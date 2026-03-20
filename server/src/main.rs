@@ -353,7 +353,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/import/google-photos", post(import::takeout::import_takeout))
         .route("/photos/{id}/metadata", get(import::handlers::get_photo_metadata))
         .route("/photos/{id}/metadata", delete(import::handlers::delete_photo_metadata))
-        // Plain-mode photos — list, serve, register, thumbnail
+        // Photos — list, serve, register, thumbnail
         .route("/photos", get(photos::handlers::list_photos))
         .route("/photos/encrypted-sync", get(photos::sync::encrypted_sync))
         .route("/photos/register", post(photos::handlers::register_photo))
@@ -373,7 +373,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/{id}/duplicate", post(photos::copies::duplicate_photo))
         // Delete now soft-deletes to trash (30-day retention)
         .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
-        // Plain-mode scan & register all files on disk
+        // Scan & register all files on disk
         .route("/admin/photos/scan", post(photos::scan::scan_and_register))
         // Trigger immediate background conversion pass
         .route("/admin/photos/convert", post(photos::convert::trigger_convert))

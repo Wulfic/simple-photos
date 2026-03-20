@@ -1,28 +1,8 @@
 /**
  * Gallery utilities — thumbnail generation, in-memory thumbnail caching,
- * cursor-based pagination helpers, and the PlainPhoto type definition.
+ * and cursor-based pagination helpers.
  */
 import { api } from "../api/client";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-/** A plain-mode photo from the server. */
-export interface PlainPhoto {
-  id: string;
-  filename: string;
-  file_path: string;
-  mime_type: string;
-  media_type: string;
-  size_bytes: number;
-  width: number;
-  height: number;
-  duration_secs: number | null;
-  taken_at: string | null;
-  thumb_path: string | null;
-  created_at: string;
-  is_favorite: boolean;
-  crop_metadata: string | null;
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

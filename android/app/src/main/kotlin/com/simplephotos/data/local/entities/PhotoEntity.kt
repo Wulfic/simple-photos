@@ -15,7 +15,7 @@ enum class SyncStatus { PENDING, UPLOADING, SYNCED, FAILED }
 @Entity(tableName = "photos")
 data class PhotoEntity(
     @PrimaryKey val localId: String,
-    /** Server photo ID for plain-mode photos */
+    /** Server photo ID */
     val serverPhotoId: String? = null,
     /** Server blob ID for encrypted-mode photos */
     val serverBlobId: String? = null,
@@ -38,7 +38,7 @@ data class PhotoEntity(
     val syncStatus: SyncStatus = SyncStatus.PENDING,
     /** @deprecated Currently unused — retained to avoid a Room schema migration. */
     val encryptedBlobSize: Long? = null,
-    /** File size in bytes (from server, for plain-mode photos) */
+    /** File size in bytes (from server) */
     val sizeBytes: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
     /** Whether this photo is favorited */

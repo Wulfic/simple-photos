@@ -474,7 +474,7 @@ class PhotoRepository @Inject constructor(
     suspend fun toggleFavorite(photoId: String): FavoriteToggleResponse =
         api.toggleFavorite(photoId)
 
-    /** Persist crop/brightness/trim metadata on the server (plain mode). */
+    /** Persist crop/brightness/trim metadata on the server. */
     suspend fun setCropOnServer(photoId: String, cropMetadata: String?) {
         api.setCrop(photoId, SetCropRequest(cropMetadata))
     }

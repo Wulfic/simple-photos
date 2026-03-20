@@ -98,7 +98,6 @@ pub struct UserStats {
 pub struct PhotoStats {
     pub total_photos: i64,
     pub encrypted_count: i64,
-    pub plain_count: i64,
     pub total_file_bytes: i64,
     pub total_thumb_bytes: i64,
     pub photos_with_thumbs: i64,

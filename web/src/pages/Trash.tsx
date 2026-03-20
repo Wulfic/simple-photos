@@ -1,7 +1,6 @@
 /**
  * Trash page — displays soft-deleted photos with restore/permanent-delete
- * actions. Supports both plain-mode (server trash API) and encrypted-mode
- * (local IndexedDB cache with decrypted thumbnails).
+ * actions. Uses local IndexedDB cache with decrypted thumbnails.
  */
 import { useEffect, useState, useCallback } from "react";
 import { api } from "../api/client";

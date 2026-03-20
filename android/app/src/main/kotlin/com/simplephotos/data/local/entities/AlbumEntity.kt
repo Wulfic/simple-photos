@@ -9,9 +9,8 @@ import androidx.room.PrimaryKey
 /**
  * Local representation of a user-created album.
  *
- * In encrypted mode, the album's photo list is stored as an encrypted
- * manifest blob on the server ([serverManifestBlobId]). In plain mode,
- * albums are local-only.
+ * The album's photo list is stored as an encrypted manifest blob on the
+ * server ([serverManifestBlobId]).
  */
 @Entity(tableName = "albums")
 data class AlbumEntity(

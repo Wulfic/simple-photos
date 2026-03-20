@@ -300,7 +300,6 @@ pub async fn external_full(
     let encrypted_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL")
             .fetch_one(pool).await.unwrap_or(0);
-    let plain_count = total_photos - encrypted_count;
     let total_file_bytes: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")
             .fetch_one(pool).await.unwrap_or(0);
@@ -329,7 +328,7 @@ pub async fn external_full(
     let photos_by_media_type: HashMap<String, i64> = media_rows.into_iter().collect();
 
     let photo_stats = PhotoStats {
-        total_photos, encrypted_count, plain_count, total_file_bytes,
+        total_photos, encrypted_count, total_file_bytes,
         total_thumb_bytes, photos_with_thumbs, photos_by_media_type,
         oldest_photo, newest_photo, favorited_count, tagged_count,
     };
