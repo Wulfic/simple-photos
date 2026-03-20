@@ -7,7 +7,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import { useAuthStore } from "../store/auth";
 import { decrypt, hasCryptoKey } from "../crypto/crypto";
 import {
   db,
@@ -172,8 +171,6 @@ export function useGalleryData(): GalleryDataResult {
     setLoading(true);
     try {
       // Phase 1: Fetch metadata via encrypted-sync endpoint.
-      // Returns ALL photos in the photos table (encrypted blobs + plain server-scanned).
-      // Plain photos (encrypted_blob_id = null) are shown using server thumbnail URLs.
       type SyncRecord = Awaited<ReturnType<typeof api.photos.encryptedSync>>["photos"][number];
       const allSyncPhotos: SyncRecord[] = [];
       let cursor: string | undefined;
@@ -183,14 +180,10 @@ export function useGalleryData(): GalleryDataResult {
         cursor = res.next_cursor ?? undefined;
       } while (cursor);
 
-      // Build set of all valid IDB keys from the server (includes both
-      // encrypted blob IDs and plain-photo IDs used as fallback keys).
+      // Build set of all valid IDB keys from the server.
       const serverBlobIds = new Set<string>();
       for (const p of allSyncPhotos) {
-        // Encrypted photos → keyed by encrypted_blob_id
         if (p.encrypted_blob_id) serverBlobIds.add(p.encrypted_blob_id);
-        // Plain server photos → keyed by the photos-table ID
-        else serverBlobIds.add(p.id);
       }
 
       // Phase 2: Also include directly-uploaded encrypted blobs not yet
@@ -216,17 +209,12 @@ export function useGalleryData(): GalleryDataResult {
       // Stale data is purged — safe to expose the live query to the UI.
       setEncryptedDataReady(true);
 
-      // Build auth headers for server thumbnail fetches
-      const { accessToken } = useAuthStore.getState();
-      const authHeaders: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
-      if (accessToken) authHeaders["Authorization"] = `Bearer ${accessToken}`;
-
       // Phase 3: Populate IndexedDB from sync records.
       for (const photo of allSyncPhotos) {
-        const blobId = photo.encrypted_blob_id ?? null;
-        // Use encrypted_blob_id as IDB key for encrypted photos,
-        // or the photos-table ID as key for plain server-scanned photos.
-        const idbKey = blobId ?? photo.id;
+        const blobId = photo.encrypted_blob_id;
+        if (!blobId) continue; // Skip photos without encrypted blobs
+
+        const idbKey = blobId;
 
         const existing = await db.photos.get(idbKey);
         if (existing) {
@@ -249,71 +237,35 @@ export function useGalleryData(): GalleryDataResult {
         }
 
         let thumbnailData: ArrayBuffer | undefined;
-
-        if (blobId) {
-          // ── Encrypted photo: download + decrypt thumbnail blob ──────────
-          const thumbBlobId = photo.encrypted_thumb_blob_id;
-          if (thumbBlobId) {
-            try {
-              const thumbEnc = await api.blobs.download(thumbBlobId);
-              const thumbDec = await decrypt(thumbEnc);
-              const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-              thumbnailData = base64ToArrayBuffer(thumbPayload.data);
-            } catch {
-              // Thumbnail fetch failed — show placeholder
-            }
-          }
-
-          await db.photos.put({
-            blobId,
-            thumbnailBlobId: photo.encrypted_thumb_blob_id ?? undefined,
-            filename: photo.filename,
-            takenAt,
-            mimeType: photo.mime_type,
-            mediaType: (photo.media_type as MediaType) ?? mediaTypeFromMime(photo.mime_type),
-            width: photo.width,
-            height: photo.height,
-            duration: photo.duration_secs ?? undefined,
-            albumIds: [],
-            thumbnailData,
-            contentHash: photo.photo_hash ?? undefined,
-            cropData: photo.crop_metadata ?? undefined,
-            isFavorite: photo.is_favorite ?? false,
-            serverPhotoId: photo.id,
-            isServerPhoto: false,
-          });
-        } else {
-          // ── Plain server-scanned photo: fetch thumbnail from server URL ──
-          // These are files scanned by the server autoscan that have not been
-          // uploaded as encrypted blobs. We display them using the server's
-          // pre-generated thumbnail.
+        const thumbBlobId = photo.encrypted_thumb_blob_id;
+        if (thumbBlobId) {
           try {
-            const thumbRes = await fetch(api.photos.thumbUrl(photo.id), { headers: authHeaders });
-            if (thumbRes.ok) {
-              thumbnailData = await thumbRes.arrayBuffer();
-            }
+            const thumbEnc = await api.blobs.download(thumbBlobId);
+            const thumbDec = await decrypt(thumbEnc);
+            const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
+            thumbnailData = base64ToArrayBuffer(thumbPayload.data);
           } catch {
-            // Thumbnail unavailable — show placeholder in gallery
+            // Thumbnail fetch failed — show placeholder
           }
-
-          await db.photos.put({
-            blobId: photo.id, // use photos-table ID as IDB key
-            filename: photo.filename,
-            takenAt,
-            mimeType: photo.mime_type,
-            mediaType: (photo.media_type as MediaType) ?? mediaTypeFromMime(photo.mime_type),
-            width: photo.width,
-            height: photo.height,
-            duration: photo.duration_secs ?? undefined,
-            albumIds: [],
-            thumbnailData,
-            contentHash: photo.photo_hash ?? undefined,
-            cropData: photo.crop_metadata ?? undefined,
-            isFavorite: photo.is_favorite ?? false,
-            serverPhotoId: photo.id,
-            isServerPhoto: true,
-          });
         }
+
+        await db.photos.put({
+          blobId,
+          thumbnailBlobId: photo.encrypted_thumb_blob_id ?? undefined,
+          filename: photo.filename,
+          takenAt,
+          mimeType: photo.mime_type,
+          mediaType: (photo.media_type as MediaType) ?? mediaTypeFromMime(photo.mime_type),
+          width: photo.width,
+          height: photo.height,
+          duration: photo.duration_secs ?? undefined,
+          albumIds: [],
+          thumbnailData,
+          contentHash: photo.photo_hash ?? undefined,
+          cropData: photo.crop_metadata ?? undefined,
+          isFavorite: photo.is_favorite ?? false,
+          serverPhotoId: photo.id,
+        });
       }
 
       // Phase 4: Handle directly-uploaded encrypted blobs not in photos table.

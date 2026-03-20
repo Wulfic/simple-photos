@@ -17,7 +17,7 @@ data class PhotoEntity(
     @PrimaryKey val localId: String,
     /** Server photo ID */
     val serverPhotoId: String? = null,
-    /** Server blob ID for encrypted-mode photos */
+    /** Server blob ID for encrypted photos */
     val serverBlobId: String? = null,
     val thumbnailBlobId: String? = null,
     val filename: String,
@@ -36,8 +36,6 @@ data class PhotoEntity(
     /** File path to cached thumbnail JPEG in app-internal storage */
     val thumbnailPath: String? = null,
     val syncStatus: SyncStatus = SyncStatus.PENDING,
-    /** @deprecated Currently unused — retained to avoid a Room schema migration. */
-    val encryptedBlobSize: Long? = null,
     /** File size in bytes (from server) */
     val sizeBytes: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),

@@ -6,7 +6,6 @@
  */
 import { useState, useCallback, useRef } from "react";
 import { api } from "../api/client";
-import { useAuthStore } from "../store/auth";
 import { decrypt } from "../crypto/crypto";
 import { db, type MediaType } from "../db";
 import { base64ToUint8Array } from "../utils/media";
@@ -122,43 +121,6 @@ export default function useViewerMedia(
           url, filename: idbCached.filename, mimeType: idbCached.mimeType,
           mediaType: resolvedType, cropData: photoCropData,
           isFavorite: idbCached.isFavorite ?? false,
-        });
-        setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
-        setLoading(false);
-        return;
-      }
-
-      // Cache miss — check if this is a plain server-scanned photo
-      const idbPhoto = await db.photos.get(blobId);
-      if (idbPhoto?.isServerPhoto && idbPhoto.serverPhotoId) {
-        // Plain server photo: fetch + display via /api/photos/:id/web (no decryption)
-        const { accessToken } = useAuthStore.getState();
-        const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
-        if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-
-        const res = await fetch(api.photos.webUrl(idbPhoto.serverPhotoId), { headers });
-        if (!res.ok) throw new Error(`Server photo fetch failed: ${res.status}`);
-        const data = await res.arrayBuffer();
-        const mimeTypeVal = idbPhoto.mimeType;
-        const blob = new Blob([data], { type: mimeTypeVal });
-        const url = URL.createObjectURL(blob);
-        setMediaUrl(url);
-        setFilename(idbPhoto.filename);
-        setMimeType(mimeTypeVal);
-        const resolvedType: MediaType =
-          idbPhoto.mediaType === "gif" ? "gif"
-          : idbPhoto.mediaType === "video" ? "video"
-          : idbPhoto.mediaType === "audio" ? "audio"
-          : "photo";
-        setMediaType(resolvedType);
-        let photoCropData = null;
-        if (idbPhoto.cropData) {
-          try { photoCropData = JSON.parse(idbPhoto.cropData); } catch { /* ignore */ }
-        }
-        preloadCache.current.set(blobId, {
-          url, filename: idbPhoto.filename, mimeType: mimeTypeVal,
-          mediaType: resolvedType, cropData: photoCropData,
-          isFavorite: idbPhoto.isFavorite ?? false,
         });
         setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
         setLoading(false);

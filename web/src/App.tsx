@@ -3,8 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom
 import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
 import { hasCryptoKey, loadKeyFromSession } from "./crypto/crypto";
-import { startActivityPolling, stopActivityPolling } from "./store/activity";
-import GlobalProgressBanners from "./components/GlobalProgressBanners";
 import Login from "./pages/Login";
 import Setup from "./pages/Setup";
 import Gallery from "./pages/Gallery";
@@ -22,11 +20,10 @@ import Diagnostics from "./pages/Diagnostics";
 /**
  * Layout route for authenticated pages.
  *
- * Checks setup status + auth, starts the global activity poller, and renders
- * persistent progress banners above child pages via `<Outlet />`.
+ * Checks setup status + auth and renders child pages via `<Outlet />`.
  *
  * Because this is a layout route, it does NOT remount when navigating between
- * child routes — the poller and banners stay alive across page changes.
+ * child routes.
  */
 function ProtectedLayout() {
   const { isAuthenticated } = useAuthStore();
@@ -46,12 +43,6 @@ function ProtectedLayout() {
       });
   }, []);
 
-  // Start global activity polling once (persists across child route changes)
-  useEffect(() => {
-    startActivityPolling();
-    return () => stopActivityPolling();
-  }, []);
-
   if (!setupChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
@@ -69,8 +60,6 @@ function ProtectedLayout() {
   return (
     <>
       <Outlet />
-      {/* Fixed overlay — doesn't participate in document flow, won't push nav */}
-      <GlobalProgressBanners />
     </>
   );
 }

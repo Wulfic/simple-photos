@@ -2,9 +2,8 @@
 //!
 //! Used by both `photos` and `setup` modules to avoid duplication.
 //!
-//! Only browser-native formats are supported — no server-side conversion
-//! (FFmpeg / ImageMagick) is required. Every accepted file type is directly
-//! renderable by `<img>`, `<video>`, or `<audio>` elements.
+//! Only browser-native formats are supported. Every accepted file type is
+//! directly renderable by `<img>`, `<video>`, or `<audio>` elements.
 
 /// Valid media file extensions — browser-native formats only.
 pub const MEDIA_EXTENSIONS: &[&str] = &[

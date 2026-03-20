@@ -5,7 +5,7 @@
 //! and crop-metadata storage.
 //!
 //! All supported formats are browser-native, so `serve_web` simply serves
-//! the original file (no conversion pipeline or `.web_previews/` directory).
+//! the original file.
 //!
 //! `serve_photo` and `serve_web` support HTTP Range requests for video
 //! seeking and large-file download resumption.
@@ -26,7 +26,7 @@ use crate::state::AppState;
 use super::models::*;
 use super::utils::{normalize_iso_timestamp, utc_now_iso};
 
-// ── Plain Photo Endpoints ─────────────────────────────────────────────────────
+// ── Photo Endpoints ───────────────────────────────────────────────────────────
 
 /// Query parameters for `GET /api/photos`.
 #[derive(Debug, Deserialize)]
