@@ -140,14 +140,6 @@ interface ApiService {
     @GET("api/admin/ssl")
     suspend fun getSslStatus(): SslStatusResponse
 
-    // ── Re-convert encrypted media (admin) ──────────────────────────────
-    @POST("api/admin/photos/reconvert")
-    suspend fun triggerReconvert(@Body request: ReconvertRequest): ReconvertResponse
-
-    // ── Conversion status (any authenticated user) ───────────────────────
-    @GET("api/photos/conversion-status")
-    suspend fun getConversionStatus(): ConversionStatusResponse
-
     // ── Admin ────────────────────────────────────────────────────────────
     @POST("api/admin/photos/scan")
     suspend fun scanAndRegister(): ScanResponse

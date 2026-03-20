@@ -35,7 +35,7 @@ rustls-pemfile = "2"
 imagesize = "0.13"
 kamadak-exif = "0.5"
 aes-gcm = "0.10"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff", "ico", "hdr"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "ico", "avif"] }
 base64 = "0.22"
 num_cpus = "1"
 async-stream = "0.3"

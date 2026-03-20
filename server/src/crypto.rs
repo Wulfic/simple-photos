@@ -38,9 +38,6 @@ pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Decrypt data produced by [`encrypt`] (or the equivalent client-side code).
 /// Input format: `[12-byte nonce][ciphertext + 16-byte auth tag]`.
-///
-/// Used by the background converter during encrypted→web-format migration
-/// (see [`crate::photos::convert`]).
 pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
     // Minimum valid ciphertext: 12-byte nonce + 16-byte GCM authentication tag
     if data.len() < NONCE_LENGTH + 16 {
@@ -57,8 +54,8 @@ pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
 
 /// Parse a hex-encoded AES-256 key (64 hex chars → 32 bytes).
 ///
-/// Used by both the encryption migration endpoint
-/// (`POST /api/admin/encryption/migrate`) and the reconvert pipeline.
+/// Used by the encryption migration endpoint
+/// (`POST /api/admin/encryption/migrate`).
 pub fn parse_key_hex(hex_str: &str) -> Result<[u8; 32], String> {
     let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid hex key: {}", e))?;
     if bytes.len() != 32 {

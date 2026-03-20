@@ -2,14 +2,15 @@
 //!
 //! All media is always encrypted — files are stored as opaque AES-256-GCM
 //! blobs (see [`crate::blobs`]); the server never sees cleartext media.
-//! The photos table and on-disk files are used only by the autoscan/
-//! conversion pipeline.
+//! The photos table and on-disk files are used only by the autoscan pipeline.
+//!
+//! Only browser-native formats are supported — no server-side conversion
+//! (FFmpeg / ImageMagick) is required.
 //!
 //! Key sub-modules:
 //! - [`handlers`]        — List, serve, favorite, and crop endpoints for photos.
 //! - [`upload`]          — Mobile client upload with content-hash deduplication.
-//! - [`scan`]            — Filesystem scan, thumbnail & web-preview generation.
-//! - [`convert`]         — Background media conversion task (MKV→MP4, HEIC→JPEG, etc.).
+//! - [`scan`]            — Filesystem scan and thumbnail generation (pure Rust).
 //! - [`encryption`]      — Encryption key storage endpoint.
 //! - [`sync`]            — Photo metadata sync for mobile gallery population.
 //! - [`copies`]          — Photo duplication and edit-copy management.
@@ -18,7 +19,6 @@
 //! - [`metadata`]        — EXIF extraction (dimensions, GPS, camera model, date).
 //! - [`utils`]           — Timestamp normalization and content hashing.
 
-pub mod convert;
 pub mod copies;
 pub mod encryption;
 pub mod galleries;

@@ -71,30 +71,6 @@ internal data class CropInfo(
     val rotate: Int = 0
 )
 
-/**
- * Mirrors the server's `needs_web_preview()` logic. Returns the target
- * extension if this filename's format requires conversion for native
- * Android playback, or null if Android can handle it directly.
- */
-internal fun needsWebPreview(filename: String): String? {
-    val ext = filename.substringAfterLast('.', "").lowercase()
-    return when (ext) {
-        // Images not decodable by Android BitmapFactory / Coil natively
-        "heic", "heif", "tiff", "tif", "hdr", "cr2", "cur", "cursor",
-        "dng", "nef", "arw", "raw" -> "jpg"
-        // ICO — not natively supported by BitmapFactory
-        "ico" -> "png"
-        // SVG — server rasterises to a 1080p JPEG via ImageMagick
-        "svg" -> "jpg"
-        // Video containers not reliably playable by ExoPlayer
-        "mkv", "avi", "wmv", "asf", "h264",
-        "mpg", "mpeg", "3gp", "mov", "m4v" -> "mp4"
-        // Audio formats not natively supported
-        "wma", "aiff", "aif" -> "mp3"
-        else -> null
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Per-page content — each page independently loads and renders its photo
 // ---------------------------------------------------------------------------
@@ -122,7 +98,6 @@ internal fun PhotoPageContent(
     onVideoUriReady: ((Uri, String) -> Unit)? = null,
     onDurationKnown: ((Float) -> Unit)? = null,
     playerError: String? = null,
-    isConverting: Boolean = false,
     onMediaSizeLoaded: ((Float, Float) -> Unit)? = null,
     intrinsicWidth: Float = -1f,
     intrinsicHeight: Float = -1f
@@ -159,7 +134,6 @@ internal fun PhotoPageContent(
             decryptLoading = true
             try {
                 val ext = if (photo.mediaType == "audio") ".mp3"
-                    else if (needsWebPreview(photo.filename) == "mp4") ".mp4"
                     else "." + photo.filename.substringAfterLast('.', "mp4").lowercase()
                 val uri = withContext(Dispatchers.IO) {
                     val tempFile = java.io.File.createTempFile("media_", ext, context.cacheDir)
@@ -484,7 +458,6 @@ internal fun PhotoPageContent(
                         photoWidth = if (intrinsicWidth > 0f) intrinsicWidth.toInt() else photo.width,
                         photoHeight = if (intrinsicHeight > 0f) intrinsicHeight.toInt() else photo.height,
                         playerError = playerError,
-                        isConverting = isConverting,
                         onMediaSizeLoaded = onMediaSizeLoaded
                     )
                 } else if (mediaUri == null) {
@@ -496,7 +469,6 @@ internal fun PhotoPageContent(
             else -> {
                 // Track image load errors for graceful fallback
                 var imageError by remember(photo.localId) { mutableStateOf<String?>(null) }
-                var isConverting by remember(photo.localId) { mutableStateOf(false) }
 
                 when {
                     imageError != null -> {
@@ -504,27 +476,17 @@ internal fun PhotoPageContent(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier.padding(32.dp)
                         ) {
-                            if (isConverting) {
-                                CircularProgressIndicator(color = Color.White)
-                                Spacer(Modifier.height(16.dp))
-                                Text(
-                                    "Converting to compatible format…",
-                                    color = Color.Gray,
-                                    fontSize = 14.sp
-                                )
-                            } else {
-                                Text(
-                                    "Unable to display this format",
-                                    color = Color.White,
-                                    fontSize = 14.sp
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    photo.filename,
-                                    color = Color.Gray,
-                                    fontSize = 12.sp
-                                )
-                            }
+                            Text(
+                                "Unable to display this format",
+                                color = Color.White,
+                                fontSize = 14.sp
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                photo.filename,
+                                color = Color.Gray,
+                                fontSize = 12.sp
+                            )
                         }
                     }
 
@@ -629,7 +591,6 @@ internal fun VideoPlayerPage(
     photoWidth: Int = 0,
     photoHeight: Int = 0,
     playerError: String?,
-    isConverting: Boolean,
     onMediaSizeLoaded: ((Float, Float) -> Unit)? = null
 ) {
     // When this page becomes active, notify the screen to load our URI
@@ -719,39 +680,23 @@ internal fun VideoPlayerPage(
     }
 
     if (playerError != null && isActivePage) {
-        // Fallback UI for unsupported formats or conversion-in-progress
+        // Fallback UI for unsupported formats
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                if (isConverting) {
-                    CircularProgressIndicator(color = Color.White)
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "Converting to compatible format\u2026",
-                        color = Color.Gray,
-                        fontSize = 14.sp
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "This may take a moment",
-                        color = Color.Gray,
-                        fontSize = 12.sp
-                    )
-                } else {
-                    Text(
-                        "Unable to play this video format",
-                        color = Color.White,
-                        fontSize = 14.sp
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        filename,
-                        color = Color.Gray,
-                        fontSize = 12.sp
-                    )
-                }
+                Text(
+                    "Unable to play this video format",
+                    color = Color.White,
+                    fontSize = 14.sp
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    filename,
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
             }
         }
     } else if (isActivePage && activeVideoUri == uri) {

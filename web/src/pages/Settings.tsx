@@ -2,7 +2,7 @@
  * Settings page — admin and user configuration panel.
  *
  * Sections: encryption key management, backup server management,
- * auto-scan/conversion, SSL settings, account (password/2FA),
+ * auto-scan, SSL settings, account (password/2FA),
  * user management (admin), and thumbnail size preference.
  */
 import { useState, useEffect, useCallback } from "react";
@@ -56,10 +56,6 @@ export default function Settings() {
   const [audioBackupEnabled, setAudioBackupEnabled] = useState(false);
   const [audioBackupLoading, setAudioBackupLoading] = useState(true);
   const [togglingAudioBackup, setTogglingAudioBackup] = useState(false);
-
-  // ── Re-convert encrypted media state ──────────────────────────────────
-  const [reconverting, setReconverting] = useState(false);
-  const [reconvertResult, setReconvertResult] = useState<string | null>(null);
 
   // ── Storage stats state ─────────────────────────────────────────────────
   type StorageStats = {
@@ -330,54 +326,6 @@ export default function Settings() {
               <span className="text-sm text-gray-600 dark:text-gray-400">{scanResult}</span>
             )}
           </div>
-        </section>
-      )}
-
-      {/* ── Re-convert Encrypted Media ───── */}
-      {isAdmin && (
-        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
-          <h2 className="text-lg font-semibold mb-2">Re-convert Encrypted Media</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-            Convert encrypted videos and images to web-compatible formats (MP4, JPEG).
-            This decrypts each file temporarily, converts it, and re-encrypts the result.
-            Required for video playback on mobile devices.
-          </p>
-          {reconvertResult && (
-            <p className="text-sm text-green-600 dark:text-green-400 mb-3 p-2 bg-green-50 dark:bg-green-900/30 rounded">
-              {reconvertResult}
-            </p>
-          )}
-          <button
-            onClick={async () => {
-              setReconverting(true);
-              setReconvertResult(null);
-              setError("");
-              try {
-                const keyHex = sessionStorage.getItem("sp_key");
-                if (!keyHex) {
-                  setError("Encryption key not available. Please log out and log back in to derive the key.");
-                  return;
-                }
-                const res = await api.admin.triggerReconvert(keyHex);
-                setReconvertResult(res.message);
-              } catch (err: unknown) {
-                setError(getErrorMessage(err, "Re-conversion failed"));
-              } finally {
-                setReconverting(false);
-              }
-            }}
-            disabled={reconverting}
-            className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
-          >
-            {reconverting ? (
-              <span className="flex items-center gap-2">
-                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Starting…
-              </span>
-            ) : (
-              "Re-convert Encrypted Media"
-            )}
-          </button>
         </section>
       )}
 

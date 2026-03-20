@@ -99,14 +99,6 @@ fun GalleryScreen(
     var showAlbumPicker by remember { mutableStateOf(false) }
     val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
 
-    // Banner dismiss state — hides the banner UI without stopping the operation.
-    // Resets when a new batch of work starts (pending count transitions from 0).
-    var conversionBannerDismissed by remember { mutableStateOf(false) }
-
-    // Auto-reset dismissed state when work restarts
-    val conversionBusy = viewModel.conversionPending > 0 || viewModel.conversionMissingThumbs > 0 || viewModel.conversionActive
-    LaunchedEffect(conversionBusy) { if (conversionBusy && conversionBannerDismissed) conversionBannerDismissed = false }
-
     // Filter out photos that live in a secure gallery
     val visiblePhotos = remember(photos, viewModel.secureBlobIds) {
         if (viewModel.secureBlobIds.isEmpty()) photos
@@ -309,18 +301,6 @@ fun GalleryScreen(
                 }
             }
             PullToRefreshContainer(state = pullToRefreshState, modifier = Modifier.align(Alignment.TopCenter))
-
-            // ── Floating progress banners (conversion / migration) ──────
-            ActivityProgressBanners(
-                conversionPending = viewModel.conversionPending,
-                conversionMissingThumbs = viewModel.conversionMissingThumbs,
-                conversionActive = viewModel.conversionActive,
-                conversionDismissed = conversionBannerDismissed,
-                onDismissConversion = { conversionBannerDismissed = true },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 80.dp) // above the FAB
-            )
         }
     }
 
@@ -603,81 +583,6 @@ private fun MediaTile(
             ) {
                 if (isSelected) {
                     Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                }
-            }
-        }
-    }
-}
-
-// ── Activity Progress Banners ───────────────────────────────────────────────
-// Floating cards showing conversion and encryption migration progress,
-// matching the web's GlobalProgressBanners component.
-
-@Composable
-private fun ActivityProgressBanners(
-    conversionPending: Int,
-    conversionMissingThumbs: Int,
-    conversionActive: Boolean,
-    conversionDismissed: Boolean = false,
-    onDismissConversion: () -> Unit = {},
-    modifier: Modifier = Modifier
-) {
-    val showConversion = !conversionDismissed && (conversionPending > 0 || conversionMissingThumbs > 0 || conversionActive)
-
-    if (!showConversion) return
-
-    Column(
-        modifier = modifier.width(260.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // ── Conversion banner ───────────────────────────────────────────
-        if (showConversion) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                shadowElevation = 4.dp,
-                color = MaterialTheme.colorScheme.surfaceContainerHigh
-            ) {
-                Box {
-                    Row(
-                        modifier = Modifier.padding(start = 12.dp, top = 12.dp, end = 28.dp, bottom = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = Color(0xFFD97706) // amber-600
-                        )
-                        Column {
-                            Text(
-                                "Converting media\u2026",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            val parts = mutableListOf<String>()
-                            if (conversionPending > 0) parts += "$conversionPending file${if (conversionPending != 1) "s" else ""} pending"
-                            if (conversionMissingThumbs > 0) parts += "$conversionMissingThumbs thumbnail${if (conversionMissingThumbs != 1) "s" else ""}"
-                            if (parts.isEmpty()) parts += "Processing in background\u2026"
-                            Text(
-                                parts.joinToString(", "),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
-                    // Dismiss X button (top-right corner)
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Dismiss",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(4.dp)
-                            .size(16.dp)
-                            .clickable(onClick = onDismissConversion)
-                    )
                 }
             }
         }

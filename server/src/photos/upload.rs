@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::media::mime_from_extension;
+use crate::media::{mime_from_extension, is_supported_extension};
 use crate::sanitize;
 use crate::state::AppState;
 
@@ -33,6 +33,15 @@ pub async fn upload_photo(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("{}.jpg", Uuid::new_v4()));
+
+    // Reject unsupported file formats early — only browser-native types accepted
+    if !is_supported_extension(&filename) {
+        return Err(AppError::BadRequest(format!(
+            "Unsupported file format: '{}'. Only browser-native formats are accepted \
+             (JPEG, PNG, GIF, WebP, AVIF, BMP, SVG, ICO, MP4, WebM, MP3, FLAC, OGG, WAV).",
+            filename.rsplit('.').next().unwrap_or("unknown")
+        )));
+    }
 
     let mime_type = headers
         .get("X-Mime-Type")

@@ -4,10 +4,6 @@
 //! triggered on-demand via `POST /api/admin/photos/auto-scan`.  Files are
 //! assigned to the first admin user; duplicates are handled gracefully with
 //! `INSERT OR IGNORE` to avoid race conditions with concurrent scans.
-//!
-//! After new files are registered, the scanner triggers the background
-//! processing pipeline in [`crate::photos::convert`] which runs three
-//! sequential phases: thumbnails → conversion → post-conversion thumbnails.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,11 +18,9 @@ use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
 use crate::photos::metadata::extract_media_metadata_async;
-use crate::photos::scan::{ffmpeg_available_pub, generate_thumbnail_file};
+use crate::photos::scan::generate_thumbnail_file;
 use crate::photos::utils::compute_photo_hash_streaming;
 use crate::state::AppState;
-
-// compute_photo_hash_streaming is now in photos::utils — imported above.
 
 /// Background task: automatically scan the storage directory for new files
 /// on a configurable interval (or when triggered by an API call).
@@ -38,7 +32,6 @@ pub async fn background_auto_scan_task(
     pool: sqlx::SqlitePool,
     storage_root: Arc<ArcSwap<PathBuf>>,
     interval_secs: u64,
-    convert_notify: std::sync::Arc<tokio::sync::Notify>,
     scan_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 ) {
     if interval_secs == 0 {
@@ -57,8 +50,6 @@ pub async fn background_auto_scan_task(
         0
     };
     tracing::info!("[DIAG:AUTOSCAN] Startup auto-scan complete: registered {} new files", count);
-    // Trigger conversion pipeline for any newly discovered files.
-    convert_notify.notify_one();
     update_last_scan_time(&pool).await;
 
     // Then scan on a configurable interval
@@ -75,9 +66,6 @@ pub async fn background_auto_scan_task(
             0
         };
         tracing::info!("[DIAG:AUTOSCAN] Interval auto-scan complete: registered {} new files", count);
-        if count > 0 {
-            convert_notify.notify_one();
-        }
         update_last_scan_time(&pool).await;
     }
 }
@@ -111,9 +99,6 @@ pub async fn trigger_auto_scan(
 
     let count = run_auto_scan(&pool, &storage_root).await;
     tracing::info!("[DIAG:AUTOSCAN] On-demand scan complete: registered {} new files", count);
-    if count > 0 {
-        state.convert_notify.notify_one();
-    }
 
     // Update last scan time
     update_last_scan_time(&pool).await;
@@ -159,9 +144,6 @@ async fn run_auto_scan(
     .flatten()
     .map(|v| v == "true")
     .unwrap_or(false);
-
-    // Check FFmpeg availability for thumbnail/preview generation
-    let has_ffmpeg = ffmpeg_available_pub().await;
 
     // Build set of already-registered paths using a streaming cursor so we
     // never hold the full Vec<String> + HashSet simultaneously in memory.
@@ -291,8 +273,8 @@ async fn run_auto_scan(
                         Ok(_) => { /* inserted successfully */ }
                     }
 
-                    // Generate thumbnail (matches scan_and_register behavior)
-                    if has_ffmpeg || mime.starts_with("audio/") {
+                    // Generate thumbnail (pure Rust via image crate — no external tools)
+                    {
                         let thumb_abs = storage_root.join(&thumb_rel);
                         if generate_thumbnail_file(&abs_path, &thumb_abs, &mime, None).await {
                             tracing::debug!(file = %rel_path, "Autoscan: generated thumbnail");

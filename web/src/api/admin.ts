@@ -1,6 +1,6 @@
 /**
  * Admin API client — user management, storage config, server settings,
- * SSL/TLS, import scanning, media conversion triggers.
+ * SSL/TLS, import scanning.
  *
  * All endpoints require admin role (enforced server-side).
  * Maps to server routes: `/api/admin/*` plus a few `/api/photos/` helpers.
@@ -158,36 +158,7 @@ export const adminApi = {
       method: "POST",
     }),
 
-  /** Trigger an immediate background conversion pass (thumbnails + web previews) */
-  triggerConvert: () =>
-    request<{ message: string }>("/admin/photos/convert", {
-      method: "POST",
-    }),
 
-  /** Supply encryption key and trigger re-conversion of encrypted blobs
-   *  that still contain raw (non-web-compatible) media data. */
-  triggerReconvert: (keyHex: string) =>
-    request<{ message: string; needs_conversion: number }>(
-      "/admin/photos/reconvert",
-      {
-        method: "POST",
-        body: JSON.stringify({ key_hex: keyHex }),
-      }
-    ),
-
-  /** Check how many files still need conversion or thumbnails.
-   *  Note: Hits `/photos/conversion-status` (not `/admin/...`) — lives here
-   *  for UI grouping since only admins use it in practice. */
-  conversionStatus: () =>
-    request<{
-      pending_conversions: number;
-      pending_awaiting_key: number;
-      missing_thumbnails: number;
-      converting: boolean;
-      key_available?: boolean;
-    }>(
-      "/photos/conversion-status"
-    ),
 
   // ── SSL / TLS ──────────────────────────────────────────────────────────
 

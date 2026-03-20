@@ -14,7 +14,6 @@ import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
 import ViewerEditPanel, { type EditTab } from "../components/viewer/ViewerEditPanel";
 import TagsBar from "../components/viewer/TagsBar";
 import LeavePrompt from "../components/viewer/LeavePrompt";
-import DownloadFormatDialog from "../components/viewer/DownloadFormatDialog";
 import CropOverlay from "../components/viewer/CropOverlay";
 import VideoControls from "../components/viewer/VideoControls";
 import useZoomPan from "../hooks/useZoomPan";
@@ -114,19 +113,17 @@ export default function Viewer() {
     loading, setLoading,
     error, setError,
     videoError, setVideoError,
-    isConverting,
     loadEncryptedMedia,
   } = useViewerMedia(preloadCache);
 
   // ── Actions (from hook) ────────────────────────────────────────────────
   const {
     showLeavePrompt, setShowLeavePrompt,
-    showDownloadDialog, setShowDownloadDialog,
     saveCopySuccess,
     handleSaveEdit, handleSaveCopy, handleClearCrop,
     handleLeaveAndSave, handleLeaveAndDiscard,
     handleDelete, handleRemoveFromAlbum,
-    handleDownload, handleDownloadOriginal, handleDownloadConverted,
+    handleDownload, handleDownloadOriginal,
     handleToggleFavorite,
   } = useViewerActions({
     id, mediaUrl, filename, mediaType,
@@ -737,16 +734,6 @@ export default function Viewer() {
           );
         })()}
 
-        {/* Conversion in progress — file not yet available in browser-compatible format */}
-        {isConverting && !mediaUrl && !loading && (
-          <div className="w-full h-full flex flex-col items-center justify-center" style={{ background: "black" }}>
-            <div className="w-10 h-10 border-3 border-gray-600 border-t-blue-500 rounded-full animate-spin mb-4" />
-            <p className="text-gray-300 text-sm mb-1">Converting to browser-compatible format...</p>
-            <p className="text-gray-500 text-xs mb-4 px-4 text-center truncate max-w-[80%]">{filename}</p>
-            <p className="text-gray-600 text-xs">This file will be viewable once conversion completes.</p>
-          </div>
-        )}
-
         {/* Video format not supported fallback */}
         {mediaUrl && mediaType === "video" && videoError && (
           <div className="w-full h-full flex flex-col items-center justify-center" style={{ background: "black" }}>
@@ -864,14 +851,6 @@ export default function Viewer() {
         </div>
       )}
 
-      {showDownloadDialog && (
-        <DownloadFormatDialog
-          filename={filename}
-          onDownloadOriginal={handleDownloadOriginal}
-          onDownloadConverted={handleDownloadConverted}
-          onCancel={() => setShowDownloadDialog(false)}
-        />
-      )}
     </div>
   );
 }
