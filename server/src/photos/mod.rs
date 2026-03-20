@@ -4,8 +4,8 @@
 //! blobs (see [`crate::blobs`]); the server never sees cleartext media.
 //! The photos table and on-disk files are used only by the autoscan pipeline.
 //!
-//! Only browser-native formats are supported — no server-side conversion
-//! (FFmpeg / ImageMagick) is required.
+//! Only browser-native formats are supported; no server-side conversion is
+//! performed.
 //!
 //! Key sub-modules:
 //! - [`handlers`]        — List, serve, favorite, and crop endpoints for photos.

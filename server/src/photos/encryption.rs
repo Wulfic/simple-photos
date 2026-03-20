@@ -2,7 +2,7 @@
 //!
 //! The server always operates in encrypted mode (AES-256-GCM, client-side).
 //! This module handles persisting the client-derived encryption key so
-//! server-side operations (autoscan, conversion) can process photos.
+//! server-side operations (autoscan) can process photos.
 //!
 //! - `POST /api/admin/encryption/store-key`   — persist the encryption key
 
@@ -19,7 +19,7 @@ use crate::state::AppState;
 
 /// POST /api/admin/encryption/store-key
 /// Persists the client-derived AES-256 encryption key (wrapped with the
-/// server's JWT secret) so that server-side operations (autoscan, conversion)
+/// server's JWT secret) so that server-side operations (autoscan)
 /// can process photos autonomously.
 ///
 /// Idempotent — safe to call on every login.

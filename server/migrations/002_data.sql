@@ -7,7 +7,8 @@
 -- 020_trash_metadata_preservation.
 --
 -- All photos are always encrypted (AES-256-GCM, client-side).
--- encrypted_blob_id is NOT NULL — there is no plain/unencrypted mode.
+-- encrypted_blob_id is nullable: NULL for autoscan-registered photos that
+-- have not yet been uploaded as encrypted blobs by a client.
 
 -- ── Blobs ───────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS blobs (
@@ -42,7 +43,7 @@ CREATE TABLE IF NOT EXISTS photos (
     longitude               REAL,
     thumb_path              TEXT,
     created_at              TEXT NOT NULL,
-    encrypted_blob_id       TEXT NOT NULL,
+    encrypted_blob_id       TEXT,
     encrypted_thumb_blob_id TEXT,
     is_favorite             INTEGER NOT NULL DEFAULT 0,
     crop_metadata           TEXT,
@@ -52,7 +53,7 @@ CREATE TABLE IF NOT EXISTS photos (
 CREATE INDEX IF NOT EXISTS idx_photos_user          ON photos(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_photos_file_path     ON photos(file_path);
 CREATE INDEX IF NOT EXISTS idx_photos_taken_at      ON photos(user_id, taken_at);
-CREATE INDEX IF NOT EXISTS idx_photos_encrypted_blob ON photos(encrypted_blob_id);
+CREATE INDEX IF NOT EXISTS idx_photos_encrypted_blob ON photos(encrypted_blob_id) WHERE encrypted_blob_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_photos_user_favorite ON photos(user_id, is_favorite) WHERE is_favorite = 1;
 CREATE INDEX IF NOT EXISTS idx_photos_hash          ON photos(photo_hash);
 

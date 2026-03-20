@@ -35,9 +35,8 @@ pub struct EncryptedSyncRecord {
     pub duration_secs: Option<f64>,
     pub taken_at: Option<String>,
     pub created_at: String,
-    /// NULL for server-scanned plain photos that have not yet been uploaded
-    /// as an encrypted blob by a client.  The gallery displays these using
-    /// the server-side thumbnail URL instead of blob decryption.
+    /// NULL for photos registered by the autoscan pipeline that have not yet
+    /// been uploaded as an encrypted blob by a client.
     pub encrypted_blob_id: Option<String>,
     pub encrypted_thumb_blob_id: Option<String>,
     pub is_favorite: bool,

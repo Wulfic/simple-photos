@@ -2,11 +2,9 @@
 //!
 //! `POST /api/admin/photos/scan` walks the storage directory tree, registers
 //! every unregistered media file as a photo, extracts EXIF metadata,
-//! and generates JPEG thumbnails using the `image` crate (pure Rust — no
-//! external tools like FFmpeg or ImageMagick required).
+//! and generates JPEG thumbnails using the `image` crate (pure Rust).
 //!
 //! Only browser-native formats are accepted (see [`crate::media::MEDIA_EXTENSIONS`]).
-//! No server-side format conversion is performed.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

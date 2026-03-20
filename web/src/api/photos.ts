@@ -62,10 +62,10 @@ export const photosApi = {
       body: JSON.stringify(data),
     }),
 
-  /** Get the URL for serving a plain photo file (original format) */
+  /** Get the URL for serving a photo file (original format, used by autoscan pipeline) */
   fileUrl: (photoId: string) => `${BASE}/photos/${photoId}/file`,
 
-  /** Get the URL for serving a plain photo thumbnail */
+  /** Get the URL for serving a photo thumbnail (autoscan pipeline) */
   thumbUrl: (photoId: string) => `${BASE}/photos/${photoId}/thumb`,
 
   /** Get the URL for serving the media in a browser-compatible format.
@@ -80,11 +80,11 @@ export const photosApi = {
   streamUrl: (photoId: string, token: string) =>
     `${BASE}/photos/${photoId}/web?token=${encodeURIComponent(token)}`,
 
-  /** Download a plain photo file as raw binary, with 401 refresh retry */
+  /** Download a photo file as raw binary, with 401 refresh retry */
   downloadFile: (photoId: string) =>
     downloadRaw(`${BASE}/photos/${photoId}/file`),
 
-  /** Download a plain photo thumbnail as raw binary, with 401 refresh retry */
+  /** Download a photo thumbnail as raw binary, with 401 refresh retry */
   downloadThumb: (photoId: string) =>
     downloadRaw(`${BASE}/photos/${photoId}/thumb`),
 

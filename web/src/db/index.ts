@@ -33,15 +33,11 @@ export interface CachedPhoto {
   contentHash?: string;
   /** Actual server storage blob ID (defaults to blobId if undefined) */
   storageBlobId?: string;
-  /** Whether this photo is marked as favorite — synced with the server for both modes */
+  /** Whether this photo is marked as favorite — synced with the server */
   isFavorite?: boolean;
   /** Server-side `photos.id` for API calls requiring the photo record ID
-   *  (e.g., toggle_favorite). Only set for encrypted photos synced via encrypted-sync. */
+   *  (e.g., toggle_favorite, duplicate). Set for photos synced via encrypted-sync. */
   serverPhotoId?: string;
-  /** True for server-scanned plain photos that have no encrypted blob.
-   *  The viewer fetches these via /api/photos/:serverPhotoId/web instead of
-   *  decrypting a blob.  They display normally in the gallery thumbnail grid. */
-  isServerPhoto?: boolean;
 }
 
 export interface CachedAlbum {

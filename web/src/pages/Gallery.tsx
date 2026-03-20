@@ -32,7 +32,6 @@ export default function Gallery() {
     uploading, uploadProgress, inputRef, handleDrop, handleFileInput,
   } = useGalleryUpload({ loadEncryptedPhotos, setError });
 
-  // ── Read global activity store (banners rendered by GlobalProgressBanners) ──
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   // ── Multi-select state (mobile long-press) ─────────────────────────────

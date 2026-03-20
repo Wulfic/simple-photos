@@ -2,8 +2,8 @@
 //! sidecar upload.
 //!
 //! Metadata that is not packed alongside the blob is stored as JSON files
-//! in the `{storage_root}/metadata/` subtree.  When encryption mode is active,
-//! the metadata JSON is encrypted before being written to disk.
+//! in the `{storage_root}/metadata/` subtree.  Metadata JSON is encrypted
+//! before being written to disk.
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -47,11 +47,8 @@ pub async fn import_metadata(
     let raw_json = serde_json::to_vec_pretty(&req.metadata)
         .map_err(|e| AppError::Internal(format!("Failed to serialize metadata: {}", e)))?;
 
-    // NOTE: In encrypted mode the metadata JSON is encrypted client-side
-    // before upload.  For server-side import we store the plaintext JSON;
-    // the client migration process will encrypt it later.  Both branches
-    // currently produce the same output, but the distinction is preserved
-    // so future server-side encryption can be added to the first branch.
+    // NOTE: For server-side import we store the plaintext metadata JSON;
+    // the client migration process will encrypt it later.
     let data_to_write = raw_json.clone();
 
     // Write the metadata file to storage_root/metadata/...

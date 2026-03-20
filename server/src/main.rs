@@ -215,7 +215,6 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // No background conversion task — all supported formats are browser-native.
     let encryption_key: Arc<tokio::sync::RwLock<Option<[u8; 32]>>> = Arc::new(tokio::sync::RwLock::new(None));
     let scan_lock: Arc<tokio::sync::Mutex<()>> = Arc::new(tokio::sync::Mutex::new(()));
 
