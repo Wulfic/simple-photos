@@ -183,9 +183,15 @@ export function useGalleryData(): GalleryDataResult {
       } while (cursor);
 
       // Build set of all valid IDB keys from the server.
+      // Includes both encrypted blob IDs and autoscanned photo IDs.
       const serverBlobIds = new Set<string>();
       for (const p of allSyncPhotos) {
-        if (p.encrypted_blob_id) serverBlobIds.add(p.encrypted_blob_id);
+        if (p.encrypted_blob_id) {
+          serverBlobIds.add(p.encrypted_blob_id);
+        } else {
+          // Autoscanned (server-side) photo — keyed by photo.id
+          serverBlobIds.add(p.id);
+        }
       }
 
       // Phase 2: Also include directly-uploaded encrypted blobs not yet
@@ -214,9 +220,10 @@ export function useGalleryData(): GalleryDataResult {
       // Phase 3: Populate IndexedDB from sync records.
       for (const photo of allSyncPhotos) {
         const blobId = photo.encrypted_blob_id;
-        if (!blobId) continue; // Skip photos without encrypted blobs
-
-        const idbKey = blobId;
+        const isServerSide = !blobId;
+        // For encrypted photos, use the blob ID as IDB key.
+        // For autoscanned (server-side) photos, use the photo.id.
+        const idbKey = blobId || photo.id;
 
         const existing = await db.photos.get(idbKey);
         if (existing) {
@@ -240,22 +247,36 @@ export function useGalleryData(): GalleryDataResult {
 
         let thumbnailData: ArrayBuffer | undefined;
         let thumbnailMimeType: string | undefined;
-        const thumbBlobId = photo.encrypted_thumb_blob_id;
-        if (thumbBlobId) {
+
+        if (isServerSide) {
+          // Autoscanned photo — download unencrypted thumbnail from server
           try {
-            const thumbEnc = await api.blobs.download(thumbBlobId);
-            const thumbDec = await decrypt(thumbEnc);
-            const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-            thumbnailData = base64ToArrayBuffer(thumbPayload.data);
-            thumbnailMimeType = thumbPayload.mime_type;
+            const thumbBytes = await api.photos.downloadThumb(photo.id);
+            thumbnailData = thumbBytes;
+            // Determine MIME from thumb content or default based on media type
+            thumbnailMimeType = photo.mime_type === "image/gif" ? "image/gif" : "image/jpeg";
           } catch {
-            // Thumbnail fetch failed — show placeholder
+            // Thumbnail not ready yet — show placeholder
+          }
+        } else {
+          // Encrypted photo — download and decrypt thumbnail blob
+          const thumbBlobId = photo.encrypted_thumb_blob_id;
+          if (thumbBlobId) {
+            try {
+              const thumbEnc = await api.blobs.download(thumbBlobId);
+              const thumbDec = await decrypt(thumbEnc);
+              const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
+              thumbnailData = base64ToArrayBuffer(thumbPayload.data);
+              thumbnailMimeType = thumbPayload.mime_type;
+            } catch {
+              // Thumbnail fetch failed — show placeholder
+            }
           }
         }
 
         await db.photos.put({
-          blobId,
-          thumbnailBlobId: photo.encrypted_thumb_blob_id ?? undefined,
+          blobId: idbKey,
+          thumbnailBlobId: isServerSide ? undefined : (photo.encrypted_thumb_blob_id ?? undefined),
           filename: photo.filename,
           takenAt,
           mimeType: photo.mime_type,
@@ -270,6 +291,7 @@ export function useGalleryData(): GalleryDataResult {
           cropData: photo.crop_metadata ?? undefined,
           isFavorite: photo.is_favorite ?? false,
           serverPhotoId: photo.id,
+          serverSide: isServerSide || undefined,
         });
       }
 

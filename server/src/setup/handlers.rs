@@ -203,7 +203,7 @@ pub async fn discover(
         }));
     }
 
-    // ── Phase 2: Localhost HTTP probing (for Docker / co-located servers) ─
+    // ── Phase 2: Localhost + Docker-host HTTP probing ──────────────────
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
@@ -218,48 +218,55 @@ pub async fn discover(
         if p != our_port && !local_ports.contains(&p) { local_ports.push(p); }
     }
 
+    // Hosts to probe: 127.0.0.1 (native), host.docker.internal (Docker-to-host),
+    // and 172.17.0.1 (Docker default gateway fallback).
+    let probe_hosts: Vec<&str> = vec!["127.0.0.1", "host.docker.internal", "172.17.0.1"];
+
     let mut local_futures = Vec::new();
     for &port in &local_ports {
-        let addr = format!("127.0.0.1:{}", port);
-        if existing_addrs.contains(&addr) { continue; }
-        let c = client.clone();
-        local_futures.push(async move {
-            // Try /api/discover/info first, then fall back to /health
-            let info_url = format!("http://127.0.0.1:{}/api/discover/info", port);
-            let health_url = format!("http://127.0.0.1:{}/health", port);
+        for &host in &probe_hosts {
+            let addr = format!("{}:{}", host, port);
+            if existing_addrs.contains(&addr) { continue; }
+            let c = client.clone();
+            let host_owned = host.to_string();
+            local_futures.push(async move {
+                // Try /api/discover/info first, then fall back to /health
+                let info_url = format!("http://{}:{}/api/discover/info", host_owned, port);
+                let health_url = format!("http://{}:{}/health", host_owned, port);
 
-            if let Ok(resp) = c.get(&info_url).send().await {
-                if resp.status().is_success() {
-                    if let Ok(body) = resp.json::<serde_json::Value>().await {
-                        if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                            let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                            let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                            return Some(serde_json::json!({
-                                "address": format!("localhost:{}", port),
-                                "name": name,
-                                "version": version,
-                            }));
+                if let Ok(resp) = c.get(&info_url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(body) = resp.json::<serde_json::Value>().await {
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
+                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                                return Some(serde_json::json!({
+                                    "address": format!("{}:{}", host_owned, port),
+                                    "name": name,
+                                    "version": version,
+                                }));
+                            }
                         }
                     }
                 }
-            }
-            if let Ok(resp) = c.get(&health_url).send().await {
-                if resp.status().is_success() {
-                    if let Ok(body) = resp.json::<serde_json::Value>().await {
-                        if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                            let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                            let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                            return Some(serde_json::json!({
-                                "address": format!("localhost:{}", port),
-                                "name": name,
-                                "version": version,
-                            }));
+                if let Ok(resp) = c.get(&health_url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(body) = resp.json::<serde_json::Value>().await {
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
+                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                                return Some(serde_json::json!({
+                                    "address": format!("{}:{}", host_owned, port),
+                                    "name": name,
+                                    "version": version,
+                                }));
+                            }
                         }
                     }
                 }
-            }
-            None
-        });
+                None
+            });
+        }
     }
 
     let local_results = futures_util::future::join_all(local_futures).await;
@@ -287,6 +294,17 @@ pub async fn discover(
         if parts.len() == 4 {
             let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
             if !subnets.contains(&subnet) { subnets.push(subnet); }
+        }
+    }
+    // Resolve host.docker.internal to discover the Docker host's LAN subnet
+    if let Ok(addrs) = tokio::net::lookup_host("host.docker.internal:0").await {
+        for addr in addrs {
+            let ip = addr.ip().to_string();
+            let parts: Vec<&str> = ip.split('.').collect();
+            if parts.len() == 4 {
+                let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
+                if !subnets.contains(&subnet) { subnets.push(subnet); }
+            }
         }
     }
     for s in &["192.168.1", "192.168.0", "10.0.0"] {

@@ -40,7 +40,7 @@ data class DiscoveredServer(
  */
 object ServerDiscovery {
 
-    private val COMMON_PORTS = listOf(8080, 3000, 443, 8443, 80, 8000, 9000)
+    private val COMMON_PORTS = listOf(8080, 8081, 8082, 8083, 3000, 3001, 3002, 3003, 443, 8443, 80, 8000, 9000)
     private const val CONNECT_TIMEOUT_MS = 600
     private const val READ_TIMEOUT_MS = 600
 

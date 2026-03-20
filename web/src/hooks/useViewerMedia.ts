@@ -93,7 +93,8 @@ export default function useViewerMedia(
   const [error, setError] = useState("");
   const [videoError, setVideoError] = useState(false);
 
-  /** Load an encrypted blob — check IndexedDB cache first, then decrypt */
+  /** Load media — check IndexedDB cache first, then download.
+   *  For server-side (autoscanned) photos, fetches directly without decryption. */
   const loadEncryptedMedia = useCallback(async (blobId: string) => {
     setLoading(true);
     setError("");
@@ -122,6 +123,47 @@ export default function useViewerMedia(
           mediaType: resolvedType, cropData: photoCropData,
           isFavorite: idbCached.isFavorite ?? false,
         });
+        setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+        setLoading(false);
+        return;
+      }
+
+      // Check if this is a server-side (autoscanned) photo — load directly
+      const dbEntry = await db.photos.get(blobId);
+      if (dbEntry?.serverSide) {
+        console.log(`[DIAG:VIEWER] Server-side photo ${blobId}, downloading directly...`);
+        const raw = await api.photos.downloadFile(blobId);
+        const resolvedMime = dbEntry.mimeType || "image/jpeg";
+        const resolvedType: MediaType = dbEntry.mediaType ?? "photo";
+        const blob = new Blob([raw], { type: resolvedMime });
+        const url = URL.createObjectURL(blob);
+
+        setMediaUrl(url);
+        setFilename(dbEntry.filename);
+        setMimeType(resolvedMime);
+        setMediaType(resolvedType);
+
+        let photoCropData = null;
+        if (dbEntry.cropData) {
+          try { photoCropData = JSON.parse(dbEntry.cropData); } catch { /* ignore */ }
+        }
+        preloadCache.current.set(blobId, {
+          url, filename: dbEntry.filename, mimeType: resolvedMime,
+          mediaType: resolvedType, cropData: photoCropData,
+          isFavorite: dbEntry.isFavorite ?? false,
+        });
+
+        // Cache for cross-session persistence
+        if (blob.size < 50 * 1024 * 1024) {
+          try {
+            await db.fullPhotos?.put({
+              photoId: blobId, filename: dbEntry.filename, mimeType: resolvedMime,
+              mediaType: resolvedType, cropData: dbEntry.cropData ?? undefined,
+              isFavorite: dbEntry.isFavorite ?? false, data: raw, cachedAt: Date.now(),
+            });
+          } catch { /* non-fatal */ }
+        }
+
         setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
         setLoading(false);
         return;
@@ -161,13 +203,13 @@ export default function useViewerMedia(
 
       // Load crop data from IndexedDB for cache entry
       let photoCropData = null;
-      const dbEntry = await db.photos.get(blobId);
-      if (dbEntry?.cropData) {
-        try { photoCropData = JSON.parse(dbEntry.cropData); } catch { /* ignore */ }
+      const cachedEntry = await db.photos.get(blobId);
+      if (cachedEntry?.cropData) {
+        try { photoCropData = JSON.parse(cachedEntry.cropData); } catch { /* ignore */ }
       }
 
       // Read favorite status from the CachedPhoto entry (synced from server)
-      const photoIsFavorite = dbEntry?.isFavorite ?? false;
+      const photoIsFavorite = cachedEntry?.isFavorite ?? false;
 
       // Store in preload cache so swiping back is instant
       preloadCache.current.set(blobId, {
@@ -184,7 +226,7 @@ export default function useViewerMedia(
         try {
           await db.fullPhotos?.put({
             photoId: blobId, filename: payload.filename, mimeType: payload.mime_type,
-            mediaType: resolvedType, cropData: dbEntry?.cropData ?? undefined,
+            mediaType: resolvedType, cropData: cachedEntry?.cropData ?? undefined,
             isFavorite: photoIsFavorite, data: bytes, cachedAt: Date.now(),
           });
         } catch { /* non-fatal */ }
