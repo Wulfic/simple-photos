@@ -172,7 +172,6 @@ export default function CompleteStep({
               api.admin.scanAndRegister()
                 .then((scanResult) => {
                   console.log("[Setup] Background scan complete:", scanResult);
-                  api.admin.triggerConvert().catch(() => {});
                 })
                 .catch((scanErr) => {
                   console.warn("[Setup] Scan failed — autoscan will catch files later:", scanErr);

@@ -1,8 +1,11 @@
-//! Photo management endpoints (photos table — used by autoscan and conversion pipeline).
+//! Photo management endpoints (photos table — used by autoscan pipeline).
 //!
 //! Covers listing (paginated, sorted by `taken_at`), registration from
-//! on-disk files, serving originals / thumbnails / web-previews,
-//! favorite toggling, and crop-metadata storage.
+//! on-disk files, serving originals / thumbnails, favorite toggling,
+//! and crop-metadata storage.
+//!
+//! All supported formats are browser-native, so `serve_web` simply serves
+//! the original file (no conversion pipeline or `.web_previews/` directory).
 //!
 //! `serve_photo` and `serve_web` support HTTP Range requests for video
 //! seeking and large-file download resumption.
@@ -205,9 +208,7 @@ fn check_etag(headers: &HeaderMap, etag: &str) -> Option<Response> {
 }
 
 /// GET /api/photos/:id/file
-/// Serve the **original** (unconverted) photo/video/audio file from disk.
-/// This always returns the original format — even after the background
-/// pipeline has generated a web-compatible copy in `.web_previews/`.
+/// Serve the **original** photo/video/audio file from disk.
 /// Supports HTTP Range requests for video seeking and download resumption.
 /// Returns ETag for caching; responds with 304 Not Modified on cache hit.
 pub async fn serve_photo(
@@ -348,9 +349,7 @@ pub async fn serve_thumbnail(
     let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&thumb_path);
 
-    // If thumbnail doesn't exist yet, return 202 Accepted to signal "pending"
-    // instead of falling back to the original file (which may be a raw format
-    // like CR2/HEVC that the browser cannot render).
+    // If thumbnail doesn't exist yet, return 202 Accepted to signal "pending".
     if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
         return Ok(Response::builder()
             .status(StatusCode::ACCEPTED)
@@ -386,28 +385,11 @@ pub async fn serve_thumbnail(
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }
 
-// DELETE /api/photos/:id is now handled by trash::handlers::soft_delete_photo
-// Photos are soft-deleted to the trash with a 30-day retention period.
-
-/// Returns the web preview file extension if this filename's format is not browser-native.
-/// Re-exported from scan module for consistency.
-fn needs_web_preview(filename: &str) -> Option<&'static str> {
-    super::scan::needs_web_preview(filename)
-}
-
 /// GET /api/photos/:id/web
-/// Serve a browser/Android-compatible version of the media.
+/// Serve a browser-compatible version of the media.
 ///
-/// If the format needs conversion (HEIC→JPEG, MKV→MP4, etc.) and the
-/// background pipeline has already generated a web preview in
-/// `.web_previews/`, serve the converted copy.  Otherwise, for
-/// browser-native formats, serve the original file directly.
-///
-/// Returns 202 "converting" if the web preview is needed but hasn't been
-/// generated yet (the pipeline will create it on its next cycle).
-///
-/// The original file is always preserved — use `/photos/:id/file` to
-/// download it in its original format.
+/// Since all supported formats are browser-native, this simply serves
+/// the original file directly (equivalent to `/photos/:id/file`).
 ///
 /// Supports HTTP Range requests for video seeking.
 pub async fn serve_web(
@@ -416,7 +398,7 @@ pub async fn serve_web(
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let (file_path, mime_type, filename, size_bytes): (String, String, String, i64) = sqlx::query_as(
+    let (file_path, mime_type, _filename, size_bytes): (String, String, String, i64) = sqlx::query_as(
         "SELECT file_path, mime_type, filename, size_bytes FROM photos WHERE id = ? AND user_id = ?",
     )
     .bind(&photo_id)
@@ -426,41 +408,6 @@ pub async fn serve_web(
     .ok_or(AppError::NotFound)?;
 
     let storage_root = (**state.storage_root.load()).clone();
-
-    // Check for a pre-generated web preview (non-browser-native formats)
-    if let Some(ext) = needs_web_preview(&filename) {
-        let preview_path =
-            storage_root.join(format!(".web_previews/{}.web.{}", photo_id, ext));
-        if tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
-            let meta = tokio::fs::metadata(&preview_path).await.map_err(|e| {
-                AppError::Internal(format!("Failed to read web preview metadata: {}", e))
-            })?;
-            let total_size = meta.len();
-            let content_type: &str = match ext {
-                "jpg" => "image/jpeg",
-                "png" => "image/png",
-                "mp3" => "audio/mpeg",
-                "mp4" => "video/mp4",
-                _ => "application/octet-stream",
-            };
-
-            let etag = format!("\"{}-web-{}\"", photo_id, total_size);
-            return serve_file_with_range(
-                &preview_path, total_size, content_type, &headers, Some(&etag),
-            ).await;
-        } else {
-            // Web preview needed but not generated yet — return 202 to signal
-            // "conversion in progress" instead of falling back to the raw file
-            // (which the browser likely cannot render).
-            return Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", HeaderValue::from_static("application/json"))
-                .body(Body::from(r#"{"status":"converting"}"#))
-                .map_err(|e| AppError::Internal(e.to_string()))?);
-        }
-    }
-
-    // Format is browser-native — serve the original file
     let full_path = storage_root.join(&file_path);
     let content_type = mime_type.as_str();
 

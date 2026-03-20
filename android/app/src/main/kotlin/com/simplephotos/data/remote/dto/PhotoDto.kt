@@ -212,28 +212,6 @@ data class SetAudioBackupRequest(
     @SerializedName("audio_backup_enabled") val audioBackupEnabled: Boolean
 )
 
-// ── Re-convert encrypted media ───────────────────────────────────────────────
-
-data class ReconvertRequest(
-    @SerializedName("key_hex") val keyHex: String
-)
-
-data class ReconvertResponse(
-    val message: String,
-    @SerializedName("needs_conversion") val needsConversion: Int
-)
-
-// ── Conversion status (polled for progress banners) ──────────────────────────
-
-data class ConversionStatusResponse(
-    @SerializedName("pending_conversions") val pendingConversions: Int,
-    @SerializedName("pending_awaiting_key") val pendingAwaitingKey: Int,
-    @SerializedName("missing_thumbnails") val missingThumbnails: Int,
-    val converting: Boolean,
-    @SerializedName("enc_missing_thumbs") val encMissingThumbs: Int = 0,
-    @SerializedName("key_available") val keyAvailable: Boolean = false
-)
-
 // ── SSL/TLS settings ─────────────────────────────────────────────────────────
 
 data class SslStatusResponse(

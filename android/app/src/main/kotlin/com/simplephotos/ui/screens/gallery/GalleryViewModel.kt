@@ -110,14 +110,6 @@ class GalleryViewModel @Inject constructor(
     var secureBlobIds by mutableStateOf(emptySet<String>())
         private set
 
-    // ── Conversion & migration status (polled every 3 seconds) ────
-    var conversionPending by mutableStateOf(0)
-        private set
-    var conversionMissingThumbs by mutableStateOf(0)
-        private set
-    var conversionActive by mutableStateOf(false)
-        private set
-
     // ── Multi-select state ────────────────────────────────────────
     var selectedIds by mutableStateOf(emptySet<String>())
         private set
@@ -139,21 +131,15 @@ class GalleryViewModel @Inject constructor(
                 error = "Init failed: ${e.message}"
             }
         }
-        // Start periodic polling for conversion & migration status (every 3s)
+        // Start periodic polling for secure gallery updates
         startActivityPolling()
     }
 
-    /** Poll the server every 3 seconds for conversion/migration progress. */
+    /** Poll the server every 3 seconds for secure gallery updates. */
     private fun startActivityPolling() {
         viewModelScope.launch {
             while (isActive) {
                 try {
-                    // Conversion status
-                    withContext(Dispatchers.IO) { photoRepository.getConversionStatus() }?.let { cs ->
-                        conversionPending = cs.pendingConversions
-                        conversionMissingThumbs = cs.missingThumbnails
-                        conversionActive = cs.converting
-                    }
                     // Refresh secure gallery blob IDs so photos moved to/from
                     // secure galleries on other devices are hidden/shown promptly.
                     try {

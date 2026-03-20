@@ -7,7 +7,6 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/auth";
 import { useThemeStore } from "../store/theme";
 import { useBackupStore } from "../store/backup";
-import { useActivityStore } from "../store/activity";
 import { clearKey } from "../crypto/crypto";
 import { api } from "../api/client";
 import AppIcon from "./AppIcon";
@@ -64,16 +63,8 @@ export default function AppHeader({
   const { username, refreshToken, logout: storeLogout, accessToken } = useAuthStore();
   const { theme, toggle: toggleTheme } = useThemeStore();
   const { backupServers, loaded: backupLoaded, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
-  const {
-    conversionPending, conversionMissingThumbs, conversionActive,
-  } = useActivityStore();
 
-  // Drive the profile ring directly from raw server-activity data so it
-  // stays spinning even when the banner has been dismissed.
-  const hasActivity =
-    conversionPending > 0 ||
-    conversionMissingThumbs > 0 ||
-    conversionActive;
+  const hasActivity = false;
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 

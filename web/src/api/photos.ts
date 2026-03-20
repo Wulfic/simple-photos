@@ -68,9 +68,8 @@ export const photosApi = {
   /** Get the URL for serving a plain photo thumbnail */
   thumbUrl: (photoId: string) => `${BASE}/photos/${photoId}/thumb`,
 
-  /** Get the URL for serving a browser-compatible version of the media.
-   *  For non-browser-native formats (HEIC, CR2, WMA, etc.), serves a
-   *  pre-converted web preview. For browser-native formats, serves the original. */
+  /** Get the URL for serving the media in a browser-compatible format.
+   *  Only browser-native formats are stored, so this serves the original file. */
   webUrl: (photoId: string) => `${BASE}/photos/${photoId}/web`,
 
   /** Build a web-media URL with an inline auth token.

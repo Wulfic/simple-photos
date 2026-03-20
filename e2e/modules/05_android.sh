@@ -60,7 +60,7 @@ AUTH="Authorization: Bearer $TOKEN"
 SCAN=$(curl -s --max-time 600 -X POST "$API/admin/photos/scan" -H "$AUTH")
 REGISTERED=$(echo "$SCAN" | jget registered 0)
 log "Scan: registered=$REGISTERED photos"
-wait_for_conversions "$API" "$AUTH" 60
+log "Scan complete"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODULE 1: APK BUILD VERIFICATION

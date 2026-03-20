@@ -7,7 +7,7 @@ A self-hosted photo & video library with always-on end-to-end encryption, multi-
 - **Self-hosted** — runs on your own server, your data stays yours
 - **End-to-end encryption** — always-on AES-256-GCM encryption with client-side key derivation
 - **Multi-platform** — Web (React/TypeScript) and Android (Kotlin/Compose) clients
-- **Photo & video support** — JPEG, PNG, HEIC, GIF, MP4, WebM, and more
+- **Photo & video support** — browser-native formats only (JPEG, PNG, GIF, WebP, AVIF, BMP, SVG, MP4, WebM, MP3, FLAC, OGG, WAV) — no FFmpeg or ImageMagick required
 - **Albums** — organize photos into albums with optional sharing between users
 - **Secure albums** — password-protected galleries for sensitive content
 - **Trash** — 30-day soft-delete with restore

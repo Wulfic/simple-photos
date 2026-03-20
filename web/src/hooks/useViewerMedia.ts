@@ -78,8 +78,6 @@ interface UseViewerMediaResult {
   setError: React.Dispatch<React.SetStateAction<string>>;
   videoError: boolean;
   setVideoError: React.Dispatch<React.SetStateAction<boolean>>;
-  isConverting: boolean;
-  setIsConverting: React.Dispatch<React.SetStateAction<boolean>>;
   loadEncryptedMedia: (blobId: string) => Promise<void>;
   preloadCacheRef: React.MutableRefObject<Map<string, PreloadEntry>>;
 }
@@ -95,13 +93,11 @@ export default function useViewerMedia(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [videoError, setVideoError] = useState(false);
-  const [isConverting, setIsConverting] = useState(false);
 
   /** Load an encrypted blob — check IndexedDB cache first, then decrypt */
   const loadEncryptedMedia = useCallback(async (blobId: string) => {
     setLoading(true);
     setError("");
-    setIsConverting(false);
     try {
       // Check IndexedDB full-photo cache for instant display
       const idbCached = await db.fullPhotos?.get(blobId);
@@ -250,7 +246,6 @@ export default function useViewerMedia(
     loading, setLoading,
     error, setError,
     videoError, setVideoError,
-    isConverting, setIsConverting,
     loadEncryptedMedia,
     preloadCacheRef: preloadCache,
   };

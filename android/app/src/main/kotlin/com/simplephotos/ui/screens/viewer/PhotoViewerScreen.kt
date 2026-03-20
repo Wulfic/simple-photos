@@ -186,7 +186,6 @@ fun PhotoViewerScreen(
     var activeVideoUri by remember { mutableStateOf<Uri?>(null) }
     // Track player errors at this level so the page can display them
     var sharedPlayerError by remember { mutableStateOf<String?>(null) }
-    var sharedPlayerConverting by remember { mutableStateOf(false) }
     DisposableEffect(sharedPlayer) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
@@ -480,7 +479,6 @@ fun PhotoViewerScreen(
                         // on every recomposition).
                         if (uri != activeVideoUri) {
                             sharedPlayerError = null
-                            sharedPlayerConverting = needsWebPreview(filename) != null
                             activeVideoUri = uri
 
                             // Evict only full-resolution viewer images from Coil's
@@ -514,7 +512,6 @@ fun PhotoViewerScreen(
                         }
                     },
                     playerError = sharedPlayerError,
-                    isConverting = sharedPlayerConverting,
                     onMediaSizeLoaded = { w, h ->
                         if (pagerState.currentPage == page) {
                             mediaIntrinsicWidth = w

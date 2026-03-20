@@ -68,7 +68,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `POST` | `/api/photos/upload` | Bearer | raw bytes; Headers: `X-Filename`, `X-Mime-Type` | **201** `{ photo_id, filename, file_path, size_bytes, photo_hash }` (or **200** with existing record if hash dedup matches) |
 | `GET` | `/api/photos/{id}/file` | Bearer | — | streaming file; supports Range, ETag, 304 |
 | `GET` | `/api/photos/{id}/thumb` | Bearer | — | `image/jpeg` stream; or **202** `{ status: "pending" }` |
-| `GET` | `/api/photos/{id}/web` | Bearer | — | web-compatible stream; or **202** `{ status: "converting" }` |
+| `GET` | `/api/photos/{id}/web` | Bearer | — | streaming file (same as `/file` — only browser-native formats are stored) |
 | `PUT` | `/api/photos/{id}/favorite` | Bearer | — | `{ id, is_favorite }` |
 | `PUT` | `/api/photos/{id}/crop` | Bearer | `{ crop_metadata?: string (JSON) }` | `{ id, crop_metadata }` |
 | `DELETE` | `/api/photos/{id}` | Bearer | — | **204** (soft-deletes to trash) |
@@ -90,11 +90,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `GET` | `/api/photos/{id}/copies` | Bearer | — | `{ copies: [{ id, name, edit_metadata, created_at }] }` |
 | `DELETE` | `/api/photos/{id}/copies/{copy_id}` | Bearer | — | `{ ok: true }` |
 
-### Conversion Status
 
-| Method | Path | Auth | Request Body | Response |
-|--------|------|------|-------------|----------|
-| `GET` | `/api/photos/conversion-status` | Bearer | — | `{ pending_conversions, pending_awaiting_key, missing_thumbnails, converting: bool, enc_missing_thumbs, key_available: bool }` |
 
 ---
 
@@ -239,7 +235,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 ## Admin — Encryption Key
 
-Encryption is always enabled (AES-256-GCM). The client derives a key from the user's credentials and sends it to the server so server-side operations (autoscan, conversion) can process photos autonomously.
+Encryption is always enabled (AES-256-GCM). The client derives a key from the user's credentials and sends it to the server so server-side operations (autoscan) can process photos autonomously.
 
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|
@@ -248,13 +244,6 @@ Encryption is always enabled (AES-256-GCM). The client derives a key from the us
 **Errors:** `400` invalid key format, `401`/`403` not admin.
 
 ---
-
-## Admin — Conversion
-
-| Method | Path | Auth | Request Body | Response |
-|--------|------|------|-------------|----------|
-| `POST` | `/api/admin/photos/convert` | Admin | — | **202** `{ message: "Conversion triggered" }` |
-| `POST` | `/api/admin/photos/reconvert` | Admin | `{ key_hex: string (64 hex) }` | **202** `{ message, needs_conversion }` |
 
 ---
 

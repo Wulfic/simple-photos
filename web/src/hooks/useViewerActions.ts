@@ -69,7 +69,6 @@ export default function useViewerActions({
   const navigate = useNavigate();
 
   const [showLeavePrompt, setShowLeavePrompt] = useState(false);
-  const [showDownloadDialog, setShowDownloadDialog] = useState(false);
   const [saveCopySuccess, setSaveCopySuccess] = useState(false);
 
   /** Build the edit metadata object from current edit state */
@@ -288,7 +287,6 @@ export default function useViewerActions({
   }, [mediaUrl, filename]);
 
   const handleDownloadOriginal = useCallback(async () => {
-    setShowDownloadDialog(false);
     if (!id) return;
     try {
       const { accessToken } = useAuthStore.getState();
@@ -308,22 +306,6 @@ export default function useViewerActions({
     }
   }, [id, filename]);
 
-  const handleDownloadConverted = useCallback(async () => {
-    setShowDownloadDialog(false);
-    if (!id) return;
-    const downloadName = filename;
-    try {
-      if (mediaUrl) {
-        // Use the already-decrypted blob URL
-        const a = document.createElement("a");
-        a.href = mediaUrl;
-        a.download = downloadName;
-        a.click();
-      }
-    } catch (err) {
-      console.error("[Viewer] Download converted failed:", err);
-    }
-  }, [id, mediaUrl, filename]);
 
   const handleToggleFavorite = useCallback(async () => {
     if (!id) return;
@@ -345,8 +327,6 @@ export default function useViewerActions({
   return {
     showLeavePrompt,
     setShowLeavePrompt,
-    showDownloadDialog,
-    setShowDownloadDialog,
     saveCopySuccess,
     buildEditMetadata,
     handleSaveEdit,
@@ -358,7 +338,6 @@ export default function useViewerActions({
     handleRemoveFromAlbum,
     handleDownload,
     handleDownloadOriginal,
-    handleDownloadConverted,
     handleToggleFavorite,
   };
 }

@@ -23,7 +23,7 @@ rm -f "$SERVER_DIR/data/db/"*
 # Clean server-managed subdirectories under internal storage, preserving any
 # manually placed test/sample files (e.g. existing.jpg in the root).
 echo "Cleaning internal storage (server-managed dirs only)..."
-for subdir in blobs metadata logs .thumbnails .web_previews; do
+for subdir in blobs metadata logs .thumbnails; do
     if [[ -d "$SERVER_DIR/data/storage/$subdir" ]]; then
         echo "  Removing $SERVER_DIR/data/storage/$subdir/..."
         rm -rf "$SERVER_DIR/data/storage/$subdir"
@@ -40,7 +40,7 @@ fi
 # Clean server-managed subdirectories under the storage root, preserving user photos
 if [[ -n "$STORAGE_ROOT" && -d "$STORAGE_ROOT" ]]; then
     echo "Cleaning storage root subdirectories in: $STORAGE_ROOT"
-    for subdir in blobs metadata logs .thumbnails .web_previews; do
+    for subdir in blobs metadata logs .thumbnails; do
         if [[ -d "$STORAGE_ROOT/$subdir" ]]; then
             echo "  Removing $STORAGE_ROOT/$subdir/..."
             rm -rf "$STORAGE_ROOT/$subdir"

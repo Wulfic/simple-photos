@@ -1,26 +1,35 @@
 //! Shared media file utilities — extension detection, MIME mapping.
 //!
 //! Used by both `photos` and `setup` modules to avoid duplication.
+//!
+//! Only browser-native formats are supported — no server-side conversion
+//! (FFmpeg / ImageMagick) is required. Every accepted file type is directly
+//! renderable by `<img>`, `<video>`, or `<audio>` elements.
 
-/// Valid media file extensions for scanning & import.
+/// Valid media file extensions — browser-native formats only.
 pub const MEDIA_EXTENSIONS: &[&str] = &[
-    // Images
-    "jpg", "jpeg", "png", "gif", "webp", "avif", "heic", "heif", "bmp", "tiff", "tif",
-    "svg", "dng", "cr2", "nef", "arw", "raw", "ico", "cur", "hdr",
-    // Videos
-    "mp4", "mov", "mkv", "webm", "avi", "3gp", "m4v", "wmv", "asf", "h264", "mpg", "mpeg",
-    // Audio
-    "mp3", "aiff", "flac", "ogg", "wav", "wma",
+    // Images (all natively renderable by modern browsers)
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "svg", "ico",
+    // Videos (universally playable in <video>)
+    "mp4", "webm",
+    // Audio (universally playable in <audio>)
+    "mp3", "flac", "ogg", "wav",
 ];
 
 /// Check whether a filename has a recognised media extension.
-/// O(n) linear scan is fine for ~40 extensions; only used during import scans,
+/// O(n) linear scan is fine for ~15 extensions; only used during import scans,
 /// not in hot request paths.
 pub fn is_media_file(name: &str) -> bool {
     let lower = name.to_lowercase();
     MEDIA_EXTENSIONS
         .iter()
         .any(|ext| lower.ends_with(&format!(".{}", ext)))
+}
+
+/// Returns `true` when the filename extension is a supported media format.
+pub fn is_supported_extension(name: &str) -> bool {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    MEDIA_EXTENSIONS.contains(&ext.as_str())
 }
 
 /// Map a filename extension to its MIME type.
@@ -32,32 +41,15 @@ pub fn mime_from_extension(name: &str) -> &'static str {
         "gif" => "image/gif",
         "webp" => "image/webp",
         "avif" => "image/avif",
-        "heic" => "image/heic",
-        "heif" => "image/heif",
         "bmp" => "image/bmp",
-        "tiff" | "tif" => "image/tiff",
         "svg" => "image/svg+xml",
         "ico" => "image/x-icon",
-        "cur" => "image/x-icon",
-        "hdr" => "image/vnd.radiance",
         "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        "mkv" => "video/x-matroska",
         "webm" => "video/webm",
-        "avi" => "video/x-msvideo",
-        "3gp" => "video/3gpp",
-        "m4v" => "video/x-m4v",
-        "wmv" => "video/x-ms-wmv",
-        "asf" => "video/x-ms-asf",
-        // Raw codec formats
-        "h264" => "video/h264",
-        "mpg" | "mpeg" => "video/mpeg",
         "mp3" => "audio/mpeg",
-        "aiff" => "audio/aiff",
         "flac" => "audio/flac",
         "ogg" => "audio/ogg",
         "wav" => "audio/wav",
-        "wma" => "audio/x-ms-wma",
         // Unknown extension — return generic binary MIME type
         _ => "application/octet-stream",
     }

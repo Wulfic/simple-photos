@@ -8,7 +8,7 @@
 #   3.  Auth (login, register, refresh, logout, password, 2FA)
 #   4.  Admin user management
 #   5.  Admin config (storage, port, SSL)
-#   6.  Photo scan & conversion
+#   6.  Photo scan
 #   7.  Photos (list, serve, favorite, crop, metadata)
 #   8.  Tags & search
 #   9.  Photo copies & duplicates
@@ -329,12 +329,12 @@ SSL_RESP=$(curl -s --max-time 10 "$API/admin/ssl" -H "$AUTH")
 assert_json "SSL is disabled" "$SSL_RESP" "enabled" "false"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODULE 6: PHOTO SCAN & CONVERSION
+# MODULE 6: PHOTO SCAN
 # ══════════════════════════════════════════════════════════════════════════════
-hdr "Module 6: Photo Scan & Conversion"
+hdr "Module 6: Photo Scan"
 
 subhdr "Trigger Photo Scan"
-log "Scan may take several minutes (FFmpeg thumbnails for videos)..."
+log "Scanning photos..."
 SCAN=$(curl -s --max-time "$CURL_LONG_MAX_TIME" -X POST "$API/admin/photos/scan" -H "$AUTH")
 log "Scan result: ${SCAN:0:200}"
 REGISTERED=$(echo "$SCAN" | jget registered 0)
@@ -355,7 +355,7 @@ except:
 # Count the expected media files by scanning the configured storage root for
 # files whose extensions match the server's MEDIA_EXTENSIONS list.  This makes
 # the test independent of the chosen directory — it adapts automatically.
-MEDIA_EXT_PATTERN='\.(jpg|jpeg|png|gif|webp|avif|heic|heif|bmp|tiff|tif|svg|dng|cr2|nef|arw|raw|ico|cur|hdr|mp4|mov|mkv|webm|avi|3gp|m4v|wmv|asf|h264|mpg|mpeg|mp3|aiff|flac|ogg|wav|wma)$'
+MEDIA_EXT_PATTERN='\.(jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|mp4|webm|mp3|flac|ogg|wav)$'
 EXPECTED_MEDIA=$(find "$CURRENT_STORAGE" -type f -not -path '*/\.*' 2>/dev/null \
   | grep -ciE "$MEDIA_EXT_PATTERN" || echo 0)
 log "Expected media files in storage root: $EXPECTED_MEDIA"
@@ -403,19 +403,6 @@ if [[ "$BAD_PATHS" -eq 0 ]]; then
 else
   fail "Found $BAD_PATHS file(s) with absolute or path-traversal file_path values"
 fi
-
-subhdr "Conversion Status"
-CONV=$(curl -s --max-time 10 "$API/photos/conversion-status" -H "$AUTH")
-assert_contains "Conversion status has pending_conversions field" "$CONV" "pending_conversions"
-assert_contains "Conversion status has converting field" "$CONV" "converting"
-assert_contains "Conversion status has missing_thumbnails field" "$CONV" "missing_thumbnails"
-
-subhdr "Trigger Convert"
-TRIGGER_CONV=$(curl -s --max-time 10 -X POST "$API/admin/photos/convert" -H "$AUTH")
-assert_contains "Convert trigger accepted" "$TRIGGER_CONV" "message"
-
-subhdr "Wait for Conversions (up to 3 min)"
-wait_for_conversions "$API" "$AUTH" 180
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MODULE 7: PHOTOS (List, Serve, Favorite, Crop, Metadata)
@@ -1308,16 +1295,6 @@ if echo "$ENC_SYNC" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/
   pass "Encrypted sync returns valid JSON"
 else
   warn "Encrypted sync response: ${ENC_SYNC:0:100}"
-fi
-
-subhdr "Reconvert Trigger"
-RECONVERT_STATUS=$(http_status -X POST "$API/admin/photos/reconvert" \
-  -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"key_hex":"0000000000000000000000000000000000000000000000000000000000000000"}')
-if [[ "$RECONVERT_STATUS" == "200" || "$RECONVERT_STATUS" == "202" || "$RECONVERT_STATUS" == "400" || "$RECONVERT_STATUS" == "404" ]]; then
-  pass "Reconvert trigger responds as expected (HTTP $RECONVERT_STATUS)"
-else
-  fail "Reconvert returned unexpected status: $RECONVERT_STATUS"
 fi
 
 subhdr "Setup Discover"

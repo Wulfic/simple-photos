@@ -123,10 +123,6 @@ class SettingsViewModel @Inject constructor(
     var scanning by mutableStateOf(false)
     var scanResult by mutableStateOf<String?>(null)
 
-    // Re-convert encrypted media
-    var reconverting by mutableStateOf(false)
-    var reconvertResult by mutableStateOf<String?>(null)
-
     init {
         viewModelScope.launch {
             val prefs = dataStore.data.first()
@@ -435,31 +431,6 @@ class SettingsViewModel @Inject constructor(
                 error = "Scan failed: ${e.message}"
             }
             scanning = false
-        }
-    }
-
-    // ── Re-convert encrypted media ───────────────────────────────────────
-
-    fun triggerReconvert() {
-        viewModelScope.launch {
-            reconverting = true
-            reconvertResult = null
-            error = null
-            try {
-                val keyHex = withContext(Dispatchers.IO) { keyManager.getKeyHex() }
-                if (keyHex == null) {
-                    error = "Encryption key not available. Please log out and log back in."
-                    reconverting = false
-                    return@launch
-                }
-                val res = withContext(Dispatchers.IO) {
-                    api.triggerReconvert(com.simplephotos.data.remote.dto.ReconvertRequest(keyHex))
-                }
-                reconvertResult = res.message
-            } catch (e: Exception) {
-                error = "Re-conversion failed: ${e.message}"
-            }
-            reconverting = false
         }
     }
 
@@ -1022,42 +993,6 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color(0xFF22C55E)
                         )
-                    }
-                }
-            }
-
-            // ── Re-convert Encrypted Media (admin) ──────────────────────
-            if (viewModel.isAdmin) {
-                SettingsCard(title = "Re-convert Media", icon = Icons.Default.Sync) {
-                    Text(
-                        "Convert encrypted videos and images to web-compatible formats (MP4, JPEG). " +
-                        "Required for video playback on mobile devices.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (viewModel.reconvertResult != null) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            viewModel.reconvertResult!!,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = { viewModel.triggerReconvert() },
-                        enabled = !viewModel.reconverting,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (viewModel.reconverting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                            Spacer(Modifier.width(8.dp))
-                        }
-                        Text(if (viewModel.reconverting) "Starting…" else "Re-convert Encrypted Media")
                     }
                 }
             }

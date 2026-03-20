@@ -11,7 +11,6 @@
 //!    - Backup server sync (hourly check per server frequency)
 //!    - Storage auto-scan (configurable interval)
 //!    - UDP broadcast for LAN backup-server discovery
-//!    - Media format conversion (on-demand via Notify + 60 s poll)
 //! 4. Build the Axum router with all API routes, middleware, and static
 //!    file serving
 //! 5. Bind to HTTP or HTTPS (if TLS configured) and start accepting
@@ -216,24 +215,9 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Spawn background task for media format conversion (MKV, AVI, HEIC, etc. → browser-native).
-    // Converts non-web-native formats to JPEG/WebP/MP4 so they can play in the browser.
-    // Wakes on-demand via `convert_notify` (e.g. after upload/scan) or polls every 60s.
-    let convert_notify = Arc::new(tokio::sync::Notify::new());
-    let conversion_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // No background conversion task — all supported formats are browser-native.
     let encryption_key: Arc<tokio::sync::RwLock<Option<[u8; 32]>>> = Arc::new(tokio::sync::RwLock::new(None));
     let scan_lock: Arc<tokio::sync::Mutex<()>> = Arc::new(tokio::sync::Mutex::new(()));
-    {
-        let pool_clone = pool.clone();
-        let read_pool_clone = read_pool.clone();
-        let storage_root_clone = config.storage.root.clone();
-        let notify_clone = convert_notify.clone();
-        let active_clone = conversion_active.clone();
-        let key_clone = encryption_key.clone();
-        tokio::spawn(async move {
-            photos::convert::background_convert_task(pool_clone, read_pool_clone, storage_root_clone, 60, notify_clone, active_clone, key_clone).await;
-        });
-    }
 
     // Spawn background task for auto-scanning storage directory.
     // Passes the ArcSwap<PathBuf> so the task always reads the *current*
@@ -243,14 +227,12 @@ async fn main() -> anyhow::Result<()> {
         let pool_clone = pool.clone();
         let storage_swap_clone = storage_root_swap.clone();
         let scan_interval = config.scan.auto_scan_interval_secs;
-        let convert_notify_clone = convert_notify.clone();
         let scan_lock_clone = scan_lock.clone();
         tokio::spawn(async move {
             backup::autoscan::background_auto_scan_task(
                 pool_clone,
                 storage_swap_clone,
                 scan_interval,
-                convert_notify_clone,
                 scan_lock_clone,
             ).await;
         });
@@ -265,8 +247,6 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         rate_limiters,
         storage_root: storage_root_swap,
-        convert_notify,
-        conversion_active,
         encryption_key,
         scan_lock,
     };
@@ -351,12 +331,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Scan & register all files on disk
         .route("/admin/photos/scan", post(photos::scan::scan_and_register))
-        // Trigger immediate background conversion pass
-        .route("/admin/photos/convert", post(photos::convert::trigger_convert))
-        // Supply encryption key and trigger re-conversion of encrypted blobs
-        .route("/admin/photos/reconvert", post(photos::convert::trigger_reconvert))
-        // Check conversion progress (pending items count) — available to any authenticated user
-        .route("/photos/conversion-status", get(photos::convert::conversion_status))
         // Store encryption key so server-side operations can encrypt autonomously
         .route("/admin/encryption/store-key", post(photos::encryption::store_encryption_key))
         // Secure galleries

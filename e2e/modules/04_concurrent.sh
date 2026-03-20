@@ -148,16 +148,14 @@ if [[ "$EXISTING_PHOTOS" -gt 0 ]]; then
     -H "Authorization: Bearer ${TOKENS[0]}")
   REGISTERED=$(echo "$SCAN" | jget registered 0)
   log "Scan result: registered=$REGISTERED"
-  # Only wait briefly since photos already exist and conversions likely done
-  wait_for_conversions "$MAIN_API" "Authorization: Bearer ${TOKENS[0]}" 15
+  log "Photos already scanned — skipping wait"
 else
   log "Scanning photos..."
   SCAN=$(curl -s --max-time 600 -X POST "$MAIN_API/admin/photos/scan" \
     -H "Authorization: Bearer ${TOKENS[0]}")
   REGISTERED=$(echo "$SCAN" | jget registered 0)
   log "Scan result: registered=$REGISTERED"
-  # Full wait for conversions (up to 60s)
-  wait_for_conversions "$MAIN_API" "Authorization: Bearer ${TOKENS[0]}" 60
+  log "Scan complete"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -346,16 +344,7 @@ except: print('')
       fi
     fi
 
-    # ── 6. Conversion status (read-heavy) ──
-    status=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$CONCURRENT_MAX_TIME" \
-      "$MAIN_API/photos/conversion-status" -H "$auth")
-    ((requests++))
-    if [[ "$status" != "200" ]]; then
-      echo "FAIL round=$round op=conversion_status status=$status" >> "$result_file"
-      ((errors++))
-    fi
-
-    # ── 7. Health check ──
+    # ── 6. Health check ──
     status=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$CONCURRENT_MAX_TIME" \
       "$MAIN_BASE/health")
     ((requests++))

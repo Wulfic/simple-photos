@@ -58,7 +58,7 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     startTask("upload");
     setError("");
 
-    const IMAGE_VIDEO_EXTENSIONS = /\.(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?|dng|cr2|nef|arw|orf|rw2|ico|cur|hdr|svg|mp4|mov|avi|mkv|webm|m4v|3gp|wmv|asf|h264|mpg|mpeg|mp3|aiff|flac|ogg|wav|wma)$/i;
+    const IMAGE_VIDEO_EXTENSIONS = /\.(jpe?g|png|gif|webp|avif|bmp|ico|svg|mp4|webm|mp3|flac|ogg|wav)$/i;
     const fileArray = Array.from(files).filter(
       (f) => f.type.startsWith("image/") || f.type.startsWith("video/") || f.type.startsWith("audio/") || IMAGE_VIDEO_EXTENSIONS.test(f.name)
     );
@@ -73,8 +73,6 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
       }
       setUploadProgress({ done: fileArray.length, total: fileArray.length });
       await loadEncryptedPhotos();
-      // Trigger immediate conversion pass in case any uploads need web previews
-      api.admin.triggerConvert().catch(() => {});
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
