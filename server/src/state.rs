@@ -7,8 +7,6 @@ use arc_swap::ArcSwap;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-
 use crate::config::AppConfig;
 use crate::ratelimit::RateLimiters;
 
@@ -34,10 +32,6 @@ pub struct AppState {
     /// update, which is extremely rare). Every handler reads this on
     /// every request, so avoiding the async RwLock overhead matters.
     pub storage_root: Arc<ArcSwap<PathBuf>>,
-    /// Temporarily holds the AES-256 encryption key during and shortly after
-    /// migration, so the server can decrypt encrypted blobs when needed.
-    /// Cleared automatically after a grace period.
-    pub encryption_key: Arc<RwLock<Option<[u8; 32]>>>,
     /// Mutex to serialize scan operations (manual scan, auto-scan, background
     /// autoscan).  Prevents concurrent scans from racing and creating
     /// duplicate photo entries even when the DB UNIQUE constraint exists.
