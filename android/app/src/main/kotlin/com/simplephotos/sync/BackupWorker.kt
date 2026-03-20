@@ -35,9 +35,9 @@ import java.io.InputStream
  *
  * 1. Scan MediaStore for new media in user-selected folders.
  * 2. Reset any uploads stuck at UPLOADING (from a previous crash).
- * 3. Deduplicate by server filename (plain mode) and content hash (both modes).
+ * 3. Deduplicate by content hash.
  * 4. Generate JPEG thumbnails (256×256) for each new item.
- * 5. Upload via [PhotoRepository] in the appropriate encryption mode.
+ * 5. Upload via [PhotoRepository] in encrypted mode.
  * 6. Re-register the reactive MediaStore content-URI observer for next trigger.
  *
  * Retries on failure using WorkManager's exponential backoff.
@@ -79,34 +79,7 @@ class BackupWorker @AssistedInject constructor(
             // Step 3: Mark exhausted queue entries as failed
             db.blobQueueDao().markExhaustedAsFailed()
 
-            // Step 4: Fetch the set of filenames already on the server so we
-            // can skip re-uploading photos that are already backed up.
-            val mode = try {
-                photoRepository.getEncryptionMode()
-            } catch (e: Exception) {
-                diag.error(TAG, "Failed to get encryption mode from server: ${e.message}", mapOf(
-                    "exception" to (e::class.simpleName ?: "Unknown")
-                ))
-                throw e
-            }
-            diag.info(TAG, "Encryption mode: $mode")
-
-            val serverFilenames: Set<String> = if (mode == "plain") {
-                try {
-                    val names = photoRepository.getServerFilenames()
-                    diag.info(TAG, "Fetched ${names.size} existing filenames from server")
-                    names
-                } catch (e: Exception) {
-                    diag.error(TAG, "Failed to fetch server filenames: ${e.message}", mapOf(
-                        "exception" to (e::class.simpleName ?: "Unknown")
-                    ))
-                    emptySet()
-                }
-            } else {
-                emptySet() // encrypted mode uses blob IDs, not filenames
-            }
-
-            // Step 5: Process photos that need uploading:
+            // Step 4: Process photos that need uploading:
             //   - PENDING (newly scanned or manually imported)
             //   - FAILED  (previous attempt hit an error — retry)
             val pending = db.photoDao().getByStatus(SyncStatus.PENDING) +
@@ -116,10 +89,7 @@ class BackupWorker @AssistedInject constructor(
             // previous successful upload (shouldn't normally happen, but guards
             // against edge cases where status was reset despite a completed upload)
             val genuinelyPending = pending.filter { photo ->
-                val alreadyUploaded = when (mode) {
-                    "plain" -> photo.serverPhotoId != null
-                    else -> photo.serverBlobId != null
-                }
+                val alreadyUploaded = photo.serverBlobId != null
                 if (alreadyUploaded) {
                     diag.debug(TAG, "Skipping ${photo.filename} — already has server ID", mapOf(
                         "localId" to photo.localId,
@@ -146,19 +116,6 @@ class BackupWorker @AssistedInject constructor(
             var failed = 0
 
             for (photo in genuinelyPending) {
-                // ── Server-side dedup ──────────────────────────────────
-                // If the server already has a photo with this exact filename,
-                // mark it SYNCED locally and skip the upload entirely.
-                if (mode == "plain" && photo.filename in serverFilenames) {
-                    diag.debug(TAG, "Skipping ${photo.filename} — already exists on server", mapOf(
-                        "localId" to photo.localId,
-                        "filename" to photo.filename
-                    ))
-                    db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
-                    skipped++
-                    continue
-                }
-
                 val localPath = photo.localPath
                 if (localPath == null) {
                     diag.warn(TAG, "Photo has no localPath, skipping", mapOf(
@@ -183,7 +140,7 @@ class BackupWorker @AssistedInject constructor(
                     }
                     val photoData = inputStream.use { it.readBytes() }
 
-                    // ── Content hash dedup (both modes) ─────────────────────
+                    // ── Content hash dedup ─────────────────────────────
                     // Compute a short content hash and check if we've already
                     // uploaded identical content in this session or a previous one.
                     val contentHash = java.security.MessageDigest.getInstance("SHA-256")
@@ -264,44 +221,27 @@ class BackupWorker @AssistedInject constructor(
                         db.photoDao().updateThumbnailPath(photo.localId, thumbPath)
                     }
 
-                    // Upload based on encryption mode
-                    if (mode == "plain") {
-                        // Plain mode sends raw bytes — thumbnail is NOT required
-                        diag.info(TAG, "Uploading photo (plain mode)", mapOf(
+                    // Upload (encrypted mode bundles thumbnail inside the
+                    // encrypted payload, so we must have a thumbnail to proceed)
+                    if (thumbnailData != null) {
+                        diag.info(TAG, "Uploading photo (encrypted)", mapOf(
                             "localId" to photo.localId,
                             "filename" to photo.filename,
                             "sizeBytes" to photoData.size.toString()
                         ))
-                        photoRepository.uploadPhotoPlain(photo, photoData)
+                        photoRepository.uploadPhoto(photo, photoData, thumbnailData)
                         uploadedHashes.add(contentHash)
-                        diag.info(TAG, "Upload succeeded (plain mode)", mapOf(
+                        diag.info(TAG, "Upload succeeded", mapOf(
                             "localId" to photo.localId,
                             "filename" to photo.filename
                         ))
                         uploaded++
                     } else {
-                        // Encrypted mode bundles thumbnail inside the encrypted payload,
-                        // so we must have a thumbnail to proceed.
-                        if (thumbnailData != null) {
-                            diag.info(TAG, "Uploading photo (encrypted mode)", mapOf(
-                                "localId" to photo.localId,
-                                "filename" to photo.filename,
-                                "sizeBytes" to photoData.size.toString()
-                            ))
-                            photoRepository.uploadPhoto(photo, photoData, thumbnailData)
-                            uploadedHashes.add(contentHash)
-                            diag.info(TAG, "Upload succeeded (encrypted mode)", mapOf(
-                                "localId" to photo.localId,
-                                "filename" to photo.filename
-                            ))
-                            uploaded++
-                        } else {
-                            diag.warn(TAG, "Skipping upload — encrypted mode requires thumbnail", mapOf(
-                                "localId" to photo.localId,
-                                "filename" to photo.filename
-                            ))
-                            failed++
-                        }
+                        diag.warn(TAG, "Skipping upload — requires thumbnail", mapOf(
+                            "localId" to photo.localId,
+                            "filename" to photo.filename
+                        ))
+                        failed++
                     }
                 } catch (e: Exception) {
                     diag.error(TAG, "Upload failed: ${e.message}", mapOf(
@@ -311,7 +251,7 @@ class BackupWorker @AssistedInject constructor(
                         "errorDetail" to (e.message ?: "no message")
                     ))
                     failed++
-                    // uploadPhotoPlain / uploadPhoto already set FAILED status internally
+                    // uploadPhoto already sets FAILED status internally
                 }
             }
 

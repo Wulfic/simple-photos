@@ -10,7 +10,6 @@ export interface CompleteStepProps {
   loading: boolean;
   setLoading: (v: boolean) => void;
   error: string;
-  encryptionMode: "plain" | "encrypted";
   createdUsers: CreatedUser[];
   serverPort: number;
   originalPort: number;
@@ -24,7 +23,6 @@ export default function CompleteStep({
   setError,
   loading,
   setLoading,
-  encryptionMode,
   createdUsers,
   serverPort,
   originalPort,
@@ -91,7 +89,7 @@ export default function CompleteStep({
             <div className="flex items-center gap-2">
               <span className="text-green-600 dark:text-green-400">{"\u2713"}</span>
               <span className="text-gray-700 dark:text-gray-300">
-                Storage: {encryptionMode === "encrypted" ? "All photos encrypted" : "Standard (unencrypted)"}
+                Storage: All photos encrypted
               </span>
             </div>
           </>
@@ -181,17 +179,15 @@ export default function CompleteStep({
                   console.warn("[Setup] Scan failed — autoscan will catch files later:", scanErr);
                 });
 
-              // Set the encryption mode on the server, including the encryption
-              // key so the server can run migration autonomously (even if the
-              // browser is closed immediately after this point).
-              // Re-read sp_key immediately before sending to ensure it's available.
-              const keyHex = encryptionMode === "encrypted"
-                ? sessionStorage.getItem("sp_key") ?? undefined
-                : undefined;
-              if (encryptionMode === "encrypted" && !keyHex) {
+              // Store the encryption key on the server so it can run
+              // auto-migration and autoscan autonomously.
+              const keyHex = sessionStorage.getItem("sp_key") ?? undefined;
+              if (!keyHex) {
                 console.error("[Setup] Encryption key missing from sessionStorage! Key derivation may have failed.");
               }
-              await api.encryption.setMode(encryptionMode, keyHex);
+              if (keyHex) {
+                await api.encryption.storeKey(keyHex);
+              }
             } catch (err: unknown) {
               // Non-fatal: mode may already be set or endpoint unavailable
               console.warn("Setup finalization:", err);

@@ -18,21 +18,6 @@ pub async fn cleanup_status(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Only meaningful in encrypted mode
-    let mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or_else(|| "plain".to_string());
-
-    if mode != "encrypted" {
-        return Ok(Json(serde_json::json!({
-            "cleanable_count": 0,
-            "cleanable_bytes": 0i64,
-        })));
-    }
-
     // Photos that are encrypted AND still have a non-empty file_path
     let row: (i64, i64) = sqlx::query_as(
         "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) \
@@ -59,31 +44,19 @@ pub async fn cleanup_plain_files(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Only allowed in encrypted mode
-    let mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
+    // Proceed with cleanup — server is always in encrypted mode.
+    // Check if a background migration is still running (in-process flag)
+    let unencrypted_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE user_id = ? AND encrypted_blob_id IS NULL",
     )
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or_else(|| "plain".to_string());
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
 
-    if mode != "encrypted" {
+    if unencrypted_count > 0 {
         return Err(AppError::BadRequest(
-            "Cleanup is only available in encrypted mode".into(),
-        ));
-    }
-
-    // Ensure no migration is in progress
-    let mig_status: String = sqlx::query_scalar(
-        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .unwrap_or_else(|| "idle".to_string());
-
-    if mig_status != "idle" {
-        return Err(AppError::BadRequest(
-            "Cannot clean up while a migration is in progress".into(),
+            "Cannot clean up while unencrypted photos still exist. Wait for migration to complete.".into(),
         ));
     }
 

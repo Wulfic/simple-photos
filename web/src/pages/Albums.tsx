@@ -30,7 +30,6 @@ export default function Albums() {
   const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
-  const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted" | null>(null);
   const navigate = useNavigate();
 
   // Shared albums state
@@ -42,14 +41,6 @@ export default function Albums() {
   const [sharePickerAlbumId, setSharePickerAlbumId] = useState<string | null>(null);
   const [confirmDeleteSharedId, setConfirmDeleteSharedId] = useState<string | null>(null);
 
-  // Smart/default album counts + first photo ID for cover thumbnail
-  const [plainPhotoCounts, setPlainPhotoCounts] = useState<{
-    all: number; favorites: number; photos: number; gifs: number; videos: number; audio: number;
-  } | null>(null);
-  const [plainFirstIds, setPlainFirstIds] = useState<{
-    favorites?: string; photos?: string; gifs?: string; videos?: string; audio?: string;
-  }>({});
-
   // Encrypted photos from IndexedDB (for smart album counts)
   const encryptedPhotos = useLiveQuery(() => db.photos.toArray());
 
@@ -58,45 +49,7 @@ export default function Albums() {
   useEffect(() => {
     loadAlbums();
     loadSharedAlbums();
-    loadEncryptionMode();
   }, []);
-
-  async function loadEncryptionMode() {
-    try {
-      const settings = await api.encryption.getSettings();
-      const mode = settings.encryption_mode as "plain" | "encrypted";
-      setEncryptionMode(mode);
-
-      // If plain mode, also load photo counts + first photo IDs for smart albums
-      if (mode === "plain") {
-        const allPhotos: Array<{ id: string; media_type: string; is_favorite: boolean }> = [];
-        let cursor: string | undefined;
-        do {
-          const res = await api.photos.list({ after: cursor, limit: 200 });
-          allPhotos.push(...res.photos);
-          cursor = res.next_cursor ?? undefined;
-        } while (cursor);
-        setPlainPhotoCounts({
-          all: allPhotos.length,
-          favorites: allPhotos.filter(p => p.is_favorite).length,
-          photos: allPhotos.filter(p => p.media_type === "photo" || p.media_type === "gif").length,
-          gifs: allPhotos.filter(p => p.media_type === "gif").length,
-          videos: allPhotos.filter(p => p.media_type === "video").length,
-          audio: allPhotos.filter(p => p.media_type === "audio").length,
-        });
-        setPlainFirstIds({
-          favorites: allPhotos.find(p => p.is_favorite)?.id,
-          photos: allPhotos.find(p => p.media_type === "photo" || p.media_type === "gif")?.id,
-          gifs: allPhotos.find(p => p.media_type === "gif")?.id,
-          videos: allPhotos.find(p => p.media_type === "video")?.id,
-          audio: allPhotos.find(p => p.media_type === "audio")?.id,
-        });
-      }
-    } catch {
-      // Fallback — assume encrypted
-      setEncryptionMode("encrypted");
-    }
-  }
 
   // Compute encrypted smart album counts + first thumbnails from IndexedDB
   const encryptedPhotoCounts = encryptedPhotos ? {
@@ -297,37 +250,32 @@ export default function Albums() {
         {/* ── Smart albums pinned at top ────────────────────────────────── */}
         <SmartAlbumCard
           label="Favorites"
-          count={encryptionMode === "plain" ? (plainPhotoCounts?.favorites ?? 0) : (encryptedPhotoCounts?.favorites ?? 0)}
-          plainThumbId={encryptionMode === "plain" ? plainFirstIds.favorites : undefined}
-          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.favorites : undefined}
+          count={encryptedPhotoCounts?.favorites ?? 0}
+          encryptedThumbData={encryptedFirstThumbs.favorites}
           onClick={() => navigate("/albums/smart-favorites")}
         />
         <SmartAlbumCard
           label="Photos"
-          count={encryptionMode === "plain" ? (plainPhotoCounts?.photos ?? 0) : (encryptedPhotoCounts?.photos ?? 0)}
-          plainThumbId={encryptionMode === "plain" ? plainFirstIds.photos : undefined}
-          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.photos : undefined}
+          count={encryptedPhotoCounts?.photos ?? 0}
+          encryptedThumbData={encryptedFirstThumbs.photos}
           onClick={() => navigate("/albums/smart-photos")}
         />
         <SmartAlbumCard
           label="GIFs"
-          count={encryptionMode === "plain" ? (plainPhotoCounts?.gifs ?? 0) : (encryptedPhotoCounts?.gifs ?? 0)}
-          plainThumbId={encryptionMode === "plain" ? plainFirstIds.gifs : undefined}
-          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.gifs : undefined}
+          count={encryptedPhotoCounts?.gifs ?? 0}
+          encryptedThumbData={encryptedFirstThumbs.gifs}
           onClick={() => navigate("/albums/smart-gifs")}
         />
         <SmartAlbumCard
           label="Videos"
-          count={encryptionMode === "plain" ? (plainPhotoCounts?.videos ?? 0) : (encryptedPhotoCounts?.videos ?? 0)}
-          plainThumbId={encryptionMode === "plain" ? plainFirstIds.videos : undefined}
-          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.videos : undefined}
+          count={encryptedPhotoCounts?.videos ?? 0}
+          encryptedThumbData={encryptedFirstThumbs.videos}
           onClick={() => navigate("/albums/smart-videos")}
         />
         <SmartAlbumCard
           label="Audio"
-          count={encryptionMode === "plain" ? (plainPhotoCounts?.audio ?? 0) : (encryptedPhotoCounts?.audio ?? 0)}
-          plainThumbId={encryptionMode === "plain" ? plainFirstIds.audio : undefined}
-          encryptedThumbData={encryptionMode === "encrypted" ? encryptedFirstThumbs.audio : undefined}
+          count={encryptedPhotoCounts?.audio ?? 0}
+          encryptedThumbData={encryptedFirstThumbs.audio}
           onClick={() => navigate("/albums/smart-audio")}
         />
 

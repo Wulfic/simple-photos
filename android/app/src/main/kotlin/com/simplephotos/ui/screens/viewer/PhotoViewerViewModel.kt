@@ -30,7 +30,7 @@ import javax.inject.Inject
 /**
  * ViewModel for the full-screen photo/video viewer with horizontal paging.
  *
- * Handles: encrypted blob download & decryption, tags (plain mode), favorites,
+ * Handles: encrypted blob download & decryption, favorites,
  * crop/brightness metadata, photo duplication ("Save Copy"), and album removal.
  * Supports memory-efficient streaming decryption to temp files for large videos.
  */
@@ -60,9 +60,6 @@ class PhotoViewerViewModel @Inject constructor(
     var listLoading by mutableStateOf(true)
         private set
 
-    var encryptionMode by mutableStateOf("plain")
-        private set
-
     var serverBaseUrl by mutableStateOf("")
         private set
 
@@ -89,7 +86,6 @@ class PhotoViewerViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
-                encryptionMode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
 
                 val photos = if (albumId != null) {
                     // Album context: load only photos in this album
@@ -178,20 +174,9 @@ class PhotoViewerViewModel @Inject constructor(
         }
     }
 
-    /** Load tags for a specific photo (called when page changes). */
+    /** Load tags for a specific photo — no-op in encrypted mode. */
     fun loadTagsForPhoto(photoId: String?) {
-        if (photoId == null || encryptionMode != "plain") return
-        viewModelScope.launch {
-            try {
-                val response = withContext(Dispatchers.IO) { tagRepository.getPhotoTags(photoId) }
-                currentTags = response.tags
-                // Also refresh all-tags list
-                val tagsResponse = withContext(Dispatchers.IO) { tagRepository.listTags() }
-                allTags = tagsResponse.tags
-            } catch (_: Exception) {
-                currentTags = emptyList()
-            }
-        }
+        // Tags are not supported in always-encrypted mode
     }
 
     /** Add a tag to the current photo. */
@@ -224,13 +209,9 @@ class PhotoViewerViewModel @Inject constructor(
         }
     }
 
-    /** Load favorite state for a specific photo (called when page changes). */
+    /** Load favorite state for a specific photo — no-op in encrypted mode. */
     fun loadFavoriteForPhoto(photoId: String?) {
-        if (photoId == null || encryptionMode != "plain") return
-        // Read from the local allPhotos list (already loaded from DB) instead
-        // of fetching up to 500 DTOs from the server on every page swipe.
-        val photo = allPhotos.find { it.serverPhotoId == photoId }
-        isFavorite = photo?.isFavorite ?: false
+        // Favorites are not supported in always-encrypted mode
     }
 
     /** Toggle the favorite state of the current photo. */
@@ -255,13 +236,7 @@ class PhotoViewerViewModel @Inject constructor(
     fun saveCropMetadata(photo: PhotoEntity, metadata: String?) {
         viewModelScope.launch {
             try {
-                if (encryptionMode == "plain" && photo.serverPhotoId != null) {
-                    // Plain mode: save to server
-                    withContext(Dispatchers.IO) {
-                        photoRepository.setCropOnServer(photo.serverPhotoId!!, metadata)
-                    }
-                }
-                // Also update local DB
+                // Update local DB
                 withContext(Dispatchers.IO) {
                     photoRepository.updateCropMetadata(photo.localId, metadata)
                 }
@@ -280,59 +255,41 @@ class PhotoViewerViewModel @Inject constructor(
     fun duplicatePhoto(photo: PhotoEntity, metadata: String?, onDone: () -> Unit = {}) {
         viewModelScope.launch {
             try {
-                if (encryptionMode == "plain" && photo.serverPhotoId != null) {
-                    val response = withContext(Dispatchers.IO) {
-                        photoRepository.duplicatePhotoOnServer(photo.serverPhotoId!!, metadata)
+                // Duplicate the local DB entry with new ID + metadata
+                val copyId = java.util.UUID.randomUUID().toString()
+
+                // Copy the local file if available, handling both content:// URIs
+                // and regular filesystem paths via PhotoRepository.copyLocalFile().
+                var newLocalPath: String? = null
+                photo.localPath?.let { oldPath ->
+                    val cacheDir = withContext(Dispatchers.IO) {
+                        photoRepository.getCacheDir()
                     }
-                    val copyEntity = photo.copy(
-                        localId = response.id,
-                        serverPhotoId = response.id,
-                        filename = response.filename,
-                        cropMetadata = response.cropMetadata,
-                        createdAt = System.currentTimeMillis(),
-                        syncStatus = SyncStatus.SYNCED
-                    )
-                    withContext(Dispatchers.IO) {
-                        photoRepository.insertPhoto(copyEntity)
+                    val ext = photo.filename.substringAfterLast('.', "jpg")
+                    val destFile = java.io.File(cacheDir, "copy_${copyId}.$ext")
+                    newLocalPath = withContext(Dispatchers.IO) {
+                        photoRepository.copyLocalFile(oldPath, destFile)
                     }
                 }
-                // Encrypted mode: duplicate the local DB entry with new ID + metadata
-                else {
-                    val copyId = java.util.UUID.randomUUID().toString()
-                    
-                    // Copy the local file if available, handling both content:// URIs
-                    // and regular filesystem paths via PhotoRepository.copyLocalFile().
-                    var newLocalPath: String? = null
-                    photo.localPath?.let { oldPath ->
-                        val cacheDir = withContext(Dispatchers.IO) {
-                            photoRepository.getCacheDir()
-                        }
-                        val ext = photo.filename.substringAfterLast('.', "jpg")
-                        val destFile = java.io.File(cacheDir, "copy_${copyId}.$ext")
-                        newLocalPath = withContext(Dispatchers.IO) {
-                            photoRepository.copyLocalFile(oldPath, destFile)
-                        }
-                    }
 
-                    val copyEntity = photo.copy(
-                        localId = copyId,
-                        serverPhotoId = null,
-                        filename = if (photo.filename.startsWith("Copy of ")) photo.filename
-                                   else "Copy of ${photo.filename}",
-                        cropMetadata = metadata,
-                        createdAt = System.currentTimeMillis(),
-                        localPath = newLocalPath,
-                        syncStatus = SyncStatus.PENDING
-                    )
-                    withContext(Dispatchers.IO) {
-                        photoRepository.insertPhoto(copyEntity)
-                    }
+                val copyEntity = photo.copy(
+                    localId = copyId,
+                    serverPhotoId = null,
+                    filename = if (photo.filename.startsWith("Copy of ")) photo.filename
+                               else "Copy of ${photo.filename}",
+                    cropMetadata = metadata,
+                    createdAt = System.currentTimeMillis(),
+                    localPath = newLocalPath,
+                    syncStatus = SyncStatus.PENDING
+                )
+                withContext(Dispatchers.IO) {
+                    photoRepository.insertPhoto(copyEntity)
+                }
 
-                    // Generate an edited thumbnail for the copy so the gallery
-                    // reflects the crop/brightness/rotation at a glance.
-                    withContext(Dispatchers.IO) {
-                        generateEditedThumbnail(photo, copyId, metadata)
-                    }
+                // Generate an edited thumbnail for the copy so the gallery
+                // reflects the crop/brightness/rotation at a glance.
+                withContext(Dispatchers.IO) {
+                    generateEditedThumbnail(photo, copyId, metadata)
                 }
                 onDone()
             } catch (_: Exception) {}
@@ -342,11 +299,8 @@ class PhotoViewerViewModel @Inject constructor(
     /**
      * Download the photo's full-resolution file and save it to [outputFile].
      *
-     * - **Plain mode:** Streams the response body directly to disk via
-     *   [PhotoRepository.downloadPlainPhotoToFile], using constant (~8 KB)
-     *   heap regardless of file size — safe for multi-hundred-MB videos.
-     * - **Encrypted mode:** Downloads + decrypts to file via
-     *   [PhotoRepository.downloadAndDecryptBlobToFile].
+     * Downloads + decrypts the blob to file via
+     * [PhotoRepository.downloadAndDecryptBlobToFile].
      *
      * Returns `true` on success, `false` on failure.
      */
@@ -354,10 +308,6 @@ class PhotoViewerViewModel @Inject constructor(
         withContext(Dispatchers.IO) {
             try {
                 when {
-                    encryptionMode == "plain" && photo.serverPhotoId != null -> {
-                        photoRepository.downloadPlainPhotoToFile(photo.serverPhotoId!!, outputFile)
-                        true
-                    }
                     photo.serverBlobId != null -> {
                         photoRepository.downloadAndDecryptBlobToFile(photo.serverBlobId!!, outputFile)
                         true
@@ -371,17 +321,6 @@ class PhotoViewerViewModel @Inject constructor(
     suspend fun downloadPhotoBytes(photo: PhotoEntity): ByteArray? = withContext(Dispatchers.IO) {
         try {
             when {
-                // Plain mode: stream to temp file, then read — avoids holding
-                // the Retrofit response body and the ByteArray simultaneously.
-                encryptionMode == "plain" && photo.serverPhotoId != null -> {
-                    val tempFile = java.io.File.createTempFile("dl_", ".tmp", photoRepository.getCacheDir())
-                    try {
-                        photoRepository.downloadPlainPhotoToFile(photo.serverPhotoId!!, tempFile)
-                        tempFile.readBytes()
-                    } finally {
-                        tempFile.delete()
-                    }
-                }
                 photo.serverBlobId != null -> {
                     downloadAndDecrypt(photo.serverBlobId!!)
                 }

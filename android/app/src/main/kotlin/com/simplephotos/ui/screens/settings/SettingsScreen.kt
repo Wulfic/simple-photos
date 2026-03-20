@@ -79,8 +79,8 @@ class SettingsViewModel @Inject constructor(
     var storageStats by mutableStateOf<StorageStatsResponse?>(null)
     var storageLoading by mutableStateOf(false)
 
-    // Encryption mode
-    var encryptionMode by mutableStateOf("plain")
+    // Encryption mode (always encrypted)
+    var encryptionMode by mutableStateOf("encrypted")
 
     // Admin status
     var isAdmin by mutableStateOf(false)
@@ -106,10 +106,6 @@ class SettingsViewModel @Inject constructor(
     var totpEnabled by mutableStateOf(false)
         private set
     var totpLoading by mutableStateOf(true)
-        private set
-
-    // Encryption toggle
-    var togglingEncryption by mutableStateOf(false)
         private set
 
     // Cleanup
@@ -152,7 +148,6 @@ class SettingsViewModel @Inject constructor(
             syncDiagnosticsFromServer()
         }
         loadStorageStats()
-        loadEncryptionSettings()
         calculateFreeableSpace()
         load2faStatus()
         loadAudioBackupSetting()
@@ -168,15 +163,6 @@ class SettingsViewModel @Inject constructor(
                 storageStats = withContext(Dispatchers.IO) { api.getStorageStats() }
             } catch (_: Exception) {}
             storageLoading = false
-        }
-    }
-
-    private fun loadEncryptionSettings() {
-        viewModelScope.launch {
-            try {
-                val settings = withContext(Dispatchers.IO) { api.getEncryptionSettings() }
-                encryptionMode = settings.encryptionMode
-            } catch (_: Exception) {}
         }
     }
 
@@ -363,27 +349,6 @@ class SettingsViewModel @Inject constructor(
             } catch (e: Exception) {
                 onError("Failed: ${e.message}")
             }
-        }
-    }
-
-    // ── Encryption mode toggle ───────────────────────────────────────────
-
-    fun toggleEncryptionMode() {
-        viewModelScope.launch {
-            togglingEncryption = true
-            error = null
-            try {
-                val newMode = if (encryptionMode == "plain") "encrypted" else "plain"
-                val res = withContext(Dispatchers.IO) {
-                    api.setEncryptionMode(com.simplephotos.data.remote.dto.SetEncryptionModeRequest(newMode))
-                }
-                encryptionMode = newMode
-                message = res.message
-                loadEncryptionSettings()
-            } catch (e: Exception) {
-                error = "Failed to change encryption: ${e.message}"
-            }
-            togglingEncryption = false
         }
     }
 
@@ -658,7 +623,7 @@ fun SettingsScreen(
             SettingsCard(title = "Account", icon = Icons.Default.Person) {
                 SettingsRow("Server", viewModel.serverUrl)
                 SettingsRow("Username", viewModel.username)
-                SettingsRow("Mode", viewModel.encryptionMode.replaceFirstChar { it.uppercase() })
+                SettingsRow("Mode", "Encrypted")
 
                 // ── Change Password (inline) ─────────────────────────────
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
@@ -1079,10 +1044,7 @@ fun SettingsScreen(
             if (viewModel.isAdmin) {
                 SettingsCard(title = "Privacy & Encryption", iconPainter = painterResource(R.drawable.ic_lock)) {
                     Text(
-                        if (viewModel.encryptionMode == "encrypted")
-                            "Photos are encrypted on the server. File contents cannot be read without your key."
-                        else
-                            "Photos are stored as plain files on the server. Consider enabling encryption for added privacy.",
+                        "Photos are encrypted on the server. File contents cannot be read without your key.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1092,26 +1054,18 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Encryption")
-                        if (viewModel.togglingEncryption) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Switch(
-                                checked = viewModel.encryptionMode == "encrypted",
-                                onCheckedChange = { viewModel.toggleEncryptionMode() }
-                            )
-                        }
+                        Text("End-to-End Encryption")
+                        Text(
+                            "Active",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFF22C55E)
+                        )
                     }
-                    Text(
-                        "Mode: ${viewModel.encryptionMode.replaceFirstChar { it.uppercase() }}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
 
-            // ── Cleanup (admin, encrypted mode) ─────────────────────────
-            if (viewModel.isAdmin && viewModel.encryptionMode == "encrypted") {
+            // ── Cleanup (admin) ─────────────────────────────────────────
+            if (viewModel.isAdmin) {
                 SettingsCard(title = "Cleanup", icon = Icons.Default.CleaningServices) {
                     if (viewModel.cleanableCount > 0) {
                         Text(
@@ -1142,8 +1096,8 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Re-convert Encrypted Media (admin, encrypted mode) ──────
-            if (viewModel.isAdmin && viewModel.encryptionMode == "encrypted") {
+            // ── Re-convert Encrypted Media (admin) ──────────────────────
+            if (viewModel.isAdmin) {
                 SettingsCard(title = "Re-convert Media", icon = Icons.Default.Sync) {
                     Text(
                         "Convert encrypted videos and images to web-compatible formats (MP4, JPEG). " +

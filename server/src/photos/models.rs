@@ -78,13 +78,10 @@ pub struct RegisterPhotoRequest {
 }
 
 /// Response for the encryption settings endpoint.
+/// The server always operates in encrypted mode.
 #[derive(Debug, Serialize)]
 pub struct EncryptionSettingsResponse {
     pub encryption_mode: String,
-    pub migration_status: String,
-    pub migration_total: i64,
-    pub migration_completed: i64,
-    pub migration_error: Option<String>,
 }
 
 /// Response for secure gallery listing.

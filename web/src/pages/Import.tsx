@@ -1,8 +1,7 @@
 /**
  * Import page — bulk photo/video import from server paths or local files.
  *
- * In plain mode, triggers a server-side directory scan. In encrypted mode,
- * reads files client-side, encrypts with AES-256-GCM, and uploads blobs.
+ * Reads files client-side, encrypts with AES-256-GCM, and uploads blobs.
  * Supports Google Photos Takeout metadata matching and deduplication via
  * content hashes.
  */
@@ -14,7 +13,7 @@ import { db, blobTypeFromMime, mediaTypeFromMime } from "../db";
 import AppHeader from "../components/AppHeader";
 import { useProcessingStore } from "../store/processing";
 
-import type { EncryptionMode, ImportItem, ServerFile, GooglePhotosMetadata } from "../utils/importTypes";
+import type { ImportItem, ServerFile, GooglePhotosMetadata } from "../utils/importTypes";
 import {
   arrayBufferToBase64,
   generateThumbnailFromBuffer,
@@ -25,7 +24,7 @@ import {
   createFallbackThumbnail,
   createAudioFallbackThumbnail,
 } from "../utils/media";
-import { formatBytes, getErrorMessage } from "../utils/formatters";
+import { formatBytes } from "../utils/formatters";
 import ImportFileList from "./import/ImportFileList";
 
 type ImportMode = "server" | "local";
@@ -48,44 +47,19 @@ export default function Import() {
   const [autoScanned, setAutoScanned] = useState(false);
   const autoImportPending = useRef(false);
 
-  // Encryption mode detection
-  const [encryptionMode, setEncryptionMode] = useState<EncryptionMode | null>(null);
-  const [plainScanResult, setPlainScanResult] = useState<{ registered: number } | null>(null);
-
   // ── Hooks (unconditional — must run in the same order every render) ────
 
-  // Detect encryption mode on mount
+  // Auto-scan default storage on first mount
   useEffect(() => {
-    api.encryption.getSettings()
-      .then((res) => setEncryptionMode(res.encryption_mode as EncryptionMode))
-      .catch(() => setEncryptionMode("encrypted"));
-  }, []);
-
-  // Plain mode: auto-scan and register on mount
-  useEffect(() => {
-    if (encryptionMode !== "plain" || scanning || plainScanResult) return;
-    setScanning(true);
-    startTask("import");
-    api.admin.scanAndRegister()
-      .then((res) => setPlainScanResult(res))
-      .catch((err: unknown) => setError(getErrorMessage(err)))
-      .finally(() => {
-        setScanning(false);
-        endTask("import");
-      });
-  }, [encryptionMode]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Encrypted mode: auto-scan default storage on first mount
-  useEffect(() => {
-    if (encryptionMode !== "encrypted" || !hasCryptoKey() || autoScanned) return;
+    if (!hasCryptoKey() || autoScanned) return;
     setAutoScanned(true);
     autoImportPending.current = true;
     handleServerScan();
-  }, [encryptionMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Encrypted mode: auto-import once scan populates items
+  // Auto-import once scan populates items
   useEffect(() => {
-    if (encryptionMode !== "encrypted" || !hasCryptoKey()) return;
+    if (!hasCryptoKey()) return;
     if (
       autoImportPending.current &&
       !scanning &&
@@ -100,69 +74,10 @@ export default function Import() {
 
   // ── Conditional early returns (AFTER all hooks) ─────────────────────────
 
-  // Redirect if encrypted mode and no crypto key
-  if (encryptionMode === "encrypted" && !hasCryptoKey()) {
+  // Redirect if no crypto key
+  if (!hasCryptoKey()) {
     navigate("/setup");
     return null;
-  }
-
-  // Plain mode: show scan results UI
-  if (encryptionMode === "plain") {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-        <AppHeader />
-        <main className="max-w-4xl mx-auto p-4">
-          <div className="mb-6">
-            <h2 className="text-xl font-semibold dark:text-white">Import Photos</h2>
-            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
-              The storage directory is automatically scanned for new photos and videos.
-            </p>
-          </div>
-          {error && (
-            <p className="text-red-600 dark:text-red-400 text-sm mb-4 p-3 bg-red-50 dark:bg-red-900/30 rounded">
-              {error}
-            </p>
-          )}
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-            {scanning ? (
-              <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
-                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm">Scanning storage directory for new files...</p>
-              </div>
-            ) : plainScanResult ? (
-              <div className="p-3 bg-green-50 dark:bg-green-900/30 rounded-lg">
-                <p className="text-sm text-green-700 dark:text-green-400">
-                  {plainScanResult.registered > 0
-                    ? `✓ ${plainScanResult.registered} new photo${plainScanResult.registered !== 1 ? "s" : ""} registered.`
-                    : "All photos in the storage directory are already registered. New files are automatically detected every 24 hours, or whenever you open the app."}
-                </p>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Preparing to scan...
-              </p>
-            )}
-            <div className="mt-4">
-              <button
-                onClick={() => navigate("/gallery")}
-                className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 text-sm"
-              >
-                Back to Gallery
-              </button>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
-  // Loading spinner while encryption mode is being determined
-  if (encryptionMode === null) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
   }
 
   // ── Server scan ─────────────────────────────────────────────────────────

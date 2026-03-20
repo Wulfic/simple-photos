@@ -23,7 +23,7 @@ import PairStep from "./welcome/PairStep";
 import AccountStep from "./welcome/AccountStep";
 import TwoFactorStep from "./welcome/TwoFactorStep";
 import ServerConfigStep from "./welcome/ServerConfigStep";
-import EncryptionStep from "./welcome/EncryptionStep";
+// EncryptionStep removed — encryption is always on
 import SslStep from "./welcome/SslStep";
 import UsersStep from "./welcome/UsersStep";
 import AndroidStep from "./welcome/AndroidStep";
@@ -97,8 +97,7 @@ export default function Welcome() {
   const [portInput, setPortInput] = useState("");
   const [portSaved, setPortSaved] = useState(false);
 
-  // ── Encryption mode ─────────────────────────────────────────────────────
-  const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted">("encrypted");
+  // Encryption is always on — no mode toggle needed
 
   // ── Additional users ────────────────────────────────────────────────────
   const [createdUsers, setCreatedUsers] = useState<CreatedUser[]>([]);
@@ -506,18 +505,6 @@ export default function Welcome() {
             />
           )}
 
-          {step === "encryption" && (
-            <EncryptionStep
-              encryptionMode={encryptionMode}
-              setEncryptionMode={setEncryptionMode}
-              setStep={setStep}
-              setError={setError}
-              loading={loading}
-              setLoading={setLoading}
-              error={error}
-            />
-          )}
-
           {step === "users" && (
             <UsersStep
               createdUsers={createdUsers}
@@ -552,7 +539,6 @@ export default function Welcome() {
               loading={loading}
               setLoading={setLoading}
               error={error}
-              encryptionMode={encryptionMode}
               createdUsers={createdUsers}
               serverPort={serverPort}
               originalPort={originalPort}

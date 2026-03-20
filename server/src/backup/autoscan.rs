@@ -145,12 +145,9 @@ pub async fn trigger_auto_scan(
     })))
 }
 
-/// If the server is in "encrypted" mode with an idle migration and there are
-/// unencrypted plain photos, automatically start the encryption migration.
-/// Public entry point for `scan_and_register` (and any other caller) to trigger
-/// the same migration-check logic that the background autoscan uses.
-/// This ensures that on-demand scans also detect newly-registered photos that
-/// need encryption migration.
+/// If there are unencrypted plain photos, automatically start the encryption
+/// migration. Public entry point for `scan_and_register` (and any other caller)
+/// to trigger migration-check logic after discovering new files.
 pub async fn try_start_migration_after_scan(
     pool: &sqlx::SqlitePool,
     storage_root: &std::path::Path,
@@ -161,11 +158,8 @@ pub async fn try_start_migration_after_scan(
     auto_start_migration_if_needed(pool, storage_root, convert_notify, encryption_key_store, jwt_secret).await;
 }
 
-/// This resolves a race condition on fresh setup where the mode is set before
-/// the initial scan registers any files.
-///
-/// When a stored encryption key is available, this also spawns the actual
-/// migration task — making the entire process fully autonomous.
+/// Check for unencrypted photos and start migration if a key is available.
+/// The server is always in encrypted mode, so we skip the mode check.
 async fn auto_start_migration_if_needed(
     pool: &sqlx::SqlitePool,
     storage_root: &std::path::Path,
@@ -173,39 +167,7 @@ async fn auto_start_migration_if_needed(
     encryption_key_store: &std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
     jwt_secret: &str,
 ) {
-    // Only relevant when mode is already "encrypted"
-    let mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_mode'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "plain".to_string());
-
-    if mode != "encrypted" {
-        tracing::info!("[DIAG:AUTOSCAN] auto_start_migration: mode='{}', skipping (not encrypted)", mode);
-        return;
-    }
-
-    // Only act if no migration is already in progress
-    let status: String = sqlx::query_scalar(
-        "SELECT status FROM encryption_migration WHERE id = 'singleton'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "idle".to_string());
-
-    if status != "idle" {
-        tracing::info!("[DIAG:AUTOSCAN] auto_start_migration: status='{}', skipping (not idle)", status);
-        return;
-    }
-
     // Count plain photos that need encryption.
-    // Note: uses a global count (no user_id filter) because `run_migration` will
-    // re-query per-user. This is a quick check to decide whether to start at all.
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
     )
@@ -214,22 +176,7 @@ async fn auto_start_migration_if_needed(
     .unwrap_or(0);
 
     if count == 0 {
-        tracing::info!("[DIAG:AUTOSCAN] auto_start_migration: 0 plain photos, nothing to do");
-        return;
-    }
-
-    // Start the migration (set DB status)
-    let now = crate::photos::utils::utc_now_iso();
-    if let Err(e) = sqlx::query(
-        "UPDATE encryption_migration SET status = 'encrypting', total = ?, completed = 0, \
-         started_at = ?, error = NULL WHERE id = 'singleton'",
-    )
-    .bind(count)
-    .bind(&now)
-    .execute(pool)
-    .await
-    {
-        tracing::error!("[DIAG:AUTOSCAN] Failed to start migration: {}", e);
+        tracing::debug!("[DIAG:AUTOSCAN] auto_start_migration: 0 plain photos, nothing to do");
         return;
     }
 

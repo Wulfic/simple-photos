@@ -66,7 +66,6 @@ export default function AppHeader({
   const { backupServers, loaded: backupLoaded, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
   const {
     conversionPending, conversionMissingThumbs, conversionActive,
-    migrationStatus, migrationTotal,
   } = useActivityStore();
 
   // Drive the profile ring directly from raw server-activity data so it
@@ -74,8 +73,7 @@ export default function AppHeader({
   const hasActivity =
     conversionPending > 0 ||
     conversionMissingThumbs > 0 ||
-    conversionActive ||
-    ((migrationStatus === "encrypting" || migrationStatus === "decrypting") && migrationTotal > 0);
+    conversionActive;
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 

@@ -1,9 +1,9 @@
 /**
- * Hook for loading and managing gallery data in both plain and encrypted modes.
+ * Hook for loading and managing gallery data in encrypted mode.
  *
  * Handles cursor-based pagination, date-group detection, encrypted sync
- * (fetching blob IDs then decrypting thumbnails from IDB), and mode-switching
- * between main gallery and backup server views.
+ * (fetching blob IDs then decrypting thumbnails from IDB), and loading
+ * plain photos that may exist during auto-migration.
  */
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -45,7 +45,7 @@ export interface ThumbnailPayload {
   data: string; // base64 JPEG
 }
 
-export type EncryptionMode = "plain" | "encrypted";
+export type EncryptionMode = "encrypted";
 
 export interface GalleryDataResult {
   mode: EncryptionMode | null;
@@ -58,12 +58,6 @@ export interface GalleryDataResult {
    *  flashing stale data from a previous user's session. */
   encryptedPhotos: CachedPhoto[] | undefined;
   secureBlobIds: Set<string>;
-  migrationStatus: string;
-  migrationTotal: number;
-  migrationCompleted: number;
-  setMigrationStatus: (s: string) => void;
-  setMigrationTotal: (n: number) => void;
-  setMigrationCompleted: (n: number) => void;
   loadPlainPhotos: () => Promise<void>;
   loadEncryptedPhotos: () => Promise<void>;
 }
@@ -71,8 +65,8 @@ export interface GalleryDataResult {
 /**
  * Core data hook for the Gallery page.
  *
- * Handles mode detection (plain vs. encrypted), initial data loading,
- * and provides loaders for both plain and encrypted photo lists.
+ * Always operates in encrypted mode. Loads both encrypted photos (from
+ * IndexedDB) and plain photos (server-side, may exist during auto-migration).
  */
 export function useGalleryData(): GalleryDataResult {
   const [loading, setLoading] = useState(true);
@@ -80,9 +74,6 @@ export function useGalleryData(): GalleryDataResult {
   const [mode, setMode] = useState<EncryptionMode | null>(null);
   const [plainPhotos, setPlainPhotos] = useState<PlainPhoto[]>([]);
   const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
-  const [migrationStatus, setMigrationStatus] = useState("idle");
-  const [migrationTotal, setMigrationTotal] = useState(0);
-  const [migrationCompleted, setMigrationCompleted] = useState(0);
   const navigate = useNavigate();
 
   // Tracks whether the first server sync has completed for encrypted mode.
@@ -138,14 +129,7 @@ export function useGalleryData(): GalleryDataResult {
   useEffect(() => {
     async function init() {
       try {
-        const settings = await api.encryption.getSettings();
-        const detected = settings.encryption_mode as EncryptionMode;
-        setMode(detected);
-
-        // Track migration state so the gallery can run the migration worker
-        setMigrationStatus(settings.migration_status);
-        setMigrationTotal(settings.migration_total);
-        setMigrationCompleted(settings.migration_completed);
+        setMode("encrypted");
 
         // Fetch blob IDs that are in secure galleries (to hide from main gallery)
         try {
@@ -161,33 +145,14 @@ export function useGalleryData(): GalleryDataResult {
 
         // Fire auto-scan in the background — don't block photo loading.
         // When it completes, reload photos so newly scanned files appear.
-        // On fresh setup the auto-scan may register plain files *after* the
-        // encryption mode was already set, so the server auto-triggers
-        // migration.  Re-fetch settings to pick up the new migration status.
         const reloadAfterScan = async () => {
           try {
-            const freshSettings = await api.encryption.getSettings();
-            const freshMigrating =
-              freshSettings.migration_status === "encrypting" ||
-              freshSettings.migration_status === "decrypting";
-
-            // Update migration state in case the server auto-started it
-            if (freshMigrating) {
-              setMigrationStatus(freshSettings.migration_status);
-              setMigrationTotal(freshSettings.migration_total);
-              setMigrationCompleted(freshSettings.migration_completed);
-            }
-
-            if (detected === "encrypted") {
-              await loadEncryptedPhotos();
-              // Also load plain photos if migration is now active
-              if (freshMigrating) await loadPlainPhotos();
-            } else {
-              await loadPlainPhotos();
-            }
+            await loadEncryptedPhotos();
+            // Also load plain photos — auto-scanned files may exist on disk
+            // before the encryption pipeline processes them.
+            await loadPlainPhotos();
           } catch {
-            // Fallback: just reload what we can
-            if (detected === "plain") await loadPlainPhotos();
+            // Non-critical — ignore transient failures
           }
         };
         api.backup.triggerAutoScan()
@@ -196,23 +161,18 @@ export function useGalleryData(): GalleryDataResult {
             // Non-critical — if the user isn't admin or endpoint fails, just ignore
           });
 
-        if (detected === "encrypted") {
-          if (!hasCryptoKey()) {
-            navigate("/setup");
-            return;
-          }
-          await loadEncryptedPhotos();
-          // Always load plain photos too — auto-scanned files on disk appear as
-          // plain photos even in encrypted mode, and the conversion-status banner
-          // needs them to be loaded for tile display.
-          await loadPlainPhotos();
-        } else {
-          // Plain mode — only load plain photos
-          await loadPlainPhotos();
+        if (!hasCryptoKey()) {
+          navigate("/setup");
+          return;
         }
+        await loadEncryptedPhotos();
+        // Always load plain photos too — auto-scanned files on disk appear as
+        // plain photos even in encrypted mode, and the conversion-status banner
+        // needs them to be loaded for tile display.
+        await loadPlainPhotos();
       } catch (err) {
-        console.error("Failed to load encryption settings:", err);
-        setError("Failed to load encryption settings. Please try again.");
+        console.error("Failed to initialize gallery:", err);
+        setError("Failed to load gallery. Please try again.");
       }
     }
     init();
@@ -423,12 +383,6 @@ export function useGalleryData(): GalleryDataResult {
     plainPhotos,
     encryptedPhotos,
     secureBlobIds,
-    migrationStatus,
-    migrationTotal,
-    migrationCompleted,
-    setMigrationStatus,
-    setMigrationTotal,
-    setMigrationCompleted,
     loadPlainPhotos,
     loadEncryptedPhotos,
   };

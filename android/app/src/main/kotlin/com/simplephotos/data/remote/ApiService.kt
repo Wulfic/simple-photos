@@ -117,9 +117,9 @@ interface ApiService {
     @GET("api/settings/storage-stats")
     suspend fun getStorageStats(): StorageStatsResponse
 
-    // ── Encryption mode (admin) ──────────────────────────────────────────
-    @PUT("api/admin/encryption")
-    suspend fun setEncryptionMode(@Body request: SetEncryptionModeRequest): SetEncryptionModeResponse
+    // ── Encryption key (admin) ───────────────────────────────────────────
+    @POST("api/admin/encryption/store-key")
+    suspend fun storeEncryptionKey(@Body request: StoreEncryptionKeyRequest): StoreEncryptionKeyResponse
 
     // ── Cleanup (encrypted mode) ─────────────────────────────────────────
     @GET("api/photos/cleanup-status")

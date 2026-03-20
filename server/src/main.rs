@@ -275,9 +275,8 @@ async fn main() -> anyhow::Result<()> {
         scan_lock,
     };
 
-    // Spawn background task to resume interrupted encryption migration on startup.
-    // If the server was restarted mid-migration, this picks up where it left off
-    // using the encryption key that was persisted (wrapped) in the database.
+    // Spawn background task to auto-encrypt any remaining plain photos on startup.
+    // Handles upgrades from older plain-mode installs and interrupted migrations.
     {
         let pool_clone = state.pool.clone();
         let storage_root_clone = config.storage.root.clone();
@@ -385,14 +384,11 @@ async fn main() -> anyhow::Result<()> {
         // Cleanup: remove original plain files after successful encryption
         .route("/photos/cleanup-status", get(photos::cleanup::cleanup_status))
         .route("/photos/cleanup", post(photos::cleanup::cleanup_plain_files))
-        // Encryption settings
+        // Encryption settings (read-only — always encrypted)
         .route("/settings/encryption", get(photos::encryption::get_encryption_settings))
-        .route("/admin/encryption", put(photos::encryption::set_encryption_mode))
-        .route("/admin/encryption/progress", post(photos::encryption::report_migration_progress))
+        // Store encryption key so server-side operations can encrypt autonomously
+        .route("/admin/encryption/store-key", post(photos::encryption::store_encryption_key))
         .route("/photos/{id}/mark-encrypted", post(photos::encryption::mark_photo_encrypted))
-        // Server-side parallel encryption migration
-        .route("/admin/encryption/migrate", post(photos::server_migrate::start_migration))
-        .route("/admin/encryption/migrate/stream", get(photos::server_migrate::migration_stream))
         // Secure galleries
         .route("/galleries/secure", get(photos::galleries::list_secure_galleries))
         .route("/galleries/secure", post(photos::galleries::create_secure_gallery))

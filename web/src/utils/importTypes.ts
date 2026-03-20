@@ -3,8 +3,8 @@
  * Google Photos Takeout metadata shapes, and import queue item definitions.
  */
 
-/** Encryption mode for photo storage */
-export type EncryptionMode = "plain" | "encrypted";
+/** Encryption mode for photo storage (always encrypted) */
+export type EncryptionMode = "encrypted";
 
 /** Google Photos JSON metadata shape */
 export interface GooglePhotosMetadata {

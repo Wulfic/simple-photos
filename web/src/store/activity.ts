@@ -3,9 +3,8 @@ import { api } from "../api/client";
 import { useProcessingStore } from "./processing";
 
 /**
- * Global activity store — tracks conversion and migration progress across
- * the entire app lifecycle. Polls the server periodically so banners survive
- * page navigation.
+ * Global activity store — tracks conversion progress across the entire app
+ * lifecycle. Polls the server periodically so banners survive page navigation.
  */
 
 interface ActivityState {
@@ -18,19 +17,11 @@ interface ActivityState {
   /** True while the server’s background converter is actively processing */
   conversionActive: boolean;
 
-  // ── Encryption migration ──────────────────────────────────────────
-  encryptionMode: string; // "plain" | "encrypted"
-  migrationStatus: string; // "idle" | "encrypting" | "decrypting"
-  migrationTotal: number;
-  migrationCompleted: number;
-  migrationError: string | null;
-
   // ── Polling control ───────────────────────────────────────────────
   polling: boolean;
 
   // ── Actions ───────────────────────────────────────────────────────
   setConversion: (pending: number, awaitingKey: number, missingThumbs: number, active: boolean) => void;
-  setMigration: (mode: string, status: string, total: number, completed: number, error: string | null) => void;
   setPolling: (v: boolean) => void;
 }
 
@@ -40,24 +31,10 @@ export const useActivityStore = create<ActivityState>((set) => ({
   conversionMissingThumbs: 0,
   conversionActive: false,
 
-  encryptionMode: "plain",
-  migrationStatus: "idle",
-  migrationTotal: 0,
-  migrationCompleted: 0,
-  migrationError: null,
-
   polling: false,
 
   setConversion: (pending, awaitingKey, missingThumbs, active) =>
     set({ conversionPending: pending, conversionAwaitingKey: awaitingKey, conversionMissingThumbs: missingThumbs, conversionActive: active }),
-  setMigration: (mode, status, total, completed, error) =>
-    set({
-      encryptionMode: mode,
-      migrationStatus: status,
-      migrationTotal: total,
-      migrationCompleted: completed,
-      migrationError: error,
-    }),
   setPolling: (v) => set({ polling: v }),
 }));
 
@@ -83,7 +60,7 @@ async function tick() {
     const nowPending = cs.pending_conversions > 0 || cs.missing_thumbnails > 0 || cs.converting;
 
     console.log(
-      `[DIAG:POLL] conversion: pending=${cs.pending_conversions} awaitingKey=${cs.pending_awaiting_key ?? 0} thumbs=${cs.missing_thumbnails} converting=${cs.converting} migRunning=${cs.migration_running ?? false} | wasPending=${wasPending} nowPending=${nowPending}`
+      `[DIAG:POLL] conversion: pending=${cs.pending_conversions} awaitingKey=${cs.pending_awaiting_key ?? 0} thumbs=${cs.missing_thumbnails} converting=${cs.converting} | wasPending=${wasPending} nowPending=${nowPending}`
     );
 
     store.setConversion(cs.pending_conversions, cs.pending_awaiting_key ?? 0, cs.missing_thumbnails, cs.converting);
@@ -103,32 +80,6 @@ async function tick() {
     // Ignore — endpoint may not be available
   }
 
-  // ── Encryption migration status ──────────────────────────────────────
-  try {
-    const es = await api.encryption.getSettings();
-
-    console.log(
-      `[DIAG:POLL] encryption: mode=${es.encryption_mode} status=${es.migration_status} progress=${es.migration_completed}/${es.migration_total} error=${es.migration_error ?? 'none'}`
-    );
-
-    store.setMigration(
-      es.encryption_mode,
-      es.migration_status,
-      es.migration_total,
-      es.migration_completed,
-      es.migration_error ?? null,
-    );
-
-    // Sync processing store for profile icon ring
-    const migActive = es.migration_status === "encrypting" || es.migration_status === "decrypting";
-    if (migActive && !processing.tasks.has("encryption")) {
-      processing.startTask("encryption");
-    } else if (!migActive && processing.tasks.has("encryption")) {
-      processing.endTask("encryption");
-    }
-  } catch {
-    // Ignore
-  }
 }
 
 /** Start global polling. Safe to call multiple times — only one poller runs. */

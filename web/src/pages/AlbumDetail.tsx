@@ -2,8 +2,8 @@
  * Album detail page — renders photos for a user-created album or a
  * "smart album" (Favorites, Photos, GIFs, Videos, Audio).
  *
- * Supports both plain and encrypted modes and handles album CRUD,
- * photo addition/removal, cover photo selection, and sharing controls.
+ * Handles album CRUD, photo addition/removal, cover photo selection,
+ * and sharing controls.
  */
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
@@ -13,38 +13,31 @@ import { db, type CachedPhoto, type CachedAlbum } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
-import { type PlainPhoto } from "../utils/gallery";
-import PlainMediaTile from "../components/gallery/PlainMediaTile";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { getErrorMessage } from "../utils/formatters";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
-const SMART_ALBUM_DEFS: Record<string, { label: string; filterEncrypted: (p: CachedPhoto) => boolean; filterPlain: (p: PlainPhoto) => boolean }> = {
+const SMART_ALBUM_DEFS: Record<string, { label: string; filterEncrypted: (p: CachedPhoto) => boolean }> = {
   "smart-favorites": {
     label: "Favorites",
     filterEncrypted: (p) => !!p.isFavorite,
-    filterPlain: (p) => p.is_favorite,
   },
   "smart-photos": {
     label: "Photos",
     filterEncrypted: (p) => p.mediaType === "photo" || p.mediaType === "gif",
-    filterPlain: (p) => p.media_type === "photo" || p.media_type === "gif",
   },
   "smart-gifs": {
     label: "GIFs",
     filterEncrypted: (p) => p.mediaType === "gif",
-    filterPlain: (p) => p.media_type === "gif",
   },
   "smart-videos": {
     label: "Videos",
     filterEncrypted: (p) => p.mediaType === "video",
-    filterPlain: (p) => p.media_type === "video",
   },
   "smart-audio": {
     label: "Audio",
     filterEncrypted: (p) => p.mediaType === "audio",
-    filterPlain: (p) => p.media_type === "audio",
   },
 };
 
@@ -72,8 +65,6 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
   const navigate = useNavigate();
   const def = SMART_ALBUM_DEFS[albumId];
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
-  const [encryptionMode, setEncryptionMode] = useState<"plain" | "encrypted" | null>(null);
-  const [plainPhotos, setPlainPhotos] = useState<PlainPhoto[]>([]);
   const [loading, setLoading] = useState(true);
   const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
 
@@ -85,53 +76,22 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
   useEffect(() => {
     (async () => {
       try {
-        // Fetch secure blob IDs
-        try {
-          const secureRes = await api.secureGalleries.secureBlobIds();
-          setSecureBlobIds(new Set(secureRes.blob_ids));
-        } catch { /* ignore */ }
-
-        const settings = await api.encryption.getSettings();
-        const mode = settings.encryption_mode as "plain" | "encrypted";
-        setEncryptionMode(mode);
-
-        if (mode === "plain") {
-          // Fetch all plain photos
-          const allPhotos: PlainPhoto[] = [];
-          let cursor: string | undefined;
-          do {
-            const res = await api.photos.list({ after: cursor, limit: 200 });
-            allPhotos.push(...res.photos);
-            cursor = res.next_cursor ?? undefined;
-          } while (cursor);
-          allPhotos.sort((a, b) => {
-            const aDate = a.taken_at || a.created_at;
-            const bDate = b.taken_at || b.created_at;
-            return bDate.localeCompare(aDate);
-          });
-          setPlainPhotos(allPhotos);
-        }
-      } catch { /* fallback */ }
+        const secureRes = await api.secureGalleries.secureBlobIds();
+        setSecureBlobIds(new Set(secureRes.blob_ids));
+      } catch { /* secure galleries may not be available */ }
       setLoading(false);
     })();
   }, []);
 
   // Compute filtered photos
   const filteredEncrypted = useMemo(() => {
-    if (encryptionMode !== "encrypted" || !allEncryptedPhotos) return [];
+    if (!allEncryptedPhotos) return [];
     return allEncryptedPhotos
       .filter((p) => !secureBlobIds.has(p.blobId))
       .filter(def.filterEncrypted);
-  }, [allEncryptedPhotos, secureBlobIds, encryptionMode]);
+  }, [allEncryptedPhotos, secureBlobIds]);
 
-  const filteredPlain = useMemo(() => {
-    if (encryptionMode !== "plain") return [];
-    return plainPhotos
-      .filter((p) => !secureBlobIds.has(p.id))
-      .filter(def.filterPlain);
-  }, [plainPhotos, secureBlobIds, encryptionMode]);
-
-  const photoCount = encryptionMode === "plain" ? filteredPlain.length : filteredEncrypted.length;
+  const photoCount = filteredEncrypted.length;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -157,7 +117,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
             <p className="text-gray-500 dark:text-gray-400">No {def.label.toLowerCase()} found</p>
           </div>
-        ) : encryptionMode === "encrypted" ? (
+        ) : (
           <div className={gridClasses}>
             {filteredEncrypted.map((photo, idx) => (
               <AlbumTile
@@ -175,23 +135,6 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
                 }}
                 onLongPress={() => {}}
                 onRemove={() => {}}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className={gridClasses}>
-            {filteredPlain.map((photo, idx) => (
-              <PlainMediaTile
-                key={photo.id}
-                photo={photo}
-                onClick={() => {
-                  navigate(`/photo/plain/${photo.id}`, {
-                    state: {
-                      photoIds: filteredPlain.map((p) => p.id),
-                      currentIndex: idx,
-                    },
-                  });
-                }}
               />
             ))}
           </div>

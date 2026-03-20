@@ -99,8 +99,6 @@ class GalleryViewModel @Inject constructor(
 
     var serverBaseUrl by mutableStateOf("")
         private set
-    var encryptionMode by mutableStateOf("plain")
-        private set
     var username by mutableStateOf("")
         private set
 
@@ -119,12 +117,6 @@ class GalleryViewModel @Inject constructor(
         private set
     var conversionActive by mutableStateOf(false)
         private set
-    var migrationStatus by mutableStateOf("idle")
-        private set
-    var migrationTotal by mutableStateOf(0L)
-        private set
-    var migrationCompleted by mutableStateOf(0L)
-        private set
 
     // ── Multi-select state ────────────────────────────────────────
     var selectedIds by mutableStateOf(emptySet<String>())
@@ -139,10 +131,8 @@ class GalleryViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val url = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
-                val mode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
                 val prefs = dataStore.data.first()
                 serverBaseUrl = url
-                encryptionMode = mode
                 username = prefs[KEY_USERNAME] ?: ""
                 thumbnailSize = prefs[KEY_THUMBNAIL_SIZE] ?: "normal"
             } catch (e: Exception) {
@@ -163,12 +153,6 @@ class GalleryViewModel @Inject constructor(
                         conversionPending = cs.pendingConversions
                         conversionMissingThumbs = cs.missingThumbnails
                         conversionActive = cs.converting
-                    }
-                    // Encryption migration status
-                    withContext(Dispatchers.IO) { photoRepository.getEncryptionSettings() }?.let { es ->
-                        migrationStatus = es.migrationStatus
-                        migrationTotal = es.migrationTotal
-                        migrationCompleted = es.migrationCompleted
                     }
                     // Refresh secure gallery blob IDs so photos moved to/from
                     // secure galleries on other devices are hidden/shown promptly.
@@ -280,9 +264,6 @@ class GalleryViewModel @Inject constructor(
                     "pending" to pendingCount.toString(), "failed" to failedCount.toString(),
                     "uploading" to uploadingCount.toString(), "synced" to syncedCount.toString()
                 ))
-
-                val mode = try { withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() } } catch (e: Exception) { "error: ${e.message}" }
-                diag.info("AppDiagnostic", "Encryption mode: $mode")
 
                 // ── Photo ordering diagnostic ───────────────────────────
                 // Log the first 10 photos in Room order so we can compare with web/server
@@ -396,8 +377,7 @@ class GalleryViewModel @Inject constructor(
             isSyncing = true; error = null; lastSyncResult = null
             try {
                 val url = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
-                val mode = withContext(Dispatchers.IO) { photoRepository.getEncryptionMode() }
-                serverBaseUrl = url; encryptionMode = mode
+                serverBaseUrl = url
                 val imported = withContext(Dispatchers.IO) { photoRepository.syncFromServer() }
                 // Also sync albums from server (downloads manifests created on web)
                 try { withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() } } catch (_: Exception) {}
@@ -467,8 +447,7 @@ class GalleryViewModel @Inject constructor(
                     }
                     try {
                         withContext(Dispatchers.IO) {
-                            if (encryptionMode == "plain") photoRepository.uploadPhotoPlain(photo, data)
-                            else photoRepository.uploadPhoto(photo, data, thumbBytes.takeIf { it.isNotEmpty() })
+                            photoRepository.uploadPhoto(photo, data, thumbBytes.takeIf { it.isNotEmpty() })
                         }
                     } catch (_: Exception) {}
                     count++

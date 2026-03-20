@@ -1,6 +1,6 @@
 /**
  * Persistent progress banners for long-running background tasks
- * (encryption migration, file conversion, missing thumbnails).
+ * (file conversion, missing thumbnails).
  *
  * Uses a "minimum display" pattern: once a banner appears, it stays
  * visible for at least 8 seconds even if the task finishes sooner,
@@ -146,28 +146,16 @@ export default function GlobalProgressBanners() {
     conversionAwaitingKey,
     conversionMissingThumbs,
     conversionActive,
-    encryptionMode,
-    migrationStatus,
-    migrationTotal,
-    migrationCompleted,
   } = useActivityStore();
-
-  // Raw activity flags from the server
-  const migrationActive =
-    migrationStatus === "encrypting" || migrationStatus === "decrypting";
 
   // Only show conversion banner when there's ACTIONABLE work (items the
   // converter can actually process right now). Items "awaiting key" are not
-  // actionable and shouldn't drive the banner or ETA timer — that was
-  // confusing users by showing conversion progress that was actually
-  // tracking encryption speed.
+  // actionable and shouldn't drive the banner or ETA timer.
   const conversionBusy =
     conversionPending > 0 || conversionMissingThumbs > 0 || conversionActive;
-  const migrationBusy = migrationActive && migrationTotal > 0;
 
   // Apply minimum-display behavior
   const [showConversion, conversionDone, hideConversion] = useMinimumDisplay(conversionBusy);
-  const [showMigration, migrationDone, hideMigration] = useMinimumDisplay(migrationBusy);
 
   const totalConversionItems = conversionPending + conversionMissingThumbs;
   const conversionEta = useETA(totalConversionItems);
@@ -194,20 +182,13 @@ export default function GlobalProgressBanners() {
 
   // ── Diagnostic logging ────────────────────────────────────────────────
   const prevDiagRef = useRef("");
-  const diagKey = `cb=${conversionBusy}|ma=${migrationActive}|sc=${showConversion}|cd=${conversionDone}|mb=${migrationBusy}|sm=${showMigration}|md=${migrationDone}|cp=${conversionPending}|cak=${conversionAwaitingKey}|ct=${conversionMissingThumbs}|ca=${conversionActive}`;
+  const diagKey = `cb=${conversionBusy}|sc=${showConversion}|cd=${conversionDone}|cp=${conversionPending}|cak=${conversionAwaitingKey}|ct=${conversionMissingThumbs}|ca=${conversionActive}`;
   if (diagKey !== prevDiagRef.current) {
     console.log(`[DIAG:BANNER] prev=${prevDiagRef.current} -> new=${diagKey}`);
     prevDiagRef.current = diagKey;
   }
 
-  if (!showConversion && !showMigration) return null;
-
-  const migPct =
-    migrationTotal > 0
-      ? Math.min(Math.round((migrationCompleted / migrationTotal) * 100), 100)
-      : 0;
-  const migAction =
-    migrationStatus === "encrypting" ? "Encrypting" : "Decrypting";
+  if (!showConversion) return null;
 
   return (
     <div className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 w-80 pointer-events-none">
@@ -276,52 +257,6 @@ export default function GlobalProgressBanners() {
         </div>
       )}
 
-      {/* ── Migration card ──────────────────────────────────────────── */}
-      {showMigration && (
-        <div className={`pointer-events-auto rounded-xl shadow-lg shadow-black/10 dark:shadow-black/30 p-3 transition-colors duration-500 relative ${
-          migrationDone
-            ? "bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700"
-            : "bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-700"
-        }`}>
-          <button
-            onClick={hideMigration}
-            className="absolute top-2 right-2 w-6 h-6 z-10 flex items-center justify-center rounded-full text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors bg-white/50 dark:bg-black/50 backdrop-blur-sm"
-            title="Dismiss"
-          >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-          {migrationDone ? (
-            <div className="flex items-center gap-2.5 pr-5">
-              <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-              <p className="text-sm font-medium text-green-700 dark:text-green-300">
-                {encryptionMode === "encrypted" ? "Encryption" : "Decryption"} complete
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2.5 mb-2 pr-5">
-                <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
-                  {migAction}… {migrationCompleted}/{migrationTotal}
-                </p>
-                <span className="ml-auto text-xs font-medium text-blue-600 dark:text-blue-400">
-                  {migPct}%
-                </span>
-              </div>
-              <div className="w-full bg-blue-100 dark:bg-blue-900/50 rounded-full h-1.5">
-                <div
-                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
-                  style={{ width: `${migPct}%` }}
-                />
-              </div>
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }

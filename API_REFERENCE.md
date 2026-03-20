@@ -47,7 +47,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 ---
 
-## Blobs (encrypted-mode storage)
+## Blobs
 
 | Method | Path | Auth | Request Body | Headers | Response |
 |--------|------|------|-------------|---------|----------|
@@ -59,7 +59,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 ---
 
-## Photos (plain-mode)
+## Photos
 
 | Method | Path | Auth | Request Body / Headers | Response |
 |--------|------|------|----------------------|----------|
@@ -94,7 +94,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|
-| `GET` | `/api/photos/conversion-status` | Bearer | — | `{ pending_conversions, pending_awaiting_key, missing_thumbnails, converting: bool, enc_missing_thumbs, key_available: bool, migration_running: bool }` |
+| `GET` | `/api/photos/conversion-status` | Bearer | — | `{ pending_conversions, pending_awaiting_key, missing_thumbnails, converting: bool, enc_missing_thumbs, key_available: bool }` |
 
 ### Cleanup
 
@@ -145,7 +145,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `POST` | `/api/sharing/albums/{id}/members` | Bearer (owner) | `{ user_id }` | **201** `{ member_id, user_id }` |
 | `DELETE` | `/api/sharing/albums/{id}/members/{user_id}` | Bearer (owner) | — | **204** |
 | `GET` | `/api/sharing/albums/{id}/photos` | Bearer (member) | — | `[{ id, photo_ref, ref_type, added_at }]` |
-| `POST` | `/api/sharing/albums/{id}/photos` | Bearer (member) | `{ photo_ref, ref_type: "plain"\|"blob" }` | **201** `{ photo_id }` |
+| `POST` | `/api/sharing/albums/{id}/photos` | Bearer (member) | `{ photo_ref, ref_type: "blob" }` | **201** `{ photo_id }` |
 | `DELETE` | `/api/sharing/albums/{album_id}/photos/{photo_id}` | Bearer (member) | — | **204** |
 | `GET` | `/api/sharing/users` | Bearer | — | `[{ id, username }]` |
 
@@ -188,8 +188,8 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|
-| `GET` | `/api/settings/encryption` | Bearer | — | `{ encryption_mode, migration_status, migration_total, migration_completed, migration_error? }` |
-| `GET` | `/api/settings/storage-stats` | Bearer | — | `{ photo_bytes, photo_count, video_bytes, video_count, other_blob_bytes, other_blob_count, plain_bytes, plain_count, user_total_bytes, fs_total_bytes, fs_free_bytes }` |
+| `GET` | `/api/settings/encryption` | Bearer | — | `{ encryption_mode }` (always `"encrypted"`) |
+| `GET` | `/api/settings/storage-stats` | Bearer | — | `{ photo_bytes, photo_count, video_bytes, video_count, other_blob_bytes, other_blob_count, user_total_bytes, fs_total_bytes, fs_free_bytes }` |
 | `GET` | `/api/settings/audio-backup` | Bearer | — | `{ audio_backup_enabled: bool }` |
 
 ---
@@ -245,15 +245,15 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 ---
 
-## Admin — Encryption & Migration
+## Admin — Encryption
+
+Encryption is always enabled (AES-256-GCM). There is no plain mode or migration flow.
 
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|
-| `PUT` | `/api/admin/encryption` | Admin | `{ mode: "plain"\|"encrypted", key_hex?: string (64 hex) }` | `{ message, mode, migration_items? }` |
-| `POST` | `/api/admin/encryption/progress` | Admin | `{ completed_count, error?, done?: bool }` | `{ ok: true }` |
-| `POST` | `/api/photos/{id}/mark-encrypted` | Bearer | `{ blob_id, thumb_blob_id? }` | `{ ok: true }` |
-| `POST` | `/api/admin/encryption/migrate` | Admin | `{ key_hex: string (64 hex) }` | `{ message, total }` |
-| `GET` | `/api/admin/encryption/migrate/stream` | Admin | — | **SSE** stream: `{ completed, succeeded, failed, total, current_file, last_error, running }` events |
+| `POST` | `/api/admin/encryption/store-key` | Admin | `{ key: string (64-char hex, 32-byte AES-256-GCM key) }` | **200** `{ message: "Encryption key stored" }` |
+
+**Errors:** `400` invalid key format, `401`/`403` not admin.
 
 ---
 
@@ -327,7 +327,7 @@ These endpoints are called by the primary server to sync/recover from a backup. 
   "database": { "size_bytes", "wal_size_bytes", "table_counts": { "users": N, ... }, "journal_mode", "page_size", "page_count", "freelist_count" },
   "storage": { "total_bytes", "file_count", "disk_total_bytes", "disk_available_bytes", "disk_used_percent" },
   "users": { "total_users", "admin_count", "totp_enabled_count" },
-  "photos": { "total_photos", "encrypted_count", "plain_count", "total_file_bytes", "total_thumb_bytes", "photos_with_thumbs", "photos_by_media_type": {}, "oldest_photo", "newest_photo", "favorited_count", "tagged_count" },
+  "photos": { "total_photos", "encrypted_count", "total_file_bytes", "total_thumb_bytes", "photos_with_thumbs", "photos_by_media_type": {}, "oldest_photo", "newest_photo", "favorited_count", "tagged_count" },
   "audit": { "total_entries", "entries_last_24h", "entries_last_7d", "events_by_type": {}, "recent_failures": [{ "event_type", "ip_address", "user_agent", "created_at", "details" }] },
   "client_logs": { "total_entries", "entries_last_24h", "entries_last_7d", "by_level": {}, "unique_sessions" },
   "backup": { "server_count", "total_sync_logs", "last_sync_at" },

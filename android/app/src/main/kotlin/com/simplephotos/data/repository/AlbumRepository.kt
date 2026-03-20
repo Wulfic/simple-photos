@@ -21,10 +21,9 @@ import javax.inject.Singleton
 /**
  * Manages album CRUD and server synchronisation.
  *
- * In encrypted mode, each album is represented as an encrypted manifest blob
- * on the server (blob_type = "album_manifest"). The manifest contains the
- * album name, cover photo, and a list of photo blob IDs. In plain mode,
- * albums are stored locally only.
+ * Each album is represented as an encrypted manifest blob on the server
+ * (blob_type = "album_manifest"). The manifest contains the album name,
+ * cover photo, and a list of photo blob IDs.
  */
 @Singleton
 class AlbumRepository @Inject constructor(
@@ -68,20 +67,8 @@ class AlbumRepository @Inject constructor(
     /**
      * Upload an album manifest blob to the server.
      * Encrypts the manifest JSON and uploads as blob_type = album_manifest.
-     * In plain mode (no encryption key), this is a no-op — albums stay local only.
      */
     suspend fun syncAlbum(album: AlbumEntity) {
-        // In plain mode the crypto key isn't available; skip manifest sync.
-        try {
-            val encSettings = api.getEncryptionSettings()
-            if (encSettings.encryptionMode == "plain") {
-                db.albumDao().update(album.copy(syncStatus = SyncStatus.SYNCED))
-                return
-            }
-        } catch (_: Exception) {
-            // Can't determine mode — try sync anyway
-        }
-
         val photoIds = db.albumDao().getPhotoIdsForAlbum(album.localId)
 
         // Build the server's photo blob IDs from the local-to-server mapping
@@ -127,18 +114,8 @@ class AlbumRepository @Inject constructor(
      * into the local Room DB. Albums that no longer exist on the server are
      * removed locally. This brings web-created albums into the Android app
      * and vice-versa.
-     *
-     * In plain mode (no encryption) this is a no-op — albums stay local.
      */
     suspend fun syncAlbumsFromServer() {
-        // Skip in plain mode — manifests are encrypted
-        try {
-            val encSettings = api.getEncryptionSettings()
-            if (encSettings.encryptionMode == "plain") return
-        } catch (_: Exception) {
-            return // can't determine mode — bail out
-        }
-
         val blobList = api.listBlobs(blobType = "album_manifest")
         val serverAlbumIds = mutableSetOf<String>()
 

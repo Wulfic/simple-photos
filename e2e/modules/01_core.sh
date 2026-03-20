@@ -1016,100 +1016,83 @@ fi
 rm -f "$TEST_BLOB"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MODULE 14: ENCRYPTION SETTINGS
+# MODULE 14: ENCRYPTION SETTINGS (Always Encrypted)
 # ══════════════════════════════════════════════════════════════════════════════
 hdr "Module 14: Encryption Settings"
 
-subhdr "Get Encryption Settings (defaults)"
-ENC=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
-assert_json "Default mode is plain" "$ENC" "encryption_mode" "plain"
-assert_json "Migration status is idle" "$ENC" "migration_status" "idle"
-assert_contains "Migration total field present" "$ENC" "migration_total"
-assert_contains "Migration completed field present" "$ENC" "migration_completed"
+# Encryption is always on — there is no plain mode, no migration, and no
+# PUT /api/admin/encryption endpoint.  The only settings-related endpoints are:
+#   GET  /api/settings/encryption          → {"encryption_mode": "encrypted"}
+#   POST /api/admin/encryption/store-key   → persist a client-provided key
 
-# ── Test: Enable encrypted mode WITH a key ────────────────────────────────
+subhdr "Get Encryption Settings (always encrypted)"
+ENC=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
+assert_json "Mode is always encrypted" "$ENC" "encryption_mode" "encrypted"
+
+# Verify that legacy migration fields are absent from the response
+MIG_STATUS_FIELD=$(echo "$ENC" | jget migration_status "__MISSING__")
+if [[ "$MIG_STATUS_FIELD" == "__MISSING__" ]]; then
+  pass "No legacy migration_status field in response"
+else
+  fail "Unexpected migration_status field present: $MIG_STATUS_FIELD"
+fi
+
+# ── Test: Store encryption key ─────────────────────────────────────────────
 # Use a deterministic 32-byte test key (hex-encoded).
 TEST_KEY_HEX="aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
 
-subhdr "Set Encryption Mode → encrypted (with key)"
-SET_ENC=$(curl -s --max-time 30 -X PUT "$API/admin/encryption" \
+subhdr "Store Encryption Key"
+STORE_KEY=$(curl -s --max-time 10 -X POST "$API/admin/encryption/store-key" \
   -H "$AUTH" -H 'Content-Type: application/json' \
-  -d "{\"mode\":\"encrypted\",\"key_hex\":\"$TEST_KEY_HEX\"}")
-assert_contains "setMode response contains encrypted" "$SET_ENC" "encrypted"
+  -d "{\"key\":\"$TEST_KEY_HEX\"}")
+assert_contains "Store-key response has message" "$STORE_KEY" "message"
 
-# Verify mode changed
-ENC2=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
-assert_json "Mode is now encrypted" "$ENC2" "encryption_mode" "encrypted"
-
-# ── Wait for migration to complete (if photos exist) ──────────────────────
-subhdr "Wait for Encryption Migration"
-MIG_TOTAL=$(echo "$SET_ENC" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('migration_items',0))" 2>/dev/null || echo "0")
-if [[ "$MIG_TOTAL" -gt 0 ]]; then
-  log "Migration started for $MIG_TOTAL items, waiting for completion..."
-  MIG_DONE=false
-  for i in $(seq 1 60); do
-    sleep 2
-    MIG_STATUS=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
-    STATUS_VAL=$(echo "$MIG_STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('migration_status','unknown'))" 2>/dev/null || echo "unknown")
-    COMPLETED=$(echo "$MIG_STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('migration_completed',0))" 2>/dev/null || echo "0")
-    if [[ "$STATUS_VAL" == "idle" && "$COMPLETED" -gt 0 ]]; then
-      MIG_DONE=true
-      pass "Encryption migration completed ($COMPLETED/$MIG_TOTAL items) in ~$((i * 2))s"
-      break
-    elif [[ "$STATUS_VAL" == "encrypting" ]]; then
-      log "  Migration in progress: $COMPLETED/$MIG_TOTAL ($STATUS_VAL) [$i/60]"
-    else
-      log "  Migration status: $STATUS_VAL, completed: $COMPLETED [$i/60]"
-    fi
-  done
-  if ! $MIG_DONE; then
-    fail "Encryption migration did not complete within 120s (status=$STATUS_VAL, $COMPLETED/$MIG_TOTAL)"
-  fi
-
-  # Verify encrypted photos via encrypted-sync
-  subhdr "Verify Encrypted Photos via encrypted-sync"
-  ENC_PHOTOS=$(curl -s --max-time 10 "$API/photos/encrypted-sync" -H "$AUTH")
-  ENC_COUNT=$(echo "$ENC_PHOTOS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('photos',[])))" 2>/dev/null || echo "0")
-  if [[ "$ENC_COUNT" -gt 0 ]]; then
-    pass "encrypted-sync returns $ENC_COUNT encrypted photos after migration"
-  else
-    fail "encrypted-sync returned 0 photos after migration (expected $MIG_TOTAL)"
-  fi
+subhdr "Store Key — Invalid Hex → 400"
+BAD_KEY_STATUS=$(http_status -X POST "$API/admin/encryption/store-key" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"key":"not-valid-hex"}')
+if [[ "$BAD_KEY_STATUS" == "400" ]]; then
+  pass "Invalid hex key correctly rejected (HTTP 400)"
 else
-  log "No photos to migrate — verifying mode was set correctly"
-  pass "Encryption mode set to encrypted (0 items to migrate — will start when photos arrive)"
+  fail "Invalid hex key should return 400, got $BAD_KEY_STATUS"
 fi
 
-# ── Test: Switch back to plain ─────────────────────────────────────────────
-subhdr "Set Encryption Mode → plain (decrypt)"
-SET_PLAIN=$(curl -s --max-time 30 -X PUT "$API/admin/encryption" \
+subhdr "Store Key — Missing Body → 400"
+EMPTY_KEY_STATUS=$(http_status -X POST "$API/admin/encryption/store-key" \
   -H "$AUTH" -H 'Content-Type: application/json' \
-  -d "{\"mode\":\"plain\",\"key_hex\":\"$TEST_KEY_HEX\"}")
-assert_contains "setMode response contains plain" "$SET_PLAIN" "plain"
-
-# Server-side decryption is not implemented — when switching to plain the server
-# flips the mode and resets migration status to "idle". Existing encrypted blobs
-# remain accessible via the encrypted-sync endpoint; the client drives any
-# download-decrypt-reupload flow. Verify mode and migration status are correct:
-subhdr "Verify plain mode migration status is idle"
-PLAIN_ENC_STATUS=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
-PLAIN_MIG_S=$(echo "$PLAIN_ENC_STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('migration_status','unknown'))" 2>/dev/null || echo "unknown")
-if [[ "$PLAIN_MIG_S" == "idle" ]]; then
-  pass "Migration status is idle after switching to plain (server-side decrypt not yet supported)"
+  -d '{}')
+if [[ "$EMPTY_KEY_STATUS" == "400" ]]; then
+  pass "Empty key body correctly rejected (HTTP 400)"
 else
-  warn "Migration status is '$PLAIN_MIG_S' (expected 'idle')"
+  fail "Empty key body should return 400, got $EMPTY_KEY_STATUS"
 fi
 
-# Verify we're back to plain
-ENC_FINAL=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
-assert_json "Mode restored to plain" "$ENC_FINAL" "encryption_mode" "plain"
-
-# Verify plain photos list works again
-PLAIN_PHOTOS=$(curl -s --max-time 10 "$API/photos" -H "$AUTH")
-if echo "$PLAIN_PHOTOS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'photos' in d" 2>/dev/null; then
-  pass "Plain photo listing works after round-trip encryption"
+# ── Verify removed endpoint returns 404 ────────────────────────────────────
+subhdr "PUT /api/admin/encryption removed → 404/405"
+OLD_PUT_STATUS=$(http_status -X PUT "$API/admin/encryption" \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"mode":"plain"}')
+if [[ "$OLD_PUT_STATUS" == "404" || "$OLD_PUT_STATUS" == "405" ]]; then
+  pass "Legacy PUT /admin/encryption correctly gone (HTTP $OLD_PUT_STATUS)"
 else
-  warn "Plain photo listing after decryption: ${PLAIN_PHOTOS:0:200}"
+  fail "PUT /admin/encryption should return 404/405, got $OLD_PUT_STATUS"
+fi
+
+# ── Encrypted photos still accessible ──────────────────────────────────────
+subhdr "Photo listing works in always-encrypted mode"
+ENC_PHOTOS=$(curl -s --max-time 10 "$API/photos" -H "$AUTH")
+if echo "$ENC_PHOTOS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'photos' in d" 2>/dev/null; then
+  pass "Photo listing works in always-encrypted mode"
+else
+  warn "Photo listing response: ${ENC_PHOTOS:0:200}"
+fi
+
+subhdr "Encrypted sync endpoint available"
+ENC_SYNC=$(curl -s --max-time 10 "$API/photos/encrypted-sync" -H "$AUTH")
+if echo "$ENC_SYNC" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
+  pass "Encrypted sync endpoint returns valid JSON"
+else
+  fail "Encrypted sync endpoint returned invalid JSON: ${ENC_SYNC:0:200}"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
