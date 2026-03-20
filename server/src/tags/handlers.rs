@@ -186,7 +186,7 @@ pub async fn search_photos(
                 p.created_at, p.taken_at, p.latitude, p.longitude, p.width, p.height
          FROM photos p
          LEFT JOIN photo_tags pt ON pt.photo_id = p.id AND pt.user_id = p.user_id
-         LEFT JOIN shared_album_photos sap ON sap.photo_ref = p.id AND sap.ref_type = 'plain'
+         LEFT JOIN shared_album_photos sap ON sap.photo_ref = p.id AND sap.ref_type = 'photo'
          LEFT JOIN shared_albums sa ON sa.id = sap.album_id
          WHERE p.user_id = ?
            AND {}

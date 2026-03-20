@@ -138,7 +138,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `POST` | `/api/sharing/albums/{id}/members` | Bearer (owner) | `{ user_id }` | **201** `{ member_id, user_id }` |
 | `DELETE` | `/api/sharing/albums/{id}/members/{user_id}` | Bearer (owner) | — | **204** |
 | `GET` | `/api/sharing/albums/{id}/photos` | Bearer (member) | — | `[{ id, photo_ref, ref_type, added_at }]` |
-| `POST` | `/api/sharing/albums/{id}/photos` | Bearer (member) | `{ photo_ref, ref_type: "blob" }` | **201** `{ photo_id }` |
+| `POST` | `/api/sharing/albums/{id}/photos` | Bearer (member) | `{ photo_ref, ref_type: "photo"\|"blob" }` | **201** `{ photo_id }` |
 | `DELETE` | `/api/sharing/albums/{album_id}/photos/{photo_id}` | Bearer (member) | — | **204** |
 | `GET` | `/api/sharing/users` | Bearer | — | `[{ id, username }]` |
 
@@ -181,7 +181,6 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|
-| `GET` | `/api/settings/encryption` | Bearer | — | `{ encryption_mode }` (always `"encrypted"`) |
 | `GET` | `/api/settings/storage-stats` | Bearer | — | `{ photo_bytes, photo_count, video_bytes, video_count, other_blob_bytes, other_blob_count, user_total_bytes, fs_total_bytes, fs_free_bytes }` |
 | `GET` | `/api/settings/audio-backup` | Bearer | — | `{ audio_backup_enabled: bool }` |
 
@@ -238,9 +237,9 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 ---
 
-## Admin — Encryption
+## Admin — Encryption Key
 
-Encryption is always enabled (AES-256-GCM). There is no plain mode or migration flow.
+Encryption is always enabled (AES-256-GCM). The client derives a key from the user's credentials and sends it to the server so server-side operations (autoscan, conversion) can process photos autonomously.
 
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|

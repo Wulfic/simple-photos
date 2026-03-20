@@ -167,9 +167,8 @@ export default function CompleteStep({
 
               // ── Normal setup tasks ────────────────────────────────────
               // Fire scan in the background — don't await it, as it can take
-              // a long time and blocks navigation. Encryption mode is set
-              // immediately after; the server applies it to any photos the scan
-              // registers. Autoscan will catch anything the background scan misses.
+              // a long time and blocks navigation. Autoscan will catch anything
+              // the background scan misses.
               api.admin.scanAndRegister()
                 .then((scanResult) => {
                   console.log("[Setup] Background scan complete:", scanResult);

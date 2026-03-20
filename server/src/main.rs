@@ -357,8 +357,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/photos/reconvert", post(photos::convert::trigger_reconvert))
         // Check conversion progress (pending items count) — available to any authenticated user
         .route("/photos/conversion-status", get(photos::convert::conversion_status))
-        // Encryption settings (read-only — always encrypted)
-        .route("/settings/encryption", get(photos::encryption::get_encryption_settings))
         // Store encryption key so server-side operations can encrypt autonomously
         .route("/admin/encryption/store-key", post(photos::encryption::store_encryption_key))
         // Secure galleries

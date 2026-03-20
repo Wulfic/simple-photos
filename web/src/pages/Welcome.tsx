@@ -23,7 +23,6 @@ import PairStep from "./welcome/PairStep";
 import AccountStep from "./welcome/AccountStep";
 import TwoFactorStep from "./welcome/TwoFactorStep";
 import ServerConfigStep from "./welcome/ServerConfigStep";
-// EncryptionStep removed — encryption is always on
 import SslStep from "./welcome/SslStep";
 import UsersStep from "./welcome/UsersStep";
 import AndroidStep from "./welcome/AndroidStep";
@@ -97,7 +96,6 @@ export default function Welcome() {
   const [portInput, setPortInput] = useState("");
   const [portSaved, setPortSaved] = useState(false);
 
-  // Encryption is always on — no mode toggle needed
 
   // ── Additional users ────────────────────────────────────────────────────
   const [createdUsers, setCreatedUsers] = useState<CreatedUser[]>([]);

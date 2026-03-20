@@ -118,7 +118,7 @@ async fn phase_convert(
     encryption_key: &Arc<RwLock<Option<[u8; 32]>>>,
     key_available: bool,
 ) -> (u32, Vec<String>) {
-    // ── Pass 1: Collect plain-disk conversions (parallelisable) ──────────
+    // ── Pass 1: Collect disk conversions (parallelisable) ───────────────
     // These only need FFmpeg and no DB writes (except optional re-encrypt),
     // so they are safe to run concurrently.
     struct DiskWork {
@@ -320,9 +320,9 @@ async fn phase_convert(
 
 /// Regenerate thumbnails for files that were just converted in Phase 2.
 ///
-/// Note: With mandatory encryption, plain-photo thumbnail regeneration is no
-/// longer needed — encrypted thumbnails are managed during upload/conversion.
-/// This phase is a no-op but retained for structural consistency.
+/// Regenerate thumbnails for files that were just converted in Phase 2.
+/// Encrypted thumbnails are managed during upload/conversion, so this phase
+/// is a no-op but retained for structural consistency.
 async fn phase_post_conversion_thumbnails(
     _photos: &[PhotoRow],
     _storage_root: &PathBuf,
@@ -399,11 +399,9 @@ async fn run_conversion_pass(
             .collect()
     };
 
-    let unencrypted_count = 0usize; // All photos are encrypted after migration 025
-    let enc_count = photos.len();
     tracing::info!(
-        "[DIAG:CONVERT] run_conversion_pass — {} photos ({} unencrypted, {} encrypted, key_available={})",
-        photos.len(), unencrypted_count, enc_count, key_available
+        "[DIAG:CONVERT] run_conversion_pass — {} photos (key_available={})",
+        photos.len(), key_available
     );
 
     // ── Phase 1: Generate ALL missing thumbnails ────────────────────────

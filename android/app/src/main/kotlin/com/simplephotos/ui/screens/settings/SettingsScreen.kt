@@ -79,9 +79,6 @@ class SettingsViewModel @Inject constructor(
     var storageStats by mutableStateOf<StorageStatsResponse?>(null)
     var storageLoading by mutableStateOf(false)
 
-    // Encryption mode (always encrypted)
-    var encryptionMode by mutableStateOf("encrypted")
-
     // Admin status
     var isAdmin by mutableStateOf(false)
 

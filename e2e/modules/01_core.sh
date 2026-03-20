@@ -843,7 +843,7 @@ if [[ -n "$ALBUM_ID" && "$ALBUM_ID" != "__MISSING__" ]]; then
   if [[ -n "$FIRST_PHOTO_ID" ]]; then
     ADD_PHOTO_STATUS=$(http_status -X POST "$API/sharing/albums/$ALBUM_ID/photos" \
       -H "$AUTH" -H 'Content-Type: application/json' \
-      -d "{\"photo_ref\":\"$FIRST_PHOTO_ID\",\"ref_type\":\"plain\"}")
+      -d "{\"photo_ref\":\"$FIRST_PHOTO_ID\",\"ref_type\":\"photo\"}")
     if [[ "$ADD_PHOTO_STATUS" == "201" || "$ADD_PHOTO_STATUS" == "200" ]]; then
       pass "Photo added to shared album (HTTP $ADD_PHOTO_STATUS)"
     else
@@ -1018,24 +1018,11 @@ rm -f "$TEST_BLOB"
 # ══════════════════════════════════════════════════════════════════════════════
 # MODULE 14: ENCRYPTION SETTINGS (Always Encrypted)
 # ══════════════════════════════════════════════════════════════════════════════
-hdr "Module 14: Encryption Settings"
+hdr "Module 14: Encryption Key Storage"
 
 # Encryption is always on — there is no plain mode, no migration, and no
-# PUT /api/admin/encryption endpoint.  The only settings-related endpoints are:
-#   GET  /api/settings/encryption          → {"encryption_mode": "encrypted"}
+# settings endpoint.  The only encryption-related endpoint is:
 #   POST /api/admin/encryption/store-key   → persist a client-provided key
-
-subhdr "Get Encryption Settings (always encrypted)"
-ENC=$(curl -s --max-time 10 "$API/settings/encryption" -H "$AUTH")
-assert_json "Mode is always encrypted" "$ENC" "encryption_mode" "encrypted"
-
-# Verify that legacy migration fields are absent from the response
-MIG_STATUS_FIELD=$(echo "$ENC" | jget migration_status "__MISSING__")
-if [[ "$MIG_STATUS_FIELD" == "__MISSING__" ]]; then
-  pass "No legacy migration_status field in response"
-else
-  fail "Unexpected migration_status field present: $MIG_STATUS_FIELD"
-fi
 
 # ── Test: Store encryption key ─────────────────────────────────────────────
 # Use a deterministic 32-byte test key (hex-encoded).

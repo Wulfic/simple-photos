@@ -32,9 +32,6 @@ export default function Settings() {
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // ── Encryption state ─────────────────────────────────────────────────────
-  const [encryptionLoading, setEncryptionLoading] = useState(true);
-
   // ── Backup recovery state ────────────────────────────────────────────────
   const [showRecoverWarning, setShowRecoverWarning] = useState(false);
   const { backupServers, loaded: backupLoaded, recovering, setRecovering, setBackupServers, setLoaded: setBackupLoaded, viewMode, setViewMode, activeBackupServerId, setActiveBackupServerId } = useBackupStore();
@@ -77,17 +74,6 @@ export default function Settings() {
 
   // ── Encryption handlers ──────────────────────────────────────────────────
 
-  const loadEncryptionSettings = useCallback(async () => {
-    try {
-      // Server always returns "encrypted" — we just need to confirm it's reachable
-      await api.encryption.getSettings();
-    } catch {
-      // Settings endpoint may not be available yet
-    } finally {
-      setEncryptionLoading(false);
-    }
-  }, []);
-
   // Scan the local network for Simple Photos servers.
   // Results are surfaced as suggestions — the user decides whether to add them.
   const [discovering, setDiscovering] = useState(false);
@@ -119,13 +105,12 @@ export default function Settings() {
     }
   }, [setBackupServers, setBackupLoaded]);
 
-  // Fetch encryption settings and backup servers on mount
+  // Fetch backup servers on mount
   useEffect(() => {
-    loadEncryptionSettings();
     loadBackupServers();
     loadStorageStats();
     loadAudioBackupSetting();
-  }, [loadEncryptionSettings, loadBackupServers]);
+  }, [loadBackupServers]);
 
   async function loadStorageStats() {
     setStorageLoading(true);
@@ -310,7 +295,7 @@ export default function Settings() {
       </section>
 
       {/* ── Scan for New Files (admin) ────────────────────────────────── */}
-      {isAdmin && !encryptionLoading && (
+      {isAdmin && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Scan for New Files</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
@@ -353,10 +338,7 @@ export default function Settings() {
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Privacy & Encryption</h2>
 
-        {encryptionLoading ? (
-          <div className="text-gray-400 text-sm">Loading encryption settings…</div>
-        ) : (
-          <div className="space-y-4">
+        <div className="space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-green-100 dark:bg-green-900/40 rounded-full flex items-center justify-center">
                 <svg className="w-5 h-5 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -373,12 +355,11 @@ export default function Settings() {
               </div>
             </div>
           </div>
-        )}
       </section>
       )}
 
       {/* ── Re-convert Encrypted Media ───── */}
-      {isAdmin && !encryptionLoading && (
+      {isAdmin && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Re-convert Encrypted Media</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">

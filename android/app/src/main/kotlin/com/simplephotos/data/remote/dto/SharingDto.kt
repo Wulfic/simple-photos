@@ -65,7 +65,7 @@ data class SharedAlbumPhoto(
 /** Request body for `POST /api/sharing/albums/{id}/photos`. */
 data class AddSharedPhotoRequest(
     @SerializedName("photo_ref") val photoRef: String,
-    @SerializedName("ref_type") val refType: String = "plain",
+    @SerializedName("ref_type") val refType: String = "photo",
 )
 
 /** Response from `POST /api/sharing/albums/{id}/photos`. */

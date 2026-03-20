@@ -8,7 +8,7 @@ import com.google.gson.annotations.SerializedName
 
 // ── Photo models ─────────────────────────────────────────────────────────────
 
-data class PlainPhotoRecord(
+data class PhotoRecord(
     val id: String,
     val filename: String,
     @SerializedName("file_path") val filePath: String,
@@ -29,8 +29,8 @@ data class PlainPhotoRecord(
     @SerializedName("photo_hash") val photoHash: String? = null
 )
 
-data class PlainPhotoListResponse(
-    val photos: List<PlainPhotoRecord>,
+data class PhotoListResponse(
+    val photos: List<PhotoRecord>,
     @SerializedName("next_cursor") val nextCursor: String?
 )
 
@@ -40,11 +40,6 @@ data class PhotoUploadResponse(
     @SerializedName("size_bytes") val sizeBytes: Long
 )
 
-// ── Encryption settings ──────────────────────────────────────────────────────
-
-data class EncryptionSettingsResponse(
-    @SerializedName("encryption_mode") val encryptionMode: String
-)
 
 // ── Encrypted-mode sync (lightweight manifest from photos table) ─────────────
 

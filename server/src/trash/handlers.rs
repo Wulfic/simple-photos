@@ -160,7 +160,7 @@ pub async fn soft_delete_photo(
         .await?;
 
     // Clean up shared album references to prevent dangling photo_ref entries
-    sqlx::query("DELETE FROM shared_album_photos WHERE photo_ref = ? AND ref_type = 'plain'")
+    sqlx::query("DELETE FROM shared_album_photos WHERE photo_ref = ? AND ref_type = 'photo'")
         .bind(&photo_id)
         .execute(&mut *tx)
         .await?;

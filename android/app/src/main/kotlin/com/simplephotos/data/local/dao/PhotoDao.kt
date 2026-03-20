@@ -50,7 +50,7 @@ interface PhotoDao {
     suspend fun markSynced(localId: String, blobId: String, thumbBlobId: String?)
 
     @Query("UPDATE photos SET serverPhotoId = :photoId, syncStatus = 'SYNCED' WHERE localId = :localId")
-    suspend fun markSyncedPlain(localId: String, photoId: String)
+    suspend fun markSynced(localId: String, photoId: String)
 
     @Query("UPDATE photos SET thumbnailPath = :path WHERE localId = :id")
     suspend fun updateThumbnailPath(id: String, path: String)

@@ -1,8 +1,9 @@
-//! Encryption settings and key storage endpoints.
+//! Encryption key storage endpoint.
 //!
 //! The server always operates in encrypted mode (AES-256-GCM, client-side).
+//! This module handles persisting the client-derived encryption key so
+//! server-side operations (autoscan, conversion) can process photos.
 //!
-//! - `GET  /api/settings/encryption`          — confirms encrypted mode
 //! - `POST /api/admin/encryption/store-key`   — persist the encryption key
 
 use axum::extract::State;
@@ -13,19 +14,6 @@ use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::setup::admin::require_admin;
 use crate::state::AppState;
-
-use super::models::EncryptionSettingsResponse;
-
-/// GET /api/settings/encryption
-/// Always returns `"encrypted"` — the server does not support plain mode.
-pub async fn get_encryption_settings(
-    State(_state): State<AppState>,
-    _auth: AuthUser,
-) -> Result<Json<EncryptionSettingsResponse>, AppError> {
-    Ok(Json(EncryptionSettingsResponse {
-        encryption_mode: "encrypted".to_string(),
-    }))
-}
 
 // ── Store encryption key ────────────────────────────────────────────────────
 

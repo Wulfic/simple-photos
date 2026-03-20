@@ -56,7 +56,7 @@ interface ApiService {
         @Query("after") after: String? = null,
         @Query("limit") limit: Int? = null,
         @Query("media_type") mediaType: String? = null
-    ): PlainPhotoListResponse
+    ): PhotoListResponse
 
     @GET("api/photos/encrypted-sync")
     suspend fun encryptedSync(
@@ -111,9 +111,6 @@ interface ApiService {
     suspend fun deleteBlob(@Path("id") blobId: String): Response<Unit>
 
     // ── Settings ─────────────────────────────────────────────────────────
-    @GET("api/settings/encryption")
-    suspend fun getEncryptionSettings(): EncryptionSettingsResponse
-
     @GET("api/settings/storage-stats")
     suspend fun getStorageStats(): StorageStatsResponse
 
