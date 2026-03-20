@@ -318,11 +318,20 @@ pub async fn discover_servers(
 
     // Hosts to probe: 127.0.0.1 (native), host.docker.internal (Docker-to-host),
     // and 172.17.0.1 (Docker default gateway fallback).
-    let probe_hosts: Vec<&str> = vec!["127.0.0.1", "host.docker.internal", "172.17.0.1"];
+    let mut probe_hosts: Vec<String> = vec![
+        "127.0.0.1".to_string(), 
+        "host.docker.internal".to_string(), 
+        "172.17.0.1".to_string()
+    ];
+    if let Some(gw) = crate::backup::broadcast::get_default_gateway() {
+        if !probe_hosts.contains(&gw) {
+            probe_hosts.push(gw);
+        }
+    }
 
     let mut local_futures = Vec::new();
     for &port in &local_ports {
-        for &host in &probe_hosts {
+        for host in &probe_hosts {
             let addr = format!("{}:{}", host, port);
             if existing_addrs.contains(&addr) {
                 continue;
