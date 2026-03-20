@@ -21,9 +21,9 @@ pub struct TrashItem {
     pub thumb_path: Option<String>,
     pub deleted_at: String,
     pub expires_at: String,
-    /// If set, this trash item came from an encrypted blob (not a plain photo).
+    /// If set, this trash item originated from an encrypted blob.
     pub encrypted_blob_id: Option<String>,
-    /// The companion thumbnail blob ID (encrypted mode only).
+    /// The companion thumbnail blob ID.
     pub thumbnail_blob_id: Option<String>,
 }
 

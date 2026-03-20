@@ -77,13 +77,6 @@ pub struct RegisterPhotoRequest {
     pub longitude: Option<f64>,
 }
 
-/// Response for the encryption settings endpoint.
-/// The server always operates in encrypted mode.
-#[derive(Debug, Serialize)]
-pub struct EncryptionSettingsResponse {
-    pub encryption_mode: String,
-}
-
 /// Response for secure gallery listing.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SecureGalleryRecord {

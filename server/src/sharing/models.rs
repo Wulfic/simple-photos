@@ -49,11 +49,11 @@ pub struct AddMemberRequest {
 #[derive(Debug, Deserialize)]
 pub struct AddPhotoRequest {
     pub photo_ref: String,
-    /// "plain" (photos table) or "blob" (blobs table)
+    /// "photo" (photos table) or "blob" (blobs table)
     #[serde(default = "default_ref_type")]
     pub ref_type: String,
 }
 
 fn default_ref_type() -> String {
-    "plain".to_string()
+    "photo".to_string()
 }

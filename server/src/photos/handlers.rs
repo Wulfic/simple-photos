@@ -100,7 +100,7 @@ pub async fn list_photos(
 }
 
 /// POST /api/photos/register
-/// Register a plain file on disk as a photo in the database.
+/// Register a file on disk as a photo in the database.
 /// The file must already exist at the given path within the storage root.
 pub async fn register_photo(
     State(state): State<AppState>,

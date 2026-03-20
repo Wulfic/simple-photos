@@ -341,9 +341,9 @@ pub async fn add_photo(
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     require_album_access(&state.read_pool, &album_id, &auth.user_id).await?;
 
-    if req.ref_type != "plain" && req.ref_type != "blob" {
+    if req.ref_type != "photo" && req.ref_type != "blob" {
         return Err(AppError::BadRequest(
-            "ref_type must be 'plain' or 'blob'".into(),
+            "ref_type must be 'photo' or 'blob'".into(),
         ));
     }
 

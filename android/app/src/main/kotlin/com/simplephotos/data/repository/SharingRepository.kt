@@ -52,7 +52,7 @@ class SharingRepository @Inject constructor(
         api.listSharedAlbumPhotos(albumId)
 
     /** Add a photo to a shared album. */
-    suspend fun addPhoto(albumId: String, photoRef: String, refType: String = "plain"): AddSharedPhotoResponse =
+    suspend fun addPhoto(albumId: String, photoRef: String, refType: String = "photo"): AddSharedPhotoResponse =
         api.addSharedAlbumPhoto(albumId, AddSharedPhotoRequest(photoRef, refType))
 
     /** Remove a photo from a shared album. */

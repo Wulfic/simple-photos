@@ -76,7 +76,7 @@ export const sharingApi = {
     >(`/sharing/albums/${albumId}/photos`),
 
   /** Add a photo to a shared album */
-  addPhoto: (albumId: string, photoRef: string, refType: "plain" | "blob" = "blob") =>
+  addPhoto: (albumId: string, photoRef: string, refType: "photo" | "blob" = "blob") =>
     request<{ photo_id: string }>(
       `/sharing/albums/${albumId}/photos`,
       {

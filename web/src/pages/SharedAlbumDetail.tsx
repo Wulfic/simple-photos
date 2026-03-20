@@ -218,7 +218,7 @@ export default function SharedAlbumDetail() {
               key={photo.id}
               className="aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden relative group"
             >
-              {photo.ref_type === "plain" ? (
+              {photo.ref_type === "photo" ? (
                 <img
                   src={api.photos.thumbUrl(photo.photo_ref)}
                   alt=""

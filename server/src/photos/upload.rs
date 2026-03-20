@@ -16,12 +16,12 @@ use super::metadata::extract_media_metadata_from_bytes_async;
 use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 
 /// POST /api/photos/upload
-/// Upload a plain photo/video/GIF file from a mobile client.
+/// Upload a photo/video/GIF file from a mobile client.
 /// The file body is sent as raw bytes with metadata in custom headers:
 ///   X-Filename: original filename
 ///   X-Mime-Type: MIME type (e.g., image/jpeg)
 ///
-/// The server stores the file in the storage root and registers it as a plain photo.
+/// The server stores the file in the storage root and registers it as a photo.
 pub async fn upload_photo(
     State(state): State<AppState>,
     auth: AuthUser,
