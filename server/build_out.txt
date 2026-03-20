@@ -1,0 +1,11 @@
+    Checking simple-photos-server v0.6.9 (/home/wulfic/repos/simple-photos/server)
+warning: function `get_default_gateway` is never used
+   --> src/backup/broadcast.rs:174:8
+    |
+174 | pub fn get_default_gateway() -> Option<String> {
+    |        ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `simple-photos-server` (bin "simple-photos-server") generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.76s

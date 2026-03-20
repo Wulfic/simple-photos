@@ -249,15 +249,9 @@ export function useGalleryData(): GalleryDataResult {
         let thumbnailMimeType: string | undefined;
 
         if (isServerSide) {
-          // Autoscanned photo — download unencrypted thumbnail from server
-          try {
-            const thumbBytes = await api.photos.downloadThumb(photo.id);
-            thumbnailData = thumbBytes;
-            // Determine MIME from thumb content or default based on media type
-            thumbnailMimeType = photo.mime_type === "image/gif" ? "image/gif" : "image/jpeg";
-          } catch {
-            // Thumbnail not ready yet — show placeholder
-          }
+          // Autoscanned photo — do not pre-download here to avoid blocking sync.
+          // MediaTile will fetch it directly using the thumbnail endpoint.
+          thumbnailMimeType = photo.mime_type === "image/gif" ? "image/gif" : "image/jpeg";
         } else {
           // Encrypted photo — download and decrypt thumbnail blob
           const thumbBlobId = photo.encrypted_thumb_blob_id;
