@@ -108,11 +108,6 @@ class SettingsViewModel @Inject constructor(
     var totpLoading by mutableStateOf(true)
         private set
 
-    // Cleanup
-    var cleanableCount by mutableStateOf(0)
-    var cleanableBytes by mutableStateOf(0L)
-    var cleaningUp by mutableStateOf(false)
-
     // Audio backup
     var audioBackupEnabled by mutableStateOf(false)
     var audioBackupLoading by mutableStateOf(true)
@@ -151,7 +146,6 @@ class SettingsViewModel @Inject constructor(
         calculateFreeableSpace()
         load2faStatus()
         loadAudioBackupSetting()
-        loadCleanupStatus()
         loadBackupServers()
         loadSslStatus()
     }
@@ -349,35 +343,6 @@ class SettingsViewModel @Inject constructor(
             } catch (e: Exception) {
                 onError("Failed: ${e.message}")
             }
-        }
-    }
-
-    // ── Cleanup ──────────────────────────────────────────────────────────
-
-    private fun loadCleanupStatus() {
-        viewModelScope.launch {
-            try {
-                val res = withContext(Dispatchers.IO) { api.getCleanupStatus() }
-                cleanableCount = res.cleanableCount
-                cleanableBytes = res.cleanableBytes
-            } catch (_: Exception) {}
-        }
-    }
-
-    fun cleanupPlainFiles(onDone: () -> Unit) {
-        viewModelScope.launch {
-            cleaningUp = true
-            try {
-                val res = withContext(Dispatchers.IO) { api.cleanupPlainFiles() }
-                message = res.message
-                cleanableCount = 0
-                cleanableBytes = 0
-                loadStorageStats()
-            } catch (e: Exception) {
-                error = "Cleanup failed: ${e.message}"
-            }
-            cleaningUp = false
-            onDone()
         }
     }
 
@@ -1059,38 +1024,6 @@ fun SettingsScreen(
                             "Active",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color(0xFF22C55E)
-                        )
-                    }
-                }
-            }
-
-            // ── Cleanup (admin) ─────────────────────────────────────────
-            if (viewModel.isAdmin) {
-                SettingsCard(title = "Cleanup", icon = Icons.Default.CleaningServices) {
-                    if (viewModel.cleanableCount > 0) {
-                        Text(
-                            "${viewModel.cleanableCount} leftover plain files (${formatBytes(viewModel.cleanableBytes)}) can be removed now that encryption is enabled.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedButton(
-                            onClick = { viewModel.cleanupPlainFiles {} },
-                            enabled = !viewModel.cleaningUp,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            if (viewModel.cleaningUp) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
-                            }
-                            Text("Clean Up ${formatBytes(viewModel.cleanableBytes)}")
-                        }
-                    } else {
-                        Text(
-                            "No leftover plain files to clean up.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

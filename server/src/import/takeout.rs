@@ -198,8 +198,6 @@ pub async fn import_takeout(
         AppError::BadRequest(format!("Cannot resolve path '{}': {}", req.path, e))
     })?;
 
-    // Server always operates in encrypted mode
-    let is_encrypted = true;
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
 
@@ -395,8 +393,8 @@ pub async fn import_takeout(
                         "INSERT INTO photo_metadata \
                          (id, user_id, photo_id, blob_id, source, title, description, taken_at, \
                           created_at_src, latitude, longitude, altitude, image_views, original_url, \
-                          storage_path, is_encrypted, imported_at) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                          storage_path, imported_at) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(&record.id)
                     .bind(&record.user_id)
@@ -413,7 +411,6 @@ pub async fn import_takeout(
                     .bind(record.image_views)
                     .bind(&record.original_url)
                     .bind(&storage_path)
-                    .bind(is_encrypted as i32)
                     .bind(&record.imported_at)
                     .execute(&state.pool)
                     .await;

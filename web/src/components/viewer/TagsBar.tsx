@@ -1,6 +1,5 @@
 /**
- * TagsBar — previously rendered server-side tags for plain mode.
- * Plain mode has been removed; tags are now stored in encrypted metadata.
+ * TagsBar — tags are stored in encrypted metadata.
  * This component is a no-op stub kept for API compatibility.
  * TODO: Remove this component and its usages entirely.
  */

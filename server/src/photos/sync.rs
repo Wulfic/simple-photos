@@ -35,7 +35,7 @@ pub struct EncryptedSyncRecord {
     pub duration_secs: Option<f64>,
     pub taken_at: Option<String>,
     pub created_at: String,
-    pub encrypted_blob_id: Option<String>,
+    pub encrypted_blob_id: String,
     pub encrypted_thumb_blob_id: Option<String>,
     pub is_favorite: bool,
     pub crop_metadata: Option<String>,
@@ -64,7 +64,7 @@ pub async fn encrypted_sync(
              duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
              is_favorite, crop_metadata, photo_hash \
              FROM photos \
-             WHERE user_id = ? AND encrypted_blob_id IS NOT NULL \
+             WHERE user_id = ? \
              AND COALESCE(taken_at, created_at) < ? \
              ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \
              LIMIT ?",
@@ -80,7 +80,7 @@ pub async fn encrypted_sync(
              duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
              is_favorite, crop_metadata, photo_hash \
              FROM photos \
-             WHERE user_id = ? AND encrypted_blob_id IS NOT NULL \
+             WHERE user_id = ? \
              ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \
              LIMIT ?",
         )

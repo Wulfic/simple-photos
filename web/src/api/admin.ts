@@ -185,7 +185,6 @@ export const adminApi = {
       missing_thumbnails: number;
       converting: boolean;
       key_available?: boolean;
-      migration_running?: boolean;
     }>(
       "/photos/conversion-status"
     ),

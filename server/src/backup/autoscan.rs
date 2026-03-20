@@ -8,9 +8,6 @@
 //! After new files are registered, the scanner triggers the background
 //! processing pipeline in [`crate::photos::convert`] which runs three
 //! sequential phases: thumbnails → conversion → post-conversion thumbnails.
-//!
-//! In encrypted mode, newly registered files also trigger the encryption
-//! migration if the encryption key is available.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,8 +39,6 @@ pub async fn background_auto_scan_task(
     storage_root: Arc<ArcSwap<PathBuf>>,
     interval_secs: u64,
     convert_notify: std::sync::Arc<tokio::sync::Notify>,
-    encryption_key_store: std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
-    jwt_secret: String,
     scan_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 ) {
     if interval_secs == 0 {
@@ -54,9 +49,7 @@ pub async fn background_auto_scan_task(
     // Run an initial scan shortly after startup
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     tracing::info!("[DIAG:AUTOSCAN] Running startup auto-scan...");
-    // Read current storage root from ArcSwap (respects runtime changes).
     let root = (**storage_root.load()).clone();
-    // Use try_lock so background autoscan skips if a manual scan is already running.
     let count = if let Ok(_guard) = scan_lock.try_lock() {
         run_auto_scan(&pool, &root).await
     } else {
@@ -64,12 +57,8 @@ pub async fn background_auto_scan_task(
         0
     };
     tracing::info!("[DIAG:AUTOSCAN] Startup auto-scan complete: registered {} new files", count);
-    // Always check migration — even when count == 0, there may be unencrypted
-    // photos from a previous scan that still need migration (e.g. setMode was
-    // called before the initial scan finished).
-    auto_start_migration_if_needed(
-        &pool, &root, &convert_notify, &encryption_key_store, &jwt_secret,
-    ).await;
+    // Trigger conversion pipeline for any newly discovered files.
+    convert_notify.notify_one();
     update_last_scan_time(&pool).await;
 
     // Then scan on a configurable interval
@@ -78,8 +67,6 @@ pub async fn background_auto_scan_task(
 
     loop {
         interval.tick().await;
-
-        // Re-read storage root each iteration — the admin may have changed it.
         let root = (**storage_root.load()).clone();
         let count = if let Ok(_guard) = scan_lock.try_lock() {
             run_auto_scan(&pool, &root).await
@@ -88,11 +75,9 @@ pub async fn background_auto_scan_task(
             0
         };
         tracing::info!("[DIAG:AUTOSCAN] Interval auto-scan complete: registered {} new files", count);
-        // Always check migration — even when count == 0, there may be unencrypted
-        // photos that need migration due to timing gaps between scan and setMode.
-        auto_start_migration_if_needed(
-            &pool, &root, &convert_notify, &encryption_key_store, &jwt_secret,
-        ).await;
+        if count > 0 {
+            convert_notify.notify_one();
+        }
         update_last_scan_time(&pool).await;
     }
 }
@@ -126,15 +111,9 @@ pub async fn trigger_auto_scan(
 
     let count = run_auto_scan(&pool, &storage_root).await;
     tracing::info!("[DIAG:AUTOSCAN] On-demand scan complete: registered {} new files", count);
-    // Always check migration — even when count == 0, there may be unencrypted
-    // photos that need migration (e.g. setMode was called before scan finished).
-    auto_start_migration_if_needed(
-        &pool,
-        &storage_root,
-        &state.convert_notify,
-        &state.encryption_key,
-        &state.config.auth.jwt_secret,
-    ).await;
+    if count > 0 {
+        state.convert_notify.notify_one();
+    }
 
     // Update last scan time
     update_last_scan_time(&pool).await;
@@ -143,115 +122,6 @@ pub async fn trigger_auto_scan(
         "message": "Scan complete",
         "new_count": count,
     })))
-}
-
-/// If there are unencrypted plain photos, automatically start the encryption
-/// migration. Public entry point for `scan_and_register` (and any other caller)
-/// to trigger migration-check logic after discovering new files.
-pub async fn try_start_migration_after_scan(
-    pool: &sqlx::SqlitePool,
-    storage_root: &std::path::Path,
-    convert_notify: &std::sync::Arc<tokio::sync::Notify>,
-    encryption_key_store: &std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
-    jwt_secret: &str,
-) {
-    auto_start_migration_if_needed(pool, storage_root, convert_notify, encryption_key_store, jwt_secret).await;
-}
-
-/// Check for unencrypted photos and start migration if a key is available.
-/// The server is always in encrypted mode, so we skip the mode check.
-async fn auto_start_migration_if_needed(
-    pool: &sqlx::SqlitePool,
-    storage_root: &std::path::Path,
-    convert_notify: &std::sync::Arc<tokio::sync::Notify>,
-    encryption_key_store: &std::sync::Arc<tokio::sync::RwLock<Option<[u8; 32]>>>,
-    jwt_secret: &str,
-) {
-    // Count plain photos that need encryption.
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-
-    if count == 0 {
-        tracing::debug!("[DIAG:AUTOSCAN] auto_start_migration: 0 plain photos, nothing to do");
-        return;
-    }
-
-    tracing::info!(
-        "[DIAG:AUTOSCAN] Auto-triggered encryption migration for {} unencrypted photos after scan",
-        count
-    );
-
-    // Try to load the encryption key and spawn the actual migration task
-    let key = {
-        // First check in-memory store
-        let guard = encryption_key_store.read().await;
-        *guard
-    };
-    let key = match key {
-        Some(k) => k,
-        None => {
-            // Try loading from DB
-            match crate::crypto::load_wrapped_key(pool, jwt_secret).await {
-                Ok(Some(k)) => {
-                    let mut guard = encryption_key_store.write().await;
-                    *guard = Some(k);
-                    k
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        "[DIAG:AUTOSCAN] No encryption key available (in-memory or DB). \
-                         Migration DB status set to 'encrypting' but actual task not started. \
-                         A client must provide the key."
-                    );
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!("[DIAG:AUTOSCAN] Failed to load stored key: {}", e);
-                    return;
-                }
-            }
-        }
-    };
-
-    // Find the admin user
-    let admin_id: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    let user_id = match admin_id {
-        Some(id) => id,
-        None => {
-            tracing::warn!("[DIAG:AUTOSCAN] No admin user found, cannot start migration task");
-            return;
-        }
-    };
-
-    // Spawn the migration in the background
-    let pool_clone = pool.clone();
-    let storage_root_clone = storage_root.to_path_buf();
-    let convert_notify_clone = convert_notify.clone();
-    let encryption_key_clone = encryption_key_store.clone();
-    let jwt_secret_clone = jwt_secret.to_string();
-    tokio::spawn(async move {
-        crate::photos::server_migrate::run_migration_from_stored_key(
-            key,
-            user_id,
-            pool_clone,
-            storage_root_clone,
-            convert_notify_clone,
-            encryption_key_clone,
-            jwt_secret_clone,
-        )
-        .await;
-    });
 }
 
 /// Scan storage directory and register any unregistered media files for ALL users.

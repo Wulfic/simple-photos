@@ -15,7 +15,7 @@ import {
 import { createFallbackThumbnail, createAudioFallbackThumbnail, arrayBufferToBase64 } from "../utils/media";
 import { useProcessingStore } from "../store/processing";
 import { generateThumbnail, getImageDimensions } from "../utils/gallery";
-import type { EncryptionMode, ThumbnailPayload } from "./useGalleryData";
+import type { ThumbnailPayload } from "./useGalleryData";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -34,7 +34,6 @@ interface PhotoPayload {
 }
 
 export interface UploadDeps {
-  mode: EncryptionMode | null;
   loadEncryptedPhotos: () => Promise<void>;
   setError: (msg: string) => void;
 }
@@ -47,7 +46,7 @@ export interface UploadDeps {
  * Each selected file is encrypted client-side (AES-256-GCM) and
  * uploaded through the blob API.
  */
-export function useGalleryUpload({ mode, loadEncryptedPhotos, setError }: UploadDeps) {
+export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -86,7 +85,7 @@ export function useGalleryUpload({ mode, loadEncryptedPhotos, setError }: Upload
   // eslint-disable-next-line react-hooks/exhaustive-deps -- startTask, endTask,
   // setError are stable store/parent refs; loadEncryptedPhotos is declared in
   // the parent hook but depends only on stable state setters.
-  }, [mode, loadEncryptedPhotos, startTask, endTask, setError]);
+  }, [loadEncryptedPhotos, startTask, endTask, setError]);
 
   async function uploadSingleFile(file: File) {
     const arrayBuf = await file.arrayBuffer();

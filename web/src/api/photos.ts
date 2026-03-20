@@ -1,6 +1,6 @@
 /**
  * Photos API client — list, upload, download, favorite, crop, duplicate,
- * edit copies, encrypted sync, and cleanup operations.
+ * edit copies, and encrypted sync operations.
  *
  * Blob IDs reference encrypted data. URL builders produce authenticated
  * URLs for `<img>` / `<video>` elements that can't set headers.
@@ -172,18 +172,5 @@ export const photosApi = {
     }>(`/photos/encrypted-sync${qs ? `?${qs}` : ""}`);
   },
 
-  // ── Cleanup: remove plain originals after encryption ──────────────────
 
-  /** Get count/bytes of plain files eligible for cleanup */
-  cleanupStatus: () =>
-    request<{ cleanable_count: number; cleanable_bytes: number }>(
-      "/photos/cleanup-status"
-    ),
-
-  /** Delete all plain originals that have been encrypted */
-  cleanupPlainFiles: () =>
-    request<{ cleaned: number; errors: number; message: string }>(
-      "/photos/cleanup",
-      { method: "POST" }
-    ),
 };

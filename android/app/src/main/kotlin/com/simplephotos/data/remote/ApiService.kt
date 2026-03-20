@@ -121,12 +121,6 @@ interface ApiService {
     @POST("api/admin/encryption/store-key")
     suspend fun storeEncryptionKey(@Body request: StoreEncryptionKeyRequest): StoreEncryptionKeyResponse
 
-    // ── Cleanup (encrypted mode) ─────────────────────────────────────────
-    @GET("api/photos/cleanup-status")
-    suspend fun getCleanupStatus(): CleanupStatusResponse
-
-    @POST("api/photos/cleanup")
-    suspend fun cleanupPlainFiles(): CleanupResponse
 
     // ── Backup servers (admin) ───────────────────────────────────────────
     @GET("api/admin/backup/servers")

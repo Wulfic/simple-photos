@@ -42,7 +42,6 @@ pub async fn import_metadata(
     );
 
     // Server always operates in encrypted mode
-    let is_encrypted = true;
 
     // Serialize the full Google Photos JSON for archival in the metadata/ dir
     let raw_json = serde_json::to_vec_pretty(&req.metadata)
@@ -70,8 +69,8 @@ pub async fn import_metadata(
         "INSERT INTO photo_metadata \
          (id, user_id, photo_id, blob_id, source, title, description, taken_at, \
           created_at_src, latitude, longitude, altitude, image_views, original_url, \
-          storage_path, is_encrypted, imported_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          storage_path, imported_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&record.id)
     .bind(&record.user_id)
@@ -88,7 +87,6 @@ pub async fn import_metadata(
     .bind(record.image_views)
     .bind(&record.original_url)
     .bind(&storage_path)
-    .bind(is_encrypted as i32)
     .bind(&record.imported_at)
     .execute(&state.pool)
     .await?;
@@ -117,7 +115,6 @@ pub async fn import_metadata(
         Json(ImportMetadataResponse {
             metadata_id: meta_id,
             storage_path: Some(storage_path),
-            is_encrypted,
         }),
     ))
 }
@@ -140,8 +137,6 @@ pub async fn batch_import_metadata(
         ));
     }
 
-    // Server always operates in encrypted mode
-    let is_encrypted = true;
     let storage_root = (**state.storage_root.load()).clone();
 
     let mut results = Vec::with_capacity(req.entries.len());
@@ -156,7 +151,6 @@ pub async fn batch_import_metadata(
             &auth.user_id,
             &meta_id,
             entry,
-            is_encrypted,
             &storage_root,
         )
         .await
@@ -219,7 +213,6 @@ async fn import_single_metadata(
     user_id: &str,
     meta_id: &str,
     entry: &GooglePhotosImportRequest,
-    is_encrypted: bool,
     storage_root: &std::path::Path,
 ) -> Result<(), AppError> {
     let record = google_photos::normalise(
@@ -240,8 +233,8 @@ async fn import_single_metadata(
         "INSERT INTO photo_metadata \
          (id, user_id, photo_id, blob_id, source, title, description, taken_at, \
           created_at_src, latitude, longitude, altitude, image_views, original_url, \
-          storage_path, is_encrypted, imported_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          storage_path, imported_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(meta_id)
     .bind(user_id)
@@ -258,7 +251,6 @@ async fn import_single_metadata(
     .bind(record.image_views)
     .bind(&record.original_url)
     .bind(&storage_path)
-    .bind(is_encrypted as i32)
     .bind(&record.imported_at)
     .execute(&state.pool)
     .await?;
@@ -328,7 +320,7 @@ pub async fn get_photo_metadata(
     let metadata: Vec<PhotoMetadataRecord> = sqlx::query_as(
         "SELECT id, user_id, photo_id, blob_id, source, title, description, taken_at, \
          created_at_src, latitude, longitude, altitude, image_views, original_url, \
-         storage_path, is_encrypted, imported_at \
+         storage_path, imported_at \
          FROM photo_metadata WHERE user_id = ? AND photo_id = ? \
          ORDER BY imported_at DESC",
     )
