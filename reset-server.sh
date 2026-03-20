@@ -85,56 +85,10 @@ if [[ -d "$DOCKER_DIR" ]]; then
             sleep 1
         done
 
-        # Auto-configure backup-1 so it is immediately discoverable as a backup server.
-        # This sets up an admin account and activates backup mode — without this,
-        # the fresh container sits in "needs setup" state and cannot be detected.
         if [[ "$BK1_READY" == "true" ]]; then
-            BK1_API="http://localhost:8081/api"
-            BK_USER="backupadmin"
-            BK_PASS="BackupPass1!"
-
-            # Check whether initial setup has already been done
-            SETUP_STATUS=$(curl -s --max-time 5 "$BK1_API/setup/status" 2>/dev/null || echo '{}')
-            if echo "$SETUP_STATUS" | grep -q '"setup_complete":true'; then
-                echo "  backup-1 already initialized"
-            else
-                echo -n "  Initializing backup-1..."
-                INIT_RESP=$(curl -s --max-time 10 -X POST "$BK1_API/setup/init" \
-                    -H 'Content-Type: application/json' \
-                    -d "{\"username\":\"$BK_USER\",\"password\":\"$BK_PASS\"}" 2>/dev/null || echo '{}')
-                if echo "$INIT_RESP" | grep -q '"user_id"'; then
-                    echo " done (user: $BK_USER)"
-                else
-                    echo " warning: $INIT_RESP"
-                fi
-            fi
-
-            # Login and activate backup mode
-            LOGIN_RESP=$(curl -s --max-time 10 -X POST "$BK1_API/auth/login" \
-                -H 'Content-Type: application/json' \
-                -d "{\"username\":\"$BK_USER\",\"password\":\"$BK_PASS\"}" 2>/dev/null || echo '{}')
-            BK_TOKEN=$(echo "$LOGIN_RESP" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
-
-            if [[ -n "$BK_TOKEN" ]]; then
-                MODE_RESP=$(curl -s --max-time 10 -X POST "$BK1_API/admin/backup/mode" \
-                    -H "Authorization: Bearer $BK_TOKEN" \
-                    -H 'Content-Type: application/json' \
-                    -d '{"mode":"backup"}' 2>/dev/null || echo '{}')
-                if echo "$MODE_RESP" | grep -q '"mode":"backup"'; then
-                    # Read the static API key from config.toml
-                    BK1_KEY=$(grep -oP '(?<=api_key\s=\s")[^"]+' \
-                        "$DOCKER_DIR/backup-1/config.toml" 2>/dev/null || echo "")
-                    echo "  backup-1 is now in backup mode"
-                    echo "  Address : localhost:8081  (or host.docker.internal:8081 from containers)"
-                    echo "  API Key : ${BK1_KEY:-see docker-instances/backup-1/config.toml}"
-                else
-                    echo "  Warning: could not set backup mode: $MODE_RESP"
-                fi
-            else
-                echo "  Warning: could not log in to backup-1 — backup mode not set"
-            fi
+            echo "  backup-1 is running and waiting for setup (http://localhost:8081)"
         else
-            echo "  Warning: backup-1 did not become healthy in time — skipping auto-configure"
+            echo "  Warning: backup-1 did not become healthy in time"
         fi
     fi
 fi

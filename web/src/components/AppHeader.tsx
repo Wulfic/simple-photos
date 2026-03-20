@@ -7,7 +7,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/auth";
 import { useThemeStore } from "../store/theme";
 import { useBackupStore } from "../store/backup";
-import { useProcessingStore } from "../store/processing";
+import { useActivityStore } from "../store/activity";
 import { clearKey } from "../crypto/crypto";
 import { api } from "../api/client";
 import AppIcon from "./AppIcon";
@@ -64,7 +64,18 @@ export default function AppHeader({
   const { username, refreshToken, logout: storeLogout, accessToken } = useAuthStore();
   const { theme, toggle: toggleTheme } = useThemeStore();
   const { backupServers, loaded: backupLoaded, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
-  const { isProcessing, activeLabel } = useProcessingStore();
+  const {
+    conversionPending, conversionMissingThumbs, conversionActive,
+    migrationStatus, migrationTotal,
+  } = useActivityStore();
+
+  // Drive the profile ring directly from raw server-activity data so it
+  // stays spinning even when the banner has been dismissed.
+  const hasActivity =
+    conversionPending > 0 ||
+    conversionMissingThumbs > 0 ||
+    conversionActive ||
+    ((migrationStatus === "encrypting" || migrationStatus === "decrypting") && migrationTotal > 0);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -178,7 +189,7 @@ export default function AppHeader({
                 onClick={() => setDropdownOpen((v) => !v)}
                 className="flex items-center gap-2 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white text-xs transition-colors"
               >
-                <div className={`w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold uppercase shrink-0${isProcessing ? " processing-ring" : ""}`}>
+                <div className={`w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold uppercase shrink-0${hasActivity ? " processing-ring" : ""}`}>
                   {username.charAt(0)}
                 </div>
                 <span className="hidden sm:inline truncate">{username}</span>
