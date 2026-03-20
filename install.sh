@@ -604,6 +604,15 @@ elif [[ "$MODE" == "docker" ]]; then
     INSTANCE_DIR="$SCRIPT_DIR/docker-instances/${INSTANCE_NAME}"
     mkdir -p "$INSTANCE_DIR/data/db" "$INSTANCE_DIR/data/storage"
 
+    # Detect the host's LAN IP for Docker base_url so cross-container
+    # discovery and subnet scanning work correctly (localhost inside a
+    # container refers to the container, not the host).
+    DOCKER_BASE_HOST="localhost"
+    LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [[ -n "$LAN_IP" && "$LAN_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        DOCKER_BASE_HOST="$LAN_IP"
+    fi
+
     # Inside container, internal port is always 3000; external is $PORT
     write_config \
         "$INSTANCE_DIR/config.toml" \
@@ -611,7 +620,7 @@ elif [[ "$MODE" == "docker" ]]; then
         "/data/storage" \
         "/data/db/simple-photos.db" \
         "/app/web/dist" \
-        "http://localhost:${PORT}"
+        "http://${DOCKER_BASE_HOST}:${PORT}"
     success "Config → docker-instances/${INSTANCE_NAME}/config.toml"
 
     # ── docker-compose.yml ────────────────────────────────────────────────
@@ -630,6 +639,8 @@ services:
       - ${SCRIPT_DIR}/web/dist:/app/web/dist:ro
       - ${INSTANCE_DIR}/data/db:/data/db
       - ${STORAGE_PATH}:/data/storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - RUST_LOG=info
     networks:

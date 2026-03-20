@@ -41,6 +41,10 @@ export interface CachedPhoto {
   /** Server-side `photos.id` for API calls requiring the photo record ID
    *  (e.g., toggle_favorite, duplicate). Set for photos synced via encrypted-sync. */
   serverPhotoId?: string;
+  /** When true, the photo lives on the server as an unencrypted file (autoscan
+   *  pipeline). The Viewer should fetch it via the photos API (`/photos/:id/file`)
+   *  instead of downloading and decrypting an encrypted blob. */
+  serverSide?: boolean;
 }
 
 export interface CachedAlbum {

@@ -194,8 +194,18 @@ export default function useViewerActions({
     const msg = "Move this item to trash? You can restore it within 30 days.";
     if (!id || !confirm(msg)) return;
     try {
-      // Soft-delete blob to trash with client metadata
       const cached = await db.photos.get(id);
+
+      if (cached?.serverSide) {
+        // Server-side (autoscanned) photo — delete via photos API
+        const photoId = cached.serverPhotoId || id;
+        await api.photos.delete(photoId);
+        await db.photos.delete(id);
+        navigate("/gallery");
+        return;
+      }
+
+      // Soft-delete blob to trash with client metadata
       const result = await api.blobs.softDelete(id, {
         thumbnail_blob_id: cached?.thumbnailBlobId,
         filename: cached?.filename ?? "unknown",

@@ -218,7 +218,9 @@ async fn run_auto_scan(
 
                     let photo_id = Uuid::new_v4().to_string();
                     let now = crate::photos::utils::utc_now_iso();
-                    let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
+                    // Use .thumb.gif for GIFs so the thumbnail preserves animation
+                    let thumb_ext = if mime == "image/gif" { "gif" } else { "jpg" };
+                    let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
                     // Extract dimensions, camera model, GPS, and date from file
                     // (matches scan_and_register behavior so photos have full metadata)
