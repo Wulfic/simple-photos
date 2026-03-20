@@ -156,7 +156,14 @@ pub async fn init(
 
 /// GET /api/setup/discover
 ///
-/// Discover Simple Photos servers on the local network via UDP broadcast.
+/// Discover Simple Photos servers on the local network.
+///
+/// Uses three discovery strategies:
+///  1. **UDP broadcast** — catches servers on the same L2 network.
+///  2. **Localhost HTTP probing** — catches Docker containers port-mapped to
+///     the host (UDP broadcast doesn't cross the Docker bridge).
+///  3. **Subnet HTTP scan** — catches servers on the local /24 subnet.
+///
 /// Only works during first-run setup (zero users in DB) — no auth required.
 pub async fn discover(
     State(state): State<AppState>,
@@ -173,7 +180,11 @@ pub async fn discover(
         ));
     }
 
-    // UDP broadcast discovery — completes in ~6 seconds
+    let our_port = state.config.server.port;
+    let mut discovered: Vec<serde_json::Value> = Vec::new();
+    let mut existing_addrs = std::collections::HashSet::new();
+
+    // ── Phase 1: UDP broadcast discovery (~6 seconds) ────────────────────
     let broadcast_results = tokio::task::spawn_blocking(|| {
         crate::backup::broadcast::discover_via_broadcast(std::time::Duration::from_secs(6))
     })
@@ -183,18 +194,156 @@ pub async fn discover(
         Vec::new()
     });
 
-    let servers: Vec<serde_json::Value> = broadcast_results
-        .into_iter()
-        .map(|b| serde_json::json!({
+    for b in broadcast_results {
+        existing_addrs.insert(b.address.clone());
+        discovered.push(serde_json::json!({
             "address": b.address,
             "name": b.name,
             "version": b.version,
-        }))
-        .collect();
+        }));
+    }
 
-    tracing::info!("Setup discovery: found {} servers via broadcast", servers.len());
+    // ── Phase 2: Localhost HTTP probing (for Docker / co-located servers) ─
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
 
-    Ok(Json(serde_json::json!({ "servers": servers })))
+    let mut local_ports: Vec<u16> = Vec::new();
+    let base = (our_port / 10) * 10;
+    for p in base..=(base + 9) {
+        if p != our_port { local_ports.push(p); }
+    }
+    for &p in &[3000u16, 3001, 3002, 3003, 8080, 8081, 8082, 8083, 8443] {
+        if p != our_port && !local_ports.contains(&p) { local_ports.push(p); }
+    }
+
+    let mut local_futures = Vec::new();
+    for &port in &local_ports {
+        let addr = format!("127.0.0.1:{}", port);
+        if existing_addrs.contains(&addr) { continue; }
+        let c = client.clone();
+        local_futures.push(async move {
+            // Try /api/discover/info first, then fall back to /health
+            let info_url = format!("http://127.0.0.1:{}/api/discover/info", port);
+            let health_url = format!("http://127.0.0.1:{}/health", port);
+
+            if let Ok(resp) = c.get(&info_url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                        if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
+                            let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                            let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                            return Some(serde_json::json!({
+                                "address": format!("localhost:{}", port),
+                                "name": name,
+                                "version": version,
+                            }));
+                        }
+                    }
+                }
+            }
+            if let Ok(resp) = c.get(&health_url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                        if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
+                            let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                            let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                            return Some(serde_json::json!({
+                                "address": format!("localhost:{}", port),
+                                "name": name,
+                                "version": version,
+                            }));
+                        }
+                    }
+                }
+            }
+            None
+        });
+    }
+
+    let local_results = futures_util::future::join_all(local_futures).await;
+    for result in local_results.into_iter().flatten() {
+        let addr = result.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
+        if !existing_addrs.contains(&addr) {
+            existing_addrs.insert(addr);
+            discovered.push(result);
+        }
+    }
+
+    // ── Phase 3: Subnet HTTP scan (for LAN servers) ──────────────────────
+    let mut subnets: Vec<String> = Vec::new();
+    if let Ok(url) = reqwest::Url::parse(&state.config.server.base_url) {
+        if let Some(host) = url.host_str() {
+            let parts: Vec<&str> = host.split('.').collect();
+            if parts.len() == 4 {
+                subnets.push(format!("{}.{}.{}", parts[0], parts[1], parts[2]));
+            }
+        }
+    }
+    // Also try to get the local IP for subnet inference
+    if let Some(local_ip) = crate::backup::broadcast::get_local_ip() {
+        let parts: Vec<&str> = local_ip.split('.').collect();
+        if parts.len() == 4 {
+            let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
+            if !subnets.contains(&subnet) { subnets.push(subnet); }
+        }
+    }
+    for s in &["192.168.1", "192.168.0", "10.0.0"] {
+        if !subnets.iter().any(|existing| existing == s) {
+            subnets.push(s.to_string());
+        }
+    }
+
+    let ports_to_scan = [our_port, 8080, 8081, 8082, 8083, 3000];
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(50));
+    let mut lan_futures = Vec::new();
+
+    for subnet in &subnets {
+        for host_part in 1..=254u8 {
+            let ip = format!("{}.{}", subnet, host_part);
+            for &port in &ports_to_scan {
+                let addr = format!("{}:{}", ip, port);
+                if existing_addrs.contains(&addr) { continue; }
+                let c = client.clone();
+                let sem = sem.clone();
+                let ip = ip.clone();
+                lan_futures.push(async move {
+                    let _permit = sem.acquire().await;
+                    let health_url = format!("http://{}:{}/health", ip, port);
+                    if let Ok(resp) = c.get(&health_url).send().await {
+                        if resp.status().is_success() {
+                            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
+                                    let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                                    let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                                    return Some(serde_json::json!({
+                                        "address": format!("{}:{}", ip, port),
+                                        "name": name,
+                                        "version": version,
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    None
+                });
+            }
+        }
+    }
+
+    let lan_results = futures_util::future::join_all(lan_futures).await;
+    for result in lan_results.into_iter().flatten() {
+        let addr = result.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
+        if !existing_addrs.contains(&addr) {
+            existing_addrs.insert(addr);
+            discovered.push(result);
+        }
+    }
+
+    tracing::info!("Setup discovery: found {} servers", discovered.len());
+
+    Ok(Json(serde_json::json!({ "servers": discovered })))
 }
 
 #[derive(Debug, Deserialize)]

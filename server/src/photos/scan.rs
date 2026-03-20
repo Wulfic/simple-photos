@@ -28,12 +28,19 @@ use super::utils::{normalize_iso_timestamp, utc_now_iso, compute_photo_hash_stre
 /// Maximum concurrent file processing tasks during scan.
 const SCAN_PARALLELISM: usize = 4;
 
-/// Generate a JPEG thumbnail using the `image` crate (pure Rust).
+/// Generate a thumbnail for a media file.
 ///
-/// Supported inputs: JPEG, PNG, GIF, WebP, BMP, ICO, AVIF.
-/// For videos and audio: generates a simple placeholder image.
-/// SVG: generates a generic placeholder (rasterisation would require an
-/// additional crate like `resvg`; keeping it simple for now).
+/// Supported inputs: JPEG, PNG, GIF, WebP, BMP, ICO, AVIF, video, audio.
+/// - **Images** (non-GIF): Pure Rust `image` crate → 256×256 JPEG.
+/// - **GIFs**: FFmpeg → scaled animated GIF thumbnail (preserving animation).
+///   Falls back to static JPEG via `image` crate if FFmpeg fails.
+/// - **Videos**: FFmpeg → extracts a real frame at ~10% of duration.
+///   Falls back to a gray placeholder if FFmpeg is unavailable.
+/// - **Audio / SVG**: Solid-color placeholder.
+///
+/// The `output_path` extension determines the format:
+/// - `.thumb.gif` for animated GIF thumbnails
+/// - `.thumb.jpg` for everything else
 pub async fn generate_thumbnail_file(
     input_path: &Path,
     output_path: &Path,
@@ -49,31 +56,48 @@ pub async fn generate_thumbnail_file(
         return generate_placeholder_thumbnail(output_path, [0, 0, 0]).await;
     }
 
-    // Video → dark-gray 256×256 placeholder (no FFmpeg available)
-    if mime.starts_with("video/") {
-        return generate_placeholder_thumbnail(output_path, [30, 30, 30]).await;
-    }
-
     // SVG → placeholder (would need resvg for proper rasterisation)
     if mime == "image/svg+xml" {
         return generate_placeholder_thumbnail(output_path, [40, 40, 40]).await;
     }
 
-    // Image formats handled by the `image` crate
+    // Video → FFmpeg frame extraction, fallback to placeholder
+    if mime.starts_with("video/") {
+        return generate_video_thumbnail_ffmpeg(input_path, output_path).await;
+    }
+
+    // GIF → FFmpeg scaled animated GIF, fallback to static JPEG via image crate
+    if mime == "image/gif" {
+        if generate_gif_thumbnail_ffmpeg(input_path, output_path).await {
+            return true;
+        }
+        tracing::debug!(path = %input_path.display(), "FFmpeg GIF thumbnail failed, falling back to static JPEG");
+        // Fall through to static image crate path (output_path may be .thumb.gif,
+        // but we'll write a JPEG there — the serve handler checks magic bytes)
+        let jpg_output = output_path
+            .with_extension("jpg");
+        return generate_static_image_thumbnail(input_path, &jpg_output).await;
+    }
+
+    // All other image formats → image crate (JPEG)
+    generate_static_image_thumbnail(input_path, output_path).await
+}
+
+/// Generate a 256×256 JPEG thumbnail from a static image using the `image` crate.
+async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) -> bool {
+    if let Some(parent) = output_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
     let input = input_path.to_path_buf();
     let output = output_path.to_path_buf();
 
-    // Offload CPU-bound image decoding + resizing to a blocking thread
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let img = image::open(&input).map_err(|e| format!("Failed to open image: {}", e))?;
-
-        // Resize to cover 256×256 then crop to exact square
         let thumb = img.resize_to_fill(256, 256, image::imageops::FilterType::Triangle);
-
         thumb
             .save_with_format(&output, image::ImageFormat::Jpeg)
             .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
-
         Ok(())
     })
     .await;
@@ -82,7 +106,6 @@ pub async fn generate_thumbnail_file(
         Ok(Ok(())) => true,
         Ok(Err(e)) => {
             tracing::warn!(path = %input_path.display(), error = %e, "Thumbnail generation failed");
-            // Fall back to placeholder
             generate_placeholder_thumbnail(output_path, [50, 50, 50]).await
         }
         Err(e) => {
@@ -90,6 +113,104 @@ pub async fn generate_thumbnail_file(
             false
         }
     }
+}
+
+/// Extract a real video frame using FFmpeg and save as 256×256 JPEG thumbnail.
+///
+/// Seeks to 10% of the video duration (at least 1 second in) to avoid
+/// black intro frames.  Falls back to a gray placeholder if FFmpeg fails.
+async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) -> bool {
+    // Probe video duration to compute the seek position
+    let duration_secs = probe_duration(input_path).await.unwrap_or(10.0);
+    let seek_to = f64::min(f64::max(duration_secs * 0.1, 1.0), duration_secs);
+
+    let result = tokio::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-ss", &format!("{:.2}", seek_to),
+            "-i",
+        ])
+        .arg(input_path)
+        .args([
+            "-frames:v", "1",
+            "-vf", "scale=256:256:force_original_aspect_ratio=increase,crop=256:256",
+            "-q:v", "5",
+        ])
+        .arg(output_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+
+    match result {
+        Ok(status) if status.success() && output_path.exists() => {
+            tracing::debug!(path = %input_path.display(), "Generated video thumbnail via FFmpeg");
+            true
+        }
+        Ok(status) => {
+            tracing::warn!(
+                path = %input_path.display(),
+                exit_code = ?status.code(),
+                "FFmpeg video thumbnail failed, using placeholder"
+            );
+            generate_placeholder_thumbnail(output_path, [30, 30, 30]).await
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %input_path.display(),
+                error = %e,
+                "FFmpeg not available for video thumbnail, using placeholder"
+            );
+            generate_placeholder_thumbnail(output_path, [30, 30, 30]).await
+        }
+    }
+}
+
+/// Generate a scaled animated GIF thumbnail using FFmpeg.
+///
+/// Produces a 256×256 (cover-cropped) animated GIF at reduced frame rate
+/// to keep file size reasonable.  Returns `false` if FFmpeg fails.
+async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) -> bool {
+    let result = tokio::process::Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(input_path)
+        .args([
+            "-vf",
+            "scale=256:256:force_original_aspect_ratio=increase,crop=256:256,fps=15",
+            "-loop", "0",
+        ])
+        .arg(output_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+
+    match result {
+        Ok(status) if status.success() && output_path.exists() => {
+            tracing::debug!(path = %input_path.display(), "Generated animated GIF thumbnail via FFmpeg");
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Probe the duration of a media file using ffprobe.
+async fn probe_duration(path: &Path) -> Option<f64> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .ok()?;
+
+    let s = String::from_utf8_lossy(&output.stdout);
+    s.trim().parse::<f64>().ok()
 }
 
 /// Generate a solid-color 256×256 JPEG placeholder thumbnail.
@@ -254,7 +375,9 @@ pub async fn scan_and_register(
 
             let photo_id = Uuid::new_v4().to_string();
             let now = utc_now_iso();
-            let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
+            // GIFs get an animated GIF thumbnail; everything else gets JPEG
+            let thumb_ext = if candidate.mime == "image/gif" { "gif" } else { "jpg" };
+            let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
             // Extract dimensions, camera model, GPS, and date from file
             let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =

@@ -41,7 +41,9 @@ export interface ThumbnailPayload {
   photo_blob_id: string;
   width: number;
   height: number;
-  data: string; // base64 JPEG
+  /** Optional MIME type of the thumbnail data (defaults to "image/jpeg" for backwards compat) */
+  mime_type?: string;
+  data: string; // base64 JPEG or GIF
 }
 
 export interface GalleryDataResult {
@@ -237,6 +239,7 @@ export function useGalleryData(): GalleryDataResult {
         }
 
         let thumbnailData: ArrayBuffer | undefined;
+        let thumbnailMimeType: string | undefined;
         const thumbBlobId = photo.encrypted_thumb_blob_id;
         if (thumbBlobId) {
           try {
@@ -244,6 +247,7 @@ export function useGalleryData(): GalleryDataResult {
             const thumbDec = await decrypt(thumbEnc);
             const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
             thumbnailData = base64ToArrayBuffer(thumbPayload.data);
+            thumbnailMimeType = thumbPayload.mime_type;
           } catch {
             // Thumbnail fetch failed — show placeholder
           }
@@ -261,6 +265,7 @@ export function useGalleryData(): GalleryDataResult {
           duration: photo.duration_secs ?? undefined,
           albumIds: [],
           thumbnailData,
+          thumbnailMimeType,
           contentHash: photo.photo_hash ?? undefined,
           cropData: photo.crop_metadata ?? undefined,
           isFavorite: photo.is_favorite ?? false,
@@ -287,12 +292,14 @@ export function useGalleryData(): GalleryDataResult {
           const payload: PhotoPayload = JSON.parse(new TextDecoder().decode(decrypted));
 
           let thumbnailData: ArrayBuffer | undefined;
+          let unsyncedThumbMime: string | undefined;
           if (payload.thumbnail_blob_id) {
             try {
               const thumbEnc = await api.blobs.download(payload.thumbnail_blob_id);
               const thumbDec = await decrypt(thumbEnc);
               const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
               thumbnailData = base64ToArrayBuffer(thumbPayload.data);
+              unsyncedThumbMime = thumbPayload.mime_type;
             } catch {
               // Thumbnail fetch failed — show placeholder
             }
@@ -312,6 +319,7 @@ export function useGalleryData(): GalleryDataResult {
             longitude: payload.longitude,
             albumIds: payload.album_ids ?? [],
             thumbnailData,
+            thumbnailMimeType: unsyncedThumbMime,
             contentHash: blob.content_hash ?? undefined,
           });
         } catch {

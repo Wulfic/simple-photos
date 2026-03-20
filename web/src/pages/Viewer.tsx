@@ -374,7 +374,8 @@ export default function Viewer() {
       setVideoError(false);
       db.photos.get(id).then((dbCached) => {
         if (dbCached?.thumbnailData) {
-          const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: "image/jpeg" }));
+          const mime = dbCached.thumbnailMimeType || (dbCached.mediaType === "gif" ? "image/gif" : "image/jpeg");
+          const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: mime }));
           setPreviewUrl(url);
         }
         // Use storageBlobId for copies that reference the original's server blob

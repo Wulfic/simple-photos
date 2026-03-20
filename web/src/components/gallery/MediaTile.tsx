@@ -1,11 +1,21 @@
 /** Gallery thumbnail tile for encrypted-mode photos. Creates object URLs
- *  from decrypted IndexedDB thumbnail data, lazy-loaded via IntersectionObserver. */
+ *  from decrypted IndexedDB thumbnail data, lazy-loaded via IntersectionObserver.
+ *  GIF thumbnails are displayed with their native animation. */
 import { useState, useEffect, useRef } from "react";
 import type { CachedPhoto } from "../../db";
 import useLongPress from "../../hooks/useLongPress";
 import { thumbnailSrc, formatDuration } from "../../utils/gallery";
 
 import { getThumbnailStyle } from "../../utils/thumbnailCss";
+
+/** Resolve the correct MIME type for a photo's thumbnail data.
+ *  Prefers the explicit thumbnailMimeType field, falls back to
+ *  "image/gif" for GIF media type, or "image/jpeg" otherwise. */
+function thumbMime(photo: CachedPhoto): string {
+  if (photo.thumbnailMimeType) return photo.thumbnailMimeType;
+  if (photo.mediaType === "gif") return "image/gif";
+  return "image/jpeg";
+}
 
 export interface MediaTileProps {
   photo: CachedPhoto;
@@ -39,11 +49,11 @@ export default function MediaTile({ photo, onClick, onLongPress, selectionMode, 
 
   useEffect(() => {
     if (visible && photo.thumbnailData) {
-      const url = thumbnailSrc(photo.thumbnailData);
+      const url = thumbnailSrc(photo.thumbnailData, thumbMime(photo));
       setSrc(url);
       return () => URL.revokeObjectURL(url);
     }
-  }, [visible, photo.thumbnailData]);
+  }, [visible, photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
 
   const longPress = useLongPress(() => onLongPress?.(), 500);
 

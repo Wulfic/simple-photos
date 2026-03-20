@@ -434,7 +434,8 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
       const localPhoto = await db.photos.get(firstBlobId);
       if (cancelled) return;
       if (localPhoto?.thumbnailData) {
-        const blob = new Blob([localPhoto.thumbnailData], { type: "image/jpeg" });
+        const mime = localPhoto.thumbnailMimeType || (localPhoto.mediaType === "gif" ? "image/gif" : "image/jpeg");
+        const blob = new Blob([localPhoto.thumbnailData], { type: mime });
         setThumbUrl(URL.createObjectURL(blob));
         return;
       }
@@ -492,7 +493,7 @@ function SmartAlbumCard({
 
     if (encryptedThumbData) {
       // Thumbnail data already available from IndexedDB
-      const blob = new Blob([encryptedThumbData], { type: "image/jpeg" });
+      const blob = new Blob([encryptedThumbData], { type: "image/jpeg" }); // Smart album covers are always JPEG
       const url = URL.createObjectURL(blob);
       setThumbUrl(url);
       return () => { cancelled = true; URL.revokeObjectURL(url); };

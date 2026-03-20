@@ -74,21 +74,36 @@ export function generateVideoThumbnail(file: File, size: number): Promise<ArrayB
   });
 }
 
-/** Generate a JPEG thumbnail from any image or video file. */
-export async function generateThumbnail(file: File, size: number): Promise<ArrayBuffer> {
+/** Generate a JPEG thumbnail from any image or video file.
+ *  For GIFs, returns scaled animated GIF data (preserving animation).
+ *  For videos, captures a frame at 10% of duration.
+ *  For everything else, returns a JPEG cover-crop. */
+export async function generateThumbnail(file: File, size: number): Promise<{ data: ArrayBuffer; mimeType: string }> {
   if (file.type.startsWith("video/")) {
-    return generateVideoThumbnail(file, size);
+    return { data: await generateVideoThumbnail(file, size), mimeType: "image/jpeg" };
   }
   if (file.type.startsWith("audio/")) {
     // Audio files have no visual content; return a small placeholder
-    return generateImageThumbnail(new File([new Blob()], file.name, { type: "image/png" }), size).catch(() => new ArrayBuffer(0));
+    const fallback = await generateImageThumbnail(new File([new Blob()], file.name, { type: "image/png" }), size).catch(() => new ArrayBuffer(0));
+    return { data: fallback, mimeType: "image/jpeg" };
   }
-  return generateImageThumbnail(file, size);
+  if (file.type === "image/gif") {
+    // Preserve GIF animation by using the original file data as the thumbnail.
+    // For large GIFs (>5 MB) fall back to static first-frame JPEG to save space.
+    const MAX_GIF_THUMB_BYTES = 5 * 1024 * 1024;
+    if (file.size <= MAX_GIF_THUMB_BYTES) {
+      return { data: await file.arrayBuffer(), mimeType: "image/gif" };
+    }
+    // Large GIF — static first-frame is the safer default
+    return { data: await generateImageThumbnail(file, size), mimeType: "image/jpeg" };
+  }
+  return { data: await generateImageThumbnail(file, size), mimeType: "image/jpeg" };
 }
 
-/** Return a data URL to preview a thumbnail stored as ArrayBuffer. */
-export function thumbnailSrc(data: ArrayBuffer): string {
-  return URL.createObjectURL(new Blob([data], { type: "image/jpeg" }));
+/** Return a data URL to preview a thumbnail stored as ArrayBuffer.
+ *  @param mimeType - Thumbnail MIME type (defaults to "image/jpeg") */
+export function thumbnailSrc(data: ArrayBuffer, mimeType?: string): string {
+  return URL.createObjectURL(new Blob([data], { type: mimeType || "image/jpeg" }));
 }
 
 /** Get the natural width/height of an image file. */

@@ -25,6 +25,9 @@ export interface CachedPhoto {
   longitude?: number;
   albumIds: string[];
   thumbnailData?: ArrayBuffer;
+  /** MIME type of the thumbnail data (e.g. "image/gif" for animated GIF thumbnails).
+   *  Defaults to "image/jpeg" when not set (backwards compatibility). */
+  thumbnailMimeType?: string;
   /** Duration in seconds for video blobs (undefined for photos/GIFs) */
   duration?: number;
   /** Crop/edit metadata (JSON string) — used for encrypted-mode crops stored locally */
