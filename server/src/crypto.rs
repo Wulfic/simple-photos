@@ -36,42 +36,11 @@ pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     Ok(result)
 }
 
-/// Decrypt data produced by [`encrypt`] (or the equivalent client-side code).
-/// Input format: `[12-byte nonce][ciphertext + 16-byte auth tag]`.
-pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
-    // Minimum valid ciphertext: 12-byte nonce + 16-byte GCM authentication tag
-    if data.len() < NONCE_LENGTH + 16 {
-        return Err("Ciphertext too short".into());
-    }
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| format!("Invalid AES key: {}", e))?;
-    let nonce = Nonce::from_slice(&data[..NONCE_LENGTH]);
-    let ciphertext = &data[NONCE_LENGTH..];
-    cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))
-}
-
-/// Parse a hex-encoded AES-256 key (64 hex chars → 32 bytes).
-///
-/// Used by the encryption migration endpoint
-/// (`POST /api/admin/encryption/migrate`).
-pub fn parse_key_hex(hex_str: &str) -> Result<[u8; 32], String> {
-    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid hex key: {}", e))?;
-    if bytes.len() != 32 {
-        return Err(format!("Key must be 32 bytes, got {}", bytes.len()));
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&bytes);
-    Ok(key)
-}
-
-// ── Key wrapping / unwrapping ───────────────────────────────────────────────
+// ── Key wrapping ────────────────────────────────────────────────────────────
 //
-// The user's AES-256 encryption key needs to be persisted in the DB so the
-// server can resume migration autonomously after a restart.  We wrap (encrypt)
-// the key with a wrapping key derived from the JWT secret via SHA-256, so the
-// stored value is useless without access to the server config.
+// The user's AES-256 encryption key is persisted in the DB wrapped (encrypted)
+// with a key derived from the JWT secret via SHA-256, so the stored blob is
+// useless without access to the server config.
 
 use sha2::{Digest, Sha256};
 
@@ -89,20 +58,6 @@ pub fn wrap_key(encryption_key: &[u8; 32], jwt_secret: &str) -> Result<String, S
     let wrapping_key = derive_wrapping_key(jwt_secret);
     let ciphertext = encrypt(&wrapping_key, encryption_key)?;
     Ok(hex::encode(ciphertext))
-}
-
-/// Unwrap (decrypt) a previously wrapped encryption key.
-/// Input: hex-encoded blob from [`wrap_key`].
-pub fn unwrap_key(wrapped_hex: &str, jwt_secret: &str) -> Result<[u8; 32], String> {
-    let wrapped = hex::decode(wrapped_hex).map_err(|e| format!("Invalid hex: {}", e))?;
-    let wrapping_key = derive_wrapping_key(jwt_secret);
-    let plaintext = decrypt(&wrapping_key, &wrapped)?;
-    if plaintext.len() != 32 {
-        return Err(format!("Unwrapped key is {} bytes, expected 32", plaintext.len()));
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&plaintext);
-    Ok(key)
 }
 
 /// Persist the wrapped encryption key to the database.
@@ -133,84 +88,4 @@ pub async fn store_wrapped_key(
     Ok(())
 }
 
-/// Load the wrapped encryption key from the database (if active).
-pub async fn load_wrapped_key(
-    pool: &sqlx::SqlitePool,
-    jwt_secret: &str,
-) -> Result<Option<[u8; 32]>, String> {
-    let active: Option<String> = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_key_active'",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to query key active flag: {}", e))?;
 
-    if active.as_deref() != Some("true") {
-        return Ok(None);
-    }
-
-    let wrapped: Option<String> = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_key_wrapped'",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to query wrapped key: {}", e))?;
-
-    match wrapped {
-        Some(hex_blob) => {
-            let key = unwrap_key(&hex_blob, jwt_secret)?;
-            tracing::info!("[CRYPTO] Encryption key loaded and unwrapped from DB");
-            Ok(Some(key))
-        }
-        None => Ok(None),
-    }
-}
-
-/// Clear the stored encryption key from the database.
-pub async fn clear_wrapped_key(pool: &sqlx::SqlitePool) -> Result<(), String> {
-    sqlx::query("DELETE FROM server_settings WHERE key IN ('encryption_key_wrapped', 'encryption_key_active')")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear wrapped key: {}", e))?;
-    tracing::info!("[CRYPTO] Encryption key cleared from DB");
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn roundtrip() {
-        let key = [0x42u8; 32];
-        let plaintext = b"Hello, simple-photos!";
-        let encrypted = encrypt(&key, plaintext).unwrap();
-        assert!(encrypted.len() > plaintext.len());
-        let decrypted = decrypt(&key, &encrypted).unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn parse_hex_key() {
-        let hex = "aa".repeat(32);
-        let key = parse_key_hex(&hex).unwrap();
-        assert_eq!(key, [0xaa; 32]);
-    }
-
-    #[test]
-    fn key_wrap_unwrap_roundtrip() {
-        let encryption_key = [0xBBu8; 32];
-        let jwt_secret = "my-super-secret-jwt-key-for-testing-purposes";
-        let wrapped = wrap_key(&encryption_key, jwt_secret).unwrap();
-        let unwrapped = unwrap_key(&wrapped, jwt_secret).unwrap();
-        assert_eq!(unwrapped, encryption_key);
-    }
-
-    #[test]
-    fn key_wrap_wrong_secret_fails() {
-        let encryption_key = [0xCCu8; 32];
-        let wrapped = wrap_key(&encryption_key, "correct-secret").unwrap();
-        let result = unwrap_key(&wrapped, "wrong-secret");
-        assert!(result.is_err());
-    }
-}

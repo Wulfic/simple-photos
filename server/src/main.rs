@@ -215,7 +215,6 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let encryption_key: Arc<tokio::sync::RwLock<Option<[u8; 32]>>> = Arc::new(tokio::sync::RwLock::new(None));
     let scan_lock: Arc<tokio::sync::Mutex<()>> = Arc::new(tokio::sync::Mutex::new(()));
 
     // Spawn background task for auto-scanning storage directory.
@@ -246,7 +245,6 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         rate_limiters,
         storage_root: storage_root_swap,
-        encryption_key,
         scan_lock,
     };
 
