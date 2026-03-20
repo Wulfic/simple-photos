@@ -54,7 +54,7 @@ use crate::state::AppState;
 use super::scan::{needs_web_preview, generate_web_preview_bg};
 
 /// Row type returned by the photos query shared across all three phases.
-type PhotoRow = (String, String, String, Option<String>, String, String, String);
+type PhotoRow = (String, String, String, Option<String>, String, Option<String>, Option<String>);
 
 /// Maximum concurrent FFmpeg/ImageMagick subprocesses for thumbnail and
 /// conversion phases.  Bounded to avoid fork-bombing the system.
@@ -145,6 +145,9 @@ async fn phase_convert(
     let mut enc_work: Vec<EncWork> = Vec::new();
 
     for (photo_id, file_path, filename, _thumb_path, _mime_type, encrypted_blob_id, user_id) in photos {
+        // Convert NULL encrypted_blob_id / user_id to empty strings for downstream logic
+        let encrypted_blob_id = encrypted_blob_id.as_deref().unwrap_or("").to_string();
+        let user_id = user_id.as_deref().unwrap_or("").to_string();
         let preview_ext = match needs_web_preview(filename) {
             Some(ext) => ext,
             None => continue,
@@ -399,9 +402,11 @@ async fn run_conversion_pass(
             .collect()
     };
 
+    let plain_count = photos.iter().filter(|p| p.5.is_none()).count();
+    let enc_count = photos.iter().filter(|p| p.5.is_some()).count();
     tracing::info!(
-        "[DIAG:CONVERT] run_conversion_pass — {} photos (key_available={})",
-        photos.len(), key_available
+        "[DIAG:CONVERT] run_conversion_pass — {} photos ({} plain, {} encrypted, key_available={})",
+        photos.len(), plain_count, enc_count, key_available
     );
 
     // ── Phase 1: Generate ALL missing thumbnails ────────────────────────

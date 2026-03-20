@@ -83,7 +83,12 @@ pub async fn init_pools(config: &DatabaseConfig) -> anyhow::Result<(SqlitePool, 
         .await?;
 
     // Run all SQL migrations (requires write access).
-    sqlx::migrate!("./migrations").run(&write_pool).await?;
+    // `set_ignore_missing` allows the server to start when the DB was previously
+    // set up with more migration files than currently exist (e.g. after consolidation).
+    sqlx::migrate!("./migrations")
+        .set_ignore_missing(true)
+        .run(&write_pool)
+        .await?;
 
     // ── Read pool ───────────────────────────────────────────────────────
     // Many connections for maximum read parallelism. SQLite WAL allows
