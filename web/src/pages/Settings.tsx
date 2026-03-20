@@ -54,6 +54,10 @@ export default function Settings() {
   const [backupServerFrequency, setBackupServerFrequency] = useState("24");
   const [addingBackupServer, setAddingBackupServer] = useState(false);
 
+  // ── Discovered servers (scan results — not yet registered) ───────────────
+  type DiscoveredEntry = { address: string; name: string; version: string; api_key?: string };
+  const [discoveredServers, setDiscoveredServers] = useState<DiscoveredEntry[]>([]);
+
   // ── Scan state (admin, plain mode) ──────────────────────────────────────
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
@@ -102,52 +106,36 @@ export default function Settings() {
     }
   }, []);
 
-  // Auto-discover and register backup servers on the LAN.
-  // Called when the DB has no backup servers yet — discovers via UDP + HTTP,
-  // auto-adds any found, then reloads the list.
+  // Scan the local network for Simple Photos servers.
+  // Results are surfaced as suggestions — the user decides whether to add them.
   const [discovering, setDiscovering] = useState(false);
-  const autoDiscoverBackupServers = useCallback(async () => {
+  const scanForBackupServers = useCallback(async () => {
     setDiscovering(true);
+    setDiscoveredServers([]);
     try {
       const disc = await api.backup.discover();
-      if (disc.servers.length === 0) return;
-      // Auto-add each discovered server that isn't already registered
-      for (const srv of disc.servers) {
-        try {
-          await api.backup.addServer({
-            name: srv.name || `Backup (${srv.address})`,
-            address: srv.address,
-            sync_frequency_hours: 24,
-          });
-        } catch {
-          // Duplicate or unreachable — skip silently
-        }
-      }
-      // Reload the list so the UI reflects newly added servers
-      const updated = await api.backup.listServers();
-      setBackupServers(updated.servers);
+      // Filter out addresses already registered so we don't re-suggest them
+      const registeredAddrs = new Set(backupServers.map((s) => s.address));
+      const fresh = disc.servers.filter((s) => !registeredAddrs.has(s.address));
+      setDiscoveredServers(fresh);
     } catch {
-      // Discovery not available or failed — ignore
+      // Discovery not available or network unreachable — ignore
     } finally {
       setDiscovering(false);
     }
-  }, [setBackupServers]);
+  }, [backupServers]);
 
   // Load backup servers on mount
   const loadBackupServers = useCallback(async () => {
     try {
       const res = await api.backup.listServers();
       setBackupServers(res.servers);
-      // If no servers in DB yet, try auto-discovery
-      if (res.servers.length === 0) {
-        autoDiscoverBackupServers();
-      }
     } catch {
       // Ignore if backup isn't configured
     } finally {
       setBackupLoaded(true);
     }
-  }, [setBackupServers, setBackupLoaded, autoDiscoverBackupServers]);
+  }, [setBackupServers, setBackupLoaded]);
 
   // Fetch encryption settings and backup servers on mount
   useEffect(() => {
@@ -264,6 +252,8 @@ export default function Settings() {
       });
       setSuccess("Backup server added successfully.");
       setShowAddBackupServer(false);
+      // Remove the just-added server from discovered suggestions
+      setDiscoveredServers((prev) => prev.filter((s) => s.address !== backupServerAddress.trim()));
       setBackupServerName("");
       setBackupServerAddress("");
       setBackupServerApiKey("");
@@ -638,25 +628,62 @@ export default function Settings() {
         {!backupLoaded ? (
           <div className="text-gray-400 text-sm">Loading backup servers…</div>
         ) : backupServers.length === 0 ? (
-          <div className="text-center py-4 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-400 text-sm">No backup servers configured.</p>
-            {discovering ? (
-              <p className="text-xs text-blue-400 mt-1 mb-3 flex items-center justify-center gap-2">
-                <span className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                Scanning network for backup servers…
-              </p>
-            ) : (
-              <p className="text-xs text-gray-400 mt-1 mb-1">
-                No servers found on the local network.
-              </p>
+          <div className="space-y-3">
+            <div className="text-center py-4 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
+              <p className="text-gray-400 text-sm">No backup servers configured.</p>
+              {discovering ? (
+                <p className="text-xs text-blue-400 mt-1 mb-3 flex items-center justify-center gap-2">
+                  <span className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                  Scanning network for backup servers…
+                </p>
+              ) : (
+                <p className="text-xs text-gray-400 mt-1 mb-1">
+                  Scan your local network to find Simple Photos instances.
+                </p>
+              )}
+              <button
+                onClick={scanForBackupServers}
+                disabled={discovering}
+                className="text-xs text-blue-500 hover:underline disabled:opacity-50 mb-2"
+              >
+                {discovering ? "Scanning…" : "Scan network"}
+              </button>
+            </div>
+
+            {/* Discovered servers — shown as suggestions, user adds manually */}
+            {discoveredServers.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                  Found on local network
+                </p>
+                {discoveredServers.map((srv) => (
+                  <div
+                    key={srv.address}
+                    className="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                        {srv.name || "Simple Photos"}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                        {srv.address} &nbsp;·&nbsp; v{srv.version}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setBackupServerName(srv.name || `Backup (${srv.address})`);
+                        setBackupServerAddress(srv.address);
+                        setBackupServerApiKey(srv.api_key ?? "");
+                        setShowAddBackupServer(true);
+                      }}
+                      className="flex-shrink-0 text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+                    >
+                      Add
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
-            <button
-              onClick={autoDiscoverBackupServers}
-              disabled={discovering}
-              className="text-xs text-blue-500 hover:underline disabled:opacity-50 mb-2"
-            >
-              {discovering ? "Scanning…" : "Re-scan network"}
-            </button>
           </div>
         ) : !showRecoverWarning ? (
           <button
@@ -710,15 +737,29 @@ export default function Settings() {
           </div>
         )}
 
-        {/* ── Manually add a backup server ───────────────────────── */}
+        {/* ── Add / Scan ─────────────────────────────────────────── */}
         <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
           {!showAddBackupServer ? (
-            <button
-              onClick={() => setShowAddBackupServer(true)}
-              className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-            >
-              + Add backup server manually
-            </button>
+            <div className="flex items-center gap-4 flex-wrap">
+              <button
+                onClick={() => {
+                  setBackupServerName("");
+                  setBackupServerAddress("");
+                  setBackupServerApiKey("");
+                  setShowAddBackupServer(true);
+                }}
+                className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                + Add backup server manually
+              </button>
+              <button
+                onClick={scanForBackupServers}
+                disabled={discovering}
+                className="text-sm text-gray-500 dark:text-gray-400 hover:underline disabled:opacity-50"
+              >
+                {discovering ? "Scanning…" : "Scan network"}
+              </button>
+            </div>
           ) : (
             <form onSubmit={handleAddBackupServer} className="space-y-3">
               <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Add Backup Server</h4>
@@ -789,6 +830,41 @@ export default function Settings() {
                 </button>
               </div>
             </form>
+          )}
+
+          {/* Discovered servers \u2014 shown after a scan, as suggestions */}
+          {discoveredServers.length > 0 && !showAddBackupServer && (
+            <div className="mt-4 space-y-2">
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                Found on local network
+              </p>
+              {discoveredServers.map((srv) => (
+                <div
+                  key={srv.address}
+                  className="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                      {srv.name || "Simple Photos"}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      {srv.address} &nbsp;\u00b7&nbsp; v{srv.version}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setBackupServerName(srv.name || `Backup (${srv.address})`);
+                      setBackupServerAddress(srv.address);
+                      setBackupServerApiKey(srv.api_key ?? "");
+                      setShowAddBackupServer(true);
+                    }}
+                    className="flex-shrink-0 text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+                  >
+                    Add
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </section>

@@ -44,6 +44,10 @@ pub struct DiscoveredServer {
     pub address: String,
     pub name: String,
     pub version: String,
+    /// API key for backup-mode servers discovered on localhost via /api/discover/info.
+    /// `None` for LAN-discovered servers or servers not in backup mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

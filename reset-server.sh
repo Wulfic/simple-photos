@@ -56,33 +56,86 @@ chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true
 
 echo "Data cleared."
 
-# Reset Docker backup instances (if running)
+# Reset Docker backup instance (backup-1 only)
 DOCKER_DIR="$SCRIPT_DIR/docker-instances"
 if [[ -d "$DOCKER_DIR" ]]; then
-    echo "Resetting Docker backup instances..."
-    for i in 1 2 3; do
-        BACKUP_DATA="$DOCKER_DIR/backup-$i/data"
-        if [[ -d "$BACKUP_DATA" ]]; then
-            rm -rf "$BACKUP_DATA/db/"* "$BACKUP_DATA/storage/"* 2>/dev/null || true
-            echo "  backup-$i data wiped"
-        fi
-    done
-    # Restart containers so they pick up the clean state
-    if command -v docker &>/dev/null && docker compose -f "$DOCKER_DIR/docker-compose.yml" ps -q 2>/dev/null | grep -q .; then
-        echo "Restarting backup containers..."
-        docker compose -f "$DOCKER_DIR/docker-compose.yml" restart 2>/dev/null || true
-        # Wait for containers to become healthy
-        echo -n "Waiting for backup servers"
-        for attempt in $(seq 1 15); do
-            if curl -sf http://localhost:8081/health >/dev/null 2>&1 && \
-               curl -sf http://localhost:8082/health >/dev/null 2>&1 && \
-               curl -sf http://localhost:8083/health >/dev/null 2>&1; then
+    echo "Resetting Docker backup instance..."
+    BACKUP_DATA="$DOCKER_DIR/backup-1/data"
+    if [[ -d "$BACKUP_DATA" ]]; then
+        rm -rf "$BACKUP_DATA/db/"* "$BACKUP_DATA/storage/"* 2>/dev/null || true
+        echo "  backup-1 data wiped"
+    fi
+
+    # Start (or recreate) the container so it picks up the clean state.
+    # --force-recreate ensures we start even when the container was stopped.
+    if command -v docker &>/dev/null && [[ -f "$DOCKER_DIR/docker-compose.yml" ]]; then
+        echo "Starting backup container..."
+        docker compose -f "$DOCKER_DIR/docker-compose.yml" up -d --force-recreate 2>/dev/null || true
+
+        # Wait for backup-1 to start accepting requests
+        echo -n "Waiting for backup-1"
+        BK1_READY=false
+        for attempt in $(seq 1 20); do
+            if curl -sf http://localhost:8081/health >/dev/null 2>&1; then
                 echo " ready!"
+                BK1_READY=true
                 break
             fi
             echo -n "."
             sleep 1
         done
+
+        # Auto-configure backup-1 so it is immediately discoverable as a backup server.
+        # This sets up an admin account and activates backup mode — without this,
+        # the fresh container sits in "needs setup" state and cannot be detected.
+        if [[ "$BK1_READY" == "true" ]]; then
+            BK1_API="http://localhost:8081/api"
+            BK_USER="backupadmin"
+            BK_PASS="BackupPass1!"
+
+            # Check whether initial setup has already been done
+            SETUP_STATUS=$(curl -s --max-time 5 "$BK1_API/setup/status" 2>/dev/null || echo '{}')
+            if echo "$SETUP_STATUS" | grep -q '"setup_complete":true'; then
+                echo "  backup-1 already initialized"
+            else
+                echo -n "  Initializing backup-1..."
+                INIT_RESP=$(curl -s --max-time 10 -X POST "$BK1_API/setup/init" \
+                    -H 'Content-Type: application/json' \
+                    -d "{\"username\":\"$BK_USER\",\"password\":\"$BK_PASS\"}" 2>/dev/null || echo '{}')
+                if echo "$INIT_RESP" | grep -q '"user_id"'; then
+                    echo " done (user: $BK_USER)"
+                else
+                    echo " warning: $INIT_RESP"
+                fi
+            fi
+
+            # Login and activate backup mode
+            LOGIN_RESP=$(curl -s --max-time 10 -X POST "$BK1_API/auth/login" \
+                -H 'Content-Type: application/json' \
+                -d "{\"username\":\"$BK_USER\",\"password\":\"$BK_PASS\"}" 2>/dev/null || echo '{}')
+            BK_TOKEN=$(echo "$LOGIN_RESP" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+
+            if [[ -n "$BK_TOKEN" ]]; then
+                MODE_RESP=$(curl -s --max-time 10 -X POST "$BK1_API/admin/backup/mode" \
+                    -H "Authorization: Bearer $BK_TOKEN" \
+                    -H 'Content-Type: application/json' \
+                    -d '{"mode":"backup"}' 2>/dev/null || echo '{}')
+                if echo "$MODE_RESP" | grep -q '"mode":"backup"'; then
+                    # Read the static API key from config.toml
+                    BK1_KEY=$(grep -oP '(?<=api_key\s=\s")[^"]+' \
+                        "$DOCKER_DIR/backup-1/config.toml" 2>/dev/null || echo "")
+                    echo "  backup-1 is now in backup mode"
+                    echo "  Address : localhost:8081  (or host.docker.internal:8081 from containers)"
+                    echo "  API Key : ${BK1_KEY:-see docker-instances/backup-1/config.toml}"
+                else
+                    echo "  Warning: could not set backup mode: $MODE_RESP"
+                fi
+            else
+                echo "  Warning: could not log in to backup-1 — backup mode not set"
+            fi
+        else
+            echo "  Warning: backup-1 did not become healthy in time — skipping auto-configure"
+        fi
     fi
 fi
 
