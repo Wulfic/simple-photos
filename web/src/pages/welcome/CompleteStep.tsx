@@ -168,17 +168,18 @@ export default function CompleteStep({
               }
 
               // ── Normal setup tasks ────────────────────────────────────
-              // Await scan so files are registered BEFORE we set encryption mode.
-              // This ensures the server knows about photos and can start migration
-              // immediately — no race condition with background scan.
-              try {
-                const scanResult = await api.admin.scanAndRegister();
-                console.log("[Setup] Scan complete:", scanResult);
-                // After scan, trigger immediate conversion for thumbnails/previews
-                api.admin.triggerConvert().catch(() => {});
-              } catch (scanErr) {
-                console.warn("[Setup] Scan failed — autoscan will catch files later:", scanErr);
-              }
+              // Fire scan in the background — don't await it, as it can take
+              // a long time and blocks navigation. Encryption mode is set
+              // immediately after; the server applies it to any photos the scan
+              // registers. Autoscan will catch anything the background scan misses.
+              api.admin.scanAndRegister()
+                .then((scanResult) => {
+                  console.log("[Setup] Background scan complete:", scanResult);
+                  api.admin.triggerConvert().catch(() => {});
+                })
+                .catch((scanErr) => {
+                  console.warn("[Setup] Scan failed — autoscan will catch files later:", scanErr);
+                });
 
               // Set the encryption mode on the server, including the encryption
               // key so the server can run migration autonomously (even if the
