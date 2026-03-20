@@ -244,8 +244,6 @@ async fn main() -> anyhow::Result<()> {
         let storage_swap_clone = storage_root_swap.clone();
         let scan_interval = config.scan.auto_scan_interval_secs;
         let convert_notify_clone = convert_notify.clone();
-        let encryption_key_clone = encryption_key.clone();
-        let jwt_secret_clone = config.auth.jwt_secret.clone();
         let scan_lock_clone = scan_lock.clone();
         tokio::spawn(async move {
             backup::autoscan::background_auto_scan_task(
@@ -253,8 +251,6 @@ async fn main() -> anyhow::Result<()> {
                 storage_swap_clone,
                 scan_interval,
                 convert_notify_clone,
-                encryption_key_clone,
-                jwt_secret_clone,
                 scan_lock_clone,
             ).await;
         });
@@ -274,26 +270,6 @@ async fn main() -> anyhow::Result<()> {
         encryption_key,
         scan_lock,
     };
-
-    // Spawn background task to auto-encrypt any remaining plain photos on startup.
-    // Handles upgrades from older plain-mode installs and interrupted migrations.
-    {
-        let pool_clone = state.pool.clone();
-        let storage_root_clone = config.storage.root.clone();
-        let convert_notify_clone = state.convert_notify.clone();
-        let encryption_key_clone = state.encryption_key.clone();
-        let jwt_secret_clone = config.auth.jwt_secret.clone();
-        tokio::spawn(async move {
-            photos::server_migrate::resume_migration_on_startup(
-                pool_clone,
-                storage_root_clone,
-                convert_notify_clone,
-                encryption_key_clone,
-                jwt_secret_clone,
-            )
-            .await;
-        });
-    }
 
     let api_routes = Router::new()
         // First-run setup (public)
@@ -381,14 +357,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/photos/reconvert", post(photos::convert::trigger_reconvert))
         // Check conversion progress (pending items count) — available to any authenticated user
         .route("/photos/conversion-status", get(photos::convert::conversion_status))
-        // Cleanup: remove original plain files after successful encryption
-        .route("/photos/cleanup-status", get(photos::cleanup::cleanup_status))
-        .route("/photos/cleanup", post(photos::cleanup::cleanup_plain_files))
         // Encryption settings (read-only — always encrypted)
         .route("/settings/encryption", get(photos::encryption::get_encryption_settings))
         // Store encryption key so server-side operations can encrypt autonomously
         .route("/admin/encryption/store-key", post(photos::encryption::store_encryption_key))
-        .route("/photos/{id}/mark-encrypted", post(photos::encryption::mark_photo_encrypted))
         // Secure galleries
         .route("/galleries/secure", get(photos::galleries::list_secure_galleries))
         .route("/galleries/secure", post(photos::galleries::create_secure_gallery))

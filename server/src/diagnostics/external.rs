@@ -298,7 +298,7 @@ pub async fn external_full(
     let total_photos: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
         .fetch_one(pool).await.unwrap_or(0);
     let encrypted_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL")
+        sqlx::query_scalar("SELECT COUNT(*) FROM photos")
             .fetch_one(pool).await.unwrap_or(0);
     let total_file_bytes: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")

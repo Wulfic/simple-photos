@@ -51,10 +51,10 @@ use crate::error::AppError;
 use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
-use super::scan::{needs_web_preview, generate_web_preview_bg, generate_thumbnail_file};
+use super::scan::{needs_web_preview, generate_web_preview_bg};
 
 /// Row type returned by the photos query shared across all three phases.
-type PhotoRow = (String, String, String, Option<String>, String, Option<String>, String);
+type PhotoRow = (String, String, String, Option<String>, String, String, String);
 
 /// Maximum concurrent FFmpeg/ImageMagick subprocesses for thumbnail and
 /// conversion phases.  Bounded to avoid fork-bombing the system.
@@ -85,59 +85,17 @@ async fn ffmpeg_available_cached() -> bool {
 
 /// Generate missing thumbnails for every photo.  This runs first so the
 /// gallery shows something useful before the (potentially slow) conversion
-/// phase begins.  Encrypted photos are skipped — their thumbnails are
-/// encrypted blobs created during migration.
+/// phase begins.
+///
+/// Note: With mandatory encryption, all photo thumbnails are encrypted blobs
+/// managed during upload — this phase is a no-op but retained for structural
+/// consistency.
 async fn phase_thumbnails(
-    photos: &[PhotoRow],
-    storage_root: &PathBuf,
+    _photos: &[PhotoRow],
+    _storage_root: &PathBuf,
 ) -> u32 {
-    // Collect work items first (cheap fs::try_exists checks), then run
-    // actual thumbnail generation in parallel bounded by MEDIA_PARALLELISM.
-    let mut work: Vec<(String, PathBuf, PathBuf, String)> = Vec::new();
-    for (photo_id, file_path, _filename, thumb_path, mime_type, encrypted_blob_id, _user_id) in photos {
-        if encrypted_blob_id.is_some() {
-            continue;
-        }
-        let tp = match thumb_path {
-            Some(tp) => tp,
-            None => continue,
-        };
-        let thumb_abs = storage_root.join(tp);
-        if tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
-            continue;
-        }
-        let source_path = storage_root.join(file_path);
-        if !tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
-            continue;
-        }
-        work.push((photo_id.clone(), source_path, thumb_abs, mime_type.clone()));
-    }
-
-    if work.is_empty() {
-        return 0;
-    }
-
-    let generated = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let sem = Arc::new(Semaphore::new(MEDIA_PARALLELISM));
-    let mut handles = Vec::with_capacity(work.len());
-
-    for (photo_id, source_path, thumb_abs, mime_type) in work {
-        let sem = sem.clone();
-        let gen = generated.clone();
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await;
-            if generate_thumbnail_file(&source_path, &thumb_abs, &mime_type, None).await {
-                gen.fetch_add(1, Ordering::Relaxed);
-                tracing::debug!(photo_id = %photo_id, "Phase 1: generated thumbnail");
-            }
-        }));
-    }
-
-    for h in handles {
-        let _ = h.await;
-    }
-
-    generated.load(Ordering::Relaxed)
+    // All photos are encrypted; thumbnails are encrypted blobs, not disk files.
+    0
 }
 
 // ── Phase 2: Convert flagged files to browser-friendly formats ──────────────
@@ -169,8 +127,7 @@ async fn phase_convert(
         source_path: PathBuf,
         preview_path: PathBuf,
         preview_ext: &'static str,
-        is_encrypted: bool,
-        encrypted_blob_id: Option<String>,
+        encrypted_blob_id: String,
         user_id: String,
     }
 
@@ -188,7 +145,6 @@ async fn phase_convert(
     let mut enc_work: Vec<EncWork> = Vec::new();
 
     for (photo_id, file_path, filename, _thumb_path, _mime_type, encrypted_blob_id, user_id) in photos {
-        let is_encrypted = encrypted_blob_id.is_some();
         let preview_ext = match needs_web_preview(filename) {
             Some(ext) => ext,
             None => continue,
@@ -223,30 +179,27 @@ async fn phase_convert(
                     source_path,
                     preview_path,
                     preview_ext,
-                    is_encrypted,
                     encrypted_blob_id: encrypted_blob_id.clone(),
                     user_id: user_id.clone(),
                 });
-            } else if is_encrypted {
+            } else {
                 mark_converted_ids.push(photo_id.clone());
             }
             continue;
         }
 
         // Path B: encrypted-only (no source on disk)
-        if is_encrypted && key_available {
-            if let Some(blob_id) = encrypted_blob_id.as_deref() {
-                if !is_blob_already_converted(pool, photo_id).await
-                    && !is_conversion_failed(pool, photo_id).await
-                {
-                    enc_work.push(EncWork {
-                        photo_id: photo_id.clone(),
-                        filename: filename.clone(),
-                        encrypted_blob_id: blob_id.to_string(),
-                        user_id: user_id.clone(),
-                        preview_ext,
-                    });
-                }
+        if key_available {
+            if !is_blob_already_converted(pool, photo_id).await
+                && !is_conversion_failed(pool, photo_id).await
+            {
+                enc_work.push(EncWork {
+                    photo_id: photo_id.clone(),
+                    filename: filename.clone(),
+                    encrypted_blob_id: encrypted_blob_id.clone(),
+                    user_id: user_id.clone(),
+                    preview_ext,
+                });
             }
         }
     }
@@ -276,7 +229,6 @@ async fn phase_convert(
                 photo_id = %item.photo_id,
                 filename = %item.filename,
                 target_ext = item.preview_ext,
-                encrypted = item.is_encrypted,
                 "Phase 2: starting conversion (source on disk)"
             );
             if generate_web_preview_bg(&item.source_path, &item.preview_path, item.preview_ext).await {
@@ -287,19 +239,17 @@ async fn phase_convert(
                     filename = %item.filename,
                     "Phase 2: conversion complete (source on disk)"
                 );
-                // Re-encrypt the blob if encrypted
-                if item.is_encrypted && key_available {
-                    if let Some(enc_id) = item.encrypted_blob_id.as_deref() {
-                        if let Err(e) = reencrypt_blob_with_converted_data(
-                            &pool, &storage_root, &enc_key,
-                            &item.photo_id, &item.user_id,
-                            enc_id, &item.filename, &item.preview_path, item.preview_ext,
-                        ).await {
-                            tracing::warn!(
-                                photo_id = %item.photo_id,
-                                "Phase 2: re-encryption failed: {}", e
-                            );
-                        }
+                // Re-encrypt the blob if key available
+                if key_available {
+                    if let Err(e) = reencrypt_blob_with_converted_data(
+                        &pool, &storage_root, &enc_key,
+                        &item.photo_id, &item.user_id,
+                        &item.encrypted_blob_id, &item.filename, &item.preview_path, item.preview_ext,
+                    ).await {
+                        tracing::warn!(
+                            photo_id = %item.photo_id,
+                            "Phase 2: re-encryption failed: {}", e
+                        );
                     }
                 }
             } else {
@@ -369,98 +319,16 @@ async fn phase_convert(
 // ── Phase 3: Post-conversion thumbnails (freshly converted only) ────────────
 
 /// Regenerate thumbnails for files that were just converted in Phase 2.
-/// The web-previewed file (e.g. the .mp4 from a .mkv) may yield a better
-/// thumbnail than the original exotic format.  Only files whose ID is in
-/// `converted_ids` are processed — everything else was already handled in
-/// Phase 1.
+///
+/// Note: With mandatory encryption, plain-photo thumbnail regeneration is no
+/// longer needed — encrypted thumbnails are managed during upload/conversion.
+/// This phase is a no-op but retained for structural consistency.
 async fn phase_post_conversion_thumbnails(
-    photos: &[PhotoRow],
-    storage_root: &PathBuf,
-    converted_ids: &[String],
+    _photos: &[PhotoRow],
+    _storage_root: &PathBuf,
+    _converted_ids: &[String],
 ) -> u32 {
-    if converted_ids.is_empty() {
-        return 0;
-    }
-
-    let id_set: std::collections::HashSet<&str> =
-        converted_ids.iter().map(|s| s.as_str()).collect();
-
-    // Collect work items first, then run in parallel.
-    struct ThumbWork {
-        photo_id: String,
-        thumb_source: PathBuf,
-        thumb_abs: PathBuf,
-        preview_mime: String,
-    }
-    let mut work: Vec<ThumbWork> = Vec::new();
-
-    for (photo_id, _file_path, filename, thumb_path, mime_type, encrypted_blob_id, _user_id) in photos {
-        if !id_set.contains(photo_id.as_str()) {
-            continue;
-        }
-        if encrypted_blob_id.is_some() {
-            continue;
-        }
-        let tp = match thumb_path {
-            Some(tp) => tp,
-            None => continue,
-        };
-        let preview_ext = match needs_web_preview(filename) {
-            Some(ext) => ext,
-            None => continue,
-        };
-        let preview_path = storage_root.join(format!(
-            ".web_previews/{}.web.{}",
-            photo_id, preview_ext
-        ));
-        let thumb_abs = storage_root.join(tp);
-        let thumb_source = if tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
-            preview_path.clone()
-        } else {
-            continue; // No preview to generate thumbnail from
-        };
-
-        // Determine the preview mime type for thumbnail generation
-        let preview_mime = match preview_ext {
-            "jpg" => "image/jpeg",
-            "png" => "image/png",
-            "mp3" => "audio/mpeg",
-            "mp4" => "video/mp4",
-            _ => mime_type.as_str(),
-        };
-        work.push(ThumbWork {
-            photo_id: photo_id.clone(),
-            thumb_source,
-            thumb_abs,
-            preview_mime: preview_mime.to_string(),
-        });
-    }
-
-    if work.is_empty() {
-        return 0;
-    }
-
-    let generated = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    let sem = Arc::new(Semaphore::new(MEDIA_PARALLELISM));
-    let mut handles = Vec::with_capacity(work.len());
-
-    for item in work {
-        let sem = sem.clone();
-        let gen = generated.clone();
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await;
-            if generate_thumbnail_file(&item.thumb_source, &item.thumb_abs, &item.preview_mime, None).await {
-                gen.fetch_add(1, Ordering::Relaxed);
-                tracing::debug!(photo_id = %item.photo_id, "Phase 3: regenerated thumbnail from web preview");
-            }
-        }));
-    }
-
-    for h in handles {
-        let _ = h.await;
-    }
-
-    generated.load(Ordering::Relaxed)
+    0
 }
 
 // ── Orchestrator: runs all three phases sequentially ────────────────────────
@@ -474,25 +342,9 @@ async fn run_conversion_pass(
     storage_root: &PathBuf,
     encryption_key: &Arc<RwLock<Option<[u8; 32]>>>,
 ) -> (u32, u32, u32) {
-    // Skip entirely while encryption migration is running.  Converting during
-    // encryption is wasteful — the migration pipeline triggers conversion once
-    // encryption finishes.
-    let unencrypted_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
-    )
-    .fetch_one(read_pool)
-    .await
-    .unwrap_or(0);
-    // Use a threshold: if there are many unencrypted photos, a migration is
-    // likely in progress. A few stragglers (< 3) are fine to ignore.
-    if unencrypted_count > 2 {
-        tracing::info!("[DIAG:CONVERT] run_conversion_pass SKIPPED — {} unencrypted photos (migration likely in progress)", unencrypted_count);
-        return (0, 0, 0);
-    }
-
-    // Diagnostic: log encrypted photos missing thumbnail blobs
+    // Diagnostic: log photos missing thumbnail blobs
     let enc_missing: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL AND encrypted_thumb_blob_id IS NULL",
+        "SELECT COUNT(*) FROM photos WHERE encrypted_thumb_blob_id IS NULL",
     )
     .fetch_one(read_pool)
     .await
@@ -547,8 +399,8 @@ async fn run_conversion_pass(
             .collect()
     };
 
-    let unencrypted_count = photos.iter().filter(|p| p.5.is_none()).count();
-    let enc_count = photos.iter().filter(|p| p.5.is_some()).count();
+    let unencrypted_count = 0usize; // All photos are encrypted after migration 025
+    let enc_count = photos.len();
     tracing::info!(
         "[DIAG:CONVERT] run_conversion_pass — {} photos ({} unencrypted, {} encrypted, key_available={})",
         photos.len(), unencrypted_count, enc_count, key_available
@@ -1032,7 +884,7 @@ pub async fn trigger_reconvert(
     let test_blob: Option<(String,)> = sqlx::query_as(
         "SELECT b.storage_path FROM photos p \
          JOIN blobs b ON b.id = p.encrypted_blob_id \
-         WHERE p.encrypted_blob_id IS NOT NULL LIMIT 1",
+         LIMIT 1",
     )
     .fetch_optional(&state.pool)
     .await?;
@@ -1059,7 +911,7 @@ pub async fn trigger_reconvert(
     // LIMIT 10000 to prevent OOM on massive libraries — this is a diagnostic
     // count, not an exhaustive scan.
     let photos: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, filename FROM photos WHERE encrypted_blob_id IS NOT NULL LIMIT 10000",
+        "SELECT id, filename FROM photos LIMIT 10000",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -1126,26 +978,11 @@ pub async fn conversion_status(
     let converting = state.conversion_active.load(Ordering::Acquire);
     let key_available = state.encryption_key.read().await.is_some();
 
-    // ── Check if a migration is in progress (unencrypted photos exist) ────
-    let unencrypted_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE user_id = ? AND encrypted_blob_id IS NULL",
-    )
-    .bind(&_auth.user_id)
-    .fetch_one(&state.read_pool)
-    .await
-    .unwrap_or(0);
-
-    let migration_running = unencrypted_count > 0;
-
-    // ── Count missing thumbnails (plain photos still awaiting migration) ──
     let mut missing_thumbnails = 0u32;
 
     // ── Check photos needing web-preview conversion ─────────────────────
-    // Only fetch photos whose filename extension matches needs_web_preview.
-    // SQL LIKE can't perfectly match the Rust logic, so we fetch a broader
-    // set and filter in Rust, but only for convertible extensions.
-    let convertible_photos: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, filename, file_path, encrypted_blob_id FROM photos \
+    let convertible_photos: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, filename, file_path FROM photos \
          WHERE user_id = ? LIMIT 10000",
     )
     .bind(&_auth.user_id)
@@ -1155,38 +992,34 @@ pub async fn conversion_status(
     let mut pending_conversions = 0u32;
     let mut pending_awaiting_key = 0u32;
 
-    // Collect filesystem-check futures for plain photos
+    // Collect filesystem-check futures
     struct ConvCheck {
-        is_encrypted: bool,
         preview_path: PathBuf,
         source_path: Option<PathBuf>,
         photo_id: String,
     }
     let mut checks: Vec<ConvCheck> = Vec::new();
 
-    for (id, filename, file_path, encrypted_blob_id) in &convertible_photos {
+    for (id, filename, file_path) in &convertible_photos {
         let ext = match super::scan::needs_web_preview(filename) {
             Some(e) => e,
             None => continue,
         };
-        let is_encrypted = encrypted_blob_id.is_some();
         let preview_path = storage_root.join(format!(".web_previews/{}.web.{}", id, ext));
 
-        if is_encrypted {
-            checks.push(ConvCheck {
-                is_encrypted: true,
-                preview_path,
-                source_path: None,
-                photo_id: id.clone(),
-            });
+        // All photos are encrypted; but some may still have source files on disk
+        // from the autoscan pipeline
+        let source_path = if !file_path.is_empty() {
+            Some(storage_root.join(file_path))
         } else {
-            checks.push(ConvCheck {
-                is_encrypted: false,
-                preview_path,
-                source_path: Some(storage_root.join(file_path)),
-                photo_id: id.clone(),
-            });
-        }
+            None
+        };
+
+        checks.push(ConvCheck {
+            preview_path,
+            source_path,
+            photo_id: id.clone(),
+        });
     }
 
     // Run all filesystem existence checks concurrently
@@ -1202,7 +1035,6 @@ pub async fn conversion_status(
     }
 
     let preview_results = futures_util::future::join_all(preview_futs).await;
-    // For source checks, only join the Some() ones
     let mut source_results: Vec<Option<bool>> = Vec::with_capacity(checks.len());
     for sf in source_futs {
         match sf {
@@ -1214,42 +1046,41 @@ pub async fn conversion_status(
     for (i, c) in checks.iter().enumerate() {
         let preview_exists = preview_results[i].as_ref().copied().unwrap_or(false);
         if preview_exists {
-            continue; // Already converted
+            continue;
         }
 
-        // Skip items whose conversion permanently failed
         if is_conversion_failed(&state.read_pool, &c.photo_id).await {
             continue;
         }
 
-        if c.is_encrypted {
+        // Check if there's a source file on disk (from autoscan)
+        let has_source = source_results[i].unwrap_or(false);
+        if has_source {
+            pending_conversions += 1;
+        } else {
+            // Encrypted-only photo — needs key to decrypt→convert→re-encrypt
             let already_converted = is_blob_already_converted(&state.read_pool, &c.photo_id).await;
             if already_converted {
                 continue;
             }
-            if key_available && !migration_running {
+            if key_available {
                 pending_conversions += 1;
             } else {
                 pending_awaiting_key += 1;
-            }
-        } else {
-            let source_exists = source_results[i].unwrap_or(false);
-            if source_exists {
-                pending_conversions += 1;
             }
         }
     }
 
     // ── Count photos missing encrypted thumbnail blobs ──────────────────
     let enc_missing_thumbs: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL AND encrypted_thumb_blob_id IS NULL AND user_id = ?",
+        "SELECT COUNT(*) FROM photos WHERE encrypted_thumb_blob_id IS NULL AND user_id = ?",
     )
     .bind(&_auth.user_id)
     .fetch_one(&state.read_pool)
     .await
     .unwrap_or(0);
 
-    if !migration_running && enc_missing_thumbs > 0 {
+    if enc_missing_thumbs > 0 {
         missing_thumbnails += enc_missing_thumbs as u32;
     }
 
@@ -1267,6 +1098,5 @@ pub async fn conversion_status(
         "converting": converting,
         "enc_missing_thumbs": enc_missing_thumbs,
         "key_available": key_available,
-        "migration_running": migration_running,
     })))
 }

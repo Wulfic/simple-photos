@@ -182,19 +182,6 @@ data class TwoFactorStatusResponse(
 data class StoreEncryptionKeyRequest(val key: String)
 data class StoreEncryptionKeyResponse(val message: String)
 
-// ── Cleanup plain files ──────────────────────────────────────────────────────
-
-data class CleanupStatusResponse(
-    @SerializedName("cleanable_count") val cleanableCount: Int,
-    @SerializedName("cleanable_bytes") val cleanableBytes: Long
-)
-
-data class CleanupResponse(
-    val cleaned: Int,
-    val errors: Int,
-    val message: String
-)
-
 // ── Backup servers ───────────────────────────────────────────────────────────
 
 data class BackupServer(
@@ -249,8 +236,7 @@ data class ConversionStatusResponse(
     @SerializedName("missing_thumbnails") val missingThumbnails: Int,
     val converting: Boolean,
     @SerializedName("enc_missing_thumbs") val encMissingThumbs: Int = 0,
-    @SerializedName("key_available") val keyAvailable: Boolean = false,
-    @SerializedName("migration_running") val migrationRunning: Boolean = false
+    @SerializedName("key_available") val keyAvailable: Boolean = false
 )
 
 // ── SSL/TLS settings ─────────────────────────────────────────────────────────

@@ -60,7 +60,6 @@ pub struct PhotoMetadataRecord {
     pub image_views: Option<i64>,
     pub original_url: Option<String>,
     pub storage_path: Option<String>,
-    pub is_encrypted: bool,
     pub imported_at: String,
 }
 
@@ -86,7 +85,6 @@ pub struct GooglePhotosBatchImportRequest {
 pub struct ImportMetadataResponse {
     pub metadata_id: String,
     pub storage_path: Option<String>,
-    pub is_encrypted: bool,
 }
 
 /// Response for batch import.

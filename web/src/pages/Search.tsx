@@ -28,8 +28,6 @@ interface SearchResult {
   tags: string[];
   /** For encrypted results, a local object URL for the thumbnail */
   _localThumbUrl?: string;
-  /** Whether this result came from encrypted local storage */
-  _isEncrypted?: boolean;
 }
 
 // ── Search Page ──────────────────────────────────────────────────────────────
@@ -170,7 +168,6 @@ export default function Search() {
                 height: photo.height ?? null,
                 tags: [],
                 _localThumbUrl: localThumbUrl,
-                _isEncrypted: true,
               });
             }
           }

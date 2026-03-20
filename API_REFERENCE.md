@@ -96,13 +96,6 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 |--------|------|------|-------------|----------|
 | `GET` | `/api/photos/conversion-status` | Bearer | — | `{ pending_conversions, pending_awaiting_key, missing_thumbnails, converting: bool, enc_missing_thumbs, key_available: bool }` |
 
-### Cleanup
-
-| Method | Path | Auth | Request Body | Response |
-|--------|------|------|-------------|----------|
-| `GET` | `/api/photos/cleanup-status` | Bearer | — | `{ cleanable_count, cleanable_bytes }` |
-| `POST` | `/api/photos/cleanup` | Bearer | — | `{ cleaned, errors?, message }` |
-
 ---
 
 ## Trash (30-day retention)
@@ -167,9 +160,9 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 | Method | Path | Auth | Request Body / Headers | Response |
 |--------|------|------|----------------------|----------|
-| `POST` | `/api/import/metadata` | Bearer | `{ metadata: GooglePhotosMetadata, photo_id?, blob_id? }` | **201** `{ metadata_id, storage_path?, is_encrypted }` |
+| `POST` | `/api/import/metadata` | Bearer | `{ metadata: GooglePhotosMetadata, photo_id?, blob_id? }` | **201** `{ metadata_id, storage_path? }` |
 | `POST` | `/api/import/metadata/batch` | Bearer | `{ entries: [{ metadata, photo_id?, blob_id? }] }` | `{ imported, failed, results: [{ index, metadata_id?, error? }] }` |
-| `POST` | `/api/import/metadata/upload` | Bearer | raw JSON sidecar bytes; Headers: `X-Photo-Id`, `X-Blob-Id` | **201** `{ metadata_id, storage_path?, is_encrypted }` |
+| `POST` | `/api/import/metadata/upload` | Bearer | raw JSON sidecar bytes; Headers: `X-Photo-Id`, `X-Blob-Id` | **201** `{ metadata_id, storage_path? }` |
 | `GET` | `/api/photos/{id}/metadata` | Bearer | — | `{ metadata: [PhotoMetadataRecord], next_cursor? }` |
 | `DELETE` | `/api/photos/{id}/metadata` | Bearer | — | **204** |
 

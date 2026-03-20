@@ -188,7 +188,7 @@ pub async fn search_photos(
          LEFT JOIN photo_tags pt ON pt.photo_id = p.id AND pt.user_id = p.user_id
          LEFT JOIN shared_album_photos sap ON sap.photo_ref = p.id AND sap.ref_type = 'plain'
          LEFT JOIN shared_albums sa ON sa.id = sap.album_id
-         WHERE p.user_id = ? AND p.encrypted_blob_id IS NULL
+         WHERE p.user_id = ?
            AND {}
          ORDER BY p.created_at DESC
          LIMIT {}",

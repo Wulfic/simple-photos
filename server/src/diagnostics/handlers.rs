@@ -377,7 +377,7 @@ pub async fn get_diagnostics(
         .await
         .unwrap_or(0);
     let encrypted_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NOT NULL")
+        sqlx::query_scalar("SELECT COUNT(*) FROM photos")
             .fetch_one(pool)
             .await
             .unwrap_or(0);

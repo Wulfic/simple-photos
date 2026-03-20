@@ -22,7 +22,7 @@ export default function Gallery() {
 
   // ── Core data hook ──────────────────────────────────────────────────────
   const {
-    mode, loading, error, setError, encryptedPhotos,
+    loading, error, setError, encryptedPhotos,
     secureBlobIds,
     loadEncryptedPhotos,
   } = useGalleryData();
@@ -30,7 +30,7 @@ export default function Gallery() {
   // ── Upload ──────────────────────────────────────────────────────────────
   const {
     uploading, uploadProgress, inputRef, handleDrop, handleFileInput,
-  } = useGalleryUpload({ mode, loadEncryptedPhotos, setError });
+  } = useGalleryUpload({ loadEncryptedPhotos, setError });
 
   // ── Read global activity store (banners rendered by GlobalProgressBanners) ──
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
@@ -130,7 +130,7 @@ export default function Gallery() {
   // Group encrypted photos by day
   type EncryptedDayGroup = { key: string; label: string; photos: CachedPhoto[] };
   const encryptedDayGroups: EncryptedDayGroup[] = (() => {
-    if (mode !== "encrypted" || !filteredPhotos || filteredPhotos.length === 0) return [];
+    if (!filteredPhotos || filteredPhotos.length === 0) return [];
     const groups = new Map<string, EncryptedDayGroup>();
     for (const photo of filteredPhotos) {
       const dk = dayKey(photo.takenAt);
@@ -209,7 +209,7 @@ export default function Gallery() {
         )}
 
         {/* Encrypted mode tiles — grouped by day */}
-        {mode === "encrypted" && encryptedDayGroups.map((group) => {
+        {encryptedDayGroups.map((group) => {
           let groupStartIdx = 0;
           for (const g of encryptedDayGroups) {
             if (g.key === group.key) break;

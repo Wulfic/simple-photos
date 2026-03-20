@@ -44,10 +44,7 @@ export interface ThumbnailPayload {
   data: string; // base64 JPEG
 }
 
-export type EncryptionMode = "encrypted";
-
 export interface GalleryDataResult {
-  mode: EncryptionMode | null;
   loading: boolean;
   error: string;
   setError: (msg: string) => void;
@@ -67,7 +64,6 @@ export interface GalleryDataResult {
 export function useGalleryData(): GalleryDataResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [mode, setMode] = useState<EncryptionMode | null>(null);
   const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
 
@@ -124,7 +120,6 @@ export function useGalleryData(): GalleryDataResult {
   useEffect(() => {
     async function init() {
       try {
-        setMode("encrypted");
 
         // Fetch blob IDs that are in secure galleries (to hide from main gallery)
         try {
@@ -335,7 +330,6 @@ export function useGalleryData(): GalleryDataResult {
   }
 
   return {
-    mode,
     loading,
     error,
     setError,

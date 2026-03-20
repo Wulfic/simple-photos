@@ -74,7 +74,6 @@ pub fn normalise(
         image_views,
         original_url: meta.url.as_deref().map(|u| sanitize::sanitize_freeform(u, 2048)),
         storage_path: None,
-        is_encrypted: false,
         imported_at: now,
     }
 }

@@ -832,16 +832,6 @@ pub async fn scan_and_register(
     tracing::info!("[DIAG:SCAN] post-scan: sending pipeline notify");
     state.convert_notify.notify_one();
 
-    // After registering new photos, check if encryption migration needs to
-    // start (for any newly discovered unencrypted files).
-    crate::backup::autoscan::try_start_migration_after_scan(
-        &state.pool,
-        &storage_root,
-        &state.convert_notify,
-        &state.encryption_key,
-        &state.config.auth.jwt_secret,
-    ).await;
-
     Ok(Json(serde_json::json!({
         "registered": new_count,
         "metadata_updated": fixed_count,
