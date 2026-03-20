@@ -89,8 +89,9 @@ export default function Trash() {
         if (item.encrypted_blob_id) {
           const localItem = await db.trash.get(item.id);
           if (localItem?.thumbnailData) {
+            const mime = localItem.mediaType === "gif" ? "image/gif" : "image/jpeg";
             const blob = new Blob([localItem.thumbnailData], {
-              type: "image/jpeg",
+              type: mime,
             });
             (item as TrashItem)._localThumbUrl = URL.createObjectURL(blob);
           }

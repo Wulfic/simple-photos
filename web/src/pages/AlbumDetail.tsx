@@ -709,13 +709,14 @@ function ThumbnailImg({ photo }: { photo: CachedPhoto }) {
 
   useEffect(() => {
     if (photo.thumbnailData) {
+      const mime = photo.thumbnailMimeType || (photo.mediaType === "gif" ? "image/gif" : "image/jpeg");
       const url = URL.createObjectURL(
-        new Blob([photo.thumbnailData], { type: "image/jpeg" })
+        new Blob([photo.thumbnailData], { type: mime })
       );
       setSrc(url);
       return () => URL.revokeObjectURL(url);
     }
-  }, [photo.thumbnailData]);
+  }, [photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
 
   if (src) {
     return (

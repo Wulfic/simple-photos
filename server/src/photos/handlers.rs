@@ -375,9 +375,16 @@ pub async fn serve_thumbnail(
     let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
     let body = Body::from_stream(stream);
 
+    // Determine Content-Type from thumbnail path extension
+    let content_type = if full_path.extension().and_then(|e| e.to_str()) == Some("gif") {
+        "image/gif"
+    } else {
+        "image/jpeg"
+    };
+
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", HeaderValue::from_static("image/jpeg"))
+        .header("Content-Type", HeaderValue::from_static(content_type))
         .header("Content-Length", HeaderValue::from(meta.len()))
         .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
         .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))

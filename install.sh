@@ -357,6 +357,13 @@ if [[ "$MODE" == "native" ]]; then
         MISSING_DEPS+=("java")
     fi
 
+    if command -v ffmpeg &>/dev/null; then
+        success "FFmpeg $(ffmpeg -version 2>/dev/null | head -1 | awk '{print $3}') found"
+    else
+        warn "FFmpeg not found (needed for video/GIF thumbnails)"
+        MISSING_DEPS+=("ffmpeg")
+    fi
+
     if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
         info "Missing: ${MISSING_DEPS[*]}"
         if prompt_yn "Install missing dependencies?"; then
@@ -392,6 +399,17 @@ if [[ "$MODE" == "native" ]]; then
                         elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm jdk17-openjdk
                         elif command -v brew &>/dev/null; then brew install openjdk@17
                         else warn "Cannot auto-install Java. Android builds unavailable."; fi
+                        ;;
+                    ffmpeg)
+                        info "Installing FFmpeg..."
+                        if command -v apt-get &>/dev/null; then
+                            sudo apt-get update -qq
+                            sudo apt-get install -y -qq ffmpeg
+                        elif command -v dnf &>/dev/null; then sudo dnf install -y ffmpeg
+                        elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm ffmpeg
+                        elif command -v brew &>/dev/null; then brew install ffmpeg
+                        else warn "Cannot auto-install FFmpeg. Video thumbnails will use placeholders."; fi
+                        command -v ffmpeg &>/dev/null && success "FFmpeg installed" || warn "FFmpeg install failed — video thumbnails will use placeholders"
                         ;;
                 esac
             done

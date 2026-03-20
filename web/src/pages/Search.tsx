@@ -151,7 +151,8 @@ export default function Search() {
             if (fuzzyMatch(searchableText, trimmed)) {
               let localThumbUrl: string | undefined;
               if (photo.thumbnailData) {
-                const blob = new Blob([photo.thumbnailData], { type: "image/jpeg" });
+                const mime = photo.thumbnailMimeType || (photo.mediaType === "gif" ? "image/gif" : "image/jpeg");
+                const blob = new Blob([photo.thumbnailData], { type: mime });
                 localThumbUrl = URL.createObjectURL(blob);
               }
               matches.push({

@@ -91,13 +91,16 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     const mediaType = mediaTypeFromMime(file.type);
     const serverBlobType = blobTypeFromMime(file.type);
 
-    // Generate thumbnail (JPEG frame for videos, scaled image for photos/GIFs)
+    // Generate thumbnail (JPEG frame for videos, scaled image for photos, animated GIF for GIFs)
     let thumbnailData: ArrayBuffer;
+    let thumbnailMimeType = "image/jpeg";
     if (mediaType === "audio") {
       thumbnailData = await createAudioFallbackThumbnail();
     } else {
       try {
-        thumbnailData = await generateThumbnail(file, 256);
+        const thumbResult = await generateThumbnail(file, 256);
+        thumbnailData = thumbResult.data;
+        thumbnailMimeType = thumbResult.mimeType;
       } catch {
         console.warn(`Thumbnail generation failed for ${file.name}, using fallback`);
         thumbnailData = await createFallbackThumbnail();
@@ -119,6 +122,7 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
       photo_blob_id: "", // filled after photo upload
       width: 256,
       height: 256,
+      mime_type: thumbnailMimeType,
       data: arrayBufferToBase64(thumbnailData),
     } satisfies Partial<ThumbnailPayload>);
 
