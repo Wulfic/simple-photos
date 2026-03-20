@@ -35,7 +35,7 @@ pub async fn cleanup_status(
     })))
 }
 
-/// Delete original plain-mode files (photo/video + thumbnail + web preview)
+/// Delete original files (photo/video + thumbnail + web preview)
 /// for every photo that has been successfully encrypted. Clears `file_path`
 /// and `thumb_path` in the DB so they won't be served or re-cleaned.
 ///
@@ -139,7 +139,7 @@ pub async fn cleanup_plain_files_internal(
         }
 
         // Clear file_path and thumb_path in DB so this photo is no longer
-        // served via plain-mode endpoints
+        // served via photo endpoints
         sqlx::query(
             "UPDATE photos SET file_path = '', thumb_path = NULL \
              WHERE id = ? AND user_id = ?",

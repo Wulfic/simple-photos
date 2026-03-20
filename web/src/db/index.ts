@@ -49,8 +49,8 @@ export interface CachedAlbum {
   photoBlobIds: string[];
 }
 
-/** A locally cached trash item (encrypted mode only).
- *  Plain-mode trash is managed entirely server-side. */
+/** A locally cached trash item.
+ *  Trash is managed with local IndexedDB cache and decrypted thumbnails. */
 export interface CachedTrashItem {
   /** Server-assigned trash item ID */
   trashId: string;
@@ -74,7 +74,7 @@ export interface CachedTrashItem {
 /** Cached full-size photo data for instant viewing across sessions.
  *  LRU-evicted: keeps the most recently viewed photos in IndexedDB. */
 export interface CachedFullPhoto {
-  /** Photo ID (plain mode) or blob ID (encrypted mode) */
+  /** Photo ID or blob ID */
   photoId: string;
   filename: string;
   mimeType: string;
@@ -87,8 +87,8 @@ export interface CachedFullPhoto {
   cachedAt: number;
 }
 
-/** A metadata-only "copy" of a photo/video/audio (encrypted mode only).
- *  Plain-mode copies are stored server-side in the edit_copies table. */
+/** A metadata-only "copy" of a photo/video/audio.
+ *  Copies are stored server-side in the edit_copies table. */
 export interface CachedEditCopy {
   /** Unique ID for this copy */
   copyId: string;
@@ -209,7 +209,7 @@ export async function clearAllUserData(): Promise<void> {
     db.editCopies.clear(),
   ]);
 
-  // Wipe persistent thumbnail cache (plain-mode)
+  // Wipe persistent thumbnail cache
   try {
     await caches.delete("sp-thumbnails-v1");
   } catch {

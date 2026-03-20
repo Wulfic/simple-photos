@@ -1,6 +1,6 @@
 /**
- * Search page — tag-based and text search across both plain-mode (server)
- * and encrypted-mode (local IndexedDB) photo libraries, with unified results.
+ * Search page — tag-based and text search across the encrypted photo library
+ * (local IndexedDB) and server, with unified results.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
@@ -116,7 +116,7 @@ export default function Search() {
     setLoading(true);
     setSearched(true);
     try {
-      // Search server-side (plain mode photos)
+      // Search server-side photos
       const serverPromise = api.search.query(trimmed).catch(() => ({ results: [] as SearchResult[] }));
 
       // Search local encrypted photos in IndexedDB
@@ -279,10 +279,7 @@ export default function Search() {
             </p>
             <div className={gridClasses}>
               {results.map((result, idx) => {
-                const isEncrypted = !!(result as any)._isEncrypted;
-                const path = isEncrypted
-                  ? `/photo/${result.id}`
-                  : `/photo/plain/${result.id}`;
+                const path = `/photo/${result.id}`;
                 return (
                 <SearchResultTile
                   key={result.id}
@@ -290,8 +287,8 @@ export default function Search() {
                   onClick={() =>
                     navigate(path, {
                       state: {
-                        photoIds: results.filter((r) => !!(r as any)._isEncrypted === isEncrypted).map((r) => r.id),
-                        currentIndex: results.filter((r) => !!(r as any)._isEncrypted === isEncrypted).map((r) => r.id).indexOf(result.id),
+                        photoIds: results.map((r) => r.id),
+                        currentIndex: results.map((r) => r.id).indexOf(result.id),
                       },
                     })
                   }

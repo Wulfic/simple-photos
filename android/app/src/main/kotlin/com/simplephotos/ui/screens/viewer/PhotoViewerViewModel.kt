@@ -66,7 +66,7 @@ class PhotoViewerViewModel @Inject constructor(
     var error by mutableStateOf<String?>(null)
         private set
 
-    /** Tags for the currently viewed photo (plain mode only). */
+    /** Tags for the currently viewed photo. */
     var currentTags by mutableStateOf<List<String>>(emptyList())
         private set
 

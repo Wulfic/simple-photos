@@ -27,8 +27,6 @@ export const storageStatsApi = {
       video_count: number;
       other_blob_bytes: number;
       other_blob_count: number;
-      plain_bytes: number;
-      plain_count: number;
       user_total_bytes: number;
       fs_total_bytes: number;
       fs_free_bytes: number;

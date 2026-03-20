@@ -96,7 +96,6 @@ export interface DiagnosticsResponse {
   photos: {
     total_photos: number;
     encrypted_count: number;
-    plain_count: number;
     total_file_bytes: number;
     total_thumb_bytes: number;
     photos_with_thumbs: number;

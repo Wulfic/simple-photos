@@ -477,15 +477,12 @@ function SmartAlbumCard({
   label,
   count,
   onClick,
-  plainThumbId,
   encryptedThumbData,
 }: {
   label: string;
   count: number;
   onClick: () => void;
-  /** Plain-mode: photo ID whose thumbnail to load from server */
-  plainThumbId?: string;
-  /** Encrypted-mode: raw JPEG ArrayBuffer from IndexedDB */
+  /** Raw JPEG ArrayBuffer from IndexedDB */
   encryptedThumbData?: ArrayBuffer;
 }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
@@ -494,31 +491,16 @@ function SmartAlbumCard({
     let cancelled = false;
 
     if (encryptedThumbData) {
-      // Encrypted mode — thumbnail data already available from IndexedDB
+      // Thumbnail data already available from IndexedDB
       const blob = new Blob([encryptedThumbData], { type: "image/jpeg" });
       const url = URL.createObjectURL(blob);
       setThumbUrl(url);
       return () => { cancelled = true; URL.revokeObjectURL(url); };
     }
 
-    if (plainThumbId) {
-      // Plain mode — fetch thumbnail from server
-      (async () => {
-        try {
-          const buf = await api.photos.downloadThumb(plainThumbId);
-          if (cancelled) return;
-          const blob = new Blob([buf], { type: "image/jpeg" });
-          setThumbUrl(URL.createObjectURL(blob));
-        } catch {
-          // Thumbnail load failed — keep showing count fallback
-        }
-      })();
-      return () => { cancelled = true; };
-    }
-
     // No thumbnail source — reset
     setThumbUrl(null);
-  }, [plainThumbId, encryptedThumbData]);
+  }, [encryptedThumbData]);
 
   // Revoke previous object URL when thumbUrl changes
   useEffect(() => {

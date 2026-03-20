@@ -50,7 +50,7 @@ interface ApiService {
     @POST("api/auth/2fa/disable")
     suspend fun disable2fa(@Body request: TotpDisableRequest): Response<Unit>
 
-    // ── Plain-mode Photos ────────────────────────────────────────────────
+    // ── Photos ───────────────────────────────────────────────────────────
     @GET("api/photos")
     suspend fun listPhotos(
         @Query("after") after: String? = null,

@@ -1,7 +1,7 @@
 /**
  * Full-screen photo/video viewer page.
  *
- * Orchestrates media loading (plain & encrypted), swipe/zoom gestures,
+ * Orchestrates encrypted media loading, swipe/zoom gestures,
  * photo preloading, crop/brightness/rotation editing, tags, favorites,
  * and prev/next navigation via photoIds passed through location.state.
  */
@@ -39,7 +39,6 @@ interface ViewerLocationState {
 export default function Viewer() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
-  const isPlainMode = location.pathname.startsWith("/photo/plain/");
   const navigate = useNavigate();
 
   // Destructure navigation context from location.state (passed by Gallery)
@@ -101,8 +100,8 @@ export default function Viewer() {
   } = useZoomPan(id, editMode, viewerContainerRef);
 
   // ── Preload cache for adjacent photos ──────────────────────────────────
-  const { preloadCache, getCachedPhotoList, preloadAdjacentPhotos } = usePhotoPreload(
-    photoIds, currentIndex, isPlainMode,
+  const { preloadCache, preloadAdjacentPhotos } = usePhotoPreload(
+    photoIds, currentIndex,
   );
 
   // ── Media loading (from hook) ──────────────────────────────────────────
@@ -116,8 +115,8 @@ export default function Viewer() {
     error, setError,
     videoError, setVideoError,
     isConverting,
-    loadPlainMedia, loadEncryptedMedia,
-  } = useViewerMedia(getCachedPhotoList, preloadCache);
+    loadEncryptedMedia,
+  } = useViewerMedia(preloadCache);
 
   // ── Actions (from hook) ────────────────────────────────────────────────
   const {
@@ -130,7 +129,7 @@ export default function Viewer() {
     handleDownload, handleDownloadOriginal, handleDownloadConverted,
     handleToggleFavorite,
   } = useViewerActions({
-    id, isPlainMode, mediaUrl, filename, mediaType,
+    id, mediaUrl, filename, mediaType,
     albumId, photoIds, currentIndex,
     cropCorners, brightness, rotateValue, trimStart, trimEnd, mediaDuration,
     setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd,
@@ -229,51 +228,29 @@ export default function Viewer() {
     return () => window.removeEventListener("resize", computeCropZoom);
   }, [computeCropZoom]);
 
-  // ── Load tags + favorite state for current photo ─────────────────────────
+  // ── Load favorite state + info for current photo ──────────────────────────
   useEffect(() => {
     if (!id) return;
     setTags([]);
     setIsFavorite(false);
-    if (isPlainMode) {
-      api.tags.getPhotoTags(id).then((res) => setTags(res.tags)).catch(() => {});
-      api.tags.list().then((res) => setAllTags(res.tags)).catch(() => {});
-      getCachedPhotoList().then((photos) => {
-        const photo = photos.find((p) => p.id === id);
-        if (photo) {
-          setIsFavorite(!!photo.is_favorite);
-          setPhotoInfo({
-            filename: photo.filename, mimeType: photo.mime_type,
-            width: photo.width, height: photo.height,
-            takenAt: photo.taken_at, sizeBytes: photo.size_bytes,
-            latitude: photo.latitude, longitude: photo.longitude,
-            createdAt: photo.created_at, durationSecs: photo.duration_secs,
-            cameraModel: photo.camera_model,
-          });
-          if (photo.crop_metadata) {
-            try { setCropData(JSON.parse(photo.crop_metadata)); } catch { setCropData(null); }
-          } else { setCropData(null); }
-        }
-      }).catch(() => {});
-    } else {
-      db.photos.get(id).then(async (cached) => {
-        if (cached) {
-          setIsFavorite(cached.isFavorite ?? false);
-          const allAlbums = await db.albums.toArray();
-          const albumNames = allAlbums.filter((a) => a.photoBlobIds.includes(id!)).map((a) => a.name);
-          setPhotoInfo({
-            filename: cached.filename, mimeType: cached.mimeType,
-            width: cached.width, height: cached.height,
-            takenAt: cached.takenAt ? new Date(cached.takenAt).toISOString() : null,
-            latitude: cached.latitude, longitude: cached.longitude,
-            albumNames,
-          });
-          if (cached.cropData) {
-            try { setCropData(JSON.parse(cached.cropData)); } catch { setCropData(null); }
-          } else { setCropData(null); }
+    db.photos.get(id).then(async (cached) => {
+      if (cached) {
+        setIsFavorite(cached.isFavorite ?? false);
+        const allAlbums = await db.albums.toArray();
+        const albumNames = allAlbums.filter((a) => a.photoBlobIds.includes(id!)).map((a) => a.name);
+        setPhotoInfo({
+          filename: cached.filename, mimeType: cached.mimeType,
+          width: cached.width, height: cached.height,
+          takenAt: cached.takenAt ? new Date(cached.takenAt).toISOString() : null,
+          latitude: cached.latitude, longitude: cached.longitude,
+          albumNames,
+        });
+        if (cached.cropData) {
+          try { setCropData(JSON.parse(cached.cropData)); } catch { setCropData(null); }
         } else { setCropData(null); }
-      }).catch(() => { setCropData(null); });
-    }
-  }, [id, isPlainMode]);
+      } else { setCropData(null); }
+    }).catch(() => { setCropData(null); });
+  }, [id]);
 
   // Auto-focus tag input when shown
   useEffect(() => { if (showTagInput) tagInputRef.current?.focus(); }, [showTagInput]);
@@ -336,14 +313,13 @@ export default function Viewer() {
   const navigateToPhoto = useCallback((index: number) => {
     if (!photoIds || index < 0 || index >= photoIds.length) return;
     const nextId = photoIds[index];
-    const prefix = isPlainMode ? "/photo/plain/" : "/photo/";
     setSlideDirection(index > currentIndex ? "right" : "left");
     setSlideKey((k) => k + 1);
-    navigate(`${prefix}${nextId}`, {
+    navigate(`/photo/${nextId}`, {
       replace: true,
       state: { photoIds, currentIndex: index } satisfies ViewerLocationState,
     });
-  }, [photoIds, isPlainMode, navigate, currentIndex]);
+  }, [photoIds, navigate, currentIndex]);
 
   const goPrev = useCallback(() => { if (hasPrev) navigateToPhoto(currentIndex - 1); }, [hasPrev, currentIndex, navigateToPhoto]);
   const goNext = useCallback(() => { if (hasNext) navigateToPhoto(currentIndex + 1); }, [hasNext, currentIndex, navigateToPhoto]);
@@ -399,18 +375,15 @@ export default function Viewer() {
       setLoading(true);
       setError("");
       setVideoError(false);
-      if (isPlainMode) loadPlainMedia(id);
-      else {
-        db.photos.get(id).then((dbCached) => {
-          if (dbCached?.thumbnailData) {
-            const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: "image/jpeg" }));
-            setPreviewUrl(url);
-          }
-          // Use storageBlobId for copies that reference the original's server blob
-          const fetchId = dbCached?.storageBlobId || id;
-          loadEncryptedMedia(fetchId);
-        }).catch(() => loadEncryptedMedia(id));
-      }
+      db.photos.get(id).then((dbCached) => {
+        if (dbCached?.thumbnailData) {
+          const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: "image/jpeg" }));
+          setPreviewUrl(url);
+        }
+        // Use storageBlobId for copies that reference the original's server blob
+        const fetchId = dbCached?.storageBlobId || id;
+        loadEncryptedMedia(fetchId);
+      }).catch(() => loadEncryptedMedia(id));
     }
     const preloadTimer = setTimeout(() => preloadAdjacentPhotos(id), 50);
     return () => clearTimeout(preloadTimer);
@@ -873,7 +846,7 @@ export default function Viewer() {
       {/* Bottom tags bar */}
       {mediaUrl && !editMode && (
         <TagsBar
-          show={showOverlay} isPlainMode={isPlainMode} tags={tags}
+          show={showOverlay} tags={tags}
           showTagInput={showTagInput} tagInput={tagInput}
           setTagInput={setTagInput} setShowTagInput={setShowTagInput}
           tagSuggestions={tagSuggestions} onAddTag={handleAddTag}

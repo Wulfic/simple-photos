@@ -884,7 +884,7 @@ fun SettingsScreen(
                 } else if (stats != null) {
                     StorageBar(stats)
                     Spacer(Modifier.height(8.dp))
-                    SettingsRow("Photos", "${stats.photoCount + stats.plainCount} files (${formatBytes(stats.photoBytes + stats.plainBytes)})")
+                    SettingsRow("Photos", "${stats.photoCount} files (${formatBytes(stats.photoBytes)})")
                     SettingsRow("Videos", "${stats.videoCount} files (${formatBytes(stats.videoBytes)})")
                     SettingsRow("Total Used", formatBytes(stats.userTotalBytes))
                     SettingsRow("Disk Free", formatBytes(stats.fsFreeBytes))
@@ -1369,7 +1369,7 @@ private fun SettingsRow(label: String, value: String) {
 @Composable
 private fun StorageBar(stats: StorageStatsResponse) {
     val total = stats.fsTotalBytes.toFloat().coerceAtLeast(1f)
-    val photoFraction = (stats.photoBytes + stats.plainBytes) / total
+    val photoFraction = stats.photoBytes / total
     val videoFraction = stats.videoBytes / total
     val otherFraction = stats.otherBlobBytes / total
     val freeFraction = stats.fsFreeBytes / total

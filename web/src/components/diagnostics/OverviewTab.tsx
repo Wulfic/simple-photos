@@ -144,7 +144,6 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard label="Total" value={photos.total_photos.toLocaleString()} />
           <StatCard label="Encrypted" value={photos.encrypted_count.toLocaleString()} />
-          <StatCard label="Plain" value={photos.plain_count.toLocaleString()} />
           <StatCard label="With Thumbs" value={photos.photos_with_thumbs.toLocaleString()} />
           <StatCard label="File Data" value={formatBytes(photos.total_file_bytes)} />
           <StatCard label="Thumb Data" value={formatBytes(photos.total_thumb_bytes)} />

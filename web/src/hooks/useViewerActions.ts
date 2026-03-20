@@ -9,8 +9,6 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { db, type MediaType } from "../db";
 import { useAuthStore } from "../store/auth";
-import { getConvertedFormat } from "../utils/mediaFormats";
-import { applyEditsToThumbnail } from "../utils/media";
 import type { CropMetadata, PreloadEntry } from "./useViewerMedia";
 
 interface ViewerLocationState {
@@ -21,7 +19,6 @@ interface ViewerLocationState {
 
 interface UseViewerActionsParams {
   id: string | undefined;
-  isPlainMode: boolean;
   mediaUrl: string | null;
   filename: string;
   mediaType: MediaType;
@@ -47,7 +44,6 @@ interface UseViewerActionsParams {
 
 export default function useViewerActions({
   id,
-  isPlainMode,
   mediaUrl,
   filename,
   mediaType,
@@ -102,35 +98,25 @@ export default function useViewerActions({
     if (!meta) {
       // All defaults — clear metadata
       try {
-        if (isPlainMode) {
-          await api.photos.setCrop(id, null);
-        } else {
-          await db.photos.update(id, { cropData: undefined });
-        }
+        await db.photos.update(id, { cropData: undefined });
         setCropData(null);
       } catch { /* ignore */ }
     } else {
       try {
-        if (isPlainMode) {
-          await api.photos.setCrop(id, JSON.stringify(meta));
-        } else {
-          await db.photos.update(id, { cropData: JSON.stringify(meta) });
-        }
+        await db.photos.update(id, { cropData: JSON.stringify(meta) });
         setCropData(meta);
       } catch { /* ignore */ }
     }
     setEditMode(false);
-  }, [id, isPlainMode, buildEditMetadata, setCropData, setEditMode]);
+  }, [id, buildEditMetadata, setCropData, setEditMode]);
 
   const handleSaveCopy = useCallback(async () => {
     if (!id) return;
     const meta = buildEditMetadata();
     const metaJson = meta ? JSON.stringify(meta) : null;
     try {
-      if (isPlainMode) {
-        await api.photos.duplicate(id, metaJson);
-      } else {
-        // Encrypted mode: duplicate the IndexedDB entry with its own ID + new metadata,
+      {
+        // Duplicate the IndexedDB entry with its own ID + new metadata,
         // sync the copy to the server, and generate an edited thumbnail.
         const original = await db.photos.get(id);
         if (original) {
@@ -178,16 +164,12 @@ export default function useViewerActions({
       console.error("[Viewer] Save Copy failed:", err);
       setError("Save Copy failed — please try again.");
     }
-  }, [id, isPlainMode, buildEditMetadata, setEditMode, setError]);
+  }, [id, buildEditMetadata, setEditMode, setError]);
 
   const handleClearCrop = useCallback(async () => {
     if (!id) return;
     try {
-      if (isPlainMode) {
-        await api.photos.setCrop(id, null);
-      } else {
-        await db.photos.update(id, { cropData: undefined });
-      }
+      await db.photos.update(id, { cropData: undefined });
       setCropData(null);
       setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
       setBrightness(0);
@@ -195,7 +177,7 @@ export default function useViewerActions({
       setTrimStart(0);
       setTrimEnd(mediaDuration);
     } catch { /* ignore */ }
-  }, [id, isPlainMode, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd, mediaDuration]);
+  }, [id, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd, mediaDuration]);
 
   const handleLeaveAndSave = useCallback(async () => {
     await handleSaveEdit();
@@ -213,50 +195,46 @@ export default function useViewerActions({
     const msg = "Move this item to trash? You can restore it within 30 days.";
     if (!id || !confirm(msg)) return;
     try {
-      if (isPlainMode) {
-        await api.photos.delete(id);
-      } else {
-        // Encrypted mode: soft-delete blob to trash with client metadata
-        const cached = await db.photos.get(id);
-        const result = await api.blobs.softDelete(id, {
-          thumbnail_blob_id: cached?.thumbnailBlobId,
-          filename: cached?.filename ?? "unknown",
-          mime_type: cached?.mimeType ?? "application/octet-stream",
-          media_type: cached?.mediaType,
-          size_bytes: 0,
-          width: cached?.width,
-          height: cached?.height,
-          duration_secs: cached?.duration,
-          taken_at: cached?.takenAt
-            ? new Date(cached.takenAt).toISOString()
-            : undefined,
+      // Soft-delete blob to trash with client metadata
+      const cached = await db.photos.get(id);
+      const result = await api.blobs.softDelete(id, {
+        thumbnail_blob_id: cached?.thumbnailBlobId,
+        filename: cached?.filename ?? "unknown",
+        mime_type: cached?.mimeType ?? "application/octet-stream",
+        media_type: cached?.mediaType,
+        size_bytes: 0,
+        width: cached?.width,
+        height: cached?.height,
+        duration_secs: cached?.duration,
+        taken_at: cached?.takenAt
+          ? new Date(cached.takenAt).toISOString()
+          : undefined,
+      });
+      // Move to local trash table so we can show thumbnails in Trash view
+      if (cached) {
+        await db.trash.put({
+          trashId: result.trash_id,
+          blobId: id,
+          thumbnailBlobId: cached.thumbnailBlobId,
+          filename: cached.filename,
+          mimeType: cached.mimeType,
+          mediaType: cached.mediaType,
+          width: cached.width,
+          height: cached.height,
+          takenAt: cached.takenAt,
+          deletedAt: Date.now(),
+          expiresAt: result.expires_at,
+          thumbnailData: cached.thumbnailData,
+          duration: cached.duration,
+          albumIds: cached.albumIds ?? [],
         });
-        // Move to local trash table so we can show thumbnails in Trash view
-        if (cached) {
-          await db.trash.put({
-            trashId: result.trash_id,
-            blobId: id,
-            thumbnailBlobId: cached.thumbnailBlobId,
-            filename: cached.filename,
-            mimeType: cached.mimeType,
-            mediaType: cached.mediaType,
-            width: cached.width,
-            height: cached.height,
-            takenAt: cached.takenAt,
-            deletedAt: Date.now(),
-            expiresAt: result.expires_at,
-            thumbnailData: cached.thumbnailData,
-            duration: cached.duration,
-            albumIds: cached.albumIds ?? [],
-          });
-        }
-        await db.photos.delete(id);
       }
+      await db.photos.delete(id);
       navigate("/gallery");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Delete failed");
     }
-  }, [id, isPlainMode, navigate, setError]);
+  }, [id, navigate, setError]);
 
   const handleRemoveFromAlbum = useCallback(async () => {
     if (!id || !albumId) return;
@@ -291,29 +269,23 @@ export default function useViewerActions({
         const remaining = photoIds.filter((pid) => pid !== id);
         const nextIdx = Math.min(currentIndex, remaining.length - 1);
         const nextId = remaining[nextIdx];
-        const prefix = isPlainMode ? "/photo/plain/" : "/photo/";
-        navigate(prefix + nextId, { replace: true, state: { photoIds: remaining, currentIndex: nextIdx, albumId } });
+        navigate("/photo/" + nextId, { replace: true, state: { photoIds: remaining, currentIndex: nextIdx, albumId } });
       } else {
         navigate(`/album/${albumId}`);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Remove failed");
     }
-  }, [id, albumId, photoIds, currentIndex, isPlainMode, navigate, setError]);
+  }, [id, albumId, photoIds, currentIndex, navigate, setError]);
 
   const handleDownload = useCallback(() => {
     if (!mediaUrl) return;
-    // If the file has a converted web preview, ask which format to download
-    if (isPlainMode && filename && getConvertedFormat(filename)) {
-      setShowDownloadDialog(true);
-      return;
-    }
-    // No conversion available — download directly
+    // Download directly
     const a = document.createElement("a");
     a.href = mediaUrl;
     a.download = filename || "media";
     a.click();
-  }, [mediaUrl, isPlainMode, filename]);
+  }, [mediaUrl, filename]);
 
   const handleDownloadOriginal = useCallback(async () => {
     setShowDownloadDialog(false);
@@ -339,28 +311,10 @@ export default function useViewerActions({
   const handleDownloadConverted = useCallback(async () => {
     setShowDownloadDialog(false);
     if (!id) return;
-    const convertedExt = getConvertedFormat(filename);
-    const baseName = filename.replace(/\.[^.]+$/, "");
-    const downloadName = convertedExt ? `${baseName}.${convertedExt}` : filename;
+    const downloadName = filename;
     try {
-      if (isPlainMode) {
-        // Fetch the converted file fresh from the /web endpoint for a reliable download.
-        // Using the in-memory blob URL with <a>.click() is unreliable for large
-        // video files in some browsers.
-        const { accessToken } = useAuthStore.getState();
-        const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
-        if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-        const res = await fetch(api.photos.webUrl(id), { headers });
-        if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = downloadName;
-        a.click();
-        URL.revokeObjectURL(url);
-      } else if (mediaUrl) {
-        // Encrypted mode: use the already-decrypted blob URL
+      if (mediaUrl) {
+        // Use the already-decrypted blob URL
         const a = document.createElement("a");
         a.href = mediaUrl;
         a.download = downloadName;
@@ -369,30 +323,24 @@ export default function useViewerActions({
     } catch (err) {
       console.error("[Viewer] Download converted failed:", err);
     }
-  }, [id, isPlainMode, mediaUrl, filename]);
+  }, [id, mediaUrl, filename]);
 
   const handleToggleFavorite = useCallback(async () => {
     if (!id) return;
     try {
-      // In plain mode, the viewer id IS the photos.id.
-      // In encrypted mode, the viewer id is the blobId — look up the server photo ID
+      // The viewer id is the blobId — look up the server photo ID
       // from the IndexedDB cache (populated by encrypted-sync).
-      let photoId = id;
-      if (!isPlainMode) {
-        const cached = await db.photos.get(id);
-        if (!cached?.serverPhotoId) return; // No server mapping yet — can't toggle
-        photoId = cached.serverPhotoId;
-      }
+      const cached = await db.photos.get(id);
+      if (!cached?.serverPhotoId) return; // No server mapping yet — can't toggle
+      const photoId = cached.serverPhotoId;
       const res = await api.photos.toggleFavorite(photoId);
       // Persist the new favorite state in IndexedDB so it survives page reloads
-      if (!isPlainMode) {
-        await db.photos.update(id, { isFavorite: res.is_favorite });
-      }
+      await db.photos.update(id, { isFavorite: res.is_favorite });
       return res.is_favorite;
     } catch {
       return undefined;
     }
-  }, [id, isPlainMode]);
+  }, [id]);
 
   return {
     showLeavePrompt,

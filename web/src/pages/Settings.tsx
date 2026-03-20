@@ -1,8 +1,8 @@
 /**
  * Settings page — admin and user configuration panel.
  *
- * Sections: encryption mode toggle + migration, backup server management,
- * auto-scan/conversion (plain mode), SSL settings, account (password/2FA),
+ * Sections: encryption key management, backup server management,
+ * auto-scan/conversion, SSL settings, account (password/2FA),
  * user management (admin), and thumbnail size preference.
  */
 import { useState, useEffect, useCallback } from "react";
@@ -51,7 +51,7 @@ export default function Settings() {
   type DiscoveredEntry = { address: string; name: string; version: string; api_key?: string };
   const [discoveredServers, setDiscoveredServers] = useState<DiscoveredEntry[]>([]);
 
-  // ── Scan state (admin, plain mode) ──────────────────────────────────────
+  // ── Scan state (admin) ──────────────────────────────────────────────────
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
 
@@ -75,7 +75,6 @@ export default function Settings() {
     photo_bytes: number; photo_count: number;
     video_bytes: number; video_count: number;
     other_blob_bytes: number; other_blob_count: number;
-    plain_bytes: number; plain_count: number;
     user_total_bytes: number;
     fs_total_bytes: number; fs_free_bytes: number;
   };

@@ -2,12 +2,10 @@
  * Hook for preloading adjacent photos in the Viewer.
  *
  * Downloads and caches the next/previous photos in the gallery so swipe
- * navigation feels instant. Works in both plain mode (prefetch URLs) and
- * encrypted mode (decrypt + cache to IndexedDB).
+ * navigation feels instant. Decrypts + caches to IndexedDB for encrypted mode.
  */
 import { useRef, useCallback, useEffect } from "react";
 import { api } from "../api/client";
-import { useAuthStore } from "../store/auth";
 import { db, type MediaType } from "../db";
 import { decrypt } from "../crypto/crypto";
 import { base64ToUint8Array } from "../utils/media";
@@ -48,7 +46,6 @@ interface MediaPayload {
 export default function usePhotoPreload(
   photoIds: string[] | undefined,
   currentIndex: number,
-  isPlainMode: boolean,
 ) {
   const preloadCache = useRef<Map<string, PreloadEntry>>(new Map());
   const lastDirection = useRef<"forward" | "backward">("forward");
@@ -64,7 +61,7 @@ export default function usePhotoPreload(
     prevIndex.current = currentIndex;
   }, [currentIndex]);
 
-  // Cached photo list to avoid re-fetching metadata on every preload (plain mode)
+  // Cached photo list (kept for API compat, may be used elsewhere)
   const photoListCache = useRef<{ data: Awaited<ReturnType<typeof api.photos.list>>["photos"]; ts: number } | null>(null);
 
   /** Get the photo list, using a short-lived cache (30s) to avoid duplicate fetches */
@@ -76,81 +73,6 @@ export default function usePhotoPreload(
     const res = await api.photos.list({ limit: 500 });
     photoListCache.current = { data: res.photos, ts: now };
     return res.photos;
-  }
-
-  /** Preload a plain-mode photo into the cache (background, no state updates) */
-  async function preloadPlainPhoto(photoId: string) {
-    try {
-      // Check IndexedDB full-photo cache first
-      const idbCached = await db.fullPhotos?.get(photoId);
-      if (idbCached?.data) {
-        const blob = new Blob([idbCached.data], { type: idbCached.mimeType });
-        const url = URL.createObjectURL(blob);
-        preloadCache.current.set(photoId, {
-          url,
-          filename: idbCached.filename,
-          mimeType: idbCached.mimeType,
-          mediaType: idbCached.mediaType,
-          cropData: idbCached.cropData ? JSON.parse(idbCached.cropData) : null,
-          isFavorite: idbCached.isFavorite,
-        });
-        return;
-      }
-
-      // Fetch metadata to get filename/type (uses cached list)
-      const photos = await getCachedPhotoList();
-      const photo = photos.find((p) => p.id === photoId);
-      if (!photo) return;
-
-      const resolvedType: MediaType =
-        photo.media_type === "gif" ? "gif"
-        : photo.media_type === "video" ? "video"
-        : photo.media_type === "audio" ? "audio"
-        : "photo";
-
-      // Fetch the full file (use /web endpoint for browser-compatible format)
-      const { accessToken } = useAuthStore.getState();
-      const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
-      if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-      const fileRes = await fetch(api.photos.webUrl(photoId), { headers });
-      // 202 = conversion in progress — don't cache the JSON placeholder
-      if (!fileRes.ok || fileRes.status === 202) return;
-      const blob = await fileRes.blob();
-      const url = URL.createObjectURL(blob);
-
-      let photoCropData = null;
-      if (photo.crop_metadata) {
-        try { photoCropData = JSON.parse(photo.crop_metadata); } catch { /* ignore */ }
-      }
-
-      preloadCache.current.set(photoId, {
-        url,
-        filename: photo.filename,
-        mimeType: photo.mime_type,
-        mediaType: resolvedType,
-        cropData: photoCropData,
-        isFavorite: !!photo.is_favorite,
-      });
-
-      // Cache in IndexedDB for cross-session persistence (skip large videos > 50MB)
-      if (blob.size < 50 * 1024 * 1024) {
-        try {
-          const arrayBuf = await blob.arrayBuffer();
-          await db.fullPhotos?.put({
-            photoId,
-            filename: photo.filename,
-            mimeType: photo.mime_type,
-            mediaType: resolvedType,
-            cropData: photo.crop_metadata ?? undefined,
-            isFavorite: !!photo.is_favorite,
-            data: arrayBuf,
-            cachedAt: Date.now(),
-          });
-        } catch { /* IndexedDB write failure is non-fatal */ }
-      }
-    } catch {
-      // Preload failures are silent — the normal load path handles errors
-    }
   }
 
   /** Preload an encrypted photo into the cache (background, no state updates) */
@@ -278,14 +200,10 @@ export default function usePhotoPreload(
         });
 
       for (const preloadId of sortedIds) {
-        if (isPlainMode) {
-          preloadPlainPhoto(preloadId);
-        } else {
-          preloadEncryptedPhoto(preloadId);
-        }
+        preloadEncryptedPhoto(preloadId);
       }
     },
-    [photoIds, currentIndex, isPlainMode]
+    [photoIds, currentIndex]
   );
 
   // Clean up all preload cache entries on unmount

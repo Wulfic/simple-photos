@@ -69,7 +69,7 @@ pub struct PhotoMetadataRecord {
 pub struct GooglePhotosImportRequest {
     /// The Google Photos JSON metadata content (parsed).
     pub metadata: GooglePhotosMetadata,
-    /// Optional: associate with an existing photo (plain mode).
+    /// Optional: associate with an existing photo.
     pub photo_id: Option<String>,
     /// Optional: associate with an existing blob (encrypted mode).
     pub blob_id: Option<String>,

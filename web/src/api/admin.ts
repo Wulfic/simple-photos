@@ -152,7 +152,7 @@ export const adminApi = {
       method: "POST",
     }),
 
-  /** Scan storage and register all unregistered media files (plain mode) */
+  /** Scan storage and register all unregistered media files */
   scanAndRegister: () =>
     request<{ registered: number; message: string }>("/admin/photos/scan", {
       method: "POST",

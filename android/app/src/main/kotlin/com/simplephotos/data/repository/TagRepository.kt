@@ -15,9 +15,8 @@ import javax.inject.Singleton
 /**
  * Repository for photo tag operations.
  *
- * Tags are server-side only (plain mode) — they attach user-defined labels
- * to photos for filtering and search. In encrypted mode the server has no
- * photo metadata, so tags are not available.
+ * Tags are server-side — they attach user-defined labels
+ * to photos for filtering and search.
  */
 @Singleton
 class TagRepository @Inject constructor(

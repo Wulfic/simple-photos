@@ -1,17 +1,14 @@
 /**
  * Hook that encapsulates media loading logic for the Viewer page.
  *
- * Handles both plain-mode (fetch from server) and encrypted-mode
- * (download + decrypt) media loading, with IndexedDB caching for
- * instant display on return visits and cross-session persistence.
+ * Handles encrypted-mode (download + decrypt) media loading, with IndexedDB
+ * caching for instant display on return visits and cross-session persistence.
  */
 import { useState, useCallback, useRef } from "react";
 import { api } from "../api/client";
 import { decrypt } from "../crypto/crypto";
-import { useAuthStore } from "../store/auth";
 import { db, type MediaType } from "../db";
 import { base64ToUint8Array } from "../utils/media";
-import type { PlainPhoto } from "../utils/gallery";
 
 // ── Payload shape (encrypted mode) ───────────────────────────────────────────
 export interface MediaPayload {
@@ -82,13 +79,11 @@ interface UseViewerMediaResult {
   setVideoError: React.Dispatch<React.SetStateAction<boolean>>;
   isConverting: boolean;
   setIsConverting: React.Dispatch<React.SetStateAction<boolean>>;
-  loadPlainMedia: (photoId: string) => Promise<void>;
   loadEncryptedMedia: (blobId: string) => Promise<void>;
   preloadCacheRef: React.MutableRefObject<Map<string, PreloadEntry>>;
 }
 
 export default function useViewerMedia(
-  getCachedPhotoList: () => Promise<PlainPhoto[]>,
   preloadCache: React.MutableRefObject<Map<string, PreloadEntry>>,
 ): UseViewerMediaResult {
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -100,159 +95,6 @@ export default function useViewerMedia(
   const [error, setError] = useState("");
   const [videoError, setVideoError] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
-
-  /** Load a plain-mode photo — check IndexedDB cache first, then fetch */
-  const loadPlainMedia = useCallback(async (photoId: string) => {
-    setLoading(true);
-    setError("");
-    setIsConverting(false);
-    try {
-      // Fetch photo metadata to get filename and media type (uses cached list)
-      const photos = await getCachedPhotoList();
-      const photo = photos.find((p) => p.id === photoId);
-      let resolvedFilename = "";
-      let resolvedMime = "image/jpeg";
-      let resolved: MediaType = "photo";
-      let photoCropData = null;
-      let photoIsFavorite = false;
-      if (photo) {
-        resolvedFilename = photo.filename;
-        resolvedMime = photo.mime_type;
-        resolved =
-          photo.media_type === "gif" ? "gif"
-          : photo.media_type === "video" ? "video"
-          : photo.media_type === "audio" ? "audio"
-          : "photo";
-        photoIsFavorite = !!photo.is_favorite;
-        if (photo.crop_metadata) {
-          try { photoCropData = JSON.parse(photo.crop_metadata); } catch { /* ignore */ }
-        }
-        setFilename(resolvedFilename);
-        setMimeType(resolvedMime);
-        setMediaType(resolved);
-      }
-
-      // Check IndexedDB full-photo cache for instant display
-      const idbCached = await db.fullPhotos?.get(photoId);
-      if (idbCached?.data) {
-        const blob = new Blob([idbCached.data], { type: idbCached.mimeType });
-        const url = URL.createObjectURL(blob);
-        setMediaUrl(url);
-        preloadCache.current.set(photoId, {
-          url, filename: resolvedFilename, mimeType: resolvedMime,
-          mediaType: resolved, cropData: photoCropData, isFavorite: photoIsFavorite,
-        });
-        setLoading(false);
-        return;
-      }
-
-      // ── Streaming path (video / audio) ──────────────────────────────────
-      // For video and audio, point the <video>/<audio> element directly at
-      // the server URL with an inline auth token.  This lets the browser
-      // issue native HTTP Range requests — enabling instant seeking and
-      // progressive playback without downloading the entire file first.
-      if ((resolved === "video" || resolved === "audio") && useAuthStore.getState().accessToken) {
-        const token = useAuthStore.getState().accessToken!;
-
-        // Check for 202 (conversion in progress) before handing off
-        const headers: Record<string, string> = {
-          "X-Requested-With": "SimplePhotos",
-          Authorization: `Bearer ${token}`,
-        };
-        let probeRes = await fetch(api.photos.webUrl(photoId), {
-          method: "HEAD",
-          headers,
-        });
-        if (probeRes.status === 202) {
-          setIsConverting(true);
-          const delays = [2000, 3000, 5000, 8000, 12000];
-          for (const delay of delays) {
-            await new Promise((r) => setTimeout(r, delay));
-            probeRes = await fetch(api.photos.webUrl(photoId), {
-              method: "HEAD",
-              headers,
-            });
-            if (probeRes.status !== 202) break;
-          }
-          if (probeRes.status === 202) {
-            setLoading(false);
-            return;
-          }
-          setIsConverting(false);
-        }
-
-        // Server has the file ready — set the direct streaming URL.
-        const streamingUrl = api.photos.streamUrl(photoId, token);
-        setMediaUrl(streamingUrl);
-        preloadCache.current.set(photoId, {
-          url: streamingUrl,
-          filename: resolvedFilename,
-          mimeType: resolvedMime,
-          mediaType: resolved,
-          cropData: photoCropData,
-          isFavorite: photoIsFavorite,
-        });
-        setLoading(false);
-        return;
-      }
-
-      // ── Blob path (images / gifs / fallback) ───────────────────────────
-      // Images benefit from blob-URL caching (IDB + in-memory preload map).
-      const { accessToken } = useAuthStore.getState();
-      const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
-      if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-      let fileRes = await fetch(api.photos.webUrl(photoId), { headers });
-
-      // 202 = conversion in progress (non-browser-native format being processed)
-      // Retry with exponential backoff up to ~30 seconds total
-      if (fileRes.status === 202) {
-        setIsConverting(true);
-        const delays = [2000, 3000, 5000, 8000, 12000];
-        for (const delay of delays) {
-          await new Promise((r) => setTimeout(r, delay));
-          fileRes = await fetch(api.photos.webUrl(photoId), { headers });
-          if (fileRes.status !== 202) break;
-        }
-        if (fileRes.status === 202) {
-          // Still converting after retries — leave the converting state active
-          setLoading(false);
-          return;
-        }
-        setIsConverting(false);
-      }
-
-      if (!fileRes.ok) throw new Error(`Failed to load photo: ${fileRes.status}`);
-      const blob = await fileRes.blob();
-      const url = URL.createObjectURL(blob);
-      setMediaUrl(url);
-
-      // Store in preload cache so swiping back is instant
-      preloadCache.current.set(photoId, {
-        url,
-        filename: resolvedFilename,
-        mimeType: resolvedMime,
-        mediaType: resolved,
-        cropData: photoCropData,
-        isFavorite: photoIsFavorite,
-      });
-
-      // Also cache in IndexedDB for cross-session persistence
-      if (blob.size < 50 * 1024 * 1024) {
-        try {
-          const arrayBuf = await blob.arrayBuffer();
-          await db.fullPhotos?.put({
-            photoId, filename: resolvedFilename, mimeType: resolvedMime,
-            mediaType: resolved, cropData: photo?.crop_metadata ?? undefined,
-            isFavorite: photoIsFavorite, data: arrayBuf, cachedAt: Date.now(),
-          });
-        } catch { /* non-fatal */ }
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load media");
-    } finally {
-      setLoading(false);
-    }
-  }, [getCachedPhotoList, preloadCache]);
 
   /** Load an encrypted blob — check IndexedDB cache first, then decrypt */
   const loadEncryptedMedia = useCallback(async (blobId: string) => {
@@ -371,7 +213,6 @@ export default function useViewerMedia(
     error, setError,
     videoError, setVideoError,
     isConverting, setIsConverting,
-    loadPlainMedia,
     loadEncryptedMedia,
     preloadCacheRef: preloadCache,
   };
