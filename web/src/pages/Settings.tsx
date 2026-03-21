@@ -465,13 +465,6 @@ export default function Settings() {
               >
                 + Add backup server manually
               </button>
-              <button
-                onClick={scanForBackupServers}
-                disabled={discovering}
-                className="text-sm text-gray-500 dark:text-gray-400 hover:underline disabled:opacity-50"
-              >
-                {discovering ? "Scanning…" : "Scan network"}
-              </button>
             </div>
           ) : (
             <form onSubmit={handleAddBackupServer} className="space-y-3">

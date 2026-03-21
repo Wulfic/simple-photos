@@ -182,9 +182,28 @@ pub async fn discover(
     let mut discovered: Vec<serde_json::Value> = Vec::new();
     let mut existing_addrs = std::collections::HashSet::new();
 
-    // ── Phase 1: UDP broadcast discovery (~3 seconds) ────────────────────
+    // Pre-seed existing_addrs with our own addresses so we never list ourselves
+    existing_addrs.insert(format!("127.0.0.1:{}", our_port));
+    existing_addrs.insert(format!("localhost:{}", our_port));
+    if let Ok(url) = reqwest::Url::parse(&state.config.server.base_url) {
+        if let Some(host) = url.host_str() {
+            let port = url.port().unwrap_or(our_port);
+            existing_addrs.insert(format!("{}:{}", host, port));
+        }
+    }
+    if let Some(local_ip) = crate::backup::broadcast::get_local_ip() {
+        existing_addrs.insert(format!("{}:{}", local_ip, our_port));
+    }
+    // Add ALL local interface IPs (Docker bridge, VPN, etc.)
+    for ip in crate::backup::broadcast::get_all_local_ips() {
+        existing_addrs.insert(format!("{}:{}", ip, our_port));
+    }
+
+    // ── Phase 1: UDP broadcast discovery (~1 second) ─────────────────────
+    // Short timeout — primary servers don't broadcast, so this mainly
+    // catches backup-mode servers that happen to be beaconing.
     let broadcast_results = tokio::task::spawn_blocking(|| {
-        crate::backup::broadcast::discover_via_broadcast(std::time::Duration::from_secs(3))
+        crate::backup::broadcast::discover_via_broadcast(std::time::Duration::from_secs(1))
     })
     .await
     .unwrap_or_else(|e| {
@@ -193,17 +212,22 @@ pub async fn discover(
     });
 
     for b in broadcast_results {
-        existing_addrs.insert(b.address.clone());
-        discovered.push(serde_json::json!({
-            "address": b.address,
-            "name": b.name,
-            "version": b.version,
-        }));
+        if !existing_addrs.contains(&b.address) {
+            existing_addrs.insert(b.address.clone());
+            discovered.push(serde_json::json!({
+                "address": b.address,
+                "name": b.name,
+                "version": b.version,
+            }));
+        }
     }
 
     // ── Phase 2: Localhost + Docker-host probing ─────────────────────────
+    // 1-second timeout — LAN servers respond in <10ms; anything over 1s
+    // is unreachable and not worth waiting for.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
+        .connect_timeout(std::time::Duration::from_secs(1))
+        .timeout(std::time::Duration::from_secs(1))
         .build()
         .unwrap_or_default();
 
@@ -228,7 +252,10 @@ pub async fn discover(
         }
     }
 
-    // Fallback: probe common ports on local hosts via /api/discover/info + /health
+    // Fallback: probe common ports via /api/discover/info + /health.
+    // When discovery_port is active, only probe fallback ports on loopback
+    // (Docker containers may not forward 3301). Skip non-local hosts to
+    // avoid slow timeouts on unreachable Docker IPs.
     let mut local_ports: Vec<u16> = Vec::new();
     let base = (our_port / 10) * 10;
     for p in base..=(base + 9) {
@@ -240,6 +267,12 @@ pub async fn discover(
 
     for &port in &local_ports {
         for host in &probe_hosts {
+            // When discovery_port is set, skip fallback-port probes on
+            // non-loopback hosts — they'll be found via the discovery
+            // port in Phase 3 and probing unreachable Docker IPs is slow.
+            if discovery_port != 0 && host != "127.0.0.1" {
+                continue;
+            }
             let addr = format!("{}:{}", host, port);
             if existing_addrs.contains(&addr) { continue; }
             local_probes.push((host.clone(), port, false));
@@ -351,7 +384,7 @@ pub async fn discover(
         }
     }
 
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(100));
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(200));
 
     // Build a flat list of (ip, port, use_discovery_protocol) probes
     let mut probes: Vec<(String, u16, bool)> = Vec::new();
