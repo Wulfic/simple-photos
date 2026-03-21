@@ -754,20 +754,74 @@ pub async fn pair(
             ))
         })?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+    let status = resp.status();
+    let resp_bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read response: {}", e)))?;
+
+    if !status.is_success() {
+        let body = String::from_utf8_lossy(&resp_bytes);
         return Err(AppError::BadRequest(format!(
             "Primary server rejected the credentials (HTTP {}): {}",
             status, body
         )));
     }
 
-    // We don't need the remote tokens — we only confirmed the credentials are valid.
+    let login_data: serde_json::Value = serde_json::from_slice(&resp_bytes)
+        .map_err(|_| AppError::Internal("Failed to parse login response".into()))?;
+
+    if login_data.get("requires_totp").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(AppError::BadRequest(
+            "Primary server has 2FA enabled. Please temporarily disable it to pair the backup server.".into(),
+        ));
+    }
+
+    let remote_token = login_data
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::Internal("Primary server did not return an access token".into()))?
+        .to_string();
+
     tracing::info!(
         "Successfully authenticated against primary server at {}",
         base_url
     );
+
+    // Auto-generate a backup API key early so we can register it
+    let api_key = Uuid::new_v4().to_string().replace('-', "");
+
+    // ── Register with the primary server ─────────────────────────────────
+    let host = headers
+        .get("Host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown-backup-host");
+    
+    let register_url = format!("{}/api/admin/backup/servers", base_url);
+    let register_body = serde_json::json!({
+        "name": format!("Backup Server ({})", host),
+        "address": host,
+        "api_key": api_key,
+        "sync_frequency_hours": 24,
+    });
+
+    let reg_resp = client
+        .post(&register_url)
+        .header("Authorization", format!("Bearer {}", remote_token))
+        .header("Content-Type", "application/json")
+        .json(&register_body)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to connect to primary server to register backup server: {}", e)))?;
+
+    if !reg_resp.status().is_success() {
+        let status = reg_resp.status();
+        let err_body = reg_resp.text().await.unwrap_or_default();
+        return Err(AppError::BadRequest(format!(
+            "Failed to register backup server on primary (HTTP {}): {}",
+            status, err_body
+        )));
+    }
 
     // ── Create local admin with the same credentials ─────────────────────
     let user_id = Uuid::new_v4().to_string();
@@ -808,8 +862,6 @@ pub async fn pair(
     .execute(&state.pool)
     .await?;
 
-    // Auto-generate a backup API key
-    let api_key = Uuid::new_v4().to_string().replace('-', "");
     sqlx::query(
         "INSERT INTO server_settings (key, value) VALUES ('backup_api_key', ?) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",

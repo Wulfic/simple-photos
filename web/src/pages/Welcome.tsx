@@ -318,6 +318,7 @@ export default function Welcome() {
     refresh_token: string;
     username: string;
     main_server_url: string;
+    password?: string;
   }) {
     // Store tokens — the pair endpoint already created a local admin
     setTokens(data.access_token, data.refresh_token);
@@ -326,7 +327,11 @@ export default function Welcome() {
     setMainServerUrl(data.main_server_url);
 
     // Derive the encryption key from the admin credentials
-    await deriveKey("", data.username);   // password already used server-side
+    try {
+      await deriveKey(data.password || "", data.username);
+    } catch (err) {
+      console.warn("Failed to derive encryption key:", err);
+    }
 
     // Go directly to storage config (skip account + 2FA for backup servers)
     loadStoragePath();
