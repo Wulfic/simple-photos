@@ -31,10 +31,17 @@ pub async fn discover_info(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Result<Json<Value>, AppError> {
-    // Strictly loopback-only — reject anything that looks external.
-    if !peer.ip().is_loopback() {
+    // Allow loopback and Docker-internal networks (172.16.0.0/12).
+    // When the primary server probes a Docker container via a port-mapped
+    // localhost port, Docker NAT rewrites the source address to the bridge
+    // gateway (e.g. 172.17.0.1).  The strict loopback-only check rejected
+    // these legitimate intra-host requests, causing discovery to miss all
+    // Docker backup containers.
+    let ip = peer.ip();
+    let is_local = ip.is_loopback() || is_docker_internal(ip);
+    if !is_local {
         return Err(AppError::Forbidden(
-            "discover/info is only accessible from localhost".into(),
+            "discover/info is only accessible from localhost or Docker networks".into(),
         ));
     }
 
@@ -69,10 +76,42 @@ pub async fn discover_info(
         None
     };
 
+    // Include a human-readable name for the discovery UI.
+    let name: String = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'server_name'",
+    )
+    .fetch_optional(&state.read_pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| {
+        if mode == "backup" {
+            "Simple Photos Backup".to_string()
+        } else {
+            "Simple Photos".to_string()
+        }
+    });
+
     Ok(Json(json!({
         "service": "simple-photos",
+        "name": name,
         "version": crate::VERSION,
         "mode": mode,
         "api_key": api_key,
     })))
+}
+
+/// Returns `true` if the IP belongs to a Docker-internal network (172.16.0.0/12)
+/// or other common private bridge ranges used by container runtimes.
+fn is_docker_internal(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            // 172.16.0.0/12 — Docker default bridge and custom networks
+            (octets[0] == 172 && (16..=31).contains(&octets[1]))
+            // 10.0.0.0/8 — some container runtimes use this range
+            || octets[0] == 10
+        }
+        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+    }
 }

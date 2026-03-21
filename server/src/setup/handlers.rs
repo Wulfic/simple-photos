@@ -158,11 +158,8 @@ pub async fn init(
 ///
 /// Discover Simple Photos servers on the local network.
 ///
-/// Uses three discovery strategies:
-///  1. **UDP broadcast** — catches servers on the same L2 network.
-///  2. **Localhost HTTP probing** — catches Docker containers port-mapped to
-///     the host (UDP broadcast doesn't cross the Docker bridge).
-///  3. **Subnet HTTP scan** — catches servers on the local /24 subnet.
+/// Uses the dedicated discovery port (default 3301) to find servers with a
+/// single probe per IP, supplemented by UDP broadcast and localhost fallbacks.
 ///
 /// Only works during first-run setup (zero users in DB) — no auth required.
 pub async fn discover(
@@ -181,12 +178,13 @@ pub async fn discover(
     }
 
     let our_port = state.config.server.port;
+    let discovery_port = state.config.server.discovery_port;
     let mut discovered: Vec<serde_json::Value> = Vec::new();
     let mut existing_addrs = std::collections::HashSet::new();
 
-    // ── Phase 1: UDP broadcast discovery (~6 seconds) ────────────────────
+    // ── Phase 1: UDP broadcast discovery (~3 seconds) ────────────────────
     let broadcast_results = tokio::task::spawn_blocking(|| {
-        crate::backup::broadcast::discover_via_broadcast(std::time::Duration::from_secs(6))
+        crate::backup::broadcast::discover_via_broadcast(std::time::Duration::from_secs(3))
     })
     .await
     .unwrap_or_else(|e| {
@@ -203,27 +201,16 @@ pub async fn discover(
         }));
     }
 
-    // ── Phase 2: Localhost + Docker-host HTTP probing ──────────────────
+    // ── Phase 2: Localhost + Docker-host probing ─────────────────────────
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .unwrap_or_default();
 
-    let mut local_ports: Vec<u16> = Vec::new();
-    let base = (our_port / 10) * 10;
-    for p in base..=(base + 9) {
-        if p != our_port { local_ports.push(p); }
-    }
-    for &p in &[3000u16, 3001, 3002, 3003, 8080, 8081, 8082, 8083, 8443] {
-        if p != our_port && !local_ports.contains(&p) { local_ports.push(p); }
-    }
-
-    // Hosts to probe: 127.0.0.1 (native), host.docker.internal (Docker-to-host),
-    // and 172.17.0.1 (Docker default gateway fallback).
     let mut probe_hosts: Vec<String> = vec![
-        "127.0.0.1".to_string(), 
-        "host.docker.internal".to_string(), 
-        "172.17.0.1".to_string()
+        "127.0.0.1".to_string(),
+        "host.docker.internal".to_string(),
+        "172.17.0.1".to_string(),
     ];
     if let Some(gw) = crate::backup::broadcast::get_default_gateway() {
         if !probe_hosts.contains(&gw) {
@@ -231,15 +218,57 @@ pub async fn discover(
         }
     }
 
-    let mut local_futures = Vec::new();
+    // Build flat list of local probes: (host, port, is_discovery)
+    let mut local_probes: Vec<(String, u16, bool)> = Vec::new();
+
+    // Probe discovery port on local hosts first
+    if discovery_port != 0 {
+        for host in &probe_hosts {
+            local_probes.push((host.clone(), discovery_port, true));
+        }
+    }
+
+    // Fallback: probe common ports on local hosts via /api/discover/info + /health
+    let mut local_ports: Vec<u16> = Vec::new();
+    let base = (our_port / 10) * 10;
+    for p in base..=(base + 9) {
+        if p != our_port && p != discovery_port { local_ports.push(p); }
+    }
+    for &p in &[3000u16, 3001, 3002, 3003, 8080, 8081, 8082, 8083, 8443] {
+        if p != our_port && p != discovery_port && !local_ports.contains(&p) { local_ports.push(p); }
+    }
+
     for &port in &local_ports {
         for host in &probe_hosts {
             let addr = format!("{}:{}", host, port);
             if existing_addrs.contains(&addr) { continue; }
-            let c = client.clone();
-            let host_owned = host.to_string();
-            local_futures.push(async move {
-                // Try /api/discover/info first, then fall back to /health
+            local_probes.push((host.clone(), port, false));
+        }
+    }
+
+    let mut local_futures = Vec::new();
+    for (host_owned, port, is_discovery) in local_probes {
+        let c = client.clone();
+        local_futures.push(async move {
+            if is_discovery {
+                let url = format!("http://{}:{}/", host_owned, port);
+                if let Ok(resp) = c.get(&url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(body) = resp.json::<serde_json::Value>().await {
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
+                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                                let actual_port = body.get("port").and_then(|p| p.as_u64()).map(|p| p as u16).unwrap_or(port);
+                                return Some(serde_json::json!({
+                                    "address": format!("{}:{}", host_owned, actual_port),
+                                    "name": name,
+                                    "version": version,
+                                }));
+                            }
+                        }
+                    }
+                }
+            } else {
                 let info_url = format!("http://{}:{}/api/discover/info", host_owned, port);
                 let health_url = format!("http://{}:{}/health", host_owned, port);
 
@@ -273,9 +302,9 @@ pub async fn discover(
                         }
                     }
                 }
-                None
-            });
-        }
+            }
+            None
+        });
     }
 
     let local_results = futures_util::future::join_all(local_futures).await;
@@ -287,7 +316,7 @@ pub async fn discover(
         }
     }
 
-    // ── Phase 3: Subnet HTTP scan (for LAN servers) ──────────────────────
+    // ── Phase 3: LAN subnet scan via discovery port ──────────────────────
     let mut subnets: Vec<String> = Vec::new();
     if let Ok(url) = reqwest::Url::parse(&state.config.server.base_url) {
         if let Some(host) = url.host_str() {
@@ -297,7 +326,6 @@ pub async fn discover(
             }
         }
     }
-    // Also try to get the local IP for subnet inference
     if let Some(local_ip) = crate::backup::broadcast::get_local_ip() {
         let parts: Vec<&str> = local_ip.split('.').collect();
         if parts.len() == 4 {
@@ -305,7 +333,6 @@ pub async fn discover(
             if !subnets.contains(&subnet) { subnets.push(subnet); }
         }
     }
-    // Resolve host.docker.internal to discover the Docker host's LAN subnet
     if let Ok(addrs) = tokio::net::lookup_host("host.docker.internal:0").await {
         for addr in addrs {
             let ip = addr.ip().to_string();
@@ -316,50 +343,85 @@ pub async fn discover(
             }
         }
     }
-    for s in &["192.168.1", "192.168.0", "10.0.0"] {
-        if !subnets.iter().any(|existing| existing == s) {
-            subnets.push(s.to_string());
-        }
-    }
 
-    let ports_to_scan = [our_port, 8080, 8081, 8082, 8083, 3000];
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(50));
-    let mut lan_futures = Vec::new();
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(100));
 
+    // Build a flat list of (ip, port, use_discovery_protocol) probes
+    let mut probes: Vec<(String, u16, bool)> = Vec::new();
     for subnet in &subnets {
         for host_part in 1..=254u8 {
             let ip = format!("{}.{}", subnet, host_part);
-            for &port in &ports_to_scan {
-                let addr = format!("{}:{}", ip, port);
-                if existing_addrs.contains(&addr) { continue; }
-                let c = client.clone();
-                let sem = sem.clone();
-                let ip = ip.clone();
-                lan_futures.push(async move {
-                    let _permit = sem.acquire().await;
-                    let health_url = format!("http://{}:{}/health", ip, port);
-                    if let Ok(resp) = c.get(&health_url).send().await {
-                        if resp.status().is_success() {
-                            if let Ok(body) = resp.json::<serde_json::Value>().await {
-                                if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                                    let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                                    let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                                    return Some(serde_json::json!({
-                                        "address": format!("{}:{}", ip, port),
-                                        "name": name,
-                                        "version": version,
-                                    }));
-                                }
-                            }
-                        }
+            if discovery_port != 0 {
+                let addr = format!("{}:{}", ip, discovery_port);
+                if !existing_addrs.contains(&addr) {
+                    probes.push((ip, discovery_port, true));
+                }
+            } else {
+                for &port in &[our_port, 8080u16, 8081, 8082, 8083, 3000] {
+                    let addr = format!("{}:{}", ip, port);
+                    if !existing_addrs.contains(&addr) {
+                        probes.push((ip.clone(), port, false));
                     }
-                    None
-                });
+                }
             }
         }
     }
 
-    let lan_results = futures_util::future::join_all(lan_futures).await;
+    let mut lan_futures = Vec::new();
+    for (ip, port, is_discovery) in probes {
+        let c = client.clone();
+        let sem = sem.clone();
+        lan_futures.push(async move {
+            let _permit = sem.acquire().await;
+            if is_discovery {
+                // Probe the dedicated discovery port
+                let url = format!("http://{}:{}/", ip, port);
+                if let Ok(resp) = c.get(&url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(body) = resp.json::<serde_json::Value>().await {
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
+                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                                let actual_port = body.get("port").and_then(|p| p.as_u64()).map(|p| p as u16).unwrap_or(port);
+                                return Some(serde_json::json!({
+                                    "address": format!("{}:{}", ip, actual_port),
+                                    "name": name,
+                                    "version": version,
+                                }));
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Fallback: probe /health on a specific server port
+                let health_url = format!("http://{}:{}/health", ip, port);
+                if let Ok(resp) = c.get(&health_url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(body) = resp.json::<serde_json::Value>().await {
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
+                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                                return Some(serde_json::json!({
+                                    "address": format!("{}:{}", ip, port),
+                                    "name": name,
+                                    "version": version,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        });
+    }
+
+    let lan_results = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        futures_util::future::join_all(lan_futures),
+    )
+    .await
+    .unwrap_or_default();
+
     for result in lan_results.into_iter().flatten() {
         let addr = result.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
         if !existing_addrs.contains(&addr) {

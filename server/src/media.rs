@@ -8,7 +8,7 @@
 /// Valid media file extensions — browser-native formats only.
 pub const MEDIA_EXTENSIONS: &[&str] = &[
     // Images (all natively renderable by modern browsers)
-    "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "svg", "ico",
+    "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "ico",
     // Videos (universally playable in <video>)
     "mp4", "webm",
     // Audio (universally playable in <audio>)

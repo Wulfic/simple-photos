@@ -1,6 +1,10 @@
 /**
  * Local network scanning to auto-discover Simple Photos server instances
- * by probing subnet IPs on common ports for the /health endpoint.
+ * by probing the dedicated discovery port (3301) on each IP in the subnet.
+ *
+ * Each server runs a lightweight HTTP listener on port 3301 that responds
+ * with the server's name, version, and actual HTTP port. This reduces
+ * network probes from ~3,300 (254 IPs × 13 ports) to just 254.
  */
 package com.simplephotos.data.remote
 
@@ -35,26 +39,35 @@ data class DiscoveredServer(
 )
 
 /**
- * Scans the local network for Simple Photos servers by probing the /health
- * endpoint on common ports across all IPs in the device's subnet.
+ * Scans the local network for Simple Photos servers.
+ *
+ * Primary strategy: probe the dedicated discovery port (3301) on each
+ * subnet IP. The discovery response includes the server's actual HTTP
+ * port, so we only need 1 probe per IP instead of scanning many ports.
+ *
+ * Fallback: if no servers are found via the discovery port, falls back
+ * to probing common ports with `/health` (for older server versions).
  */
 object ServerDiscovery {
 
-    private val COMMON_PORTS = listOf(8080, 8081, 8082, 8083, 3000, 3001, 3002, 3003, 443, 8443, 80, 8000, 9000)
+    /** Dedicated discovery port — must match the server's `discovery_port` config. */
+    private const val DISCOVERY_PORT = 3301
+
+    /** Legacy ports to try if discovery port finds nothing (backward compat). */
+    private val FALLBACK_PORTS = listOf(8080, 8081, 8082, 8083, 3000, 3001, 3002, 3003, 443, 8443, 80, 8000, 9000)
+
     private const val CONNECT_TIMEOUT_MS = 600
     private const val READ_TIMEOUT_MS = 600
-
-    // Limit concurrent connections to avoid exhausting the connection pool on mobile
-    private const val MAX_CONCURRENT_PROBES = 50
+    private const val MAX_CONCURRENT_PROBES = 100
 
     /**
      * Discover servers on the local network.
      *
      * Strategy:
-     * 1. Determine the device's local IP address and subnet (via NetworkInterface + WiFi fallback).
-     * 2. First do a fast TCP connect scan to find hosts with open ports.
-     * 3. Then probe only reachable host:port combos for `/health`.
-     * 4. Return any that respond with `{"service":"simple-photos",...}`.
+     * 1. Determine the device's local IP address and subnet.
+     * 2. Probe port 3301 on all 254 subnet IPs (fast — 1 probe per IP).
+     * 3. Each response includes the server's real HTTP port → build URL.
+     * 4. If nothing found, fall back to legacy multi-port scan.
      */
     suspend fun discover(context: Context? = null): List<DiscoveredServer> = withContext(Dispatchers.IO) {
         val localAddresses = getLocalAddresses(context)
@@ -62,53 +75,118 @@ object ServerDiscovery {
         if (localAddresses.isEmpty()) return@withContext emptyList()
 
         val semaphore = Semaphore(MAX_CONCURRENT_PROBES)
-        val results = mutableListOf<DiscoveredServer>()
 
+        // ── Phase 1: Discovery port scan (254 probes per subnet) ─────────
+        val discoveryResults = mutableListOf<DiscoveredServer>()
         coroutineScope {
             val jobs = localAddresses.flatMap { localIp ->
                 val prefix = localIp.substringBeforeLast(".")
-                Log.d(TAG, "Scanning subnet $prefix.0/24")
-                // Scan .1 through .254
+                Log.d(TAG, "Scanning subnet $prefix.0/24 on discovery port $DISCOVERY_PORT")
+                (1..254).map { i ->
+                    val ip = "$prefix.$i"
+                    async {
+                        semaphore.withPermit {
+                            probeDiscoveryPort(ip)
+                        }
+                    }
+                }
+            }
+            discoveryResults.addAll(jobs.awaitAll().filterNotNull())
+        }
+
+        if (discoveryResults.isNotEmpty()) {
+            Log.d(TAG, "Discovery port found ${discoveryResults.size} servers")
+            return@withContext discoveryResults.distinctBy { it.url }
+        }
+
+        // ── Phase 2: Fallback — legacy multi-port scan ───────────────────
+        Log.d(TAG, "No servers found via discovery port, falling back to multi-port scan")
+        val fallbackResults = mutableListOf<DiscoveredServer>()
+        coroutineScope {
+            val jobs = localAddresses.flatMap { localIp ->
+                val prefix = localIp.substringBeforeLast(".")
                 (1..254).flatMap { i ->
                     val ip = "$prefix.$i"
-                    COMMON_PORTS.map { port ->
+                    FALLBACK_PORTS.map { port ->
                         async {
                             semaphore.withPermit {
-                                probeServer(ip, port)
+                                probeServerHealth(ip, port)
                             }
                         }
                     }
                 }
             }
-
-            results.addAll(jobs.awaitAll().filterNotNull())
+            fallbackResults.addAll(jobs.awaitAll().filterNotNull())
         }
 
-        Log.d(TAG, "Discovery complete. Found ${results.size} servers")
-        // Deduplicate by url
-        results.distinctBy { it.url }
+        Log.d(TAG, "Discovery complete. Found ${fallbackResults.size} servers (fallback)")
+        fallbackResults.distinctBy { it.url }
     }
 
     /**
-     * Check if a port is open using a quick TCP connect, then probe the health endpoint.
+     * Probe the dedicated discovery port on a host.
+     * Returns a DiscoveredServer with the actual HTTP port from the response.
      */
-    private fun probeServer(host: String, port: Int): DiscoveredServer? {
+    private fun probeDiscoveryPort(host: String): DiscoveredServer? {
         return try {
-            // Quick TCP connect check first — much faster than a full HTTP request
+            // Quick TCP connect check
+            val socket = Socket()
+            try {
+                socket.connect(InetSocketAddress(host, DISCOVERY_PORT), CONNECT_TIMEOUT_MS)
+                socket.close()
+            } catch (_: Exception) {
+                return null
+            }
+
+            val url = "http://$host:$DISCOVERY_PORT/"
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = READ_TIMEOUT_MS
+            conn.requestMethod = "GET"
+
+            if (conn.responseCode == 200) {
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                val json = JSONObject(body)
+                if (json.optString("service") == "simple-photos") {
+                    val actualPort = json.optInt("port", DISCOVERY_PORT)
+                    val version = json.optString("version", "unknown")
+                    val serverUrl = "http://$host:$actualPort"
+                    Log.d(TAG, "Found server at $serverUrl via discovery port (v$version)")
+                    return DiscoveredServer(
+                        url = serverUrl,
+                        version = version,
+                        host = host,
+                        port = actualPort
+                    )
+                }
+            } else {
+                conn.disconnect()
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Legacy: probe a server via /health endpoint (for servers without discovery port).
+     */
+    private fun probeServerHealth(host: String, port: Int): DiscoveredServer? {
+        return try {
             val socket = Socket()
             try {
                 socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
                 socket.close()
             } catch (_: Exception) {
-                return null // Port not open, skip HTTP probe
+                return null
             }
 
-            // Port is open — now try HTTP health check
             val protocols = if (port == 443 || port == 8443) listOf("https") else listOf("http")
             for (protocol in protocols) {
-                val url = "$protocol://$host:$port"
+                val serverUrl = "$protocol://$host:$port"
                 try {
-                    val conn = URL("$url/health").openConnection() as HttpURLConnection
+                    val conn = URL("$serverUrl/health").openConnection() as HttpURLConnection
                     conn.connectTimeout = CONNECT_TIMEOUT_MS
                     conn.readTimeout = READ_TIMEOUT_MS
                     conn.requestMethod = "GET"
@@ -119,9 +197,9 @@ object ServerDiscovery {
                         conn.disconnect()
                         val json = JSONObject(body)
                         if (json.optString("service") == "simple-photos") {
-                            Log.d(TAG, "Found server at $url (v${json.optString("version", "?")})")
+                            Log.d(TAG, "Found server at $serverUrl (v${json.optString("version", "?")})")
                             return DiscoveredServer(
-                                url = url,
+                                url = serverUrl,
                                 version = json.optString("version", "unknown"),
                                 host = host,
                                 port = port
@@ -131,7 +209,7 @@ object ServerDiscovery {
                         conn.disconnect()
                     }
                 } catch (_: Exception) {
-                    // This particular protocol/host/port didn't work
+                    // This protocol/host/port didn't work
                 }
             }
             null
@@ -142,10 +220,10 @@ object ServerDiscovery {
 
     /**
      * Get the device's local IPv4 addresses (non-loopback).
-     * 
+     *
      * Uses two strategies:
      * 1. NetworkInterface enumeration (works in most cases)
-     * 2. WifiManager fallback (works when NetworkInterface is restricted on some devices)
+     * 2. WifiManager fallback (works when NetworkInterface is restricted)
      */
     private fun getLocalAddresses(context: Context? = null): List<String> {
         val addresses = mutableSetOf<String>()
@@ -156,7 +234,6 @@ object ServerDiscovery {
             while (interfaces.hasMoreElements()) {
                 val iface = interfaces.nextElement()
                 if (iface.isLoopback || !iface.isUp) continue
-                // Only consider WiFi/Ethernet-like interfaces
                 val name = iface.name?.lowercase() ?: continue
                 if (name.startsWith("wlan") || name.startsWith("eth") || name.startsWith("en")) {
                     val addrs = iface.inetAddresses

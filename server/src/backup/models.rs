@@ -39,7 +39,7 @@ pub struct UpdateBackupServerRequest {
 }
 
 /// Discovered server on the local network.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DiscoveredServer {
     pub address: String,
     pub name: String,

@@ -13,6 +13,7 @@ use crate::sanitize;
 use crate::state::AppState;
 
 use super::metadata::extract_media_metadata_from_bytes_async;
+use super::scan::generate_thumbnail_file;
 use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 
 /// POST /api/photos/upload
@@ -38,7 +39,7 @@ pub async fn upload_photo(
     if !is_supported_extension(&filename) {
         return Err(AppError::BadRequest(format!(
             "Unsupported file format: '{}'. Only browser-native formats are accepted \
-             (JPEG, PNG, GIF, WebP, AVIF, BMP, SVG, ICO, MP4, WebM, MP3, FLAC, OGG, WAV).",
+             (JPEG, PNG, GIF, WebP, AVIF, BMP, ICO, MP4, WebM, MP3, FLAC, OGG, WAV).",
             filename.rsplit('.').next().unwrap_or("unknown")
         )));
     }
@@ -135,7 +136,9 @@ pub async fn upload_photo(
     // Register in database
     let photo_id = Uuid::new_v4().to_string();
     let now = utc_now_iso();
-    let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
+    // Use .thumb.gif for GIFs to preserve animation in thumbnails
+    let thumb_ext = if mime_type == "image/gif" { "gif" } else { "jpg" };
+    let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
     // Extract metadata from the uploaded bytes (offloaded to spawn_blocking — CPU-bound EXIF parsing)
     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
@@ -168,6 +171,21 @@ pub async fn upload_photo(
     .bind(&photo_hash)
     .execute(&state.pool)
     .await?;
+
+    // Generate thumbnail immediately so it's available for the first gallery load.
+    // Runs in the background — the upload response isn't delayed if this is slow.
+    {
+        let thumb_abs = storage_root.join(&thumb_rel);
+        let file_path_clone = file_path.clone();
+        let mime_clone = mime_type.clone();
+        tokio::spawn(async move {
+            if generate_thumbnail_file(&file_path_clone, &thumb_abs, &mime_clone, None).await {
+                tracing::debug!("Generated thumbnail for uploaded file");
+            } else {
+                tracing::warn!("Failed to generate thumbnail for uploaded file");
+            }
+        });
+    }
 
     tracing::info!(
         user_id = %auth.user_id,

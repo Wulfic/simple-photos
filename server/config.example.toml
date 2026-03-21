@@ -5,6 +5,11 @@ base_url = "http://localhost:3000"
 # Set to true ONLY when behind a reverse proxy (nginx, Caddy) that sets
 # X-Forwarded-For. When false, proxy headers are ignored for rate limiting.
 trust_proxy = false
+# Dedicated LAN discovery port. All Simple Photos servers listen on this
+# port so clients can find them by scanning a single well-known port.
+# The listener returns the server's name, version, and actual HTTP port.
+# Set to 0 to disable. Default: 3301.
+# discovery_port = 3301
 
 [database]
 path = "/data/db/simple-photos.db"

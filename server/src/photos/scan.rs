@@ -66,17 +66,17 @@ pub async fn generate_thumbnail_file(
         return generate_video_thumbnail_ffmpeg(input_path, output_path).await;
     }
 
-    // GIF → FFmpeg scaled animated GIF, fallback to static JPEG via image crate
+    // GIF → FFmpeg scaled animated GIF, fallback to static single-frame GIF
     if mime == "image/gif" {
         if generate_gif_thumbnail_ffmpeg(input_path, output_path).await {
             return true;
         }
-        tracing::debug!(path = %input_path.display(), "FFmpeg GIF thumbnail failed, falling back to static JPEG");
-        // Fall through to static image crate path (output_path may be .thumb.gif,
-        // but we'll write a JPEG there — the serve handler checks magic bytes)
-        let jpg_output = output_path
-            .with_extension("jpg");
-        return generate_static_image_thumbnail(input_path, &jpg_output).await;
+        tracing::debug!(path = %input_path.display(), "FFmpeg GIF thumbnail failed, falling back to static GIF");
+        // Fall back to a single-frame GIF at the SAME output path so the DB
+        // thumb_path (.thumb.gif) still resolves correctly.  Previous code
+        // wrote a JPEG to a different path, causing a file-not-found for the
+        // DB-recorded .thumb.gif path.
+        return generate_static_gif_thumbnail(input_path, output_path).await;
     }
 
     // All other image formats → image crate (JPEG)
@@ -110,6 +110,40 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
         }
         Err(e) => {
             tracing::warn!(path = %input_path.display(), error = %e, "Thumbnail task panicked");
+            false
+        }
+    }
+}
+
+/// Generate a 256×256 single-frame GIF thumbnail as a fallback when FFmpeg is
+/// unavailable.  Writes to the same `.thumb.gif` path the DB references,
+/// ensuring the serve handler can find and return the file.
+async fn generate_static_gif_thumbnail(input_path: &Path, output_path: &Path) -> bool {
+    if let Some(parent) = output_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
+    let input = input_path.to_path_buf();
+    let output = output_path.to_path_buf();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let img = image::open(&input).map_err(|e| format!("Failed to open GIF: {}", e))?;
+        let thumb = img.resize_to_fill(256, 256, image::imageops::FilterType::Triangle);
+        thumb
+            .save_with_format(&output, image::ImageFormat::Gif)
+            .map_err(|e| format!("Failed to save GIF thumbnail: {}", e))?;
+        Ok(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            tracing::warn!(path = %input_path.display(), error = %e, "Static GIF thumbnail failed");
+            generate_placeholder_thumbnail(output_path, [50, 50, 50]).await
+        }
+        Err(e) => {
+            tracing::warn!(path = %input_path.display(), error = %e, "GIF thumbnail task panicked");
             false
         }
     }
