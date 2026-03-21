@@ -139,7 +139,7 @@ export const adminApi = {
   },
 
   getPort: () =>
-    request<{ port: number; message: string }>("/admin/port"),
+    request<{ port: number; suggested_port: number; message: string }>("/admin/port"),
 
   updatePort: (port: number) =>
     request<{ port: number; message: string }>("/admin/port", {

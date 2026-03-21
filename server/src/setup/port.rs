@@ -26,7 +26,26 @@ use super::admin::require_admin;
 #[derive(Debug, Serialize)]
 pub struct PortResponse {
     pub port: u16,
+    /// First available port starting from 8080 (for wizard default).
+    /// Increments from 8080 until an unbound port is found.
+    pub suggested_port: u16,
     pub message: String,
+}
+
+/// Find the first TCP port that can be bound, starting from `start`.
+/// Tries each port in sequence; returns `start` as a fallback if all fail.
+fn find_available_port(start: u16) -> u16 {
+    let mut port = start;
+    loop {
+        // Attempt a non-blocking bind — if it succeeds the port is free.
+        if std::net::TcpListener::bind(("0.0.0.0", port)).is_ok() {
+            return port;
+        }
+        match port.checked_add(1) {
+            Some(next) if next < 65535 => port = next,
+            _ => return start, // wrapped or hit ceiling — use fallback
+        }
+    }
 }
 
 /// Admin-only: Get the current server port from config.
@@ -38,8 +57,14 @@ pub async fn get_port(
 ) -> Result<Json<PortResponse>, AppError> {
     require_admin(&state, &auth).await?;
 
+    // Run the blocking port-scan off the async executor.
+    let suggested_port = tokio::task::spawn_blocking(|| find_available_port(8080))
+        .await
+        .unwrap_or(8080);
+
     Ok(Json(PortResponse {
         port: state.config.server.port,
+        suggested_port,
         message: "Current server port".into(),
     }))
 }
@@ -99,6 +124,8 @@ pub async fn update_port(
 
     Ok(Json(PortResponse {
         port: req.port,
+        // After an explicit save the chosen port is already confirmed; echo it back.
+        suggested_port: req.port,
         message: format!(
             "Port updated to {}. Server restart required for the change to take effect.",
             req.port

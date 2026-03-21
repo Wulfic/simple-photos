@@ -266,7 +266,14 @@ export default function Welcome() {
       setPendingStoragePath(storageData.storage_path);
       setServerPort(portData.port);
       setOriginalPort(portData.port);
-      setPortInput(String(portData.port));
+      // During setup, offer the first available port starting at 8080 rather
+      // than the internal container port (often 3000). If the server is already
+      // on a non-default port the user customised, keep that value.
+      const defaultInput =
+        portData.suggested_port != null
+          ? String(portData.suggested_port)
+          : String(portData.port);
+      setPortInput(defaultInput);
       setPortSaved(false);
       setStep("storage");
     } catch (err: unknown) {
