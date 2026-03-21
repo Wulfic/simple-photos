@@ -4,8 +4,8 @@
 //! diagnostics enable/disable configuration, and paginated audit log viewing.
 
 use axum::extract::{Query, State};
-use axum::Json;
 use axum::response::IntoResponse;
+use axum::Json;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -22,7 +22,6 @@ static SERVER_START: std::sync::OnceLock<(Instant, String)> = std::sync::OnceLoc
 pub(crate) fn server_start() -> &'static (Instant, String) {
     SERVER_START.get_or_init(|| (Instant::now(), chrono::Utc::now().to_rfc3339()))
 }
-
 
 /// Read `/proc/self/status` on Linux to get VmRSS in bytes.
 #[cfg(target_os = "linux")]
@@ -245,11 +244,10 @@ pub async fn get_diagnostics(
 
     // ── Server info ───────────────────────────────────────────────────
     // Offload /proc reads to spawn_blocking (they do blocking I/O)
-    let (rss_bytes, cpu_secs) = tokio::task::spawn_blocking(|| {
-        (read_rss_bytes(), read_cpu_seconds())
-    })
-    .await
-    .unwrap_or((0, 0.0));
+    let (rss_bytes, cpu_secs) =
+        tokio::task::spawn_blocking(|| (read_rss_bytes(), read_cpu_seconds()))
+            .await
+            .unwrap_or((0, 0.0));
     let storage_root = (**state.storage_root.load()).clone();
     let server_info = ServerInfo {
         version: crate::VERSION.to_string(),
@@ -315,10 +313,7 @@ pub async fn get_diagnostics(
     let mut table_counts: HashMap<String, i64> = HashMap::new();
     for table in tables {
         let sql = format!("SELECT COUNT(*) FROM {}", table);
-        let count: i64 = sqlx::query_scalar(&sql)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+        let count: i64 = sqlx::query_scalar(&sql).fetch_one(pool).await.unwrap_or(0);
         table_counts.insert(table.to_string(), count);
     }
 
@@ -354,11 +349,10 @@ pub async fn get_diagnostics(
         .fetch_one(pool)
         .await
         .unwrap_or(0);
-    let admin_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let totp_enabled_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE totp_enabled = 1")
             .fetch_one(pool)
@@ -376,11 +370,10 @@ pub async fn get_diagnostics(
         .fetch_one(pool)
         .await
         .unwrap_or(0);
-    let encrypted_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM photos")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    let encrypted_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let total_file_bytes: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")
             .fetch_one(pool)
@@ -388,41 +381,37 @@ pub async fn get_diagnostics(
             .unwrap_or(0);
     // No dedicated thumb_size column — estimate from count of photos with thumbnails
     let total_thumb_bytes: i64 = 0;
-    let photos_with_thumbs: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE thumb_path IS NOT NULL AND thumb_path != ''")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    let photos_with_thumbs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE thumb_path IS NOT NULL AND thumb_path != ''",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
     let favorited_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE is_favorite = 1")
             .fetch_one(pool)
             .await
             .unwrap_or(0);
-    let tagged_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(DISTINCT photo_id) FROM photo_tags")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-    let oldest_photo: Option<String> =
-        sqlx::query_scalar("SELECT MIN(created_at) FROM photos")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(None);
-    let newest_photo: Option<String> =
-        sqlx::query_scalar("SELECT MAX(created_at) FROM photos")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(None);
+    let tagged_count: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT photo_id) FROM photo_tags")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let oldest_photo: Option<String> = sqlx::query_scalar("SELECT MIN(created_at) FROM photos")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(None);
+    let newest_photo: Option<String> = sqlx::query_scalar("SELECT MAX(created_at) FROM photos")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(None);
 
     // Photos grouped by media_type
-    let media_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT media_type, COUNT(*) as cnt FROM photos GROUP BY media_type",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    let photos_by_media_type: HashMap<String, i64> =
-        media_rows.into_iter().collect();
+    let media_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT media_type, COUNT(*) as cnt FROM photos GROUP BY media_type")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+    let photos_by_media_type: HashMap<String, i64> = media_rows.into_iter().collect();
 
     let photo_stats = PhotoStats {
         total_photos,
@@ -446,25 +435,22 @@ pub async fn get_diagnostics(
     let h24 = (now - chrono::Duration::hours(24)).to_rfc3339();
     let d7 = (now - chrono::Duration::days(7)).to_rfc3339();
 
-    let audit_24h: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
-            .bind(&h24)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-    let audit_7d: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
-            .bind(&d7)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    let audit_24h: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
+        .bind(&h24)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let audit_7d: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
+        .bind(&d7)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
 
-    let event_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT event_type, COUNT(*) as cnt FROM audit_log GROUP BY event_type",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let event_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT event_type, COUNT(*) as cnt FROM audit_log GROUP BY event_type")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
     let events_by_type: HashMap<String, i64> = event_rows.into_iter().collect();
 
     // Recent failures (last 50)
@@ -479,15 +465,15 @@ pub async fn get_diagnostics(
 
     let recent_failures: Vec<AuditFailureEntry> = failure_rows
         .into_iter()
-        .map(|(event_type, ip_address, user_agent, created_at, details)| {
-            AuditFailureEntry {
+        .map(
+            |(event_type, ip_address, user_agent, created_at, details)| AuditFailureEntry {
                 event_type,
                 ip_address,
                 user_agent,
                 created_at,
                 details,
-            }
-        })
+            },
+        )
         .collect();
 
     let audit_summary = AuditSummary {
@@ -499,29 +485,25 @@ pub async fn get_diagnostics(
     };
 
     // ── Client log summary ────────────────────────────────────────────
-    let cl_total: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM client_logs")
-            .fetch_one(pool)
+    let cl_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_24h: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
+        .bind(&h24)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_7d: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
+        .bind(&d7)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_level_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT level, COUNT(*) as cnt FROM client_logs GROUP BY level")
+            .fetch_all(pool)
             .await
-            .unwrap_or(0);
-    let cl_24h: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
-            .bind(&h24)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-    let cl_7d: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
-            .bind(&d7)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-    let cl_level_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT level, COUNT(*) as cnt FROM client_logs GROUP BY level",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+            .unwrap_or_default();
     let by_level: HashMap<String, i64> = cl_level_rows.into_iter().collect();
     let unique_sessions: i64 =
         sqlx::query_scalar("SELECT COUNT(DISTINCT session_id) FROM client_logs")
@@ -538,16 +520,14 @@ pub async fn get_diagnostics(
     };
 
     // ── Backup summary ────────────────────────────────────────────────
-    let backup_servers: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM backup_servers")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-    let total_sync_logs: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM backup_sync_log")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    let backup_servers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backup_servers")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let total_sync_logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backup_sync_log")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let last_sync_at: Option<String> =
         sqlx::query_scalar("SELECT MAX(started_at) FROM backup_sync_log")
             .fetch_one(pool)
@@ -587,7 +567,8 @@ pub async fn get_diagnostics(
         client_logs: client_log_summary,
         backup: backup_summary,
         performance,
-    }).into_response())
+    })
+    .into_response())
 }
 
 /// GET /api/admin/audit-logs — paginated audit log with optional filters.
@@ -646,10 +627,19 @@ pub async fn list_audit_logs(
         where_clause
     );
 
-    let mut query =
-        sqlx::query_as::<_, (String, String, Option<String>, Option<String>, String, String, String, String)>(
-            &sql,
-        );
+    let mut query = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+            String,
+            String,
+        ),
+    >(&sql);
     for b in &binds {
         query = query.bind(b);
     }

@@ -60,7 +60,11 @@ pub async fn import_scan(
     }
 
     let canonical = tokio::fs::canonicalize(&scan_path).await.map_err(|e| {
-        AppError::BadRequest(format!("Cannot resolve path '{}': {}", scan_path.display(), e))
+        AppError::BadRequest(format!(
+            "Cannot resolve path '{}': {}",
+            scan_path.display(),
+            e
+        ))
     })?;
 
     let meta = tokio::fs::metadata(&canonical).await.map_err(|e| {
@@ -163,9 +167,9 @@ pub async fn import_file(
         AppError::BadRequest(format!("Cannot resolve path '{}': {}", query.path, e))
     })?;
 
-    let meta = tokio::fs::metadata(&canonical).await.map_err(|_e| {
-        AppError::NotFound
-    })?;
+    let meta = tokio::fs::metadata(&canonical)
+        .await
+        .map_err(|_e| AppError::NotFound)?;
 
     if !meta.is_file() {
         return Err(AppError::BadRequest("Path is not a file".into()));
@@ -183,9 +187,9 @@ pub async fn import_file(
     let mime = mime_from_extension(&name);
     let size = meta.len();
 
-    let file = tokio::fs::File::open(&canonical).await.map_err(|e| {
-        AppError::Internal(format!("Failed to open file: {}", e))
-    })?;
+    let file = tokio::fs::File::open(&canonical)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
@@ -196,9 +200,8 @@ pub async fn import_file(
         .header("Content-Length", HeaderValue::from(size))
         .header(
             "Content-Disposition",
-            HeaderValue::from_str(&format!("inline; filename=\"{}\"", name)).unwrap_or_else(|_| {
-                HeaderValue::from_static("inline")
-            }),
+            HeaderValue::from_str(&format!("inline; filename=\"{}\"", name))
+                .unwrap_or_else(|_| HeaderValue::from_static("inline")),
         )
         .header("Cache-Control", HeaderValue::from_static("no-store"))
         .body(body)

@@ -207,8 +207,7 @@ impl AppConfig {
     ///   SIMPLE_PHOTOS_STORAGE_ROOT=/mnt/vault/Files/Simple-Photos
     ///   SIMPLE_PHOTOS_SERVER_PORT=8080
     pub fn load() -> anyhow::Result<Self> {
-        let path = std::env::var("SIMPLE_PHOTOS_CONFIG")
-            .unwrap_or_else(|_| "config.toml".into());
+        let path = std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
 
         let contents = std::fs::read_to_string(&path)
             .map_err(|e| anyhow::anyhow!("Failed to read config file '{}': {}", path, e))?;
@@ -242,9 +241,9 @@ impl AppConfig {
                 .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_DATABASE_MAX_CONNECTIONS"))?;
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_DATABASE_READ_POOL_MAX_CONNECTIONS") {
-            config.database.read_pool_max_connections = v
-                .parse()
-                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_DATABASE_READ_POOL_MAX_CONNECTIONS"))?;
+            config.database.read_pool_max_connections = v.parse().map_err(|_| {
+                anyhow::anyhow!("Invalid SIMPLE_PHOTOS_DATABASE_READ_POOL_MAX_CONNECTIONS")
+            })?;
         }
 
         // Storage — accepts local paths AND mounted network shares (SMB/NFS/SSHFS)
@@ -252,14 +251,14 @@ impl AppConfig {
             config.storage.root = PathBuf::from(v);
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_STORAGE_DEFAULT_QUOTA_BYTES") {
-            config.storage.default_quota_bytes = v
-                .parse()
-                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_STORAGE_DEFAULT_QUOTA_BYTES"))?;
+            config.storage.default_quota_bytes = v.parse().map_err(|_| {
+                anyhow::anyhow!("Invalid SIMPLE_PHOTOS_STORAGE_DEFAULT_QUOTA_BYTES")
+            })?;
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_STORAGE_MAX_BLOB_SIZE_BYTES") {
-            config.storage.max_blob_size_bytes = v
-                .parse()
-                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_STORAGE_MAX_BLOB_SIZE_BYTES"))?;
+            config.storage.max_blob_size_bytes = v.parse().map_err(|_| {
+                anyhow::anyhow!("Invalid SIMPLE_PHOTOS_STORAGE_MAX_BLOB_SIZE_BYTES")
+            })?;
         }
 
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AUTH_JWT_SECRET") {
@@ -271,9 +270,9 @@ impl AppConfig {
                 .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_AUTH_ACCESS_TOKEN_TTL_SECS"))?;
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AUTH_REFRESH_TOKEN_TTL_DAYS") {
-            config.auth.refresh_token_ttl_days = v
-                .parse()
-                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_AUTH_REFRESH_TOKEN_TTL_DAYS"))?;
+            config.auth.refresh_token_ttl_days = v.parse().map_err(|_| {
+                anyhow::anyhow!("Invalid SIMPLE_PHOTOS_AUTH_REFRESH_TOKEN_TTL_DAYS")
+            })?;
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AUTH_ALLOW_REGISTRATION") {
             config.auth.allow_registration = v.to_lowercase() == "true" || v == "1";
@@ -293,9 +292,9 @@ impl AppConfig {
         }
 
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_SCAN_AUTO_SCAN_INTERVAL_SECS") {
-            config.scan.auto_scan_interval_secs = v
-                .parse()
-                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_SCAN_AUTO_SCAN_INTERVAL_SECS"))?;
+            config.scan.auto_scan_interval_secs = v.parse().map_err(|_| {
+                anyhow::anyhow!("Invalid SIMPLE_PHOTOS_SCAN_AUTO_SCAN_INTERVAL_SECS")
+            })?;
         }
 
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_ENABLED") {

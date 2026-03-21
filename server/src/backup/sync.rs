@@ -113,13 +113,12 @@ pub async fn trigger_sync(
     // Spawn the sync as a background task
     let pool = state.pool.clone();
     let storage_root = (**state.storage_root.load()).clone();
-    let api_key: Option<String> = sqlx::query_scalar(
-        "SELECT api_key FROM backup_servers WHERE id = ?",
-    )
-    .bind(&server_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
+    let api_key: Option<String> =
+        sqlx::query_scalar("SELECT api_key FROM backup_servers WHERE id = ?")
+            .bind(&server_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
 
     let log_id_clone = log_id.clone();
     tokio::spawn(async move {
@@ -219,7 +218,13 @@ async fn run_sync(
 
     for (photo_id, file_path, size) in &photos_to_sync {
         match send_file(
-            &client, &base_url, api_key, storage_root, photo_id, file_path, "photos",
+            &client,
+            &base_url,
+            api_key,
+            storage_root,
+            photo_id,
+            file_path,
+            "photos",
         )
         .await
         {
@@ -236,26 +241,25 @@ async fn run_sync(
     }
 
     // 2. Sync trash items — only those the remote doesn't have yet
-    let trash_items: Vec<(String, String, i64)> = match sqlx::query_as(
-        "SELECT id, file_path, size_bytes FROM trash_items",
-    )
-    .fetch_all(pool)
-    .await
-    {
-        Ok(t) => t,
-        Err(e) => {
-            update_sync_log(
-                pool,
-                log_id,
-                "error",
-                photos_synced,
-                bytes_synced,
-                Some(&e.to_string()),
-            )
-            .await;
-            return;
-        }
-    };
+    let trash_items: Vec<(String, String, i64)> =
+        match sqlx::query_as("SELECT id, file_path, size_bytes FROM trash_items")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                update_sync_log(
+                    pool,
+                    log_id,
+                    "error",
+                    photos_synced,
+                    bytes_synced,
+                    Some(&e.to_string()),
+                )
+                .await;
+                return;
+            }
+        };
 
     let trash_to_sync: Vec<_> = trash_items
         .iter()
@@ -271,7 +275,13 @@ async fn run_sync(
 
     for (trash_id, file_path, size) in &trash_to_sync {
         match send_file(
-            &client, &base_url, api_key, storage_root, trash_id, file_path, "trash",
+            &client,
+            &base_url,
+            api_key,
+            storage_root,
+            trash_id,
+            file_path,
+            "trash",
         )
         .await
         {
@@ -410,10 +420,7 @@ async fn send_file(
     source: &str,
 ) -> Result<(), String> {
     let full_path = storage_root.join(file_path);
-    if !tokio::fs::try_exists(&full_path)
-        .await
-        .unwrap_or(false)
-    {
+    if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
         return Err("file not found on disk".to_string());
     }
 
@@ -479,10 +486,7 @@ async fn update_sync_log(
 
 /// Background task: periodically sync to all enabled backup servers
 /// based on their configured frequency.
-pub async fn background_sync_task(
-    pool: sqlx::SqlitePool,
-    storage_root: std::path::PathBuf,
-) {
+pub async fn background_sync_task(pool: sqlx::SqlitePool, storage_root: std::path::PathBuf) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Check every hour
 
     loop {
@@ -549,14 +553,13 @@ pub async fn background_sync_task(
                 tracing::warn!(server_id = %server.id, error = %e, "Failed to create backup sync log entry");
             }
 
-            let api_key: Option<String> = sqlx::query_scalar(
-                "SELECT api_key FROM backup_servers WHERE id = ?",
-            )
-            .bind(&server.id)
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
+            let api_key: Option<String> =
+                sqlx::query_scalar("SELECT api_key FROM backup_servers WHERE id = ?")
+                    .bind(&server.id)
+                    .fetch_optional(&pool)
+                    .await
+                    .ok()
+                    .flatten();
 
             run_sync(&pool, &storage_root, server, &api_key, &log_id).await;
             drop(guard); // Release the concurrency lock

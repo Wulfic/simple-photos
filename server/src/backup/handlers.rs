@@ -59,12 +59,11 @@ pub async fn add_backup_server(
         .map_err(|reason| AppError::BadRequest(reason.into()))?;
 
     // Check for duplicates
-    let exists: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) > 0 FROM backup_servers WHERE address = ?",
-    )
-    .bind(&address)
-    .fetch_one(&state.read_pool)
-    .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM backup_servers WHERE address = ?")
+            .bind(&address)
+            .fetch_one(&state.read_pool)
+            .await?;
 
     if exists {
         return Err(AppError::Conflict(format!(
@@ -115,12 +114,10 @@ pub async fn update_backup_server(
     require_admin(&state, &auth).await?;
 
     // Verify server exists
-    let exists: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) > 0 FROM backup_servers WHERE id = ?",
-    )
-    .bind(&server_id)
-    .fetch_one(&state.read_pool)
-    .await?;
+    let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM backup_servers WHERE id = ?")
+        .bind(&server_id)
+        .fetch_one(&state.read_pool)
+        .await?;
 
     if !exists {
         return Err(AppError::NotFound);
@@ -214,13 +211,11 @@ pub async fn check_backup_server_status(
 ) -> Result<Json<BackupServerStatus>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let address: String = sqlx::query_scalar(
-        "SELECT address FROM backup_servers WHERE id = ?",
-    )
-    .bind(&server_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let address: String = sqlx::query_scalar("SELECT address FROM backup_servers WHERE id = ?")
+        .bind(&server_id)
+        .fetch_optional(&state.read_pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     // Try to reach the server's health endpoint
     let url = format!("http://{}/health", address);
@@ -286,18 +281,14 @@ pub async fn discover_servers(
     // so this outer limit is just a crash-stop. Inner phases use streaming
     // collection so partial results survive phase-level timeouts.
     let discover_future = discover_servers_inner(&state);
-    let discovered = match tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        discover_future,
-    )
-    .await
-    {
-        Ok(servers) => servers,
-        Err(_) => {
-            tracing::warn!("Server discovery timed out after 15s");
-            Vec::new()
-        }
-    };
+    let discovered =
+        match tokio::time::timeout(std::time::Duration::from_secs(15), discover_future).await {
+            Ok(servers) => servers,
+            Err(_) => {
+                tracing::warn!("Server discovery timed out after 15s");
+                Vec::new()
+            }
+        };
 
     Ok(Json(DiscoverResponse {
         servers: discovered,
@@ -407,7 +398,12 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
             // When discovery_port is set, skip fallback-port probes on
             // non-loopback hosts — they'll be found via the discovery
             // port in Phase 2 and probing unreachable Docker IPs is slow.
-            if discovery_port != 0 && host != "127.0.0.1" {
+            if discovery_port != 0
+                && host != "127.0.0.1"
+                && host != "host.docker.internal"
+                && !host.starts_with("172.")
+                && !host.starts_with("192.")
+            {
                 continue;
             }
             let addr = format!("{}:{}", host, port);
@@ -515,8 +511,7 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
 
     // Use FuturesUnordered + streaming so partial results are preserved
     // if the deadline fires (join_all + unwrap_or_default discards everything).
-    let mut stream: futures_util::stream::FuturesUnordered<_> =
-        lan_futures.into_iter().collect();
+    let mut stream: futures_util::stream::FuturesUnordered<_> = lan_futures.into_iter().collect();
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -528,27 +523,38 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
                 }
             }
             Ok(Some(None)) => { /* probe returned None */ }
-            Ok(None) => break,   // stream exhausted
+            Ok(None) => break, // stream exhausted
             Err(_) => {
-                tracing::warn!("[DISCOVER] Phase 2 subnet scan timed out after 10s with {} servers", discovered.len());
+                tracing::warn!(
+                    "[DISCOVER] Phase 2 subnet scan timed out after 10s with {} servers",
+                    discovered.len()
+                );
                 break;
             }
         }
     }
 
     // ── Deduplication: prefer routable addresses over loopback/Docker ────
-    let mut by_port: std::collections::HashMap<u16, DiscoveredServer> = std::collections::HashMap::new();
+    let mut by_port: std::collections::HashMap<u16, DiscoveredServer> =
+        std::collections::HashMap::new();
     for server in discovered {
-        let port = server.address.rsplit(':').next()
+        let port = server
+            .address
+            .rsplit(':')
+            .next()
             .and_then(|p| p.parse::<u16>().ok())
             .unwrap_or(0);
         let entry = by_port.entry(port).or_insert_with(|| server.clone());
         let current_ip = entry.address.split(':').next().unwrap_or("");
         let new_ip = server.address.split(':').next().unwrap_or("");
         let score = |ip: &str| -> u8 {
-            if ip == "127.0.0.1" || ip == "localhost" { 0 }
-            else if ip.starts_with("172.") || ip == "host.docker.internal" { 1 }
-            else { 2 }
+            if ip == "127.0.0.1" || ip == "localhost" {
+                0
+            } else if ip.starts_with("172.") || ip == "host.docker.internal" {
+                1
+            } else {
+                2
+            }
         };
         if score(new_ip) > score(current_ip) {
             let api_key = server.api_key.or_else(|| entry.api_key.clone());
@@ -570,11 +576,7 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
 /// Probe a single host:port for a Simple Photos server.
 /// Tries `/api/discover/info` first (returns API key for localhost),
 /// then falls back to `/health`.
-async fn probe_server(
-    client: &reqwest::Client,
-    host: &str,
-    port: u16,
-) -> Option<DiscoveredServer> {
+async fn probe_server(client: &reqwest::Client, host: &str, port: u16) -> Option<DiscoveredServer> {
     let info_url = format!("http://{}:{}/api/discover/info", host, port);
 
     // Primary probe: /api/discover/info (loopback-only, returns API key)
@@ -582,12 +584,21 @@ async fn probe_server(
         if resp.status().is_success() {
             if let Ok(body) = resp.json::<serde_json::Value>().await {
                 if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                    let name = body.get("name").and_then(|n| n.as_str())
-                        .unwrap_or("Unknown").to_string();
-                    let version = body.get("version").and_then(|v| v.as_str())
-                        .unwrap_or("unknown").to_string();
-                    let api_key = body.get("api_key").and_then(|k| k.as_str())
-                        .filter(|k| !k.is_empty()).map(|k| k.to_string());
+                    let name = body
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let version = body
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let api_key = body
+                        .get("api_key")
+                        .and_then(|k| k.as_str())
+                        .filter(|k| !k.is_empty())
+                        .map(|k| k.to_string());
                     return Some(DiscoveredServer {
                         address: format!("{}:{}", host, port),
                         name,
@@ -603,19 +614,22 @@ async fn probe_server(
 }
 
 /// Probe a single address via `/health` endpoint only.
-async fn probe_health_only(
-    client: &reqwest::Client,
-    addr: &str,
-) -> Option<DiscoveredServer> {
+async fn probe_health_only(client: &reqwest::Client, addr: &str) -> Option<DiscoveredServer> {
     let url = format!("http://{}/health", addr);
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => {
             if let Ok(body) = resp.json::<serde_json::Value>().await {
                 if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                    let name = body.get("name").and_then(|n| n.as_str())
-                        .unwrap_or("Unknown").to_string();
-                    let version = body.get("version").and_then(|v| v.as_str())
-                        .unwrap_or("unknown").to_string();
+                    let name = body
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let version = body
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
                     return Some(DiscoveredServer {
                         address: addr.to_string(),
                         name,
@@ -645,12 +659,20 @@ async fn probe_discovery_port(
         Ok(resp) if resp.status().is_success() => {
             if let Ok(body) = resp.json::<serde_json::Value>().await {
                 if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                    let name = body.get("name").and_then(|n| n.as_str())
-                        .unwrap_or("Unknown").to_string();
-                    let version = body.get("version").and_then(|v| v.as_str())
-                        .unwrap_or("unknown").to_string();
+                    let name = body
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let version = body
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
                     // The discovery response includes the server's real HTTP port
-                    let actual_port = body.get("port").and_then(|p| p.as_u64())
+                    let actual_port = body
+                        .get("port")
+                        .and_then(|p| p.as_u64())
                         .map(|p| p as u16)
                         .unwrap_or(discovery_port);
                     return Some(DiscoveredServer {
@@ -677,12 +699,11 @@ pub async fn get_backup_mode(
 ) -> Result<Json<BackupModeResponse>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'backup_mode'",
-    )
-    .fetch_optional(&state.read_pool)
-    .await?
-    .unwrap_or_else(|| "primary".to_string());
+    let mode: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+            .fetch_optional(&state.read_pool)
+            .await?
+            .unwrap_or_else(|| "primary".to_string());
 
     let local_ip = broadcast::get_local_ip().unwrap_or_else(|| "unknown".to_string());
     let port = state.config.server.port;
@@ -720,7 +741,11 @@ pub async fn set_backup_mode(
 
     let mode = match req.mode.as_str() {
         "primary" | "backup" => req.mode.clone(),
-        _ => return Err(AppError::BadRequest("Mode must be 'primary' or 'backup'".into())),
+        _ => {
+            return Err(AppError::BadRequest(
+                "Mode must be 'primary' or 'backup'".into(),
+            ))
+        }
     };
 
     // Upsert the backup_mode setting
@@ -812,12 +837,11 @@ pub async fn get_audio_backup_setting(
     State(state): State<AppState>,
     _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let enabled: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
-    )
-    .fetch_optional(&state.read_pool)
-    .await?
-    .unwrap_or_else(|| "false".to_string());
+    let enabled: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'")
+            .fetch_optional(&state.read_pool)
+            .await?
+            .unwrap_or_else(|| "false".to_string());
 
     Ok(Json(serde_json::json!({
         "audio_backup_enabled": enabled == "true",

@@ -53,13 +53,9 @@ pub async fn import_metadata(
 
     // Write the metadata file to storage_root/metadata/...
     let storage_root = (**state.storage_root.load()).clone();
-    let storage_path = blob_storage::write_metadata(
-        &storage_root,
-        &auth.user_id,
-        &meta_id,
-        &data_to_write,
-    )
-    .await?;
+    let storage_path =
+        blob_storage::write_metadata(&storage_root, &auth.user_id, &meta_id, &data_to_write)
+            .await?;
 
     // Insert DB record
     sqlx::query(
@@ -129,9 +125,7 @@ pub async fn batch_import_metadata(
     Json(req): Json<GooglePhotosBatchImportRequest>,
 ) -> Result<Json<BatchImportResponse>, AppError> {
     if req.entries.len() > 500 {
-        return Err(AppError::BadRequest(
-            "Maximum 500 entries per batch".into(),
-        ));
+        return Err(AppError::BadRequest("Maximum 500 entries per batch".into()));
     }
 
     let storage_root = (**state.storage_root.load()).clone();
@@ -143,15 +137,7 @@ pub async fn batch_import_metadata(
     for (idx, entry) in req.entries.iter().enumerate() {
         let meta_id = Uuid::new_v4().to_string();
 
-        match import_single_metadata(
-            &state,
-            &auth.user_id,
-            &meta_id,
-            entry,
-            &storage_root,
-        )
-        .await
-        {
+        match import_single_metadata(&state, &auth.user_id, &meta_id, entry, &storage_root).await {
             Ok(_) => {
                 imported += 1;
                 results.push(ImportMetadataResultEntry {
@@ -282,8 +268,7 @@ pub async fn upload_sidecar(
         ));
     }
 
-    let gp_meta = google_photos::parse_sidecar(&body)
-        .map_err(|e| AppError::BadRequest(e))?;
+    let gp_meta = google_photos::parse_sidecar(&body).map_err(|e| AppError::BadRequest(e))?;
 
     let photo_id = headers
         .get("x-photo-id")
@@ -352,7 +337,9 @@ pub async fn delete_photo_metadata(
 
     let storage_root = (**state.storage_root.load()).clone();
     for path in paths.into_iter().flatten() {
-        blob_storage::delete_metadata(&storage_root, &path).await.ok();
+        blob_storage::delete_metadata(&storage_root, &path)
+            .await
+            .ok();
     }
 
     sqlx::query("DELETE FROM photo_metadata WHERE user_id = ? AND photo_id = ?")

@@ -60,10 +60,7 @@ struct DiscoveryResponse {
 /// This is designed to be spawned as a background task from `main()`.
 /// It will log a warning and return (without crashing the server) if the
 /// port is already in use.
-pub async fn run_discovery_listener(
-    pool: SqlitePool,
-    config: Arc<AppConfig>,
-) {
+pub async fn run_discovery_listener(pool: SqlitePool, config: Arc<AppConfig>) {
     let discovery_port = config.server.discovery_port;
     if discovery_port == 0 {
         tracing::info!("Discovery listener disabled (discovery_port = 0)");
@@ -128,28 +125,24 @@ pub async fn run_discovery_listener(
 /// it reveals the server name, version, and port but no sensitive data.
 /// API keys are never exposed here; the `api_key_required` flag only
 /// indicates *whether* one is needed, not what it is.
-async fn discovery_handler(
-    State(state): State<DiscoveryState>,
-) -> Json<DiscoveryResponse> {
+async fn discovery_handler(State(state): State<DiscoveryState>) -> Json<DiscoveryResponse> {
     // Fetch server name from DB (fallback to sensible default)
-    let name: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'server_name'",
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "Simple Photos".to_string());
+    let name: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'server_name'")
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Simple Photos".to_string());
 
     // Fetch operating mode (primary / backup)
-    let mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'backup_mode'",
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| "primary".to_string());
+    let mode: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "primary".to_string());
 
     // Check whether an API key is configured (don't reveal the key itself)
     let api_key_required: bool = state

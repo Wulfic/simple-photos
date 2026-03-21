@@ -21,31 +21,30 @@ use crate::state::AppState;
 /// 3. `{project_root}/downloads/simple-photos.apk`
 ///
 /// Returns 404 with instructions if no APK is found.
-pub async fn android_apk(
-    State(state): State<AppState>,
-) -> Result<Response, AppError> {
+pub async fn android_apk(State(state): State<AppState>) -> Result<Response, AppError> {
     // Resolve the project root (go up from server working dir)
     let static_root = std::path::PathBuf::from(&state.config.web.static_root);
     // static_root is typically "../web/dist", so project root is "../" from server cwd
-    let project_root = std::env::current_dir()
-        .unwrap_or_default()
-        .join("..");
+    let project_root = std::env::current_dir().unwrap_or_default().join("..");
 
     let candidates = [
         project_root.join("android/app/build/outputs/apk/release/app-release.apk"),
         project_root.join("android/app/build/outputs/apk/debug/app-debug.apk"),
         project_root.join("downloads/simple-photos.apk"),
         // Also check relative to static_root parent
-        static_root.clone().join("../../downloads/simple-photos.apk"),
+        static_root
+            .clone()
+            .join("../../downloads/simple-photos.apk"),
     ];
 
     for path in &candidates {
         if path.exists() {
-            let data = tokio::fs::read(path).await.map_err(|e| {
-                AppError::Internal(format!("Failed to read APK file: {}", e))
-            })?;
+            let data = tokio::fs::read(path)
+                .await
+                .map_err(|e| AppError::Internal(format!("Failed to read APK file: {}", e)))?;
 
-            let filename = path.file_name()
+            let filename = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("simple-photos.apk");
 
@@ -56,13 +55,10 @@ pub async fn android_apk(
             );
             headers.insert(
                 "Content-Disposition",
-                HeaderValue::from_str(&format!(
-                    "attachment; filename=\"{}\"",
-                    filename
-                ))
-                .unwrap_or_else(|_| {
-                    HeaderValue::from_static("attachment; filename=\"simple-photos.apk\"")
-                }),
+                HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
+                    .unwrap_or_else(|_| {
+                        HeaderValue::from_static("attachment; filename=\"simple-photos.apk\"")
+                    }),
             );
 
             tracing::info!("Serving APK download: {:?}", path);
@@ -73,7 +69,10 @@ pub async fn android_apk(
     // No APK found — return a helpful error
     tracing::debug!(
         "No APK found. Searched: {:?}",
-        candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()
+        candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
     );
 
     let body = serde_json::json!({
@@ -81,8 +80,5 @@ pub async fn android_apk(
         "message": "The Android app has not been built yet. To build it:\n\n  cd android && ./gradlew assembleRelease\n\nOr place a pre-built APK at: downloads/simple-photos.apk"
     });
 
-    Ok((
-        StatusCode::NOT_FOUND,
-        axum::Json(body),
-    ).into_response())
+    Ok((StatusCode::NOT_FOUND, axum::Json(body)).into_response())
 }

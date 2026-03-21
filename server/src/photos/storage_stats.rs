@@ -123,7 +123,11 @@ fn get_fs_stats(path: &std::path::Path) -> (i64, i64) {
     use std::os::windows::ffi::OsStrExt;
 
     // Encode path as null-terminated wide string for Win32 API
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
 
     let mut free_available: u64 = 0;
     let mut total_bytes: u64 = 0;

@@ -9,7 +9,14 @@
 //! coordinates, and `DateTimeOriginal` (via the `exif` crate).
 
 /// Metadata tuple returned by both extraction functions.
-pub(crate) type MediaMetadata = (i64, i64, Option<String>, Option<f64>, Option<f64>, Option<String>);
+pub(crate) type MediaMetadata = (
+    i64,
+    i64,
+    Option<String>,
+    Option<f64>,
+    Option<f64>,
+    Option<String>,
+);
 
 /// Extract image dimensions, camera model, and GPS coordinates from a file.
 /// Returns (width, height, camera_model, latitude, longitude, taken_at).
@@ -17,9 +24,7 @@ pub(crate) type MediaMetadata = (i64, i64, Option<String>, Option<f64>, Option<f
 /// **Blocking:** Uses `std::fs::File::open` and CPU-bound EXIF parsing.
 /// Callers on the tokio runtime should use [`extract_media_metadata_async`]
 /// instead, which wraps this in `spawn_blocking`.
-pub(crate) fn extract_media_metadata(
-    file_path: &std::path::Path,
-) -> MediaMetadata {
+pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetadata {
     let mut width: i64 = 0;
     let mut height: i64 = 0;
     let mut camera_model: Option<String> = None;
@@ -89,7 +94,11 @@ pub(crate) fn extract_media_metadata(
             if let Some(dt_field) =
                 exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
             {
-                let dt_str = dt_field.display_value().to_string().trim_matches('"').to_string();
+                let dt_str = dt_field
+                    .display_value()
+                    .to_string()
+                    .trim_matches('"')
+                    .to_string();
                 // EXIF format: "2024:01:15 14:30:00" → convert to ISO 8601
                 if dt_str.len() >= 19 {
                     let iso = format!(
@@ -130,7 +139,14 @@ pub(crate) fn extract_media_metadata(
 pub(crate) fn extract_media_metadata_from_bytes(
     data: &[u8],
     filename: &str,
-) -> (i64, i64, Option<String>, Option<f64>, Option<f64>, Option<String>) {
+) -> (
+    i64,
+    i64,
+    Option<String>,
+    Option<f64>,
+    Option<f64>,
+    Option<String>,
+) {
     let mut width: i64 = 0;
     let mut height: i64 = 0;
     let mut camera_model: Option<String> = None;
@@ -157,7 +173,11 @@ pub(crate) fn extract_media_metadata_from_bytes(
             (Some(mk), Some(md)) => {
                 let mk = mk.trim_matches('"').trim().to_string();
                 let md = md.trim_matches('"').trim().to_string();
-                if md.starts_with(&mk) { Some(md) } else { Some(format!("{} {}", mk, md)) }
+                if md.starts_with(&mk) {
+                    Some(md)
+                } else {
+                    Some(format!("{} {}", mk, md))
+                }
             }
             (None, Some(md)) => Some(md.trim_matches('"').trim().to_string()),
             (Some(mk), None) => Some(mk.trim_matches('"').trim().to_string()),
@@ -174,8 +194,12 @@ pub(crate) fn extract_media_metadata_from_bytes(
                 (&lat_field.value, &lon_field.value)
             {
                 if lat_vals.len() >= 3 && lon_vals.len() >= 3 {
-                    let lat = lat_vals[0].to_f64() + lat_vals[1].to_f64() / 60.0 + lat_vals[2].to_f64() / 3600.0;
-                    let lon = lon_vals[0].to_f64() + lon_vals[1].to_f64() / 60.0 + lon_vals[2].to_f64() / 3600.0;
+                    let lat = lat_vals[0].to_f64()
+                        + lat_vals[1].to_f64() / 60.0
+                        + lat_vals[2].to_f64() / 3600.0;
+                    let lon = lon_vals[0].to_f64()
+                        + lon_vals[1].to_f64() / 60.0
+                        + lon_vals[2].to_f64() / 3600.0;
                     let lat_ref_str = lat_ref.display_value().to_string();
                     let lon_ref_str = lon_ref.display_value().to_string();
                     latitude = Some(if lat_ref_str.contains('S') { -lat } else { lat });
@@ -184,20 +208,40 @@ pub(crate) fn extract_media_metadata_from_bytes(
             }
         }
 
-        if let Some(dt_field) = exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY) {
-            let dt_str = dt_field.display_value().to_string().trim_matches('"').to_string();
+        if let Some(dt_field) =
+            exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+        {
+            let dt_str = dt_field
+                .display_value()
+                .to_string()
+                .trim_matches('"')
+                .to_string();
             if dt_str.len() >= 19 {
-                let iso = format!("{}-{}-{}T{}Z", &dt_str[0..4], &dt_str[5..7], &dt_str[8..10], &dt_str[11..19]);
+                let iso = format!(
+                    "{}-{}-{}T{}Z",
+                    &dt_str[0..4],
+                    &dt_str[5..7],
+                    &dt_str[8..10],
+                    &dt_str[11..19]
+                );
                 taken_at = Some(iso);
             }
         }
 
         if width == 0 || height == 0 {
-            if let Some(w_field) = exif_reader.get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY) {
-                if let Some(w) = w_field.value.get_uint(0) { width = w as i64; }
+            if let Some(w_field) =
+                exif_reader.get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY)
+            {
+                if let Some(w) = w_field.value.get_uint(0) {
+                    width = w as i64;
+                }
             }
-            if let Some(h_field) = exif_reader.get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY) {
-                if let Some(h) = h_field.value.get_uint(0) { height = h as i64; }
+            if let Some(h_field) =
+                exif_reader.get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY)
+            {
+                if let Some(h) = h_field.value.get_uint(0) {
+                    height = h as i64;
+                }
             }
         }
     }
@@ -210,9 +254,7 @@ pub(crate) fn extract_media_metadata_from_bytes(
 
 /// Async wrapper around [`extract_media_metadata`] that offloads the blocking
 /// file I/O and EXIF parsing to a `spawn_blocking` thread.
-pub(crate) async fn extract_media_metadata_async(
-    file_path: std::path::PathBuf,
-) -> MediaMetadata {
+pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) -> MediaMetadata {
     tokio::task::spawn_blocking(move || extract_media_metadata(&file_path))
         .await
         .unwrap_or_else(|_| (0, 0, None, None, None, None))

@@ -85,12 +85,10 @@ pub async fn unlock_secure_galleries(
     Json(req): Json<UnlockSecureGalleryRequest>,
 ) -> Result<Json<SecureGalleryUnlockResponse>, AppError> {
     // Verify against the user's account password
-    let password_hash: String = sqlx::query_scalar(
-        "SELECT password_hash FROM users WHERE id = ?",
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let password_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
+        .bind(&auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
 
     let valid = bcrypt::verify(&req.password, &password_hash)
         .map_err(|e| AppError::Internal(format!("Bcrypt verify failed: {}", e)))?;
@@ -126,13 +124,11 @@ pub async fn delete_secure_gallery(
     // Verify ownership BEFORE deleting items to prevent IDOR:
     // without this check any authenticated user who guesses a gallery UUID
     // could wipe another user's gallery items.
-    let result = sqlx::query(
-        "DELETE FROM encrypted_galleries WHERE id = ? AND user_id = ?",
-    )
-    .bind(&gallery_id)
-    .bind(&auth.user_id)
-    .execute(&state.pool)
-    .await?;
+    let result = sqlx::query("DELETE FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+        .bind(&gallery_id)
+        .bind(&auth.user_id)
+        .execute(&state.pool)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
@@ -166,13 +162,12 @@ pub async fn add_gallery_item(
     Path(gallery_id): Path<String>,
     Json(req): Json<AddGalleryItemRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?",
-    )
-    .bind(&gallery_id)
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
     if count == 0 {
         return Err(AppError::NotFound);
@@ -199,11 +194,10 @@ pub async fn add_gallery_item(
         .map_err(|e| AppError::Internal(format!("Failed to read source blob: {}", e)))?;
 
     let new_blob_id = Uuid::new_v4().to_string();
-    let new_storage_path = crate::blobs::storage::write_blob(
-        &storage_root, &auth.user_id, &new_blob_id, &blob_data,
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to write cloned blob: {}", e)))?;
+    let new_storage_path =
+        crate::blobs::storage::write_blob(&storage_root, &auth.user_id, &new_blob_id, &blob_data)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to write cloned blob: {}", e)))?;
 
     let now = Utc::now().to_rfc3339();
 
@@ -280,13 +274,12 @@ pub async fn list_gallery_items(
     headers: HeaderMap,
     Path(gallery_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?",
-    )
-    .bind(&gallery_id)
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
     if count == 0 {
         return Err(AppError::NotFound);
@@ -295,7 +288,9 @@ pub async fn list_gallery_items(
     let _token = headers
         .get("x-gallery-token")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError::Unauthorized("Gallery token required. Unlock the gallery first.".into()))?;
+        .ok_or_else(|| {
+            AppError::Unauthorized("Gallery token required. Unlock the gallery first.".into())
+        })?;
 
     let items: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT gi.id, gi.blob_id, gi.added_at \

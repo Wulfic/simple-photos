@@ -106,8 +106,7 @@ pub async fn scan_takeout(
     // or simply:              "photo.jpg" → "photo.json"
     let mut paired = 0usize;
     let mut unpaired_media = Vec::new();
-    let sidecar_set: std::collections::HashSet<String> =
-        sidecar_files.iter().cloned().collect();
+    let sidecar_set: std::collections::HashSet<String> = sidecar_files.iter().cloned().collect();
 
     for media in &media_files {
         let supplemental = format!("{}.supplemental-metadata.json", media);
@@ -127,8 +126,7 @@ pub async fn scan_takeout(
     }
 
     // Find sidecars that don't match any media file
-    let media_set: std::collections::HashSet<String> =
-        media_files.iter().cloned().collect();
+    let media_set: std::collections::HashSet<String> = media_files.iter().cloned().collect();
     let unpaired_sidecars: Vec<String> = sidecar_files
         .iter()
         .filter(|s| {
@@ -194,9 +192,9 @@ pub async fn import_takeout(
     }
 
     let scan_path = std::path::PathBuf::from(&req.path);
-    let canonical = tokio::fs::canonicalize(&scan_path).await.map_err(|e| {
-        AppError::BadRequest(format!("Cannot resolve path '{}': {}", req.path, e))
-    })?;
+    let canonical = tokio::fs::canonicalize(&scan_path)
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Cannot resolve path '{}': {}", req.path, e)))?;
 
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
@@ -290,17 +288,12 @@ pub async fn import_takeout(
             let mut longitude: Option<f64> = None;
 
             // Check for sidecar and extract taken_at / geo if present
-            let supplemental_path = media_path
-                .with_file_name(format!("{}.supplemental-metadata.json", filename));
+            let supplemental_path =
+                media_path.with_file_name(format!("{}.supplemental-metadata.json", filename));
             if let Ok(sidecar_bytes) = tokio::fs::read(&supplemental_path).await {
                 if let Ok(gp) = google_photos::parse_sidecar(&sidecar_bytes) {
-                    let record = google_photos::normalise(
-                        &gp,
-                        String::new(),
-                        String::new(),
-                        None,
-                        None,
-                    );
+                    let record =
+                        google_photos::normalise(&gp, String::new(), String::new(), None, None);
                     if record.taken_at.is_some() {
                         taken_at = record.taken_at.clone();
                     }
@@ -366,8 +359,8 @@ pub async fn import_takeout(
         };
 
         // Look for Google Photos sidecar: filename.supplemental-metadata.json
-        let supplemental_path = media_path
-            .with_file_name(format!("{}.supplemental-metadata.json", filename));
+        let supplemental_path =
+            media_path.with_file_name(format!("{}.supplemental-metadata.json", filename));
 
         if let Ok(sidecar_bytes) = tokio::fs::read(&supplemental_path).await {
             match google_photos::parse_sidecar(&sidecar_bytes) {
@@ -418,18 +411,13 @@ pub async fn import_takeout(
                     match insert_result {
                         Ok(_) => metadata_imported += 1,
                         Err(e) => {
-                            errors.push(format!(
-                                "Metadata DB insert failed for {}: {}",
-                                filename, e
-                            ));
+                            errors
+                                .push(format!("Metadata DB insert failed for {}: {}", filename, e));
                         }
                     }
                 }
                 Err(e) => {
-                    errors.push(format!(
-                        "Failed to parse sidecar for {}: {}",
-                        filename, e
-                    ));
+                    errors.push(format!("Failed to parse sidecar for {}: {}", filename, e));
                 }
             }
         }

@@ -114,13 +114,16 @@ pub async fn upload(
             .fetch_one(&state.read_pool)
             .await?;
 
-    let quota: i64 =
-        sqlx::query_scalar("SELECT storage_quota_bytes FROM users WHERE id = ?")
-            .bind(&auth.user_id)
-            .fetch_one(&state.read_pool)
-            .await?;
+    let quota: i64 = sqlx::query_scalar("SELECT storage_quota_bytes FROM users WHERE id = ?")
+        .bind(&auth.user_id)
+        .fetch_one(&state.read_pool)
+        .await?;
 
-    if let Some(cl) = headers.get("content-length").and_then(|v| v.to_str().ok()).and_then(|s| s.parse::<i64>().ok()) {
+    if let Some(cl) = headers
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+    {
         if cl > state.config.storage.max_blob_size_bytes as i64 {
             return Err(AppError::PayloadTooLarge);
         }
@@ -353,9 +356,15 @@ pub async fn download(
         if inm == etag || inm.trim_matches('"') == blob_id {
             return Ok(Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
-                .header("ETag", HeaderValue::from_str(&etag)
-                    .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
-                .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
+                .header(
+                    "ETag",
+                    HeaderValue::from_str(&etag)
+                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+                )
+                .header(
+                    "Cache-Control",
+                    HeaderValue::from_static("private, max-age=31536000, immutable"),
+                )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         }
@@ -369,10 +378,12 @@ pub async fn download(
         if let Some((start, end)) = parse_range_header(range_header, total_size) {
             let length = end - start + 1;
 
-            let mut file = tokio::fs::File::open(&path).await.map_err(|e| match e.kind() {
-                std::io::ErrorKind::NotFound => AppError::NotFound,
-                _ => AppError::Internal(format!("Failed to open blob: {}", e)),
-            })?;
+            let mut file = tokio::fs::File::open(&path)
+                .await
+                .map_err(|e| match e.kind() {
+                    std::io::ErrorKind::NotFound => AppError::NotFound,
+                    _ => AppError::Internal(format!("Failed to open blob: {}", e)),
+                })?;
 
             // Seek to the requested start position
             use tokio::io::AsyncSeekExt;
@@ -385,47 +396,74 @@ pub async fn download(
 
             return Ok(Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
-                .header("Content-Type", HeaderValue::from_static("application/octet-stream"))
+                .header(
+                    "Content-Type",
+                    HeaderValue::from_static("application/octet-stream"),
+                )
                 .header("Content-Length", HeaderValue::from(length))
-                .header("Content-Range", HeaderValue::from_str(
-                    &format!("bytes {}-{}/{}", start, end, total_size)
-                ).map_err(|e| AppError::Internal(format!("Invalid Content-Range header: {}", e)))?)
+                .header(
+                    "Content-Range",
+                    HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end, total_size))
+                        .map_err(|e| {
+                            AppError::Internal(format!("Invalid Content-Range header: {}", e))
+                        })?,
+                )
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
-                .header("ETag", HeaderValue::from_str(&etag)
-                    .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
+                .header(
+                    "Cache-Control",
+                    HeaderValue::from_static("private, max-age=31536000, immutable"),
+                )
+                .header(
+                    "ETag",
+                    HeaderValue::from_str(&etag)
+                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+                )
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         } else {
             // Invalid range → 416 Range Not Satisfiable
             return Ok(Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header("Content-Range", HeaderValue::from_str(
-                    &format!("bytes */{}", total_size)
-                ).map_err(|e| AppError::Internal(format!("Invalid Content-Range header: {}", e)))?)
+                .header(
+                    "Content-Range",
+                    HeaderValue::from_str(&format!("bytes */{}", total_size)).map_err(|e| {
+                        AppError::Internal(format!("Invalid Content-Range header: {}", e))
+                    })?,
+                )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         }
     }
 
     // ── Full download (no Range header) ────────────────────────────────────
-    let file = tokio::fs::File::open(&path).await.map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => AppError::NotFound,
-        _ => AppError::Internal(format!("Failed to open blob: {}", e)),
-    })?;
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Internal(format!("Failed to open blob: {}", e)),
+        })?;
 
     let stream = tokio_util::io::ReaderStream::with_capacity(file, BLOB_BUF);
     let body = Body::from_stream(stream);
 
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", HeaderValue::from_static("application/octet-stream"))
+        .header(
+            "Content-Type",
+            HeaderValue::from_static("application/octet-stream"),
+        )
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
         // Blobs are immutable (content-addressed by UUID) — cache aggressively
-        .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
-        .header("ETag", HeaderValue::from_str(&etag)
-            .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
+        .header(
+            "Cache-Control",
+            HeaderValue::from_static("private, max-age=31536000, immutable"),
+        )
+        .header(
+            "ETag",
+            HeaderValue::from_str(&etag)
+                .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+        )
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }
@@ -529,10 +567,12 @@ pub async fn download_thumb(
     let storage_root = (**state.storage_root.load()).clone();
     let path = storage_root.join(&storage_path);
 
-    let file = tokio::fs::File::open(&path).await.map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => AppError::NotFound,
-        _ => AppError::Internal(format!("Failed to open thumbnail blob: {}", e)),
-    })?;
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Internal(format!("Failed to open thumbnail blob: {}", e)),
+        })?;
 
     // ── If-None-Match → 304 ────────────────────────────────────────────
     let etag = format!("\"{}\"", thumb_blob_id);
@@ -540,9 +580,15 @@ pub async fn download_thumb(
         if inm == etag || inm.trim_matches('"') == thumb_blob_id.as_str() {
             return Ok(Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
-                .header("ETag", HeaderValue::from_str(&etag)
-                    .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
-                .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
+                .header(
+                    "ETag",
+                    HeaderValue::from_str(&etag)
+                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+                )
+                .header(
+                    "Cache-Control",
+                    HeaderValue::from_static("private, max-age=31536000, immutable"),
+                )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         }
@@ -553,11 +599,20 @@ pub async fn download_thumb(
 
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", HeaderValue::from_static("application/octet-stream"))
+        .header(
+            "Content-Type",
+            HeaderValue::from_static("application/octet-stream"),
+        )
         .header("Content-Length", HeaderValue::from(size_bytes))
-        .header("Cache-Control", HeaderValue::from_static("private, max-age=31536000, immutable"))
-        .header("ETag", HeaderValue::from_str(&etag)
-            .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?)
+        .header(
+            "Cache-Control",
+            HeaderValue::from_static("private, max-age=31536000, immutable"),
+        )
+        .header(
+            "ETag",
+            HeaderValue::from_str(&etag)
+                .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+        )
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }

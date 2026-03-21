@@ -94,8 +94,7 @@ pub async fn init_pools(config: &DatabaseConfig) -> anyhow::Result<(SqlitePool, 
     // Many connections for maximum read parallelism. SQLite WAL allows
     // unlimited concurrent readers. `query_only = 1` prevents accidental
     // writes from leaking into the read pool.
-    let read_options = base_options(config)?
-        .pragma("query_only", "1");
+    let read_options = base_options(config)?.pragma("query_only", "1");
 
     let read_pool_size = config.read_pool_max_connections;
     let read_pool = SqlitePoolOptions::new()

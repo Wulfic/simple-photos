@@ -89,26 +89,23 @@ pub async fn list_shared_albums(
 
     let mut albums = Vec::with_capacity(rows.len());
     for (id, name, owner_user_id, created_at) in rows {
-        let owner_username: String =
-            sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
-                .bind(&owner_user_id)
-                .fetch_optional(&state.read_pool)
-                .await?
-                .unwrap_or_else(|| "unknown".to_string());
+        let owner_username: String = sqlx::query_scalar("SELECT username FROM users WHERE id = ?")
+            .bind(&owner_user_id)
+            .fetch_optional(&state.read_pool)
+            .await?
+            .unwrap_or_else(|| "unknown".to_string());
 
-        let photo_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM shared_album_photos WHERE album_id = ?",
-        )
-        .bind(&id)
-        .fetch_one(&state.read_pool)
-        .await?;
+        let photo_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM shared_album_photos WHERE album_id = ?")
+                .bind(&id)
+                .fetch_one(&state.read_pool)
+                .await?;
 
-        let member_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM shared_album_members WHERE album_id = ?",
-        )
-        .bind(&id)
-        .fetch_one(&state.read_pool)
-        .await?;
+        let member_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM shared_album_members WHERE album_id = ?")
+                .bind(&id)
+                .fetch_one(&state.read_pool)
+                .await?;
 
         albums.push(SharedAlbumInfo {
             id,
@@ -140,13 +137,15 @@ pub async fn create_shared_album(
     let album_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
-    sqlx::query("INSERT INTO shared_albums (id, owner_user_id, name, created_at) VALUES (?, ?, ?, ?)")
-        .bind(&album_id)
-        .bind(&auth.user_id)
-        .bind(&name)
-        .bind(&now)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO shared_albums (id, owner_user_id, name, created_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&album_id)
+    .bind(&auth.user_id)
+    .bind(&name)
+    .bind(&now)
+    .execute(&state.pool)
+    .await?;
 
     Ok((
         StatusCode::CREATED,
@@ -176,7 +175,9 @@ pub async fn delete_shared_album(
 
     let owner_id = owner.ok_or(AppError::NotFound)?;
     if owner_id != auth.user_id {
-        return Err(AppError::Forbidden("Only the album owner can delete it".into()));
+        return Err(AppError::Forbidden(
+            "Only the album owner can delete it".into(),
+        ));
     }
 
     sqlx::query("DELETE FROM shared_albums WHERE id = ?")
@@ -235,20 +236,23 @@ pub async fn add_member(
 
     let owner_id = owner.ok_or(AppError::NotFound)?;
     if owner_id != auth.user_id {
-        return Err(AppError::Forbidden("Only the album owner can add members".into()));
+        return Err(AppError::Forbidden(
+            "Only the album owner can add members".into(),
+        ));
     }
 
     // Can't add yourself
     if req.user_id == auth.user_id {
-        return Err(AppError::BadRequest("Cannot add yourself as a member".into()));
+        return Err(AppError::BadRequest(
+            "Cannot add yourself as a member".into(),
+        ));
     }
 
     // Verify user exists
-    let user_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)")
-            .bind(&req.user_id)
-            .fetch_one(&state.read_pool)
-            .await?;
+    let user_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = ?)")
+        .bind(&req.user_id)
+        .fetch_one(&state.read_pool)
+        .await?;
 
     if !user_exists {
         return Err(AppError::NotFound);
@@ -294,7 +298,9 @@ pub async fn remove_member(
 
     let owner_id = owner.ok_or(AppError::NotFound)?;
     if owner_id != auth.user_id {
-        return Err(AppError::Forbidden("Only the owner can remove members".into()));
+        return Err(AppError::Forbidden(
+            "Only the owner can remove members".into(),
+        ));
     }
 
     sqlx::query("DELETE FROM shared_album_members WHERE album_id = ? AND user_id = ?")
@@ -407,9 +413,7 @@ pub async fn list_users_for_sharing(
 
     let users: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(id, username)| {
-            serde_json::json!({ "id": id, "username": username })
-        })
+        .map(|(id, username)| serde_json::json!({ "id": id, "username": username }))
         .collect();
 
     Ok(Json(users))

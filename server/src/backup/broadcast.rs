@@ -33,23 +33,19 @@ pub struct BroadcastInfo {
 /// broadcasts a UDP beacon on the LAN so primary servers can auto-discover it.
 ///
 /// Broadcast payload (UTF-8):  SPBK|<port>|<name>|<version>|<api_key_required>
-pub async fn background_broadcast_task(
-    pool: sqlx::SqlitePool,
-    server_port: u16,
-) {
+pub async fn background_broadcast_task(pool: sqlx::SqlitePool, server_port: u16) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
 
     loop {
         interval.tick().await;
 
         // Check if this server is in backup mode
-        let mode: Option<String> = sqlx::query_scalar(
-            "SELECT value FROM server_settings WHERE key = 'backup_mode'",
-        )
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten();
+        let mode: Option<String> =
+            sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten();
 
         if mode.as_deref() != Some("backup") {
             // Not in backup mode — sleep longer and recheck
@@ -221,7 +217,10 @@ pub fn get_default_gateway() -> Option<String> {
                 if gw_hex.len() == 8 {
                     if let Ok(ip) = u32::from_str_radix(gw_hex, 16) {
                         let bytes = ip.to_le_bytes();
-                        return Some(format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3]));
+                        return Some(format!(
+                            "{}.{}.{}.{}",
+                            bytes[0], bytes[1], bytes[2], bytes[3]
+                        ));
                     }
                 }
             }

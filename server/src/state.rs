@@ -3,12 +3,12 @@
 //! All fields use `Arc` (or are internally `Arc`-wrapped) so cloning the struct
 //! is cheap — Axum clones state into each handler invocation.
 
+use crate::config::AppConfig;
+use crate::ratelimit::RateLimiters;
 use arc_swap::ArcSwap;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::config::AppConfig;
-use crate::ratelimit::RateLimiters;
 
 /// Shared state for all request handlers and background tasks.
 #[derive(Clone)]

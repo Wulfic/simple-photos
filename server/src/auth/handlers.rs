@@ -54,8 +54,9 @@ pub async fn register(
         // Security: timing-safe — do a dummy hash so timing is the same.
         // Offloaded to the blocking threadpool so the tokio worker is free.
         let cost = state.config.auth.bcrypt_cost;
-        let _ = tokio::task::spawn_blocking(move || bcrypt::hash("dummy_password_for_timing", cost))
-            .await;
+        let _ =
+            tokio::task::spawn_blocking(move || bcrypt::hash("dummy_password_for_timing", cost))
+                .await;
         return Err(AppError::Conflict("Username already taken".into()));
     }
 
@@ -126,8 +127,12 @@ pub async fn login(
             // Offloaded to blocking threadpool.
             let pw = req.password.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                bcrypt::verify(&pw, "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK")
-            }).await;
+                bcrypt::verify(
+                    &pw,
+                    "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK",
+                )
+            })
+            .await;
             audit::log(
                 &state,
                 AuditEvent::LoginFailure,
@@ -243,7 +248,12 @@ pub async fn login_totp(
         .ok_or_else(|| AppError::Internal("TOTP enabled but no secret found".into()))?;
 
     if let Some(code) = &req.totp_code {
-        match verify_totp_code(totp_secret, code, &state.config.server.base_url, &user.username) {
+        match verify_totp_code(
+            totp_secret,
+            code,
+            &state.config.server.base_url,
+            &user.username,
+        ) {
             Ok(()) => {
                 audit::log(
                     &state,
@@ -395,12 +405,11 @@ pub async fn logout(
     state.rate_limiters.general.check(ip)?;
     let token_hash = hash_token(&req.refresh_token);
 
-    let user_id: Option<String> = sqlx::query_scalar(
-        "SELECT user_id FROM refresh_tokens WHERE token_hash = ?",
-    )
-    .bind(&token_hash)
-    .fetch_optional(&state.pool)
-    .await?;
+    let user_id: Option<String> =
+        sqlx::query_scalar("SELECT user_id FROM refresh_tokens WHERE token_hash = ?")
+            .bind(&token_hash)
+            .fetch_optional(&state.pool)
+            .await?;
 
     sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?")
         .bind(&token_hash)
@@ -424,12 +433,10 @@ pub async fn get_2fa_status(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let enabled: bool = sqlx::query_scalar(
-        "SELECT totp_enabled != 0 FROM users WHERE id = ?",
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let enabled: bool = sqlx::query_scalar("SELECT totp_enabled != 0 FROM users WHERE id = ?")
+        .bind(&auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
 
     Ok(Json(serde_json::json!({ "totp_enabled": enabled })))
 }
@@ -461,7 +468,9 @@ pub async fn setup_2fa(
         6,
         1,
         30,
-        secret.to_bytes().map_err(|e| AppError::Internal(format!("TOTP secret error: {}", e)))?,
+        secret
+            .to_bytes()
+            .map_err(|e| AppError::Internal(format!("TOTP secret error: {}", e)))?,
         Some("SimplePhotos".to_string()),
         username.clone(),
     )
@@ -560,7 +569,12 @@ pub async fn confirm_2fa(
         .fetch_one(&state.pool)
         .await?;
 
-    verify_totp_code(&secret, &req.totp_code, &state.config.server.base_url, &username)?;
+    verify_totp_code(
+        &secret,
+        &req.totp_code,
+        &state.config.server.base_url,
+        &username,
+    )?;
 
     sqlx::query("UPDATE users SET totp_enabled = 1 WHERE id = ?")
         .bind(&auth.user_id)
@@ -606,7 +620,12 @@ pub async fn disable_2fa(
     let secret =
         totp_secret.ok_or_else(|| AppError::Internal("TOTP enabled but no secret".into()))?;
 
-    verify_totp_code(&secret, &req.totp_code, &state.config.server.base_url, &username)?;
+    verify_totp_code(
+        &secret,
+        &req.totp_code,
+        &state.config.server.base_url,
+        &username,
+    )?;
 
     // Transaction: disable 2FA flag + delete backup codes atomically so a
     // crash can't leave orphaned codes in the table.
@@ -656,12 +675,10 @@ pub async fn change_password(
 
     validate_password(&req.new_password)?;
 
-    let current_hash: String = sqlx::query_scalar(
-        "SELECT password_hash FROM users WHERE id = ?",
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let current_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
+        .bind(&auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
 
     let pw = req.current_password.clone();
     let hash = current_hash.clone();
@@ -679,7 +696,9 @@ pub async fn change_password(
             Some(serde_json::json!({ "reason": "wrong_password_on_change" })),
         )
         .await;
-        return Err(AppError::Unauthorized("Current password is incorrect".into()));
+        return Err(AppError::Unauthorized(
+            "Current password is incorrect".into(),
+        ));
     }
 
     let new_pw = req.new_password.clone();
@@ -736,12 +755,10 @@ pub async fn verify_password(
     let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
     state.rate_limiters.login.check(ip)?;
 
-    let current_hash: String = sqlx::query_scalar(
-        "SELECT password_hash FROM users WHERE id = ?",
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let current_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
+        .bind(&auth.user_id)
+        .fetch_one(&state.pool)
+        .await?;
 
     let pw = req.password.clone();
     let hash = current_hash.clone();

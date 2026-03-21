@@ -70,9 +70,7 @@ impl FromRequestParts<AppState> for AuthUser {
         // Reject TOTP session tokens — they represent a half-authenticated
         // state (password OK, 2FA pending) and must not access protected routes.
         if token_data.claims.totp_required {
-            return Err(AppError::Unauthorized(
-                "TOTP verification required".into(),
-            ));
+            return Err(AppError::Unauthorized("TOTP verification required".into()));
         }
 
         Ok(AuthUser {

@@ -95,20 +95,20 @@ pub async fn update_storage(
 
     // Test write permissions by creating and removing a temp file
     let test_file = new_path.join(".simple-photos-write-test");
-    tokio::fs::write(&test_file, b"test")
-        .await
-        .map_err(|e| {
-            AppError::BadRequest(format!(
-                "Directory '{}' is not writable: {}",
-                new_path.display(),
-                e
-            ))
-        })?;
+    tokio::fs::write(&test_file, b"test").await.map_err(|e| {
+        AppError::BadRequest(format!(
+            "Directory '{}' is not writable: {}",
+            new_path.display(),
+            e
+        ))
+    })?;
     let _ = tokio::fs::remove_file(&test_file).await;
 
     // Atomically swap the storage root (lock-free for readers).
     {
-        state.storage_root.store(std::sync::Arc::new(new_path.clone()));
+        state
+            .storage_root
+            .store(std::sync::Arc::new(new_path.clone()));
     }
 
     // Persist to config.toml (blocking I/O — offload to spawn_blocking)
@@ -142,13 +142,16 @@ pub async fn update_storage(
 
 /// Read config.toml, update [storage] root, and write it back.
 pub fn update_config_toml_storage(new_root: &str) -> anyhow::Result<()> {
-    let config_path = std::env::var("SIMPLE_PHOTOS_CONFIG")
-        .unwrap_or_else(|_| "config.toml".into());
+    let config_path =
+        std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
     let contents = std::fs::read_to_string(&config_path)?;
     let mut doc: toml::Table = contents.parse()?;
 
     if let Some(storage) = doc.get_mut("storage").and_then(|v| v.as_table_mut()) {
-        storage.insert("root".to_string(), toml::Value::String(new_root.to_string()));
+        storage.insert(
+            "root".to_string(),
+            toml::Value::String(new_root.to_string()),
+        );
     }
 
     std::fs::write(&config_path, toml::to_string_pretty(&doc)?)?;
@@ -203,7 +206,11 @@ pub async fn browse_directory(
 
     // Canonicalize to get absolute path
     let canonical = tokio::fs::canonicalize(&browse_path).await.map_err(|e| {
-        AppError::BadRequest(format!("Cannot resolve path '{}': {}", browse_path.display(), e))
+        AppError::BadRequest(format!(
+            "Cannot resolve path '{}': {}",
+            browse_path.display(),
+            e
+        ))
     })?;
 
     let meta = tokio::fs::metadata(&canonical).await.map_err(|e| {
@@ -220,7 +227,11 @@ pub async fn browse_directory(
     // Read directory entries — directories only, skip hidden ones
     let mut directories = Vec::new();
     let mut entries = tokio::fs::read_dir(&canonical).await.map_err(|e| {
-        AppError::BadRequest(format!("Cannot read directory '{}': {}", canonical.display(), e))
+        AppError::BadRequest(format!(
+            "Cannot read directory '{}': {}",
+            canonical.display(),
+            e
+        ))
     })?;
 
     while let Ok(Some(entry)) = entries.next_entry().await {

@@ -92,7 +92,10 @@ pub async fn update_port(
     )
     .await;
 
-    tracing::info!("Server port updated to {} in config (restart required)", req.port);
+    tracing::info!(
+        "Server port updated to {} in config (restart required)",
+        req.port
+    );
 
     Ok(Json(PortResponse {
         port: req.port,
@@ -105,8 +108,8 @@ pub async fn update_port(
 
 /// Read config.toml, update [server] port (and base_url), and write it back.
 fn update_config_toml_port(new_port: u16) -> anyhow::Result<()> {
-    let config_path = std::env::var("SIMPLE_PHOTOS_CONFIG")
-        .unwrap_or_else(|_| "config.toml".into());
+    let config_path =
+        std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
     let contents = std::fs::read_to_string(&config_path)?;
     let mut doc: toml::Table = contents.parse()?;
 

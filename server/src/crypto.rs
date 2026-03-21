@@ -14,8 +14,7 @@ const NONCE_LENGTH: usize = 12;
 /// Encrypt `plaintext` with AES-256-GCM using the given 32-byte `key`.
 /// Returns `[12-byte nonce][ciphertext + 16-byte auth tag]`.
 pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| format!("Invalid AES key: {}", e))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid AES key: {}", e))?;
 
     let nonce_bytes = aes_gcm::aead::rand_core::RngCore::next_u64(&mut OsRng);
     let mut nonce_arr = [0u8; NONCE_LENGTH];
@@ -87,5 +86,3 @@ pub async fn store_wrapped_key(
     tracing::info!("[CRYPTO] Encryption key wrapped and stored in DB");
     Ok(())
 }
-
-

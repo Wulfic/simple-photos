@@ -7,8 +7,8 @@
 //! Only browser-native formats are accepted (see [`crate::media::MEDIA_EXTENSIONS`]).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 
 use axum::extract::State;
 use axum::Json;
@@ -23,7 +23,7 @@ use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
 use super::metadata::extract_media_metadata_async;
-use super::utils::{normalize_iso_timestamp, utc_now_iso, compute_photo_hash_streaming};
+use super::utils::{compute_photo_hash_streaming, normalize_iso_timestamp, utc_now_iso};
 
 /// Maximum concurrent file processing tasks during scan.
 const SCAN_PARALLELISM: usize = 4;
@@ -159,16 +159,15 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
     let seek_to = f64::min(f64::max(duration_secs * 0.1, 1.0), duration_secs);
 
     let result = tokio::process::Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-ss", &format!("{:.2}", seek_to),
-            "-i",
-        ])
+        .args(["-y", "-ss", &format!("{:.2}", seek_to), "-i"])
         .arg(input_path)
         .args([
-            "-frames:v", "1",
-            "-vf", "scale=256:256:force_original_aspect_ratio=increase,crop=256:256",
-            "-q:v", "5",
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=256:256:force_original_aspect_ratio=increase,crop=256:256",
+            "-q:v",
+            "5",
         ])
         .arg(output_path)
         .stdout(std::process::Stdio::null())
@@ -211,7 +210,8 @@ async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) ->
         .args([
             "-vf",
             "scale=256:256:force_original_aspect_ratio=increase,crop=256:256,fps=15",
-            "-loop", "0",
+            "-loop",
+            "0",
         ])
         .arg(output_path)
         .stdout(std::process::Stdio::null())
@@ -232,9 +232,12 @@ async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) ->
 async fn probe_duration(path: &Path) -> Option<f64> {
     let output = tokio::process::Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
         ])
         .arg(path)
         .stdout(std::process::Stdio::piped())
@@ -287,11 +290,10 @@ pub async fn scan_and_register(
     // never hold the full Vec<String> + HashSet simultaneously in memory.
     let mut existing_set = std::collections::HashSet::new();
     {
-        let mut rows = sqlx::query_scalar::<_, String>(
-            "SELECT file_path FROM photos WHERE user_id = ?",
-        )
-        .bind(&auth.user_id)
-        .fetch(&state.pool);
+        let mut rows =
+            sqlx::query_scalar::<_, String>("SELECT file_path FROM photos WHERE user_id = ?")
+                .bind(&auth.user_id)
+                .fetch(&state.pool);
 
         while let Some(path) = rows.try_next().await? {
             existing_set.insert(path);
@@ -390,7 +392,10 @@ pub async fn scan_and_register(
         }
     }
 
-    tracing::info!("Scan phase 1: found {} unregistered media files", candidates.len());
+    tracing::info!(
+        "Scan phase 1: found {} unregistered media files",
+        candidates.len()
+    );
 
     // ── Phase 2: Register files in parallel (metadata, hash, DB insert, thumbnail) ──
     let new_count = Arc::new(AtomicI64::new(0));
@@ -478,7 +483,11 @@ pub async fn scan_and_register(
     }
 
     let new_count = new_count.load(Ordering::Relaxed);
-    tracing::info!("Scan complete: registered {} new photos (skipped {} audio)", new_count, skipped_audio);
+    tracing::info!(
+        "Scan complete: registered {} new photos (skipped {} audio)",
+        new_count,
+        skipped_audio
+    );
 
     // ── Retroactively fill missing metadata for existing photos ──────────
     let photos_needing_fix: Vec<(String, String)> = sqlx::query_as(

@@ -23,7 +23,9 @@ pub fn utc_now_iso() -> String {
 pub fn normalize_iso_timestamp(ts: &str) -> String {
     // Try parsing as a full DateTime<Utc> or DateTime<FixedOffset>
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
-        return dt.with_timezone(&Utc).to_rfc3339_opts(SecondsFormat::Millis, true);
+        return dt
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
     }
     // Try parsing as naive datetime (no timezone) — treat as UTC
     if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f") {

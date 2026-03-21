@@ -17,10 +17,7 @@ pub const LOCKOUT_DURATION_MINS: i64 = 10;
 ///
 /// Returns `Err(Forbidden)` with a retry delay if locked. Automatically
 /// resets expired lockouts.
-pub async fn check_account_lockout(
-    state: &AppState,
-    user_id: &str,
-) -> Result<(), AppError> {
+pub async fn check_account_lockout(state: &AppState, user_id: &str) -> Result<(), AppError> {
     let row = sqlx::query_as::<_, (i32, Option<String>)>(
         "SELECT failed_attempts, lockout_until FROM account_lockouts WHERE user_id = ?",
     )
@@ -54,11 +51,7 @@ pub async fn check_account_lockout(
 
 /// Increment the failed-login counter. Locks the account for
 /// [`LOCKOUT_DURATION_MINS`] minutes if it reaches [`MAX_LOGIN_ATTEMPTS`].
-pub async fn record_failed_login(
-    state: &AppState,
-    user_id: &str,
-    headers: &HeaderMap,
-) {
+pub async fn record_failed_login(state: &AppState, user_id: &str, headers: &HeaderMap) {
     let now = Utc::now().to_rfc3339();
 
     let result = sqlx::query(
@@ -79,13 +72,12 @@ pub async fn record_failed_login(
         return;
     }
 
-    let attempts: Option<i32> = sqlx::query_scalar(
-        "SELECT failed_attempts FROM account_lockouts WHERE user_id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await
-    .unwrap_or(None);
+    let attempts: Option<i32> =
+        sqlx::query_scalar("SELECT failed_attempts FROM account_lockouts WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
 
     if let Some(count) = attempts {
         if count >= MAX_LOGIN_ATTEMPTS {
@@ -94,13 +86,12 @@ pub async fn record_failed_login(
 
             // SECURITY: This write MUST succeed for brute-force protection
             // to work. Log loudly on failure so operators notice.
-            if let Err(e) = sqlx::query(
-                "UPDATE account_lockouts SET lockout_until = ? WHERE user_id = ?",
-            )
-            .bind(&lockout_until)
-            .bind(user_id)
-            .execute(&state.pool)
-            .await
+            if let Err(e) =
+                sqlx::query("UPDATE account_lockouts SET lockout_until = ? WHERE user_id = ?")
+                    .bind(&lockout_until)
+                    .bind(user_id)
+                    .execute(&state.pool)
+                    .await
             {
                 tracing::error!(
                     user_id = user_id,

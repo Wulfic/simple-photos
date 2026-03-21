@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::media::{mime_from_extension, is_supported_extension};
+use crate::media::{is_supported_extension, mime_from_extension};
 use crate::sanitize;
 use crate::state::AppState;
 
@@ -102,9 +102,9 @@ pub async fn upload_photo(
     // Ensure unique filename if it already exists on disk (different content)
     let storage_root = (**state.storage_root.load()).clone();
     let uploads_dir = storage_root.join("uploads");
-    tokio::fs::create_dir_all(&uploads_dir).await.map_err(|e| {
-        AppError::Internal(format!("Failed to create uploads directory: {}", e))
-    })?;
+    tokio::fs::create_dir_all(&uploads_dir)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to create uploads directory: {}", e)))?;
 
     let mut final_filename = safe_filename.clone();
     let mut counter = 1u32;
@@ -126,9 +126,9 @@ pub async fn upload_photo(
 
     // Write file to disk
     let file_path = uploads_dir.join(&final_filename);
-    tokio::fs::write(&file_path, &body).await.map_err(|e| {
-        AppError::Internal(format!("Failed to write photo file: {}", e))
-    })?;
+    tokio::fs::write(&file_path, &body)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to write photo file: {}", e)))?;
 
     // Relative path for DB storage
     let rel_path = format!("uploads/{}", final_filename);
@@ -137,7 +137,11 @@ pub async fn upload_photo(
     let photo_id = Uuid::new_v4().to_string();
     let now = utc_now_iso();
     // Use .thumb.gif for GIFs to preserve animation in thumbnails
-    let thumb_ext = if mime_type == "image/gif" { "gif" } else { "jpg" };
+    let thumb_ext = if mime_type == "image/gif" {
+        "gif"
+    } else {
+        "jpg"
+    };
     let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
     // Extract metadata from the uploaded bytes (offloaded to spawn_blocking — CPU-bound EXIF parsing)

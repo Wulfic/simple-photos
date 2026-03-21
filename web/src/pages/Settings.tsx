@@ -344,59 +344,8 @@ export default function Settings() {
           <div className="space-y-3">
             <div className="text-center py-4 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
               <p className="text-gray-400 text-sm">No backup servers configured.</p>
-              {discovering ? (
-                <p className="text-xs text-blue-400 mt-1 mb-3 flex items-center justify-center gap-2">
-                  <span className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-                  Scanning network for backup servers…
-                </p>
-              ) : (
-                <p className="text-xs text-gray-400 mt-1 mb-1">
-                  Scan your local network to find Simple Photos instances.
-                </p>
-              )}
-              <button
-                onClick={scanForBackupServers}
-                disabled={discovering}
-                className="text-xs text-blue-500 hover:underline disabled:opacity-50 mb-2"
-              >
-                {discovering ? "Scanning…" : "Scan network"}
-              </button>
             </div>
 
-            {/* Discovered servers — shown as suggestions, user adds manually */}
-            {discoveredServers.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                  Found on local network
-                </p>
-                {discoveredServers.map((srv) => (
-                  <div
-                    key={srv.address}
-                    className="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
-                        {srv.name || "Simple Photos"}
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                        {srv.address} &nbsp;·&nbsp; v{srv.version}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setBackupServerName(srv.name || `Backup (${srv.address})`);
-                        setBackupServerAddress(srv.address);
-                        setBackupServerApiKey(srv.api_key ?? "");
-                        setShowAddBackupServer(true);
-                      }}
-                      className="flex-shrink-0 text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-                    >
-                      Add
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         ) : !showRecoverWarning ? (
           <button
@@ -453,18 +402,62 @@ export default function Settings() {
         {/* ── Add / Scan ─────────────────────────────────────────── */}
         <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
           {!showAddBackupServer ? (
-            <div className="flex items-center gap-4 flex-wrap">
-              <button
-                onClick={() => {
-                  setBackupServerName("");
-                  setBackupServerAddress("");
-                  setBackupServerApiKey("");
-                  setShowAddBackupServer(true);
-                }}
-                className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-              >
-                + Add backup server manually
-              </button>
+            <div className="space-y-4">
+              <div className="flex items-center gap-4 flex-wrap">
+                <button
+                  onClick={scanForBackupServers}
+                  disabled={discovering}
+                  className="text-sm text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+                >
+                  {discovering ? "Scanning…" : "Scan network for backup servers"}
+                </button>
+                <button
+                  onClick={() => {
+                    setBackupServerName("");
+                    setBackupServerAddress("");
+                    setBackupServerApiKey("");
+                    setShowAddBackupServer(true);
+                  }}
+                  className="text-sm text-gray-600 dark:text-gray-400 hover:underline"
+                >
+                  + Add backup server manually
+                </button>
+              </div>
+
+              {/* Discovered servers — shown as suggestions, user adds manually */}
+              {discoveredServers.length > 0 && (
+                <div className="space-y-2 mt-4">
+                  <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                    Found on local network
+                  </p>
+                  {discoveredServers.map((srv) => (
+                    <div
+                      key={srv.address}
+                      className="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                          {srv.name || "Simple Photos"}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                          {srv.address} &nbsp;·&nbsp; v{srv.version}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setBackupServerName(srv.name || `Backup (${srv.address})`);
+                          setBackupServerAddress(srv.address);
+                          setBackupServerApiKey(srv.api_key ?? "");
+                          setShowAddBackupServer(true);
+                        }}
+                        className="flex-shrink-0 text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <form onSubmit={handleAddBackupServer} className="space-y-3">
