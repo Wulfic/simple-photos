@@ -9,6 +9,16 @@ SERVER_DIR="$SCRIPT_DIR/server"
 # When run via `sudo`, SUDO_USER holds the invoking user; otherwise fall back to
 # the current user.
 RUN_USER="${SUDO_USER:-$(id -un)}"
+RUN_HOME=$(eval echo "~$RUN_USER")
+
+# Locate cargo — it's typically in ~/.cargo/bin which sudo strips from PATH
+CARGO_BIN="${RUN_HOME}/.cargo/bin/cargo"
+if [[ ! -x "$CARGO_BIN" ]]; then
+    CARGO_BIN=$(sudo -u "$RUN_USER" bash -c 'source ~/.cargo/env 2>/dev/null; which cargo 2>/dev/null' || true)
+fi
+if [[ -z "$CARGO_BIN" || ! -x "$CARGO_BIN" ]]; then
+    CARGO_BIN="cargo"  # last resort: hope it's on PATH
+fi
 
 echo "=== Simple Photos Server Reset ==="
 
@@ -32,10 +42,10 @@ fi
 # ── Rebuild server binary ────────────────────────────────────────────────────
 echo "Building server binary..."
 if [[ "$RUN_USER" != "$(id -un)" ]]; then
-    sudo -u "$RUN_USER" bash -c "cd '$SERVER_DIR' && cargo build --release" \
+    sudo -u "$RUN_USER" bash -c "cd '$SERVER_DIR' && '$CARGO_BIN' build --release" \
         || { echo "ERROR: Server build failed. Aborting reset."; exit 1; }
 else
-    (cd "$SERVER_DIR" && cargo build --release) \
+    (cd "$SERVER_DIR" && "$CARGO_BIN" build --release) \
         || { echo "ERROR: Server build failed. Aborting reset."; exit 1; }
 fi
 echo "Server binary built."
