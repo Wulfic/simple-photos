@@ -12,6 +12,34 @@ RUN_USER="${SUDO_USER:-$(id -un)}"
 
 echo "=== Simple Photos Server Reset ==="
 
+# ── Rebuild web frontend ─────────────────────────────────────────────────────
+echo "Building web frontend..."
+WEB_DIR="$SCRIPT_DIR/web"
+if [[ -d "$WEB_DIR" ]]; then
+    # Drop privileges when running as root via sudo
+    if [[ "$RUN_USER" != "$(id -un)" ]]; then
+        sudo -u "$RUN_USER" bash -c "cd '$WEB_DIR' && npm run build" \
+            || { echo "WARNING: Web frontend build failed — continuing with existing dist"; }
+    else
+        (cd "$WEB_DIR" && npm run build) \
+            || { echo "WARNING: Web frontend build failed — continuing with existing dist"; }
+    fi
+    echo "Web frontend built."
+else
+    echo "WARNING: $WEB_DIR not found — skipping web build"
+fi
+
+# ── Rebuild server binary ────────────────────────────────────────────────────
+echo "Building server binary..."
+if [[ "$RUN_USER" != "$(id -un)" ]]; then
+    sudo -u "$RUN_USER" bash -c "cd '$SERVER_DIR' && cargo build --release" \
+        || { echo "ERROR: Server build failed. Aborting reset."; exit 1; }
+else
+    (cd "$SERVER_DIR" && cargo build --release) \
+        || { echo "ERROR: Server build failed. Aborting reset."; exit 1; }
+fi
+echo "Server binary built."
+
 # Kill any running server (root or user-owned)
 echo "Stopping server..."
 pkill -9 -f simple-photos-server 2>/dev/null && sleep 2 || true

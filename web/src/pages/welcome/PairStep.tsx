@@ -12,6 +12,7 @@ export interface PairStepProps {
     refresh_token: string;
     username: string;
     main_server_url: string;
+    password?: string;
   }) => void;
 }
 
@@ -99,6 +100,7 @@ export default function PairStep({
         refresh_token: data.refresh_token,
         username: data.username,
         main_server_url: data.main_server_url,
+        password,
       });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Pairing failed");
@@ -138,7 +140,6 @@ export default function PairStep({
 
         {discovering && !hasScanned && (
           <div className="flex items-center gap-3 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-            <div className="w-5 h-5 border-2 border-blue-200 dark:border-blue-900 border-t-blue-600 dark:border-t-blue-400 rounded-full animate-spin" />
             <p className="text-sm text-gray-600 dark:text-gray-400">
               Scanning your network for Simple Photos servers…
             </p>
@@ -281,9 +282,7 @@ export default function PairStep({
               <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
             </svg>
             <p className="text-blue-700 dark:text-blue-300">
-              Your credentials are sent to <strong>this</strong> backup server,
-              which verifies them against the primary. A local admin account is
-              created with the same credentials.
+              Please log in using the admin username and password from your primary server.
             </p>
           </div>
         </div>

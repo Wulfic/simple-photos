@@ -133,7 +133,6 @@ export default function RestoreStep({
 
         {discovering && !hasScanned && (
           <div className="flex items-center gap-3 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-            <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
             <p className="text-sm text-gray-600 dark:text-gray-400">
               Scanning your network for Simple Photos servers&hellip;
             </p>
