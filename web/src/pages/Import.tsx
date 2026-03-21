@@ -482,7 +482,7 @@ export default function Import() {
                   ref={inputRef}
                   type="file"
                   multiple
-                  accept="image/*,video/*,audio/*,.json,.avif,.flac"
+                  accept="image/jpeg,image/png,image/gif,image/webp,image/avif,image/bmp,image/x-icon,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/flac,audio/ogg,audio/wav,.json"
                   className="hidden"
                   onChange={(e) => {
                     if (e.target.files && e.target.files.length > 0) processFiles(e.target.files);

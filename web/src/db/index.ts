@@ -247,9 +247,9 @@ export function mediaTypeFromMime(mimeType: string): MediaType {
  */
 export const ACCEPTED_MIME_TYPES = [
   // ── Images ──────────────────────────────────────────────────────────────────
-  "image/*",
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/avif", "image/bmp", "image/x-icon",
   // ── Videos ──────────────────────────────────────────────────────────────────
-  "video/*",
+  "video/mp4", "video/webm", "video/quicktime",
   // ── Audio ───────────────────────────────────────────────────────────────────
-  "audio/*",
+  "audio/mpeg", "audio/flac", "audio/ogg", "audio/wav",
 ].join(",");

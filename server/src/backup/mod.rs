@@ -15,6 +15,7 @@
 
 pub mod autoscan;
 pub mod broadcast;
+pub mod discovery;
 pub mod handlers;
 pub mod models;
 pub mod recovery;

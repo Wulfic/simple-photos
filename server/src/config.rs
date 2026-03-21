@@ -38,6 +38,20 @@ pub struct ServerConfig {
     /// the TCP peer address for rate-limiting.
     #[serde(default)]
     pub trust_proxy: bool,
+    /// Dedicated LAN discovery port. Every Simple Photos server runs a tiny
+    /// HTTP listener on this port so clients can discover servers by scanning
+    /// a single well-known port instead of probing many ports per IP.
+    /// The listener responds with the server's name, version, actual HTTP
+    /// port, and mode — allowing instant pairing.
+    /// Default: 3301. Set to 0 to disable the discovery listener.
+    #[serde(default = "ServerConfig::default_discovery_port")]
+    pub discovery_port: u16,
+}
+
+impl ServerConfig {
+    fn default_discovery_port() -> u16 {
+        3301
+    }
 }
 
 /// SQLite database connection settings.
@@ -212,6 +226,11 @@ impl AppConfig {
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_SERVER_BASE_URL") {
             config.server.base_url = v;
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_SERVER_DISCOVERY_PORT") {
+            config.server.discovery_port = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_SERVER_DISCOVERY_PORT"))?;
         }
 
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_DATABASE_PATH") {

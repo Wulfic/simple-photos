@@ -215,6 +215,17 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn dedicated discovery listener on port 3301 (configurable).
+    // Other servers and mobile apps probe this single port to find us,
+    // then read our actual HTTP port from the response.
+    {
+        let pool_clone = pool.clone();
+        let config_clone = Arc::new(config.clone());
+        tokio::spawn(async move {
+            backup::discovery::run_discovery_listener(pool_clone, config_clone).await;
+        });
+    }
+
     let scan_lock: Arc<tokio::sync::Mutex<()>> = Arc::new(tokio::sync::Mutex::new(()));
 
     // Spawn background task for auto-scanning storage directory.
@@ -313,6 +324,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/upload", post(photos::upload::upload_photo))
         .route("/photos/{id}/file", get(photos::handlers::serve_photo))
         .route("/photos/{id}/thumb", get(photos::handlers::serve_thumbnail))
+        .route("/photos/{id}/thumbnail", get(photos::handlers::serve_thumbnail))
         .route("/photos/{id}/web", get(photos::handlers::serve_web))
         // Favorite toggle
         .route("/photos/{id}/favorite", put(photos::handlers::toggle_favorite))
