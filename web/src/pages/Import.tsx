@@ -55,7 +55,8 @@ export default function Import() {
     setAutoScanned(true);
     autoImportPending.current = true;
     handleServerScan();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- Intentionally runs once on mount.
+  // handleServerScan is defined in the same component and must not trigger re-runs.
 
   // Auto-import once scan populates items
   useEffect(() => {
@@ -71,6 +72,9 @@ export default function Import() {
       handleImport();
     }
   }, [items, scanning, importing]); // eslint-disable-line react-hooks/exhaustive-deps
+  // handleImport is excluded intentionally: including it would re-trigger the effect
+  // on every render since it closes over component state. The effect only needs to
+  // fire when items/scanning/importing change.
 
   // ── Conditional early returns (AFTER all hooks) ─────────────────────────
 

@@ -654,11 +654,9 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
         if dedup_map.contains_key(&key) {
             let existing_addr = dedup_map
                 .get(&key)
-                .unwrap()
-                .get("address")
-                .unwrap()
-                .as_str()
-                .unwrap()
+                .and_then(|v| v.get("address"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
                 .to_string();
             // Score URLs: lower is better
             let score = |a: &str| {

@@ -29,7 +29,8 @@ export default function RestoreStep({
   // Auto-discover on mount
   useEffect(() => {
     handleDiscover();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- Intentionally runs once on mount.
+  // handleDiscover is a local function that fires a one-time discovery request.
 
   async function handleDiscover() {
     setDiscovering(true);

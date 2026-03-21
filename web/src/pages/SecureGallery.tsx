@@ -267,12 +267,9 @@ export default function SecureGallery() {
   }
 
   // Get blob IDs already in this album (to filter from picker).
-  // Also exclude server-side (autoscanned) photos: they have no encrypted blob
-  // in the blobs table so the server add-item endpoint would return "Blob not
-  // found" for them.
   const albumBlobIds = new Set(items.map((i) => i.blob_id));
   const availablePhotos = (cachedPhotos || []).filter(
-    (p) => !albumBlobIds.has(p.blobId) && !p.serverSide
+    (p) => !albumBlobIds.has(p.blobId)
   );
 
   // ── Password Gate ───────────────────────────────────────────────────────────

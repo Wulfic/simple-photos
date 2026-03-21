@@ -39,28 +39,34 @@ pub struct PortResponse {
 }
 
 /// Find the first TCP port that can be bound, starting from `start`.
-/// Tries each port in sequence; returns `start` as a fallback if all fail.
+/// Returns `None` if all ports in the range `start..65535` are occupied.
 ///
 /// `our_port` is the port this server process is already listening on.
 /// Binding that port would spuriously fail (we own it), so we treat it as
 /// available and return it immediately so the wizard never suggests `our_port + 1`
 /// as the "next free" port when the server is already on `our_port`.
-fn find_available_port(start: u16, our_port: u16) -> u16 {
+fn find_available_port(start: u16, our_port: u16) -> Option<u16> {
     let mut port = start;
     loop {
         // Our own port is always valid — we already own the binding.
         // Attempting TcpListener::bind on it would fail even though it is free
         // for our use, which would cause the function to skip past it incorrectly.
         if port == our_port {
-            return port;
+            return Some(port);
         }
         // Attempt a non-blocking bind — if it succeeds the port is free.
         if std::net::TcpListener::bind(("0.0.0.0", port)).is_ok() {
-            return port;
+            return Some(port);
         }
         match port.checked_add(1) {
             Some(next) if next < 65535 => port = next,
-            _ => return start, // wrapped or hit ceiling — use fallback
+            _ => {
+                tracing::warn!(
+                    "find_available_port: all ports from {} to 65534 are occupied",
+                    start
+                );
+                return None;
+            }
         }
     }
 }
@@ -108,6 +114,8 @@ pub async fn get_port(
     let ext = external_port.unwrap_or(current_port);
     let suggested_port = tokio::task::spawn_blocking(move || find_available_port(ext.max(1024), current_port))
         .await
+        .ok()
+        .flatten()
         .unwrap_or(ext.max(1024));
 
     Ok(Json(PortResponse {

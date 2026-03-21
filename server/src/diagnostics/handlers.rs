@@ -131,8 +131,8 @@ fn walk_recursive(
     if dir.is_dir() {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
+            let path = entry.path();
             entries.push(entry);
-            let path = entries.last().unwrap().path();
             if path.is_dir() {
                 walk_recursive(&path, entries)?;
             }

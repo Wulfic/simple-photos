@@ -163,7 +163,13 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   useEffect(() => {
     api.secureGalleries.secureBlobIds()
       .then((res) => setSecureBlobIds(new Set(res.blob_ids)))
-      .catch(() => { /* secure galleries may not be available */ });
+      .catch((err: unknown) => {
+        // 404 = secure galleries feature not available — expected
+        const status = (err as { status?: number })?.status;
+        if (status !== 404) {
+          console.error("Failed to fetch secure blob IDs:", err);
+        }
+      });
   }, []);
 
   const album = useLiveQuery(

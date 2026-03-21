@@ -508,7 +508,7 @@ pub async fn backup_receive(
 
         // Replicate photo tags from the primary
         for tag in &tags {
-            let _ = sqlx::query(
+            if let Err(e) = sqlx::query(
                 "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag, created_at)
                  VALUES (?, ?, ?, ?)",
             )
@@ -517,7 +517,15 @@ pub async fn backup_receive(
             .bind(tag)
             .bind(&created_at)
             .execute(&state.pool)
-            .await;
+            .await
+            {
+                tracing::warn!(
+                    photo_id = %photo_id,
+                    tag = %tag,
+                    "Failed to replicate photo tag during backup: {}",
+                    e
+                );
+            }
         }
     }
 
@@ -641,7 +649,7 @@ pub async fn backup_upsert_user(
             id, e
         );
         let fallback_username = format!("{}_bak", username);
-        let _ = sqlx::query(
+        if let Err(fallback_err) = sqlx::query(
             "INSERT OR IGNORE INTO users
              (id, username, password_hash, created_at, storage_quota_bytes, role)
              VALUES (?, ?, ?, ?, ?, ?)",
@@ -653,7 +661,17 @@ pub async fn backup_upsert_user(
         .bind(quota)
         .bind(&role)
         .execute(&state.pool)
-        .await;
+        .await
+        {
+            tracing::error!(
+                "backup_upsert_user: fallback insert also failed for id={}: {}",
+                id, fallback_err
+            );
+            return Err(AppError::Internal(format!(
+                "Failed to create backup user record for id={}: {}",
+                id, fallback_err
+            )));
+        }
     }
 
     Ok(StatusCode::OK)

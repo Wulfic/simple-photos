@@ -4,9 +4,10 @@
 //! token refresh (with rotation + theft detection), logout, 2FA management,
 //! and password changes.
 
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use std::net::SocketAddr;
 use chrono::Utc;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use rand::Rng;
@@ -32,10 +33,11 @@ use super::validation::{validate_password, validate_username};
 /// Rate-limited, validates username/password, hashes with bcrypt.
 pub async fn register(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<RegisterResponse>), AppError> {
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.register.check(ip)?;
 
     if !state.config.auth.allow_registration {
@@ -106,10 +108,11 @@ pub async fn register(
 /// instead of full tokens — the client must complete login via `login_totp`.
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.login.check(ip)?;
 
     // Timing-safe: always do a password check even if user doesn't exist
@@ -213,10 +216,11 @@ pub async fn login(
 /// the 6-digit TOTP code (or single-use backup code) before issuing full tokens.
 pub async fn login_totp(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<TotpLoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.totp.check(ip)?;
 
     let key = DecodingKey::from_secret(state.config.auth.jwt_secret.as_bytes());
@@ -323,10 +327,11 @@ pub async fn login_totp(
 /// abuse from issuing unlimited refresh-token rotations.
 pub async fn refresh(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<RefreshRequest>,
 ) -> Result<Json<RefreshResponse>, AppError> {
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.general.check(ip)?;
     let token_hash = hash_token(&req.refresh_token);
 
@@ -398,10 +403,11 @@ pub async fn refresh(
 /// or was already revoked. This prevents token-hash enumeration.
 pub async fn logout(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<LogoutRequest>,
 ) -> Result<StatusCode, AppError> {
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.general.check(ip)?;
     let token_hash = hash_token(&req.refresh_token);
 
@@ -540,12 +546,13 @@ pub async fn setup_2fa(
 /// The user must have called `setup_2fa` first to generate a secret.
 pub async fn confirm_2fa(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     auth: AuthUser,
     Json(req): Json<TotpConfirmRequest>,
 ) -> Result<StatusCode, AppError> {
     // Rate-limit TOTP confirmation to prevent brute-force of 6-digit codes
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.totp.check(ip)?;
 
     let user = sqlx::query_as::<_, (Option<String>, bool)>(
@@ -597,12 +604,13 @@ pub async fn confirm_2fa(
 /// POST /api/auth/2fa/disable — turn off 2FA (requires a valid TOTP code to confirm).
 pub async fn disable_2fa(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     auth: AuthUser,
     Json(req): Json<TotpDisableRequest>,
 ) -> Result<StatusCode, AppError> {
     // Rate-limit TOTP verification to prevent brute-force of 6-digit codes
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.totp.check(ip)?;
 
     let user = sqlx::query_as::<_, (Option<String>, bool, String)>(
@@ -666,11 +674,12 @@ pub async fn disable_2fa(
 /// the rate limit window (10 req/min).
 pub async fn change_password(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     auth: AuthUser,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<StatusCode, AppError> {
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.login.check(ip)?;
 
     validate_password(&req.new_password)?;
@@ -748,11 +757,12 @@ pub async fn change_password(
 /// lockout on failure. Same brute-force caveat as [`change_password`].
 pub async fn verify_password(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     auth: AuthUser,
     Json(req): Json<VerifyPasswordRequest>,
 ) -> Result<StatusCode, AppError> {
-    let ip = extract_client_ip(&headers, state.config.server.trust_proxy);
+    let ip = extract_client_ip(&headers, state.config.server.trust_proxy, Some(peer));
     state.rate_limiters.login.check(ip)?;
 
     let current_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")

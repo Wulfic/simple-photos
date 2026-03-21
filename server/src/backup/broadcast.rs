@@ -75,9 +75,13 @@ pub async fn background_broadcast_task(pool: sqlx::SqlitePool, server_port: u16)
 
         // Send UDP broadcast to the discovery port
         if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
-            let _ = socket.set_broadcast(true);
+            if let Err(e) = socket.set_broadcast(true) {
+                tracing::warn!("UDP broadcast: failed to set_broadcast: {}", e);
+            }
             let dest = SocketAddrV4::new(Ipv4Addr::BROADCAST, DISCOVERY_PORT);
-            let _ = socket.send_to(payload.as_bytes(), dest);
+            if let Err(e) = socket.send_to(payload.as_bytes(), dest) {
+                tracing::debug!("UDP broadcast send_to failed: {}", e);
+            }
         }
     }
 }
@@ -101,13 +105,19 @@ pub fn discover_via_broadcast(timeout: Duration) -> Vec<BroadcastInfo> {
         }
     };
 
-    let _ = socket.set_read_timeout(Some(timeout));
-    let _ = socket.set_broadcast(true);
+    if let Err(e) = socket.set_read_timeout(Some(timeout)) {
+        tracing::warn!("UDP discovery: failed to set_read_timeout: {}", e);
+    }
+    if let Err(e) = socket.set_broadcast(true) {
+        tracing::warn!("UDP discovery: failed to set_broadcast: {}", e);
+    }
 
     // Also send a discovery probe so backup servers can respond immediately
     let probe = b"SPBK|DISCOVER";
     let dest = SocketAddrV4::new(Ipv4Addr::BROADCAST, DISCOVERY_PORT);
-    let _ = socket.send_to(probe, dest);
+    if let Err(e) = socket.send_to(probe, dest) {
+        tracing::debug!("UDP discovery probe send_to failed: {}", e);
+    }
 
     let deadline = std::time::Instant::now() + timeout;
     let mut buf = [0u8; 512];

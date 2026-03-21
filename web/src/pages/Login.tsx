@@ -44,7 +44,9 @@ export default function Login() {
         // tokens — setTokens triggers isAuthenticated=true which causes
         // ProtectedLayout to immediately render Gallery.  If we clear
         // after, there's a race where Gallery reads stale IndexedDB data.
-        await clearAllUserData().catch(() => {});
+        await clearAllUserData().catch((e) => {
+          console.error("Failed to clear previous user data:", e);
+        });
         thumbMemoryCache.clear();
         setTokens(res.access_token, res.refresh_token);
         storeSetUsername(username);
@@ -52,7 +54,7 @@ export default function Login() {
         await deriveKey(password, username);
         // Persist the key server-side so autoscan/migration work autonomously
         const k = sessionStorage.getItem("sp_key");
-        if (k) api.encryption.storeKey(k).catch(() => {});
+        if (k) api.encryption.storeKey(k).catch((e) => console.error("Failed to store encryption key:", e));
         navigate("/gallery");
       } else {
         const res = await api.auth.login(username, password);
@@ -60,7 +62,9 @@ export default function Login() {
           setTotpSession(res.totp_session_token);
         } else if (res.access_token && res.refresh_token) {
           // Clear stale data BEFORE setting tokens (see comment above)
-          await clearAllUserData().catch(() => {});
+          await clearAllUserData().catch((e) => {
+            console.error("Failed to clear previous user data:", e);
+          });
           thumbMemoryCache.clear();
           setTokens(res.access_token, res.refresh_token);
           storeSetUsername(username);
@@ -68,7 +72,7 @@ export default function Login() {
           await deriveKey(password, username);
           // Persist the key server-side so autoscan/migration work autonomously
           const k2 = sessionStorage.getItem("sp_key");
-          if (k2) api.encryption.storeKey(k2).catch(() => {});
+          if (k2) api.encryption.storeKey(k2).catch((e) => console.error("Failed to store encryption key:", e));
           navigate("/gallery");
         }
       }

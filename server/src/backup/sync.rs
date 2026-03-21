@@ -248,7 +248,7 @@ async fn run_sync(
             tracing::error!("{}", msg);
             update_sync_log(pool, log_id, "error", 0, 0, Some(&msg)).await;
             let now = Utc::now().to_rfc3339();
-            let _ = sqlx::query(
+            if let Err(e) = sqlx::query(
                 "UPDATE backup_servers SET last_sync_at = ?, last_sync_status = 'error', \
                  last_sync_error = ? WHERE id = ?",
             )
@@ -256,7 +256,10 @@ async fn run_sync(
             .bind(&msg)
             .bind(&server.id)
             .execute(pool)
-            .await;
+            .await
+            {
+                tracing::warn!("Failed to update sync error status for server {}: {}", server.id, e);
+            }
             return;
         }
         Err(e) => {
@@ -270,7 +273,7 @@ async fn run_sync(
             tracing::error!("{}", msg);
             update_sync_log(pool, log_id, "error", 0, 0, Some(&msg)).await;
             let now = Utc::now().to_rfc3339();
-            let _ = sqlx::query(
+            if let Err(e) = sqlx::query(
                 "UPDATE backup_servers SET last_sync_at = ?, last_sync_status = 'error', \
                  last_sync_error = ? WHERE id = ?",
             )
@@ -278,7 +281,10 @@ async fn run_sync(
             .bind(&msg)
             .bind(&server.id)
             .execute(pool)
-            .await;
+            .await
+            {
+                tracing::warn!("Failed to update sync error status for server {}: {}", server.id, e);
+            }
             return;
         }
     }

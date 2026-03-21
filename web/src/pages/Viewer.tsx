@@ -12,7 +12,6 @@ import { db, type MediaType } from "../db";
 import AppIcon from "../components/AppIcon";
 import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
 import ViewerEditPanel, { type EditTab } from "../components/viewer/ViewerEditPanel";
-import TagsBar from "../components/viewer/TagsBar";
 import LeavePrompt from "../components/viewer/LeavePrompt";
 import CropOverlay from "../components/viewer/CropOverlay";
 import VideoControls from "../components/viewer/VideoControls";
@@ -839,17 +838,7 @@ export default function Viewer() {
         />
       )}
 
-      {/* Bottom tags bar */}
-      {mediaUrl && !editMode && (
-        <TagsBar
-          show={showOverlay} tags={tags}
-          showTagInput={showTagInput} tagInput={tagInput}
-          setTagInput={setTagInput} setShowTagInput={setShowTagInput}
-          tagSuggestions={tagSuggestions} onAddTag={handleAddTag}
-          onRemoveTag={handleRemoveTag} tagInputRef={tagInputRef}
-        />
-      )}
-
+      {/* Photo info panel */}
       <PhotoInfoPanel show={showInfoPanel} onClose={() => setShowInfoPanel(false)} photoInfo={photoInfo} />
       <LeavePrompt show={showLeavePrompt} onCancel={() => setShowLeavePrompt(false)} onDiscard={handleLeaveAndDiscard} onSave={handleLeaveAndSave} />
 

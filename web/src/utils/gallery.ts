@@ -3,6 +3,7 @@
  * and cursor-based pagination helpers.
  */
 import { api } from "../api/client";
+import { createFallbackThumbnail } from "./media";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -84,7 +85,7 @@ export async function generateThumbnail(file: File, size: number): Promise<{ dat
   }
   if (file.type.startsWith("audio/")) {
     // Audio files have no visual content; return a small placeholder
-    const fallback = await generateImageThumbnail(new File([new Blob()], file.name, { type: "image/png" }), size).catch(() => new ArrayBuffer(0));
+    const fallback = await generateImageThumbnail(new File([new Blob()], file.name, { type: "image/png" }), size).catch(() => createFallbackThumbnail());
     return { data: fallback, mimeType: "image/jpeg" };
   }
   if (file.type === "image/gif") {

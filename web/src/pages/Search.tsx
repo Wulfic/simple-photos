@@ -39,12 +39,15 @@ export default function Search() {
   const [allTags, setAllTags] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [searchError, setSearchError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   // Load all user tags on mount
   useEffect(() => {
-    api.tags.list().then((res) => setAllTags(res.tags)).catch(() => {});
+    api.tags.list().then((res) => setAllTags(res.tags)).catch((err) => {
+      console.warn("Failed to load tag suggestions:", err);
+    });
   }, []);
 
   // Auto-focus the search input
@@ -113,9 +116,15 @@ export default function Search() {
     }
     setLoading(true);
     setSearched(true);
+    setSearchError("");
     try {
       // Search server-side photos
-      const serverPromise = api.search.query(trimmed).catch(() => ({ results: [] as SearchResult[] }));
+      let serverSearchFailed = false;
+      const serverPromise = api.search.query(trimmed).catch((err) => {
+        console.warn("Server search failed:", err);
+        serverSearchFailed = true;
+        return { results: [] as SearchResult[] };
+      });
 
       // Search local encrypted photos in IndexedDB
       const localPromise = (async (): Promise<SearchResult[]> => {
@@ -188,6 +197,9 @@ export default function Search() {
       ];
 
       setResults(combined);
+      if (serverSearchFailed) {
+        setSearchError("Server search unavailable — showing local results only.");
+      }
     } catch {
       setResults([]);
     } finally {
@@ -249,6 +261,13 @@ export default function Search() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Server search error banner */}
+        {searchError && (
+          <div className="max-w-xl mx-auto mb-4 px-4 py-3 rounded-lg bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 text-sm">
+            {searchError}
           </div>
         )}
 

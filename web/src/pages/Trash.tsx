@@ -165,7 +165,9 @@ export default function Trash() {
 
       // Clean up local Dexie trash entry for encrypted items
       if (item?.encrypted_blob_id) {
-        await db.trash.delete(id).catch(() => {});
+        await db.trash.delete(id).catch((e) => {
+          console.error(`Failed to delete trash entry ${id} from local DB:`, e);
+        });
         if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
       }
 
@@ -247,7 +249,9 @@ export default function Trash() {
         const item = items.find((i) => i.id === id);
         await api.trash.permanentDelete(id);
         if (item?.encrypted_blob_id) {
-          await db.trash.delete(id).catch(() => {});
+          await db.trash.delete(id).catch((e) => {
+            console.error(`Failed to delete trash entry ${id} from local DB:`, e);
+          });
           if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
         }
       }
