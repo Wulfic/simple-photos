@@ -708,16 +708,24 @@ pub async fn get_backup_mode(
     let local_ip = broadcast::get_local_ip().unwrap_or_else(|| "unknown".to_string());
     let port = state.config.server.port;
 
-    // Include the API key when in backup mode
-    let api_key: Option<String> = if mode == "backup" {
-        sqlx::query_scalar::<_, Option<String>>(
+    // Include the API key and primary server URL when in backup mode
+    let (api_key, primary_server_url) = if mode == "backup" {
+        let key = sqlx::query_scalar::<_, Option<String>>(
             "SELECT value FROM server_settings WHERE key = 'backup_api_key'",
         )
         .fetch_optional(&state.read_pool)
         .await?
-        .flatten()
+        .flatten();
+
+        let primary_url: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM server_settings WHERE key = 'primary_server_url'",
+        )
+        .fetch_optional(&state.read_pool)
+        .await?;
+
+        (key, primary_url)
     } else {
-        None
+        (None, None)
     };
 
     Ok(Json(BackupModeResponse {
@@ -726,6 +734,7 @@ pub async fn get_backup_mode(
         server_address: format!("{}:{}", local_ip, port),
         port,
         api_key,
+        primary_server_url,
     }))
 }
 
@@ -787,16 +796,24 @@ pub async fn set_backup_mode(
 
     tracing::info!("Server mode set to '{}'", mode);
 
-    // Include the API key when in backup mode
-    let api_key_val: Option<String> = if mode == "backup" {
-        sqlx::query_scalar::<_, Option<String>>(
+    // Include the API key and primary server URL when in backup mode
+    let (api_key_val, primary_server_url): (Option<String>, Option<String>) = if mode == "backup" {
+        let key = sqlx::query_scalar::<_, Option<String>>(
             "SELECT value FROM server_settings WHERE key = 'backup_api_key'",
         )
         .fetch_optional(&state.read_pool)
         .await?
-        .flatten()
+        .flatten();
+
+        let primary_url: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM server_settings WHERE key = 'primary_server_url'",
+        )
+        .fetch_optional(&state.read_pool)
+        .await?;
+
+        (key, primary_url)
     } else {
-        None
+        (None, None)
     };
 
     Ok(Json(BackupModeResponse {
@@ -805,6 +822,7 @@ pub async fn set_backup_mode(
         server_address: format!("{}:{}", local_ip, port),
         port,
         api_key: api_key_val,
+        primary_server_url,
     }))
 }
 

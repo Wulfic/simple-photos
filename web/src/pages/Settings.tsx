@@ -32,6 +32,10 @@ export default function Settings() {
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // ── Backup mode state (is this a backup server?) ────────────────────────
+  const [isBackupMode, setIsBackupMode] = useState(false);
+  const [primaryServerUrl, setPrimaryServerUrl] = useState<string | null>(null);
+
   // ── Backup recovery state ────────────────────────────────────────────────
   const [showRecoverWarning, setShowRecoverWarning] = useState(false);
   const { backupServers, loaded: backupLoaded, recovering, setRecovering, setBackupServers, setLoaded: setBackupLoaded, viewMode, setViewMode, activeBackupServerId, setActiveBackupServerId } = useBackupStore();
@@ -101,12 +105,23 @@ export default function Settings() {
     }
   }, [setBackupServers, setBackupLoaded]);
 
-  // Fetch backup servers on mount
+  // Fetch backup servers and mode on mount
   useEffect(() => {
     loadBackupServers();
     loadStorageStats();
     loadAudioBackupSetting();
+    loadBackupMode();
   }, [loadBackupServers]);
+
+  async function loadBackupMode() {
+    try {
+      const mode = await api.backup.getMode();
+      setIsBackupMode(mode.mode === "backup");
+      setPrimaryServerUrl(mode.primary_server_url ?? null);
+    } catch {
+      // Not an admin or endpoint unavailable — default to primary behaviour
+    }
+  }
 
   async function loadStorageStats() {
     setStorageLoading(true);
@@ -203,13 +218,23 @@ export default function Settings() {
         </p>
       )}
 
-      <AccountSection username={username ?? ""} error={error} setError={setError} success={success} setSuccess={setSuccess} loading={loading} setLoading={setLoading} />
+      {!isBackupMode ? (
+        <AccountSection username={username ?? ""} error={error} setError={setError} success={success} setSuccess={setSuccess} loading={loading} setLoading={setLoading} />
+      ) : (
+        /* Backup servers mirror accounts from the primary — no local changes */
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+          <h2 className="text-lg font-semibold mb-2">Account</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Logged in as <strong>{username}</strong>. Account changes (password, 2FA) are managed on the primary server.
+          </p>
+        </section>
+      )}
 
       {/* ── Storage Usage ──────────────────────────────────────────────────── */}
       <StorageStatsSection stats={storageStats} loading={storageLoading} />
 
-      {/* ── Server Selection ───────────────────────────────────────────────── */}
-      {backupLoaded && (
+      {/* ── Server Selection (hidden on backup servers) ─────────────────── */}
+      {backupLoaded && !isBackupMode && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Active Server</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
@@ -290,8 +315,8 @@ export default function Settings() {
         </div>
       </section>
 
-      {/* ── Scan for New Files (admin) ────────────────────────────────── */}
-      {isAdmin && (
+      {/* ── Scan for New Files (admin, hidden on backup servers) ────────── */}
+      {isAdmin && !isBackupMode && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Scan for New Files</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
@@ -329,8 +354,34 @@ export default function Settings() {
         </section>
       )}
 
-      {/* ── Backup Recovery (admin only) ──────────────────────────────────── */}
-      {isAdmin && (
+      {/* ── Backup Recovery / Primary Server Connection ─────────────────── */}
+      {isAdmin && isBackupMode ? (
+        /* Backup server: show the paired primary server, no scan/add controls */
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+          <h2 className="text-lg font-semibold mb-3">Primary Server</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            This server is running in <strong>backup mode</strong>. All photos, accounts, and settings are mirrored from the primary server.
+          </p>
+          <div className="flex items-center gap-3 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+            <div className="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/40 flex items-center justify-center flex-shrink-0">
+              <svg className="w-5 h-5 text-green-600 dark:text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-green-800 dark:text-green-300">
+                Connected to Primary Server
+              </p>
+              <p className="text-xs text-green-600 dark:text-green-400 truncate font-mono">
+                {primaryServerUrl ?? "Unknown address"}
+              </p>
+            </div>
+          </div>
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">
+            Changes to photos, users, passwords, and 2FA should be made on the primary server. They will be synced automatically.
+          </p>
+        </section>
+      ) : isAdmin && (
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Backup Recovery</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
@@ -573,8 +624,8 @@ export default function Settings() {
 
 
 
-      {/* ── Audio Backup ───────────────────────────────────────────────────── */}
-      {isAdmin && !audioBackupLoading && (
+      {/* ── Audio Backup (hidden on backup servers) ─────────────────────── */}
+      {isAdmin && !audioBackupLoading && !isBackupMode && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Audio Backup</h2>
           <div className="flex items-center justify-between gap-4">
@@ -622,8 +673,10 @@ export default function Settings() {
 
       <SslSettings error={error} setError={setError} success={success} setSuccess={setSuccess} />
 
-      {/* ── Manage Users (admin only) ────────────────────────────────────── */}
-      <UserManagement error={error} setError={setError} success={success} setSuccess={setSuccess} />
+      {/* ── Manage Users (admin only, hidden on backup servers) ────────── */}
+      {!isBackupMode && (
+        <UserManagement error={error} setError={setError} success={success} setSuccess={setSuccess} />
+      )}
 
 
 
