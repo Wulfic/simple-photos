@@ -823,6 +823,17 @@ pub async fn pair(
         )));
     }
 
+    // Parse the registration response to get the backup server ID on the primary
+    let reg_data: serde_json::Value = reg_resp
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to parse registration response: {}", e)))?;
+
+    let backup_server_id_on_primary = reg_data
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     // ── Create local admin with the same credentials ─────────────────────
     let user_id = Uuid::new_v4().to_string();
     let password_clone = req.password.clone();
@@ -891,6 +902,58 @@ pub async fn pair(
         req.username,
         base_url
     );
+
+    // ── Trigger initial sync from primary → this backup ──────────────────
+    // The primary server now has this backup registered. Ask it to push all
+    // existing photos so the backup starts with a complete mirror.
+    if let Some(server_id) = backup_server_id_on_primary {
+        let sync_url = format!(
+            "{}/api/admin/backup/servers/{}/sync",
+            base_url, server_id
+        );
+        let remote_token_clone = remote_token.clone();
+        let server_id_clone = server_id.clone();
+
+        // Fire-and-forget: the sync runs in the background on the primary.
+        // We don't block pairing on it completing.
+        tokio::spawn(async move {
+            let sync_client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .danger_accept_invalid_certs(true)
+                .build()
+                .ok();
+
+            if let Some(c) = sync_client {
+                match c
+                    .post(&sync_url)
+                    .header("Authorization", format!("Bearer {}", remote_token_clone))
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        tracing::info!(
+                            "Initial sync triggered on primary for backup server {}",
+                            server_id_clone
+                        );
+                    }
+                    Ok(resp) => {
+                        tracing::warn!(
+                            "Initial sync trigger returned HTTP {}: primary will sync on next scheduled run",
+                            resp.status()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Could not trigger initial sync on primary (will sync on schedule): {}",
+                            e
+                        );
+                    }
+                }
+            }
+        });
+    } else {
+        tracing::warn!("Could not extract backup server ID from primary registration response — initial sync will run on next scheduled cycle");
+    }
 
     Ok((
         StatusCode::CREATED,

@@ -143,6 +143,7 @@ export const backupApi = {
       server_ip: string;
       server_address: string;
       port: number;
+      primary_server_url?: string;
     }>("/admin/backup/mode"),
 
   /** Set backup mode ("primary" or "backup") */
