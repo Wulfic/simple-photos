@@ -264,15 +264,18 @@ export default function Welcome() {
       ]);
       setStoragePath(storageData.storage_path);
       setPendingStoragePath(storageData.storage_path);
-      setServerPort(portData.port);
-      setOriginalPort(portData.port);
-      // During setup, offer the first available port starting at 8080 rather
-      // than the internal container port (often 3000). If the server is already
-      // on a non-default port the user customised, keep that value.
+      // Use the external port (from the Host header) when available — this
+      // is the port the user actually reaches the server on, which may
+      // differ from the internal container port in Docker setups.
+      const effectivePort = portData.external_port ?? portData.port;
+      setServerPort(effectivePort);
+      setOriginalPort(effectivePort);
+      // During setup, offer the external port the server is already on, or
+      // the first available port starting at 8080 if different.
       const defaultInput =
         portData.suggested_port != null
           ? String(portData.suggested_port)
-          : String(portData.port);
+          : String(effectivePort);
       setPortInput(defaultInput);
       setPortSaved(false);
       setStep("storage");

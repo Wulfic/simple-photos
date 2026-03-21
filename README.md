@@ -1,20 +1,21 @@
 # Simple Photos
 
-A self-hosted photo & video library with always-on end-to-end encryption, multi-device backup, and a unified web + Android experience.
+A self-hosted photo & video library with always-on end-to-end encryption, multi-device backup, and web + Android access.
 
 ## Features
 
 - **Self-hosted** — runs on your own server, your data stays yours
-- **End-to-end encryption** — always-on AES-256-GCM encryption with client-side key derivation
-- **Multi-platform** — Web (React/TypeScript) and Android (Kotlin/Compose) clients
-- **Photo & video support** — browser-native formats only (JPEG, PNG, GIF, WebP, AVIF, BMP, SVG, MP4, WebM, MP3, FLAC, OGG, WAV) — no FFmpeg or ImageMagick required
+- **End-to-end encryption** — always-on AES-256-GCM encryption with client-side key management, so only you can access your photos. This means even if the server is compromised, your data remains secure.
+- **Photo, video, and audio support** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
 - **Albums** — organize photos into albums with optional sharing between users
-- **Secure albums** — password-protected galleries for sensitive content
+- **Secure albums** — password-protected galleries for sensitive content. Supports multiple password protected albums.
 - **Trash** — 30-day soft-delete with restore
 - **Tags & search** — tag photos and search across your library
-- **Backup sync** — automatic server-to-server backup replication
+- **Backup sync** — automatic server-to-server backup replication, with support for multiple backup targets, including remote servers.
 - **2FA** — TOTP two-factor authentication
-- **Dark mode** — full light/dark theme support across both platforms
+- **Themes** — full light/dark theme support
+- **Android app** — view and manage your library on the go, with automatic photo backup from your device
+- **NO AI** — no AI features, no data collection, just a secure and private photo library
 
 ## Tech Stack
 

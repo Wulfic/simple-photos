@@ -154,10 +154,13 @@ export default function Gallery() {
             albumIds: cached.albumIds ?? [],
           });
         }
+        // Remove immediately from local IDB so the gallery updates at once
         await db.photos.delete(id);
       }
       await loadEncryptedPhotos();
-    } catch { /* ignore */ }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to delete selected items");
+    }
     clearSelection();
   }
 
