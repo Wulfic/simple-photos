@@ -10,6 +10,7 @@ import AppHeader from "../components/AppHeader";
 import { formatBytes, getErrorMessage } from "../utils/formatters";
 import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
+import { useIsBackupServer } from "../hooks/useIsBackupServer";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ function timeSince(isoDate: string): string {
 export default function Trash() {
   const { accessToken } = useAuthStore();
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
+  const isBackupServer = useIsBackupServer();
   const [items, setItems] = useState<TrashItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -305,7 +307,7 @@ export default function Trash() {
 
           {/* Action buttons — stacked below the header */}
           <div className="flex flex-col items-start gap-2 mt-4">
-            {items.length > 0 && (
+            {!isBackupServer && items.length > 0 && (
               <button
                 onClick={() => setConfirmEmpty(true)}
                 disabled={actionLoading !== null}
@@ -315,7 +317,7 @@ export default function Trash() {
                 Empty Trash
               </button>
             )}
-            {selectedIds.size > 0 && (
+            {!isBackupServer && selectedIds.size > 0 && (
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleRestoreSelected}

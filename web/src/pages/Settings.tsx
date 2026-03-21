@@ -585,7 +585,8 @@ export default function Settings() {
       </section>
       )}
 
-      {/* ── Apps ───────────────────────────────────────────────────────────── */}
+      {/* ── Apps (hidden on backup servers — Android clients connect to primary) ── */}
+      {!isBackupMode && (
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Apps</h2>
         <div className="space-y-4">
@@ -621,6 +622,7 @@ export default function Settings() {
           </div>
         </div>
       </section>
+      )}
 
 
 

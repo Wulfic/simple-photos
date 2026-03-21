@@ -12,6 +12,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { getErrorMessage } from "../utils/formatters";
+import { useIsBackupServer } from "../hooks/useIsBackupServer";
 
 type SharedAlbumInfo = {
   id: string;
@@ -28,6 +29,7 @@ type ShareUser = { id: string; username: string };
 export default function Albums() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const isBackupServer = useIsBackupServer();
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
   const navigate = useNavigate();
@@ -213,6 +215,7 @@ export default function Albums() {
         {/* ── User Albums ────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Albums</h2>
+          {!isBackupServer && (
           <button
             onClick={() => setShowCreate(!showCreate)}
             className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors shadow-sm shadow-blue-900/20"
@@ -222,9 +225,10 @@ export default function Albums() {
             </svg>
             New Album
           </button>
+          )}
         </div>
 
-      {showCreate && (
+      {!isBackupServer && showCreate && (
         <form onSubmit={createAlbum} className="mb-6 flex gap-2">
           <input
             type="text"

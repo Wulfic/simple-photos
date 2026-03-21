@@ -215,6 +215,20 @@ export default function Diagnostics() {
     started_at: string;
   } | null>(null);
 
+  // ── Backup-mode detection (hide client diagnostics on backup servers) ──
+  const [isBackupMode, setIsBackupMode] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const mode = await api.backup.getMode();
+        setIsBackupMode(mode.mode === "backup");
+      } catch {
+        // Not admin or endpoint unavailable — default to primary
+      }
+    })();
+  }, []);
+
   // Redirect non-admins
   useEffect(() => {
     if (!isAdmin) {
@@ -329,7 +343,8 @@ export default function Diagnostics() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "overview", label: "Overview" },
     { id: "server-logs", label: "Server Logs" },
-    { id: "client-logs", label: "Client Logs" },
+    // Client logs are only accepted on primary servers
+    ...(!isBackupMode ? [{ id: "client-logs" as Tab, label: "Client Logs" }] : []),
   ];
 
   const diagnosticsEnabled = config?.diagnostics_enabled ?? false;
@@ -422,8 +437,8 @@ export default function Diagnostics() {
               </button>
             </div>
 
-            {/* Client diagnostics sub-toggle (only show when server diagnostics enabled) */}
-            {diagnosticsEnabled && (
+            {/* Client diagnostics sub-toggle (only show when server diagnostics enabled AND on primary server) */}
+            {diagnosticsEnabled && !isBackupMode && (
               <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
                 <div className="flex items-center justify-between">
                   <div>

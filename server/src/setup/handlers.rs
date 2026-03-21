@@ -853,19 +853,65 @@ pub async fn pair(
         // this endpoint, and auth already confirmed the server is reachable.
     }
 
-    // Auto-generate a backup API key early so we can register it
-    let api_key = Uuid::new_v4().to_string().replace('-', "");
+    // Use the statically configured backup API key if present, otherwise auto-generate
+    let api_key = state
+        .config
+        .backup
+        .api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .map(|k| k.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string().replace('-', ""));
 
-    // ── Register with the primary server ─────────────────────────────────
-    let host = headers
+    // ── Determine the backup server's routable address ───────────────────
+    // Use `config.server.base_url` — the externally-reachable URL the user
+    // configured.  This is critical in Docker where `get_local_ip()` returns
+    // the container's internal bridge IP (unreachable from the primary) and
+    // `config.server.port` is the internal container port (not the host-
+    // mapped port).  `base_url` already contains the correct host + port as
+    // seen from the LAN, e.g. `http://192.168.86.34:8081`.
+    let backup_address = {
+        let base = state.config.server.base_url.trim_end_matches('/');
+        // Strip scheme to get "host:port"
+        let host_port = base
+            .strip_prefix("https://")
+            .or_else(|| base.strip_prefix("http://"))
+            .unwrap_or(base)
+            .split('/')
+            .next()
+            .unwrap_or("");
+
+        if host_port.is_empty() || host_port == "localhost" || host_port.starts_with("127.") {
+            // base_url points at loopback — fall back to LAN IP detection
+            let ip = crate::backup::broadcast::get_local_ip()
+                .unwrap_or_else(|| {
+                    headers
+                        .get("Host")
+                        .and_then(|h| h.to_str().ok())
+                        .unwrap_or("unknown-backup-host")
+                        .to_string()
+                });
+            if ip.contains(':') { ip } else { format!("{}:{}", ip, state.config.server.port) }
+        } else {
+            host_port.to_string()
+        }
+    };
+    tracing::info!(
+        backup_address = %backup_address,
+        base_url = %state.config.server.base_url,
+        "Determined backup address for primary registration"
+    );
+
+    let host_display = headers
         .get("Host")
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown-backup-host");
-    
+        .unwrap_or(&backup_address);
+
+    // ── Register with the primary server ─────────────────────────────────
     let register_url = format!("{}/api/admin/backup/servers", base_url);
     let register_body = serde_json::json!({
-        "name": format!("Backup Server ({})", host),
-        "address": host,
+        "name": format!("Backup Server ({})", host_display),
+        "address": backup_address,
         "api_key": api_key,
         "sync_frequency_hours": 24,
     });

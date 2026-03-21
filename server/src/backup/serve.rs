@@ -22,6 +22,7 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, CONTROLS};
 use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
+use crate::photos::scan::generate_thumbnail_file;
 use crate::sanitize;
 use crate::state::AppState;
 
@@ -212,16 +213,16 @@ pub async fn backup_download_thumb(
 // ── Backup Receive Endpoint ──────────────────────────────────────────────────
 
 /// POST /api/backup/receive
-/// Receives a file from a primary server during sync.
-/// Headers: X-API-Key, X-Photo-Id, X-File-Path, X-Source ("photos" or "trash")
-/// Body: raw file bytes
+/// Receives a file pushed from a primary server during sync.
+/// Preserves all metadata (timestamps, GPS, dimensions, tags, user association)
+/// and generates a thumbnail immediately so the backup is a 1:1 replica.
 ///
-/// **Note:** The UPSERT only populates the core columns (`id`, `user_id`,
-/// `filename`, `file_path`, `mime_type`, `media_type`, `size_bytes`,
-/// `created_at`).  Metadata like `width`, `height`, `duration_secs`,
-/// `taken_at`, GPS coordinates, `photo_hash`, and `thumb_path` are NOT
-/// transferred — the background convert/scan tasks will fill some of these
-/// in later, but some (GPS, original taken_at) may be permanently lost.
+/// Required headers: X-API-Key, X-Photo-Id, X-File-Path, X-Source, X-Content-Hash
+/// Metadata headers (all optional, sent by updated primary sync engine):
+///   X-User-Id, X-Original-Created-At, X-Taken-At, X-Width, X-Height,
+///   X-Latitude, X-Longitude, X-Duration-Secs, X-Camera-Model, X-Is-Favorite,
+///   X-Photo-Hash, X-Crop-Metadata, X-Tags,
+///   X-Deleted-At, X-Expires-At (trash only)
 pub async fn backup_receive(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -296,13 +297,59 @@ pub async fn backup_receive(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to write file: {}", e)))?;
 
-    // Get (or create) a user to own the synced photo — use first admin user
-    let admin_id: String = sqlx::query_scalar(
-        "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
-    )
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))?;
+    // ── Parse metadata headers ──────────────────────────────────────────────
+
+    // Helpers to parse percent-encoded optional string / numeric headers
+    fn hdr_str(headers: &HeaderMap, name: &str) -> Option<String> {
+        headers.get(name).and_then(|v| v.to_str().ok()).map(|s| {
+            percent_decode_str(s)
+                .decode_utf8()
+                .map(|d| d.to_string())
+                .unwrap_or_else(|_| s.to_string())
+        })
+    }
+    fn hdr_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<f64>().ok())
+    }
+    fn hdr_i64(headers: &HeaderMap, name: &str) -> i64 {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0)
+    }
+
+    // Use the primary's user_id when the corresponding user exists on the backup;
+    // otherwise fall back to the local admin so foreign-key constraints are met.
+    let primary_user_id = hdr_str(&headers, "X-User-Id");
+    let owner_id: String = if let Some(ref uid) = primary_user_id {
+        let exists: bool =
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM users WHERE id = ?")
+                .bind(uid)
+                .fetch_one(&state.read_pool)
+                .await
+                .unwrap_or(false);
+        if exists {
+            uid.clone()
+        } else {
+            sqlx::query_scalar(
+                "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
+            )
+            .fetch_optional(&state.read_pool)
+            .await?
+            .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))?
+        }
+    } else {
+        sqlx::query_scalar(
+            "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
+        )
+        .fetch_optional(&state.read_pool)
+        .await?
+        .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))?
+    };
 
     // Derive filename and mime_type from file_path
     let filename = std::path::Path::new(&file_path)
@@ -322,48 +369,172 @@ pub async fn backup_receive(
         "photo"
     };
 
+    // Preserve original timestamps; fall back to now only when absent
     let now = Utc::now().to_rfc3339();
+    let created_at   = hdr_str(&headers, "X-Original-Created-At").unwrap_or_else(|| now.clone());
+    let taken_at     = hdr_str(&headers, "X-Taken-At");
+    let deleted_at   = hdr_str(&headers, "X-Deleted-At").unwrap_or_else(|| now.clone());
+    let expires_at   = hdr_str(&headers, "X-Expires-At").unwrap_or_else(|| now.clone());
+
+    let width         = hdr_i64(&headers, "X-Width");
+    let height        = hdr_i64(&headers, "X-Height");
+    let latitude      = hdr_f64(&headers, "X-Latitude");
+    let longitude     = hdr_f64(&headers, "X-Longitude");
+    let duration      = hdr_f64(&headers, "X-Duration-Secs");
+    let camera_model  = hdr_str(&headers, "X-Camera-Model");
+    let is_favorite   = headers
+        .get("X-Is-Favorite")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s == "1")
+        .unwrap_or(false);
+    let photo_hash    = hdr_str(&headers, "X-Photo-Hash");
+    let crop_metadata = hdr_str(&headers, "X-Crop-Metadata");
+
+    // Tags: comma-separated, each tag percent-encoded
+    let tags: Vec<String> = headers
+        .get("X-Tags")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            s.split(',')
+                .filter(|t| !t.is_empty())
+                .map(|t| {
+                    percent_decode_str(t)
+                        .decode_utf8()
+                        .map(|d| d.to_string())
+                        .unwrap_or_else(|_| t.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Thumbnail path — same convention as autoscan so serving code stays identical
+    let thumb_ext = if mime_type == "image/gif" { "gif" } else { "jpg" };
+    let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
     if source == "trash" {
-        // Upsert into trash_items
+        // ── Upsert into trash_items (full metadata) ───────────────────────────
         sqlx::query(
-            "INSERT INTO trash_items (id, user_id, photo_id, filename, file_path, mime_type, \
-             media_type, size_bytes, deleted_at, expires_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(id) DO UPDATE SET file_path = excluded.file_path, \
-             size_bytes = excluded.size_bytes",
+            "INSERT INTO trash_items (
+                id, user_id, photo_id, filename, file_path, mime_type, media_type,
+                size_bytes, width, height, taken_at, latitude, longitude,
+                duration_secs, camera_model, is_favorite, photo_hash, crop_metadata,
+                thumb_path, deleted_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                file_path     = excluded.file_path,
+                size_bytes    = excluded.size_bytes,
+                taken_at      = COALESCE(excluded.taken_at,     taken_at),
+                latitude      = COALESCE(excluded.latitude,     latitude),
+                longitude     = COALESCE(excluded.longitude,    longitude),
+                width         = CASE WHEN excluded.width  > 0 THEN excluded.width  ELSE width  END,
+                height        = CASE WHEN excluded.height > 0 THEN excluded.height ELSE height END,
+                duration_secs = COALESCE(excluded.duration_secs,  duration_secs),
+                camera_model  = COALESCE(excluded.camera_model,   camera_model),
+                is_favorite   = excluded.is_favorite,
+                photo_hash    = COALESCE(excluded.photo_hash,     photo_hash),
+                crop_metadata = COALESCE(excluded.crop_metadata,  crop_metadata),
+                thumb_path    = COALESCE(excluded.thumb_path,     thumb_path),
+                deleted_at    = excluded.deleted_at,
+                expires_at    = excluded.expires_at",
         )
         .bind(&photo_id)
-        .bind(&admin_id)
-        .bind(&photo_id) // photo_id == original photo ID for trash
+        .bind(&owner_id)
+        .bind(&photo_id)
         .bind(&filename)
         .bind(&file_path)
         .bind(&mime_type)
         .bind(media_type)
         .bind(size_bytes)
-        .bind(&now)
-        .bind(&now) // expires_at — not important for backups, just needs a value
+        .bind(width)
+        .bind(height)
+        .bind(&taken_at)
+        .bind(latitude)
+        .bind(longitude)
+        .bind(duration)
+        .bind(&camera_model)
+        .bind(is_favorite)
+        .bind(&photo_hash)
+        .bind(&crop_metadata)
+        .bind(&thumb_rel)
+        .bind(&deleted_at)
+        .bind(&expires_at)
         .execute(&state.pool)
         .await?;
     } else {
-        // Upsert into photos
+        // ── Upsert into photos (full metadata) ───────────────────────────────
         sqlx::query(
-            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-             size_bytes, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(id) DO UPDATE SET file_path = excluded.file_path, \
-             size_bytes = excluded.size_bytes",
+            "INSERT INTO photos (
+                id, user_id, filename, file_path, mime_type, media_type,
+                size_bytes, width, height, taken_at, latitude, longitude,
+                duration_secs, camera_model, is_favorite, photo_hash, crop_metadata,
+                thumb_path, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                file_path     = excluded.file_path,
+                size_bytes    = excluded.size_bytes,
+                taken_at      = COALESCE(excluded.taken_at,    taken_at),
+                latitude      = COALESCE(excluded.latitude,    latitude),
+                longitude     = COALESCE(excluded.longitude,   longitude),
+                width         = CASE WHEN excluded.width  > 0 THEN excluded.width  ELSE width  END,
+                height        = CASE WHEN excluded.height > 0 THEN excluded.height ELSE height END,
+                duration_secs = COALESCE(excluded.duration_secs,  duration_secs),
+                camera_model  = COALESCE(excluded.camera_model,   camera_model),
+                is_favorite   = excluded.is_favorite,
+                photo_hash    = COALESCE(excluded.photo_hash,     photo_hash),
+                crop_metadata = COALESCE(excluded.crop_metadata,  crop_metadata),
+                thumb_path    = COALESCE(excluded.thumb_path,     thumb_path)",
         )
         .bind(&photo_id)
-        .bind(&admin_id)
+        .bind(&owner_id)
         .bind(&filename)
         .bind(&file_path)
         .bind(&mime_type)
         .bind(media_type)
         .bind(size_bytes)
-        .bind(&now)
+        .bind(width)
+        .bind(height)
+        .bind(&taken_at)
+        .bind(latitude)
+        .bind(longitude)
+        .bind(duration)
+        .bind(&camera_model)
+        .bind(is_favorite)
+        .bind(&photo_hash)
+        .bind(&crop_metadata)
+        .bind(&thumb_rel)
+        .bind(&created_at)
         .execute(&state.pool)
         .await?;
+
+        // Replicate photo tags from the primary
+        for tag in &tags {
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag, created_at)
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(&photo_id)
+            .bind(&owner_id)
+            .bind(tag)
+            .bind(&created_at)
+            .execute(&state.pool)
+            .await;
+        }
+    }
+
+    // ── Generate thumbnail immediately ───────────────────────────────────────
+    // Don't wait for the background autoscan pass — generate now so the
+    // backup serves thumbnails right after the sync completes.
+    if media_type != "audio" {
+        let thumb_abs = storage_root.join(&thumb_rel);
+        let generated = generate_thumbnail_file(&full_path, &thumb_abs, &mime_type, None).await;
+        if generated {
+            tracing::debug!(photo_id = %photo_id, "Generated thumbnail on receive");
+        } else {
+            tracing::warn!(
+                photo_id = %photo_id,
+                "Thumbnail generation failed on receive; will be retried by autoscan"
+            );
+        }
     }
 
     tracing::debug!(
@@ -378,4 +549,112 @@ pub async fn backup_receive(
         "photo_id": photo_id,
         "size_bytes": size_bytes,
     })))
+}
+
+// ── User Sync Endpoints ────────────────────────────────────────────────────
+
+/// GET /api/backup/list-users
+/// Returns all user IDs on this backup server for delta-sync detection.
+/// Used by the primary's sync engine to skip users already present.
+pub async fn backup_list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    validate_api_key(&state, &headers).await?;
+
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, username FROM users ORDER BY created_at ASC")
+            .fetch_all(&state.read_pool)
+            .await?;
+
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(id, username)| serde_json::json!({ "id": id, "username": username }))
+        .collect();
+
+    Ok(Json(items))
+}
+
+/// POST /api/backup/upsert-user
+/// Creates or updates a user stub on this backup server.
+/// Transfers id, username, role, storage_quota_bytes, created_at from the
+/// primary — **no password hash or TOTP secret** (backup logins are disabled).
+pub async fn backup_upsert_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<StatusCode, AppError> {
+    validate_api_key(&state, &headers).await?;
+
+    let id = body
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("missing id".into()))?
+        .to_string();
+    let username = body
+        .get("username")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("missing username".into()))?
+        .to_string();
+    let role = body
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("user")
+        .to_string();
+    let quota = body
+        .get("storage_quota_bytes")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(10_737_418_240); // 10 GiB default
+    let created_at = body
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Placeholder hash with "!" prefix — standard disabled-login marker.
+    // Real credentials must never be transmitted to the backup.
+    let placeholder_hash = format!("!backup_stub_{}", id);
+
+    // Try upsert by id (common path: new user or role/quota update)
+    let result = sqlx::query(
+        "INSERT INTO users (id, username, password_hash, created_at, storage_quota_bytes, role)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+             role                = excluded.role,
+             storage_quota_bytes = excluded.storage_quota_bytes",
+    )
+    .bind(&id)
+    .bind(&username)
+    .bind(&placeholder_hash)
+    .bind(&created_at)
+    .bind(quota)
+    .bind(&role)
+    .execute(&state.pool)
+    .await;
+
+    if let Err(e) = result {
+        // Likely a UNIQUE violation on `username` from a conflicting local
+        // account.  Retry with a disambiguated username so the user ID gets
+        // created and photos can be attributed correctly on restore.
+        tracing::warn!(
+            "backup_upsert_user: insert failed for id={} ({}); retrying with \"_bak\" suffix",
+            id, e
+        );
+        let fallback_username = format!("{}_bak", username);
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO users
+             (id, username, password_hash, created_at, storage_quota_bytes, role)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&fallback_username)
+        .bind(&placeholder_hash)
+        .bind(&created_at)
+        .bind(quota)
+        .bind(&role)
+        .execute(&state.pool)
+        .await;
+    }
+
+    Ok(StatusCode::OK)
 }

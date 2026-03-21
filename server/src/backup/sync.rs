@@ -32,6 +32,49 @@ use crate::state::AppState;
 
 use super::models::*;
 
+// ── Full-metadata structs for sync ───────────────────────────────────────────
+
+/// All metadata columns needed to faithfully replicate a photo entry.
+#[derive(Debug, sqlx::FromRow)]
+struct PhotoToSync {
+    id: String,
+    user_id: String,
+    file_path: String,
+    size_bytes: i64,
+    taken_at: Option<String>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    width: i64,
+    height: i64,
+    duration_secs: Option<f64>,
+    camera_model: Option<String>,
+    is_favorite: bool,
+    photo_hash: Option<String>,
+    crop_metadata: Option<String>,
+    created_at: String,
+}
+
+/// All metadata columns needed to faithfully replicate a trash item.
+#[derive(Debug, sqlx::FromRow)]
+struct TrashToSync {
+    id: String,
+    user_id: String,
+    file_path: String,
+    size_bytes: i64,
+    taken_at: Option<String>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    width: i64,
+    height: i64,
+    duration_secs: Option<f64>,
+    camera_model: Option<String>,
+    is_favorite: bool,
+    photo_hash: Option<String>,
+    crop_metadata: Option<String>,
+    deleted_at: String,
+    expires_at: String,
+}
+
 // ── Concurrency Lock ─────────────────────────────────────────────────────────
 
 /// Tracks which backup server IDs have an active sync in progress.
@@ -156,6 +199,9 @@ async fn run_sync(
 ) {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
+        // Accept self-signed certs — backup servers on a LAN often use
+        // untrusted TLS or sit behind a self-signed reverse proxy.
+        .danger_accept_invalid_certs(true)
         .build()
     {
         Ok(c) => c,
@@ -166,16 +212,109 @@ async fn run_sync(
     };
 
     let base_url = format!("http://{}/api", server.address);
+    let has_key = api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false);
+    tracing::info!(
+        server_name = %server.name,
+        server_address = %server.address,
+        base_url = %base_url,
+        has_api_key = has_key,
+        log_id = %log_id,
+        "Starting sync to backup server"
+    );
+
     let mut photos_synced = 0i64;
     let mut bytes_synced = 0i64;
     let mut failures = 0i64;
     let mut last_error: Option<String> = None;
+
+    // ── Pre-flight: verify the backup server is reachable ───────────────
+    // A quick health check avoids wasting time on N individual file failures
+    // when the address is simply wrong or the server is down.
+    let health_url = format!("http://{}/health", server.address);
+    match client.get(&health_url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::info!(
+                server = %server.name,
+                address = %server.address,
+                "Backup server health check passed"
+            );
+        }
+        Ok(resp) => {
+            let msg = format!(
+                "Backup server health check returned HTTP {} at {}",
+                resp.status(),
+                health_url
+            );
+            tracing::error!("{}", msg);
+            update_sync_log(pool, log_id, "error", 0, 0, Some(&msg)).await;
+            let now = Utc::now().to_rfc3339();
+            let _ = sqlx::query(
+                "UPDATE backup_servers SET last_sync_at = ?, last_sync_status = 'error', \
+                 last_sync_error = ? WHERE id = ?",
+            )
+            .bind(&now)
+            .bind(&msg)
+            .bind(&server.id)
+            .execute(pool)
+            .await;
+            return;
+        }
+        Err(e) => {
+            let msg = format!(
+                "Cannot reach backup server at {} — {}\n\
+                 Hint: verify the registered address in backup_servers matches \
+                 the backup's externally-reachable host:port (check base_url in \
+                 the backup's config.toml).",
+                health_url, e
+            );
+            tracing::error!("{}", msg);
+            update_sync_log(pool, log_id, "error", 0, 0, Some(&msg)).await;
+            let now = Utc::now().to_rfc3339();
+            let _ = sqlx::query(
+                "UPDATE backup_servers SET last_sync_at = ?, last_sync_status = 'error', \
+                 last_sync_error = ? WHERE id = ?",
+            )
+            .bind(&now)
+            .bind(&msg)
+            .bind(&server.id)
+            .execute(pool)
+            .await;
+            return;
+        }
+    }
 
     // ── Delta: fetch IDs the remote already has ──────────────────────────
     let remote_photo_ids: HashSet<String> =
         fetch_remote_ids(&client, &base_url, "/backup/list", api_key).await;
     let remote_trash_ids: HashSet<String> =
         fetch_remote_ids(&client, &base_url, "/backup/list-trash", api_key).await;
+
+    // ── Phase 0: sync user accounts ──────────────────────────────────────
+    // Must run before photos/trash so user_id foreign keys resolve correctly.
+    sync_users_to_backup(pool, &client, &base_url, api_key).await;
+
+    // Pre-fetch ALL photo tags in one query to avoid N+1 inside the transfer loop.
+    let all_tags: std::collections::HashMap<String, Vec<String>> = {
+        match sqlx::query_as::<_, (String, String)>(
+            "SELECT photo_id, tag FROM photo_tags ORDER BY photo_id",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => {
+                let mut map: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
+                for (photo_id, tag) in rows {
+                    map.entry(photo_id).or_default().push(tag);
+                }
+                map
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch photo tags for sync: {}", e);
+                std::collections::HashMap::new()
+            }
+        }
+    };
 
     // Check whether audio files should be included in sync
     let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
@@ -189,13 +328,17 @@ async fn run_sync(
     .unwrap_or(false);
 
     // 1. Sync photos — only those the remote doesn't have yet
-    let photos: Vec<(String, String, i64)> = {
+    let photos: Vec<PhotoToSync> = {
         let query = if audio_backup_enabled {
-            "SELECT id, file_path, size_bytes FROM photos"
+            "SELECT id, user_id, file_path, size_bytes, taken_at, latitude, longitude, \
+             width, height, duration_secs, camera_model, is_favorite, photo_hash, \
+             crop_metadata, created_at FROM photos"
         } else {
-            "SELECT id, file_path, size_bytes FROM photos WHERE media_type != 'audio'"
+            "SELECT id, user_id, file_path, size_bytes, taken_at, latitude, longitude, \
+             width, height, duration_secs, camera_model, is_favorite, photo_hash, \
+             crop_metadata, created_at FROM photos WHERE media_type != 'audio'"
         };
-        match sqlx::query_as(query).fetch_all(pool).await {
+        match sqlx::query_as::<_, PhotoToSync>(query).fetch_all(pool).await {
             Ok(p) => p,
             Err(e) => {
                 update_sync_log(pool, log_id, "error", 0, 0, Some(&e.to_string())).await;
@@ -206,7 +349,7 @@ async fn run_sync(
 
     let photos_to_sync: Vec<_> = photos
         .iter()
-        .filter(|(id, _, _)| !remote_photo_ids.contains(id))
+        .filter(|p| !remote_photo_ids.contains(&p.id))
         .collect();
 
     tracing::info!(
@@ -216,54 +359,95 @@ async fn run_sync(
         photos.len()
     );
 
-    for (photo_id, file_path, size) in &photos_to_sync {
+    for photo in &photos_to_sync {
+        let tags = all_tags.get(&photo.id).cloned().unwrap_or_default();
+        let mut extra: Vec<(String, String)> = vec![
+            ("X-User-Id".to_string(),            photo.user_id.clone()),
+            ("X-Original-Created-At".to_string(), photo.created_at.clone()),
+            ("X-Width".to_string(),               photo.width.to_string()),
+            ("X-Height".to_string(),              photo.height.to_string()),
+            ("X-Is-Favorite".to_string(),  if photo.is_favorite { "1" } else { "0" }.to_string()),
+        ];
+        if let Some(ref v) = photo.taken_at {
+            extra.push(("X-Taken-At".to_string(), v.clone()));
+        }
+        if let Some(v) = photo.latitude {
+            extra.push(("X-Latitude".to_string(), v.to_string()));
+        }
+        if let Some(v) = photo.longitude {
+            extra.push(("X-Longitude".to_string(), v.to_string()));
+        }
+        if let Some(v) = photo.duration_secs {
+            extra.push(("X-Duration-Secs".to_string(), v.to_string()));
+        }
+        if let Some(ref v) = photo.camera_model {
+            extra.push(("X-Camera-Model".to_string(), utf8_percent_encode(v, CONTROLS).to_string()));
+        }
+        if let Some(ref v) = photo.photo_hash {
+            extra.push(("X-Photo-Hash".to_string(), v.clone()));
+        }
+        if let Some(ref v) = photo.crop_metadata {
+            extra.push(("X-Crop-Metadata".to_string(), utf8_percent_encode(v, CONTROLS).to_string()));
+        }
+        if !tags.is_empty() {
+            let tags_str = tags
+                .iter()
+                .map(|t| utf8_percent_encode(t, CONTROLS).to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            extra.push(("X-Tags".to_string(), tags_str));
+        }
         match send_file(
             &client,
             &base_url,
             api_key,
             storage_root,
-            photo_id,
-            file_path,
+            &photo.id,
+            &photo.file_path,
             "photos",
+            &extra,
         )
         .await
         {
             Ok(()) => {
                 photos_synced += 1;
-                bytes_synced += *size;
+                bytes_synced += photo.size_bytes;
             }
             Err(e) => {
                 failures += 1;
                 last_error = Some(e.clone());
-                tracing::warn!("Backup sync failed for photo {}: {}", photo_id, e);
+                tracing::warn!("Backup sync failed for photo {}: {}", photo.id, e);
             }
         }
     }
 
     // 2. Sync trash items — only those the remote doesn't have yet
-    let trash_items: Vec<(String, String, i64)> =
-        match sqlx::query_as("SELECT id, file_path, size_bytes FROM trash_items")
-            .fetch_all(pool)
-            .await
-        {
-            Ok(t) => t,
-            Err(e) => {
-                update_sync_log(
-                    pool,
-                    log_id,
-                    "error",
-                    photos_synced,
-                    bytes_synced,
-                    Some(&e.to_string()),
-                )
-                .await;
-                return;
-            }
-        };
+    let trash_items: Vec<TrashToSync> = match sqlx::query_as::<_, TrashToSync>(
+        "SELECT id, user_id, file_path, size_bytes, taken_at, latitude, longitude, \
+         width, height, duration_secs, camera_model, is_favorite, photo_hash, \
+         crop_metadata, deleted_at, expires_at FROM trash_items",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            update_sync_log(
+                pool,
+                log_id,
+                "error",
+                photos_synced,
+                bytes_synced,
+                Some(&e.to_string()),
+            )
+            .await;
+            return;
+        }
+    };
 
     let trash_to_sync: Vec<_> = trash_items
         .iter()
-        .filter(|(id, _, _)| !remote_trash_ids.contains(id))
+        .filter(|t| !remote_trash_ids.contains(&t.id))
         .collect();
 
     tracing::info!(
@@ -273,26 +457,57 @@ async fn run_sync(
         trash_items.len()
     );
 
-    for (trash_id, file_path, size) in &trash_to_sync {
+    for item in &trash_to_sync {
+        let mut extra: Vec<(String, String)> = vec![
+            ("X-User-Id".to_string(),            item.user_id.clone()),
+            ("X-Original-Created-At".to_string(), item.deleted_at.clone()),
+            ("X-Deleted-At".to_string(),          item.deleted_at.clone()),
+            ("X-Expires-At".to_string(),          item.expires_at.clone()),
+            ("X-Width".to_string(),               item.width.to_string()),
+            ("X-Height".to_string(),              item.height.to_string()),
+            ("X-Is-Favorite".to_string(),  if item.is_favorite { "1" } else { "0" }.to_string()),
+        ];
+        if let Some(ref v) = item.taken_at {
+            extra.push(("X-Taken-At".to_string(), v.clone()));
+        }
+        if let Some(v) = item.latitude {
+            extra.push(("X-Latitude".to_string(), v.to_string()));
+        }
+        if let Some(v) = item.longitude {
+            extra.push(("X-Longitude".to_string(), v.to_string()));
+        }
+        if let Some(v) = item.duration_secs {
+            extra.push(("X-Duration-Secs".to_string(), v.to_string()));
+        }
+        if let Some(ref v) = item.camera_model {
+            extra.push(("X-Camera-Model".to_string(), utf8_percent_encode(v, CONTROLS).to_string()));
+        }
+        if let Some(ref v) = item.photo_hash {
+            extra.push(("X-Photo-Hash".to_string(), v.clone()));
+        }
+        if let Some(ref v) = item.crop_metadata {
+            extra.push(("X-Crop-Metadata".to_string(), utf8_percent_encode(v, CONTROLS).to_string()));
+        }
         match send_file(
             &client,
             &base_url,
             api_key,
             storage_root,
-            trash_id,
-            file_path,
+            &item.id,
+            &item.file_path,
             "trash",
+            &extra,
         )
         .await
         {
             Ok(()) => {
                 photos_synced += 1;
-                bytes_synced += *size;
+                bytes_synced += item.size_bytes;
             }
             Err(e) => {
                 failures += 1;
                 last_error = Some(e.clone());
-                tracing::warn!("Backup sync failed for trash {}: {}", trash_id, e);
+                tracing::warn!("Backup sync failed for trash {}: {}", item.id, e);
             }
         }
     }
@@ -332,7 +547,9 @@ async fn run_sync(
     .await;
 
     let now = Utc::now().to_rfc3339();
-    let db_status = if failures == 0 { "success" } else { "partial" };
+    // Mirror the fine-grained status into backup_servers so the background
+    // scheduler can distinguish a total failure ("error") from a partial one.
+    let db_status = status;
     let db_error = error_detail.as_deref();
 
     if let Err(e) = sqlx::query(
@@ -381,7 +598,14 @@ async fn fetch_remote_ids(
                 id: String,
             }
             match resp.json::<Vec<IdOnly>>().await {
-                Ok(items) => items.into_iter().map(|i| i.id).collect(),
+                Ok(items) => {
+                    tracing::info!(
+                        path = %path,
+                        count = items.len(),
+                        "Fetched remote ID list successfully"
+                    );
+                    items.into_iter().map(|i| i.id).collect()
+                }
                 Err(e) => {
                     tracing::warn!("Failed to parse remote ID list from {}: {}", path, e);
                     HashSet::new()
@@ -389,10 +613,20 @@ async fn fetch_remote_ids(
             }
         }
         Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::error!(
+                path = %path,
+                status = %status,
+                body = %body,
+                "Remote ID list fetch failed — this likely means the backup is unreachable or auth failed"
+            );
+            // Return an error sentinel so the caller can abort early
+            // instead of trying to push every file only to get N failures.
             tracing::warn!(
                 "Remote {} returned HTTP {} — falling back to full sync",
                 path,
-                resp.status()
+                status
             );
             HashSet::new()
         }
@@ -418,6 +652,7 @@ async fn send_file(
     item_id: &str,
     file_path: &str,
     source: &str,
+    extra_headers: &[(String, String)],
 ) -> Result<(), String> {
     let full_path = storage_root.join(file_path);
     if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
@@ -445,6 +680,13 @@ async fn send_file(
         .header("X-Content-Hash", hash_hex.as_str())
         .body(file_data);
 
+    // Attach all metadata headers so the backup stores a faithful replica
+    for (name, value) in extra_headers {
+        if let Ok(hv) = reqwest::header::HeaderValue::from_str(value) {
+            req = req.header(name.as_str(), hv);
+        }
+    }
+
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());
     }
@@ -453,6 +695,68 @@ async fn send_file(
         Ok(resp) if resp.status().is_success() => Ok(()),
         Ok(resp) => Err(format!("HTTP {}", resp.status())),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+// ── User Sync Helpers ────────────────────────────────────────────────────────
+
+/// Sync all user accounts from the primary to the backup server.
+/// Creates stub accounts (no password hash / TOTP) so user_id foreign keys
+/// resolve correctly, enabling per-user data restoration.
+async fn sync_users_to_backup(
+    pool: &sqlx::SqlitePool,
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &Option<String>,
+) {
+    let users: Vec<(String, String, String, i64, String)> = match sqlx::query_as(
+        "SELECT id, username, role, storage_quota_bytes, created_at FROM users",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(u) => u,
+        Err(e) => {
+            tracing::warn!("Could not fetch users for backup sync: {}", e);
+            return;
+        }
+    };
+
+    // Fetch remote user IDs for delta (skip those already present)
+    let remote_user_ids: HashSet<String> =
+        fetch_remote_ids(client, base_url, "/backup/list-users", api_key).await;
+
+    let mut synced = 0u32;
+    for (id, username, role, quota, created_at) in &users {
+        if remote_user_ids.contains(id) {
+            continue;
+        }
+        let body = serde_json::json!({
+            "id": id,
+            "username": username,
+            "role": role,
+            "storage_quota_bytes": quota,
+            "created_at": created_at,
+        });
+        let mut req = client
+            .post(format!("{}/backup/upsert-user", base_url))
+            .json(&body);
+        if let Some(ref key) = api_key {
+            req = req.header("X-API-Key", key.as_str());
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => synced += 1,
+            Ok(resp) => tracing::warn!(
+                "Failed to upsert user {} on backup: HTTP {}",
+                id,
+                resp.status()
+            ),
+            Err(e) => tracing::warn!("Failed to upsert user {} on backup: {}", id, e),
+        }
+    }
+
+    if synced > 0 {
+        tracing::info!("Synced {} new user account(s) to backup server", synced);
     }
 }
 
@@ -512,13 +816,27 @@ pub async fn background_sync_task(pool: sqlx::SqlitePool, storage_root: std::pat
         };
 
         for server in &servers {
-            // Check if it's time to sync
+            // Check if it's time to sync.
+            //
+            // Retry policy:
+            //  - Never synced (last_sync_at IS NULL) → sync immediately.
+            //  - Last sync was "error" or "partial"  → retry after 1 h so a
+            //    newly-paired server whose first sync failed (e.g. wrong
+            //    address, temporary network issue) is retried well within the
+            //    hour rather than waiting the full sync_frequency_hours (24 h
+            //    default).  Without this the backup would silently stay empty
+            //    for a full day after every failed attempt.
+            //  - Last sync succeeded → wait sync_frequency_hours as usual.
             let should_sync = match &server.last_sync_at {
                 None => true, // Never synced
                 Some(last) => {
                     if let Ok(last_dt) = chrono::DateTime::parse_from_rfc3339(last) {
                         let elapsed = Utc::now() - last_dt.with_timezone(&Utc);
-                        elapsed.num_hours() >= server.sync_frequency_hours
+                        let threshold_hours = match server.last_sync_status.as_str() {
+                            "error" | "partial" => 1_i64,
+                            _ => server.sync_frequency_hours,
+                        };
+                        elapsed.num_hours() >= threshold_hours
                     } else {
                         true
                     }
