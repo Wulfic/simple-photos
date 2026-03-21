@@ -487,7 +487,11 @@ async fn update_sync_log(
 /// Background task: periodically sync to all enabled backup servers
 /// based on their configured frequency.
 pub async fn background_sync_task(pool: sqlx::SqlitePool, storage_root: std::path::PathBuf) {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Check every hour
+    // Check every 5 minutes so newly-paired servers get synced quickly.
+    // The per-server `sync_frequency_hours` still controls how often each
+    // individual server is actually synced — this interval only affects
+    // how often we *check* whether any server is due.
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
 
     loop {
         interval.tick().await;

@@ -330,6 +330,7 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
     .await
     .unwrap_or_default();
 
+    // Broadcast is sent exclusively by backup-mode servers (SPBK prefix).
     let mut discovered: Vec<DiscoveredServer> = broadcast_results
         .into_iter()
         .filter(|b| !existing_addrs.contains(&b.address))
@@ -337,6 +338,7 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
             address: b.address,
             name: b.name,
             version: b.version,
+            mode: Some("backup".to_string()),
             api_key: None,
         })
         .collect();
@@ -557,16 +559,31 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
             }
         };
         if score(new_ip) > score(current_ip) {
+            // Prefer routable address, but merge api_key and mode from both
             let api_key = server.api_key.or_else(|| entry.api_key.clone());
-            *entry = DiscoveredServer { api_key, ..server };
-        } else if entry.api_key.is_none() && server.api_key.is_some() {
-            entry.api_key = server.api_key;
+            let mode = server.mode.or_else(|| entry.mode.clone());
+            *entry = DiscoveredServer { api_key, mode, ..server };
+        } else {
+            // Keep current (better-scored) address — merge any extra info in
+            if entry.api_key.is_none() && server.api_key.is_some() {
+                entry.api_key = server.api_key;
+            }
+            if entry.mode.is_none() && server.mode.is_some() {
+                entry.mode = server.mode;
+            }
         }
     }
-    let deduped: Vec<DiscoveredServer> = by_port.into_values().collect();
+    // Filter: primary server scan should only surface backup-mode servers.
+    // Servers whose mode is explicitly "primary" are excluded.
+    // Servers with mode=None (responded via /health only, mode unknown) are
+    // kept for backward compatibility with older server versions.
+    let deduped: Vec<DiscoveredServer> = by_port
+        .into_values()
+        .filter(|s| s.mode.as_deref() != Some("primary"))
+        .collect();
 
     tracing::info!(
-        "[DISCOVER] Discovery complete: {} unique servers found",
+        "[DISCOVER] Discovery complete: {} backup servers found",
         deduped.len()
     );
 
@@ -599,10 +616,15 @@ async fn probe_server(client: &reqwest::Client, host: &str, port: u16) -> Option
                         .and_then(|k| k.as_str())
                         .filter(|k| !k.is_empty())
                         .map(|k| k.to_string());
+                    let mode = body
+                        .get("mode")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string());
                     return Some(DiscoveredServer {
                         address: format!("{}:{}", host, port),
                         name,
                         version,
+                        mode,
                         api_key,
                     });
                 }
@@ -634,6 +656,7 @@ async fn probe_health_only(client: &reqwest::Client, addr: &str) -> Option<Disco
                         address: addr.to_string(),
                         name,
                         version,
+                        mode: None, // /health doesn't report mode
                         api_key: None,
                     });
                 }
@@ -675,10 +698,15 @@ async fn probe_discovery_port(
                         .and_then(|p| p.as_u64())
                         .map(|p| p as u16)
                         .unwrap_or(discovery_port);
+                    let mode = body
+                        .get("mode")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string());
                     return Some(DiscoveredServer {
                         address: format!("{}:{}", host, actual_port),
                         name,
                         version,
+                        mode,
                         api_key: None,
                     });
                 }

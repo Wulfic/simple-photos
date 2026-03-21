@@ -34,9 +34,20 @@ pub struct PortResponse {
 
 /// Find the first TCP port that can be bound, starting from `start`.
 /// Tries each port in sequence; returns `start` as a fallback if all fail.
-fn find_available_port(start: u16) -> u16 {
+///
+/// `our_port` is the port this server process is already listening on.
+/// Binding that port would spuriously fail (we own it), so we treat it as
+/// available and return it immediately so the wizard never suggests `our_port + 1`
+/// as the "next free" port when the server is already on `our_port`.
+fn find_available_port(start: u16, our_port: u16) -> u16 {
     let mut port = start;
     loop {
+        // Our own port is always valid — we already own the binding.
+        // Attempting TcpListener::bind on it would fail even though it is free
+        // for our use, which would cause the function to skip past it incorrectly.
+        if port == our_port {
+            return port;
+        }
         // Attempt a non-blocking bind — if it succeeds the port is free.
         if std::net::TcpListener::bind(("0.0.0.0", port)).is_ok() {
             return port;
@@ -57,8 +68,10 @@ pub async fn get_port(
 ) -> Result<Json<PortResponse>, AppError> {
     require_admin(&state, &auth).await?;
 
-    // Run the blocking port-scan off the async executor.
-    let suggested_port = tokio::task::spawn_blocking(|| find_available_port(8080))
+    // Pass our own port so find_available_port never skips it — if we're
+    // already on 8080 the suggestion should remain 8080, not 8081.
+    let current_port = state.config.server.port;
+    let suggested_port = tokio::task::spawn_blocking(move || find_available_port(8080, current_port))
         .await
         .unwrap_or(8080);
 
@@ -95,15 +108,39 @@ pub async fn update_port(
         ));
     }
 
-    // Persist to config.toml (blocking I/O — offload to spawn_blocking)
+    // Persist to config.toml (blocking I/O — offload to spawn_blocking).
+    //
+    // In Docker the config file is often read-only (mounted :ro).  When the
+    // write fails we fall back to persisting the new port in the database so
+    // the wizard can continue.  The server operator will still need to
+    // update docker-compose.yml for the actual port mapping.
     let port = req.port;
-    tokio::task::spawn_blocking(move || update_config_toml_port(port))
-        .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
-        .map_err(|e| {
-            tracing::error!("Failed to update port in config.toml: {}", e);
-            AppError::Internal(format!("Failed to save port configuration: {}", e))
-        })?;
+    let config_write_result =
+        tokio::task::spawn_blocking(move || update_config_toml_port(port))
+            .await
+            .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?;
+
+    let config_write_ok = match config_write_result {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!("Could not write port to config.toml (read-only / Docker?): {}", e);
+            false
+        }
+    };
+
+    // Always persist the port in the database so other parts of the system
+    // can read it, and so the wizard value survives even if the config file
+    // is immutable (common in Docker containers).
+    if let Err(e) = sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('server_port', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(req.port.to_string())
+    .execute(&state.pool)
+    .await
+    {
+        tracing::error!("Failed to persist port to database: {}", e);
+    }
 
     audit::log(
         &state,
@@ -122,14 +159,25 @@ pub async fn update_port(
         req.port
     );
 
+    let message = if config_write_ok {
+        format!(
+            "Port updated to {}. Server restart required for the change to take effect.",
+            req.port
+        )
+    } else {
+        format!(
+            "Port preference saved ({}). Note: the config file is read-only \
+             (common in Docker). Update the port mapping in your docker-compose.yml \
+             and restart the container for the change to take effect.",
+            req.port
+        )
+    };
+
     Ok(Json(PortResponse {
         port: req.port,
         // After an explicit save the chosen port is already confirmed; echo it back.
         suggested_port: req.port,
-        message: format!(
-            "Port updated to {}. Server restart required for the change to take effect.",
-            req.port
-        ),
+        message,
     }))
 }
 
