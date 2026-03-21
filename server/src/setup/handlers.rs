@@ -316,6 +316,12 @@ pub async fn discover(
         }
     }
 
+    tracing::info!(
+        "Setup discovery Phase 2 complete: {} servers found via local probes (discovery_port={})",
+        discovered.len(),
+        discovery_port
+    );
+
     // ── Phase 3: LAN subnet scan via discovery port ──────────────────────
     let mut subnets: Vec<String> = Vec::new();
     if let Ok(url) = reqwest::Url::parse(&state.config.server.base_url) {
@@ -327,6 +333,7 @@ pub async fn discover(
         }
     }
     if let Some(local_ip) = crate::backup::broadcast::get_local_ip() {
+        tracing::debug!("Setup discovery: local IP = {}", local_ip);
         let parts: Vec<&str> = local_ip.split('.').collect();
         if parts.len() == 4 {
             let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
@@ -367,6 +374,14 @@ pub async fn discover(
         }
     }
 
+    tracing::info!(
+        "Setup discovery Phase 3: scanning {} subnets ({:?}) on port {}, {} total probes",
+        subnets.len(),
+        subnets,
+        if discovery_port != 0 { discovery_port } else { our_port },
+        probes.len()
+    );
+
     let mut lan_futures = Vec::new();
     for (ip, port, is_discovery) in probes {
         let c = client.clone();
@@ -374,7 +389,7 @@ pub async fn discover(
         lan_futures.push(async move {
             let _permit = sem.acquire().await;
             if is_discovery {
-                // Probe the dedicated discovery port
+                // Probe the dedicated discovery port (default 3301)
                 let url = format!("http://{}:{}/", ip, port);
                 if let Ok(resp) = c.get(&url).send().await {
                     if resp.status().is_success() {
@@ -415,18 +430,31 @@ pub async fn discover(
         });
     }
 
-    let lan_results = tokio::time::timeout(
-        std::time::Duration::from_secs(8),
-        futures_util::future::join_all(lan_futures),
-    )
-    .await
-    .unwrap_or_default();
+    // Use FuturesUnordered + streaming so we collect results as they
+    // complete. Previously `join_all` + `unwrap_or_default()` discarded
+    // ALL results when the timeout fired — even those already finished.
+    let mut stream: futures_util::stream::FuturesUnordered<_> =
+        lan_futures.into_iter().collect();
 
-    for result in lan_results.into_iter().flatten() {
-        let addr = result.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
-        if !existing_addrs.contains(&addr) {
-            existing_addrs.insert(addr);
-            discovered.push(result);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(12);
+    loop {
+        match tokio::time::timeout_at(deadline, futures_util::StreamExt::next(&mut stream)).await {
+            Ok(Some(Some(result))) => {
+                let addr = result.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
+                if !existing_addrs.contains(&addr) {
+                    existing_addrs.insert(addr);
+                    discovered.push(result);
+                }
+            }
+            Ok(Some(None)) => { /* probe returned None (no server found) */ }
+            Ok(None) => break,   // stream exhausted — all probes done
+            Err(_) => {
+                tracing::warn!(
+                    "Setup discovery: LAN scan timed out after 12s with {} servers found so far",
+                    discovered.len()
+                );
+                break; // deadline reached — keep whatever we collected
+            }
         }
     }
 

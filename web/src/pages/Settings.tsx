@@ -544,41 +544,6 @@ export default function Settings() {
               </div>
             </form>
           )}
-
-          {/* Discovered servers \u2014 shown after a scan, as suggestions */}
-          {discoveredServers.length > 0 && !showAddBackupServer && (
-            <div className="mt-4 space-y-2">
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                Found on local network
-              </p>
-              {discoveredServers.map((srv) => (
-                <div
-                  key={srv.address}
-                  className="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
-                      {srv.name || "Simple Photos"}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                      {srv.address} &nbsp;\u00b7&nbsp; v{srv.version}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setBackupServerName(srv.name || `Backup (${srv.address})`);
-                      setBackupServerAddress(srv.address);
-                      setBackupServerApiKey(srv.api_key ?? "");
-                      setShowAddBackupServer(true);
-                    }}
-                    className="flex-shrink-0 text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
-                  >
-                    Add
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </section>
       )}
