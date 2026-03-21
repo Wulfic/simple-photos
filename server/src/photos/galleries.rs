@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
+use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -189,6 +190,48 @@ pub async fn add_gallery_item(
         .fetch_optional(&state.pool)
         .await?;
 
+    // Track whether the source is a server-side photo (for cloning into photos table)
+    let is_server_side = blob_row.is_none();
+
+    /// Row shape for the full photos table query used when cloning server-side photos.
+    #[derive(Debug, Clone, FromRow)]
+    struct PhotoRowFull {
+        filename: String,
+        mime_type: String,
+        media_type: String,
+        file_path: String,
+        size_bytes: i64,
+        width: i32,
+        height: i32,
+        duration_secs: Option<f64>,
+        taken_at: Option<String>,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+        thumb_path: Option<String>,
+        created_at: String,
+        is_favorite: i32,
+        crop_metadata: Option<String>,
+        camera_model: Option<String>,
+        photo_hash: Option<String>,
+    }
+
+    // Full photo row needed for server-side clones
+    let photo_row_full: Option<PhotoRowFull> =
+        if is_server_side {
+            sqlx::query_as::<_, PhotoRowFull>(
+                "SELECT filename, mime_type, media_type, file_path, size_bytes, width, height, \
+                 duration_secs, taken_at, latitude, longitude, thumb_path, created_at, \
+                 is_favorite, crop_metadata, camera_model, photo_hash \
+                 FROM photos WHERE id = ? AND user_id = ?",
+            )
+            .bind(&req.blob_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.pool)
+            .await?
+        } else {
+            None
+        };
+
     // Resolve source file path, metadata, and determine blob_type
     let (blob_type, size_bytes, client_hash, storage_path, content_hash): (
         String,
@@ -199,28 +242,19 @@ pub async fn add_gallery_item(
     ) = if let Some((_id, bt, sz, ch, sp, coh)) = blob_row {
         (bt, sz, ch, sp, coh)
     } else {
-        // Not in blobs table — check the photos table (server-side / autoscanned)
-        let photo_row: Option<(String, String, i64, String, Option<String>)> = sqlx::query_as(
-            "SELECT mime_type, media_type, size_bytes, file_path, photo_hash \
-             FROM photos WHERE id = ? AND user_id = ?",
-        )
-        .bind(&req.blob_id)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.pool)
-        .await?;
-
-        let (mime, media_type, sz, fp, ph) =
-            photo_row.ok_or_else(|| AppError::BadRequest("Photo or blob not found".into()))?;
+        // Not in blobs table — use the photos table row
+        let prf = photo_row_full.as_ref()
+            .ok_or_else(|| AppError::BadRequest("Photo or blob not found".into()))?;
 
         // Derive blob_type from media_type (same logic as restore)
-        let bt = match media_type.as_str() {
+        let bt = match prf.media_type.as_str() {
             "gif" => "gif".to_string(),
             "video" => "video".to_string(),
             "audio" => "audio".to_string(),
-            _ if mime.starts_with("video/") => "video".to_string(),
+            _ if prf.mime_type.starts_with("video/") => "video".to_string(),
             _ => "photo".to_string(),
         };
-        (bt, sz, None, fp, ph)
+        (bt, prf.size_bytes, None, prf.file_path.clone(), prf.photo_hash.clone())
     };
 
     // Clone: read the original file data from disk, write a new copy under a fresh ID
@@ -250,18 +284,86 @@ pub async fn add_gallery_item(
     .execute(&state.pool)
     .await?;
 
+    // For server-side (autoscanned) photos, also create a `photos` table row
+    // for the clone.  This ensures the viewer's `/api/photos/{id}/file` and
+    // `/api/photos/{id}/thumbnail` endpoints can serve the cloned file.
+    if let Some(prf) = &photo_row_full {
+        // Resolve the thumbnail: copy the original thumbnail file if it exists
+        let new_thumb_path = if let Some(tp) = &prf.thumb_path {
+            let thumb_data = crate::blobs::storage::read_blob(&storage_root, tp)
+                .await
+                .ok(); // Non-fatal if thumbnail missing
+            if let Some(td) = thumb_data {
+                let thumb_id = format!("{}_thumb", new_blob_id);
+                crate::blobs::storage::write_blob(&storage_root, &auth.user_id, &thumb_id, &td)
+                    .await
+                    .ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        sqlx::query(
+            "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+             size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
+             thumb_path, created_at, is_favorite, crop_metadata, camera_model, photo_hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&new_blob_id)
+        .bind(&auth.user_id)
+        .bind(&prf.filename)
+        .bind(&new_storage_path)
+        .bind(&prf.mime_type)
+        .bind(&prf.media_type)
+        .bind(prf.size_bytes)
+        .bind(prf.width)
+        .bind(prf.height)
+        .bind(prf.duration_secs)
+        .bind(&prf.taken_at)
+        .bind(prf.latitude)
+        .bind(prf.longitude)
+        .bind(&new_thumb_path)
+        .bind(&prf.created_at)
+        .bind(prf.is_favorite)
+        .bind(&prf.crop_metadata)
+        .bind(&prf.camera_model)
+        .bind(Option::<String>::None) // Don't copy photo_hash — it has a unique index per user
+        .execute(&state.pool)
+        .await?;
+
+        tracing::info!(
+            new_blob_id = %new_blob_id,
+            original_id = %req.blob_id,
+            mime_type = %prf.mime_type,
+            "[DIAG:SECURE_ADD] Created photos table row for server-side clone"
+        );
+    }
+
     let item_id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT OR IGNORE INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at) \
-         VALUES (?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id) \
+         VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&item_id)
     .bind(&gallery_id)
     .bind(&new_blob_id)
     .bind(&now)
+    .bind(&req.blob_id) // Track the original so it can be hidden from the main gallery
     .execute(&state.pool)
     .await?;
+
+    tracing::info!(
+        gallery_id = %gallery_id,
+        original_blob_id = %req.blob_id,
+        new_blob_id = %new_blob_id,
+        item_id = %item_id,
+        blob_type = %blob_type,
+        is_server_side = is_server_side,
+        "[DIAG:SECURE_ADD] Cloned blob into secure gallery"
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -280,8 +382,10 @@ pub async fn list_secure_blob_ids(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let blob_ids: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT gi.blob_id \
+    // Return BOTH the cloned blob IDs and the original blob IDs so the
+    // main gallery can hide originals that have been moved to secure albums.
+    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT gi.blob_id, gi.original_blob_id \
          FROM encrypted_gallery_items gi \
          JOIN encrypted_galleries g ON g.id = gi.gallery_id \
          WHERE g.user_id = ?",
@@ -290,8 +394,24 @@ pub async fn list_secure_blob_ids(
     .fetch_all(&state.pool)
     .await?;
 
-    let ids: Vec<&str> = blob_ids.iter().map(|(id,)| id.as_str()).collect();
-    Ok(Json(serde_json::json!({ "blob_ids": ids })))
+    let mut ids = std::collections::HashSet::new();
+    for (cloned_id, original_id) in &rows {
+        ids.insert(cloned_id.as_str());
+        if let Some(orig) = original_id {
+            ids.insert(orig.as_str());
+        }
+    }
+
+    let id_vec: Vec<&str> = ids.into_iter().collect();
+
+    tracing::debug!(
+        user_id = %auth.user_id,
+        total_ids = id_vec.len(),
+        cloned_count = rows.len(),
+        "[DIAG:SECURE_IDS] Returning secure blob IDs (cloned + originals)"
+    );
+
+    Ok(Json(serde_json::json!({ "blob_ids": id_vec })))
 }
 
 /// GET /api/galleries/secure/:id/items

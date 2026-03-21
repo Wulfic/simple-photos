@@ -95,9 +95,15 @@ export function useGalleryData(): GalleryDataResult {
         const fresh = new Set(res.blob_ids);
         setSecureBlobIds((prev) => {
           // Only update state if the set actually changed (avoids re-renders)
-          if (prev.size !== fresh.size) return fresh;
+          if (prev.size !== fresh.size) {
+            console.log(`[DIAG:SECURE_POLL] secureBlobIds changed: ${prev.size} → ${fresh.size}, ids:`, Array.from(fresh));
+            return fresh;
+          }
           for (const id of fresh) {
-            if (!prev.has(id)) return fresh;
+            if (!prev.has(id)) {
+              console.log(`[DIAG:SECURE_POLL] secureBlobIds changed (new member), ids:`, Array.from(fresh));
+              return fresh;
+            }
           }
           return prev;
         });
