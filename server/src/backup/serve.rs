@@ -30,17 +30,36 @@ use super::models::BackupPhotoRecord;
 // ── API-Key Validation ───────────────────────────────────────────────────────
 
 /// Validate the `X-API-Key` header against the configured backup API key.
+///
+/// Priority:
+/// 1. `config.backup.api_key` (TOML / env var) — static, fastest path
+/// 2. `server_settings.backup_api_key` (DB) — auto-generated during pairing
+///    or when "backup mode" is enabled via the admin UI
+///
 /// Returns an error if the key is missing, wrong, or backup serving is disabled.
-fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
-    let configured_key = state
+async fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
+    // Resolve the expected key: prefer static config, fall back to DB
+    let configured_key: String = if let Some(k) = state
         .config
         .backup
         .api_key
         .as_deref()
         .filter(|k| !k.is_empty())
-        .ok_or_else(|| {
+    {
+        k.to_string()
+    } else {
+        // Check DB for a key generated via pairing or admin UI
+        let db_key: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM server_settings WHERE key = 'backup_api_key'",
+        )
+        .fetch_optional(&state.read_pool)
+        .await
+        .unwrap_or(None);
+
+        db_key.filter(|k| !k.is_empty()).ok_or_else(|| {
             AppError::Forbidden("Backup serving is not enabled on this server".into())
-        })?;
+        })?
+    };
 
     let provided_key = headers
         .get("X-API-Key")
@@ -63,7 +82,7 @@ pub async fn backup_list_photos(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<BackupPhotoRecord>>, AppError> {
-    validate_api_key(&state, &headers)?;
+    validate_api_key(&state, &headers).await?;
 
     let photos = sqlx::query_as::<_, BackupPhotoRecord>(
         "SELECT p.id, p.filename, p.file_path, p.mime_type, p.media_type, \
@@ -84,7 +103,7 @@ pub async fn backup_list_trash(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
-    validate_api_key(&state, &headers)?;
+    validate_api_key(&state, &headers).await?;
 
     let rows: Vec<(String, String, i64)> =
         sqlx::query_as("SELECT id, file_path, size_bytes FROM trash_items ORDER BY deleted_at ASC")
@@ -109,7 +128,7 @@ pub async fn backup_download_photo(
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
-    validate_api_key(&state, &headers)?;
+    validate_api_key(&state, &headers).await?;
 
     let (file_path, mime_type): (String, String) =
         sqlx::query_as("SELECT file_path, mime_type FROM photos WHERE id = ?")
@@ -159,7 +178,7 @@ pub async fn backup_download_thumb(
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
-    validate_api_key(&state, &headers)?;
+    validate_api_key(&state, &headers).await?;
 
     let thumb_path: Option<String> =
         sqlx::query_scalar("SELECT thumb_path FROM photos WHERE id = ?")
@@ -208,7 +227,7 @@ pub async fn backup_receive(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    validate_api_key(&state, &headers)?;
+    validate_api_key(&state, &headers).await?;
 
     // Extract required headers
     let photo_id = headers

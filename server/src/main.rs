@@ -486,6 +486,10 @@ async fn main() -> anyhow::Result<()> {
             get(backup::recovery::proxy_backup_photos),
         )
         .route(
+            "/admin/backup/servers/{id}/photos/{photo_id}/thumb",
+            get(backup::recovery::proxy_backup_thumbnail),
+        )
+        .route(
             "/admin/backup/discover",
             get(backup::handlers::discover_servers),
         )

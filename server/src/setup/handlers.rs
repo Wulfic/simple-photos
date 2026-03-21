@@ -204,6 +204,8 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
         Vec::new()
     });
 
+    // Only backup-mode servers broadcast via UDP (SPBK prefix).
+    // Tag them so they are filtered out of the primary-server list below.
     for b in broadcast_results {
         if !existing_addrs.contains(&b.address) {
             existing_addrs.insert(b.address.clone());
@@ -211,6 +213,7 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
                 "address": b.address,
                 "name": b.name,
                 "version": b.version,
+                "mode": "backup",
             }));
         }
     }
@@ -309,10 +312,16 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
                                     .and_then(|p| p.as_u64())
                                     .map(|p| p as u16)
                                     .unwrap_or(port);
+                                let mode = body
+                                    .get("mode")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("primary")
+                                    .to_string();
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", host_owned, actual_port),
                                     "name": name,
                                     "version": version,
+                                    "mode": mode,
                                 }));
                             }
                         }
@@ -337,10 +346,16 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("unknown")
                                     .to_string();
+                                let mode = body
+                                    .get("mode")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("primary")
+                                    .to_string();
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", host_owned, port),
                                     "name": name,
                                     "version": version,
+                                    "mode": mode,
                                 }));
                             }
                         }
@@ -500,10 +515,16 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
                                     .and_then(|p| p.as_u64())
                                     .map(|p| p as u16)
                                     .unwrap_or(port);
+                                let mode = body
+                                    .get("mode")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("primary")
+                                    .to_string();
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", ip, actual_port),
                                     "name": name,
                                     "version": version,
+                                    "mode": mode,
                                 }));
                             }
                         }
@@ -529,10 +550,16 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("unknown")
                                     .to_string();
+                                let mode = body
+                                    .get("mode")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("primary")
+                                    .to_string();
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", ip, port),
                                     "name": name,
                                     "version": version,
+                                    "mode": mode,
                                 }));
                             }
                         }
@@ -662,10 +689,18 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
             dedup_map.insert(key, srv);
         }
     }
-    let final_servers: Vec<serde_json::Value> = dedup_map.into_values().collect();
+    // This discover endpoint is called by a backup server during setup to
+    // locate a primary server to pair with.  Only return primary-mode servers;
+    // filter out anything that reported mode="backup" explicitly.
+    // Servers with no mode field (backward compat) are kept.
+    let final_servers: Vec<serde_json::Value> = dedup_map
+        .into_values()
+        .filter(|s| s.get("mode").and_then(|m| m.as_str()) != Some("backup"))
+        .collect();
     tracing::info!(
-        "Discovery: found {} servers ({} after dedup)",
+        "Discovery: found {} servers ({} after dedup, {} after primary-only filter)",
         discovered_len,
+        final_servers.len(),
         final_servers.len()
     );
 
@@ -787,6 +822,36 @@ pub async fn pair(
         "Successfully authenticated against primary server at {}",
         base_url
     );
+
+    // ── Verify the target is a primary (not backup) server ───────────────
+    // A backup server cannot pair with another backup server — pairing is
+    // only valid between a backup server and a primary server.
+    let mode_url = format!("{}/api/admin/backup/mode", base_url);
+    if let Ok(mode_resp) = client
+        .get(&mode_url)
+        .header("Authorization", format!("Bearer {}", remote_token))
+        .send()
+        .await
+    {
+        if mode_resp.status().is_success() {
+            if let Ok(mode_data) = mode_resp.json::<serde_json::Value>().await {
+                let server_mode = mode_data
+                    .get("mode")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("primary");
+                if server_mode != "primary" {
+                    return Err(AppError::BadRequest(
+                        "The target server is already in backup mode. \
+                         You can only pair a backup server to a primary server, \
+                         not to another backup server.".into(),
+                    ));
+                }
+            }
+        }
+        // If the endpoint is unreachable or returns a non-success status we
+        // allow the pairing to proceed — older server versions may not have
+        // this endpoint, and auth already confirmed the server is reachable.
+    }
 
     // Auto-generate a backup API key early so we can register it
     let api_key = Uuid::new_v4().to_string().replace('-', "");
