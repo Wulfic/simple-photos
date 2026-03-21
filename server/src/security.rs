@@ -69,9 +69,7 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response {
     // Disable dangerous browser APIs we don't need
     headers.insert(
         "Permissions-Policy",
-        HeaderValue::from_static(
-            "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
-        ),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
     );
 
     // CSP: allow self + inline styles (Tailwind) + blob: for media URLs + wasm for Argon2id

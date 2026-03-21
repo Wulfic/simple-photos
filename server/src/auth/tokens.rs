@@ -45,10 +45,7 @@ pub fn create_jwt(
 ///
 /// The refresh token is stored as a SHA-256 hash in the `refresh_tokens` table.
 /// The raw (unhashed) refresh token is returned to the caller for the client.
-pub async fn issue_tokens(
-    state: &AppState,
-    user_id: &str,
-) -> Result<(String, String), AppError> {
+pub async fn issue_tokens(state: &AppState, user_id: &str) -> Result<(String, String), AppError> {
     // Fetch the user's role so it can be embedded in the JWT
     let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
         .bind(user_id)
@@ -66,8 +63,8 @@ pub async fn issue_tokens(
 
     let raw_refresh = Uuid::new_v4().to_string();
     let refresh_hash = hash_token(&raw_refresh);
-    let expires_at = Utc::now()
-        + chrono::Duration::days(state.config.auth.refresh_token_ttl_days as i64);
+    let expires_at =
+        Utc::now() + chrono::Duration::days(state.config.auth.refresh_token_ttl_days as i64);
 
     sqlx::query(
         "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",

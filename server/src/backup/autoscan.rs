@@ -49,7 +49,10 @@ pub async fn background_auto_scan_task(
         tracing::info!("[DIAG:AUTOSCAN] Startup scan skipped — another scan is in progress");
         0
     };
-    tracing::info!("[DIAG:AUTOSCAN] Startup auto-scan complete: registered {} new files", count);
+    tracing::info!(
+        "[DIAG:AUTOSCAN] Startup auto-scan complete: registered {} new files",
+        count
+    );
     update_last_scan_time(&pool).await;
 
     // Then scan on a configurable interval
@@ -65,7 +68,10 @@ pub async fn background_auto_scan_task(
             tracing::info!("[DIAG:AUTOSCAN] Interval scan skipped — another scan is in progress");
             0
         };
-        tracing::info!("[DIAG:AUTOSCAN] Interval auto-scan complete: registered {} new files", count);
+        tracing::info!(
+            "[DIAG:AUTOSCAN] Interval auto-scan complete: registered {} new files",
+            count
+        );
         update_last_scan_time(&pool).await;
     }
 }
@@ -98,7 +104,10 @@ pub async fn trigger_auto_scan(
     let storage_root = (**state.storage_root.load()).clone();
 
     let count = run_auto_scan(&pool, &storage_root).await;
-    tracing::info!("[DIAG:AUTOSCAN] On-demand scan complete: registered {} new files", count);
+    tracing::info!(
+        "[DIAG:AUTOSCAN] On-demand scan complete: registered {} new files",
+        count
+    );
 
     // Update last scan time
     update_last_scan_time(&pool).await;
@@ -110,10 +119,7 @@ pub async fn trigger_auto_scan(
 }
 
 /// Scan storage directory and register any unregistered media files for ALL users.
-async fn run_auto_scan(
-    pool: &sqlx::SqlitePool,
-    storage_root: &std::path::Path,
-) -> i64 {
+async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) -> i64 {
     // Get the first admin user to assign new photos to
     let admin_id: Option<String> = sqlx::query_scalar(
         "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
@@ -149,16 +155,17 @@ async fn run_auto_scan(
     // never hold the full Vec<String> + HashSet simultaneously in memory.
     let mut existing_set = std::collections::HashSet::new();
     {
-        let mut rows = sqlx::query_scalar::<_, String>(
-            "SELECT file_path FROM photos",
-        )
-        .fetch(pool);
+        let mut rows = sqlx::query_scalar::<_, String>("SELECT file_path FROM photos").fetch(pool);
 
         while let Some(path) = rows.try_next().await.unwrap_or(None) {
             existing_set.insert(path);
         }
     }
-    tracing::info!("[DIAG:AUTOSCAN] run_auto_scan: {} existing photos in DB, scanning {:?}", existing_set.len(), storage_root);
+    tracing::info!(
+        "[DIAG:AUTOSCAN] run_auto_scan: {} existing photos in DB, scanning {:?}",
+        existing_set.len(),
+        storage_root
+    );
 
     let mut new_count = 0i64;
     let mut queue = vec![storage_root.to_path_buf()];
@@ -269,7 +276,11 @@ async fn run_auto_scan(
                             continue;
                         }
                         Err(e) => {
-                            tracing::error!("Autoscan: failed to register photo {}: {}", rel_path, e);
+                            tracing::error!(
+                                "Autoscan: failed to register photo {}: {}",
+                                rel_path,
+                                e
+                            );
                             continue;
                         }
                         Ok(_) => { /* inserted successfully */ }
@@ -288,7 +299,10 @@ async fn run_auto_scan(
                     new_count += 1;
                     tracing::info!(
                         "[DIAG:AUTOSCAN] Registered: {} (type={}, mime={}, size={})",
-                        name, media_type, mime, size
+                        name,
+                        media_type,
+                        mime,
+                        size
                     );
                 }
             }

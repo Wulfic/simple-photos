@@ -46,12 +46,11 @@ pub async fn discover_info(
     }
 
     // Fetch the current backup mode (default: "primary").
-    let mode: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'backup_mode'",
-    )
-    .fetch_optional(&state.read_pool)
-    .await?
-    .unwrap_or_else(|| "primary".to_string());
+    let mode: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+            .fetch_optional(&state.read_pool)
+            .await?
+            .unwrap_or_else(|| "primary".to_string());
 
     // Only expose the API key when this server is operating as a backup.
     let api_key: Option<String> = if mode == "backup" {
@@ -77,20 +76,19 @@ pub async fn discover_info(
     };
 
     // Include a human-readable name for the discovery UI.
-    let name: String = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'server_name'",
-    )
-    .fetch_optional(&state.read_pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| {
-        if mode == "backup" {
-            "Simple Photos Backup".to_string()
-        } else {
-            "Simple Photos".to_string()
-        }
-    });
+    let name: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'server_name'")
+            .fetch_optional(&state.read_pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| {
+                if mode == "backup" {
+                    "Simple Photos Backup".to_string()
+                } else {
+                    "Simple Photos".to_string()
+                }
+            });
 
     Ok(Json(json!({
         "service": "simple-photos",

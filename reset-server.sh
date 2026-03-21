@@ -69,8 +69,11 @@ if [[ -d "$DOCKER_DIR" ]]; then
     # Start (or recreate) the container so it picks up the clean state.
     # --force-recreate ensures we start even when the container was stopped.
     if command -v docker &>/dev/null && [[ -f "$DOCKER_DIR/docker-compose.yml" ]]; then
+        echo "Stopping any extra backup containers..."
+        docker compose -f "$DOCKER_DIR/docker-compose.yml" stop backup-2 backup-3 2>/dev/null || true
+        
         echo "Starting backup container..."
-        docker compose -f "$DOCKER_DIR/docker-compose.yml" up -d --force-recreate 2>/dev/null || true
+        docker compose -f "$DOCKER_DIR/docker-compose.yml" up -d --build --force-recreate backup-1 2>/dev/null || true
 
         # Wait for backup-1 to start accepting requests
         echo -n "Waiting for backup-1"

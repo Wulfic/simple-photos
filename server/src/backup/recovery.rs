@@ -63,13 +63,12 @@ pub async fn recover_from_backup(
     .ok_or(AppError::NotFound)?;
 
     // Fetch the API key for the remote server
-    let api_key: Option<String> = sqlx::query_scalar(
-        "SELECT api_key FROM backup_servers WHERE id = ?",
-    )
-    .bind(&server_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
+    let api_key: Option<String> =
+        sqlx::query_scalar("SELECT api_key FROM backup_servers WHERE id = ?")
+            .bind(&server_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
 
     // Create a sync log entry for tracking
     let recovery_id = Uuid::new_v4().to_string();
@@ -88,9 +87,7 @@ pub async fn recover_from_backup(
 
     // Prevent overlapping recoveries to the same server
     let guard = try_acquire_sync(&server_id).ok_or_else(|| {
-        AppError::BadRequest(
-            "A sync or recovery is already in progress for this server".into(),
-        )
+        AppError::BadRequest("A sync or recovery is already in progress for this server".into())
     })?;
 
     // Spawn recovery as a background task (guard moves into the task
@@ -174,10 +171,7 @@ async fn run_recovery(
                 "error",
                 0,
                 0,
-                Some(&format!(
-                    "Backup server returned HTTP {}",
-                    resp.status()
-                )),
+                Some(&format!("Backup server returned HTTP {}", resp.status())),
             )
             .await;
             return;
@@ -206,18 +200,17 @@ async fn run_recovery(
     //    ID dedup handles re-recovery of the same backup.
     //    file_path dedup prevents re-downloading files that were registered
     //    by a local scan (different ID, same on-disk file).
-    let local_entries: Vec<(String, String)> = match sqlx::query_as::<_, (String, String)>(
-        "SELECT id, file_path FROM photos",
-    )
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            update_recovery_log(pool, recovery_id, "error", 0, 0, Some(&e.to_string())).await;
-            return;
-        }
-    };
+    let local_entries: Vec<(String, String)> =
+        match sqlx::query_as::<_, (String, String)>("SELECT id, file_path FROM photos")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                update_recovery_log(pool, recovery_id, "error", 0, 0, Some(&e.to_string())).await;
+                return;
+            }
+        };
 
     let local_id_set: std::collections::HashSet<String> =
         local_entries.iter().map(|(id, _)| id.clone()).collect();
@@ -252,7 +245,11 @@ async fn run_recovery(
             Ok(resp) if resp.status().is_success() => match resp.bytes().await {
                 Ok(bytes) => bytes,
                 Err(e) => {
-                    tracing::warn!("Recovery: failed to read bytes for {}: {}", photo.filename, e);
+                    tracing::warn!(
+                        "Recovery: failed to read bytes for {}: {}",
+                        photo.filename,
+                        e
+                    );
                     continue;
                 }
             },
@@ -276,7 +273,9 @@ async fn run_recovery(
         if let Err(reason) = sanitize::validate_relative_path(file_path) {
             tracing::warn!(
                 "Recovery: skipping {} — unsafe file_path '{}': {}",
-                photo.filename, file_path, reason
+                photo.filename,
+                file_path,
+                reason
             );
             continue;
         }
@@ -409,21 +408,18 @@ pub async fn proxy_backup_photos(
 ) -> Result<Json<Vec<BackupPhotoRecord>>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let address: String = sqlx::query_scalar(
-        "SELECT address FROM backup_servers WHERE id = ?",
-    )
-    .bind(&server_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let address: String = sqlx::query_scalar("SELECT address FROM backup_servers WHERE id = ?")
+        .bind(&server_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
-    let api_key: Option<String> = sqlx::query_scalar(
-        "SELECT api_key FROM backup_servers WHERE id = ?",
-    )
-    .bind(&server_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .flatten();
+    let api_key: Option<String> =
+        sqlx::query_scalar("SELECT api_key FROM backup_servers WHERE id = ?")
+            .bind(&server_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))

@@ -89,7 +89,9 @@ pub async fn list_photos(
     let photos = query.fetch_all(&state.read_pool).await?;
 
     let next_cursor = if photos.len() as i64 > limit {
-        photos.last().map(|p| p.taken_at.clone().unwrap_or_else(|| p.created_at.clone()))
+        photos
+            .last()
+            .map(|p| p.taken_at.clone().unwrap_or_else(|| p.created_at.clone()))
     } else {
         None
     };
@@ -111,9 +113,8 @@ pub async fn register_photo(
     Json(req): Json<RegisterPhotoRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     // Security: ensure file_path is a safe relative path (no traversal, no absolute)
-    sanitize::validate_relative_path(&req.file_path).map_err(|reason| {
-        AppError::BadRequest(format!("Invalid file_path: {}", reason))
-    })?;
+    sanitize::validate_relative_path(&req.file_path)
+        .map_err(|reason| AppError::BadRequest(format!("Invalid file_path: {}", reason)))?;
 
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
@@ -198,8 +199,14 @@ fn check_etag(headers: &HeaderMap, etag: &str) -> Option<Response> {
         if inm == etag || inm.trim_matches('"') == etag.trim_matches('"') {
             return Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
-                .header("ETag", HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("")))
-                .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+                .header(
+                    "ETag",
+                    HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("")),
+                )
+                .header(
+                    "Cache-Control",
+                    HeaderValue::from_static("private, max-age=86400"),
+                )
                 .body(Body::empty())
                 .ok();
         }
@@ -275,7 +282,9 @@ pub async fn serve_photo(
 
     // ── HTTP Range support ─────────────────────────────────────────────
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
-        if let Some((start, end)) = crate::blobs::handlers::parse_range_header(range_header, total_size) {
+        if let Some((start, end)) =
+            crate::blobs::handlers::parse_range_header(range_header, total_size)
+        {
             let length = end - start + 1;
             let mut file = open_file().await?;
 
@@ -284,27 +293,38 @@ pub async fn serve_photo(
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
 
-            let stream = tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
+            let stream =
+                tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
             let body = Body::from_stream(stream);
 
             return Ok(Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", content_type)
                 .header("Content-Length", HeaderValue::from(length))
-                .header("Content-Range", HeaderValue::from_str(
-                    &format!("bytes {}-{}/{}", start, end, total_size)
-                ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
+                .header(
+                    "Content-Range",
+                    HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end, total_size))
+                        .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
+                )
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
-                .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+                .header(
+                    "ETag",
+                    HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+                )
+                .header(
+                    "Cache-Control",
+                    HeaderValue::from_static("private, max-age=86400"),
+                )
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         } else {
             return Ok(Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header("Content-Range", HeaderValue::from_str(
-                    &format!("bytes */{}", total_size)
-                ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
+                .header(
+                    "Content-Range",
+                    HeaderValue::from_str(&format!("bytes */{}", total_size))
+                        .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
+                )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         }
@@ -320,8 +340,14 @@ pub async fn serve_photo(
         .header("Content-Type", content_type)
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-        .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
-        .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+        .header(
+            "ETag",
+            HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+        )
+        .header(
+            "Cache-Control",
+            HeaderValue::from_static("private, max-age=86400"),
+        )
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }
@@ -335,14 +361,13 @@ pub async fn serve_thumbnail(
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let thumb_path: Option<String> = sqlx::query_scalar(
-        "SELECT thumb_path FROM photos WHERE id = ? AND user_id = ?",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let thumb_path: Option<String> =
+        sqlx::query_scalar("SELECT thumb_path FROM photos WHERE id = ? AND user_id = ?")
+            .bind(&photo_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.read_pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let thumb_path = thumb_path.ok_or(AppError::NotFound)?;
     // Lock-free read via ArcSwap.
@@ -358,9 +383,9 @@ pub async fn serve_thumbnail(
             .map_err(|e| AppError::Internal(e.to_string()))?);
     }
 
-    let meta = tokio::fs::metadata(&full_path).await.map_err(|e| {
-        AppError::Internal(format!("Failed to read thumbnail: {}", e))
-    })?;
+    let meta = tokio::fs::metadata(&full_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read thumbnail: {}", e)))?;
 
     // ETag for thumbnails — ID + file size on disk
     let etag = format!("\"{}-thumb-{}\"", photo_id, meta.len());
@@ -368,9 +393,9 @@ pub async fn serve_thumbnail(
         return Ok(not_modified);
     }
 
-    let file = tokio::fs::File::open(&full_path).await.map_err(|e| {
-        AppError::Internal(format!("Failed to open thumbnail: {}", e))
-    })?;
+    let file = tokio::fs::File::open(&full_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to open thumbnail: {}", e)))?;
 
     let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
     let body = Body::from_stream(stream);
@@ -386,8 +411,14 @@ pub async fn serve_thumbnail(
         .status(StatusCode::OK)
         .header("Content-Type", HeaderValue::from_static(content_type))
         .header("Content-Length", HeaderValue::from(meta.len()))
-        .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
-        .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+        .header(
+            "ETag",
+            HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+        )
+        .header(
+            "Cache-Control",
+            HeaderValue::from_static("private, max-age=86400"),
+        )
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }
@@ -419,7 +450,14 @@ pub async fn serve_web(
     let content_type = mime_type.as_str();
 
     let etag = format!("\"{}-orig-{}\"", photo_id, size_bytes);
-    serve_file_with_range(&full_path, size_bytes as u64, content_type, &headers, Some(&etag)).await
+    serve_file_with_range(
+        &full_path,
+        size_bytes as u64,
+        content_type,
+        &headers,
+        Some(&etag),
+    )
+    .await
 }
 
 /// Internal helper: serve a file with optional HTTP Range + ETag support.
@@ -445,50 +483,65 @@ async fn serve_file_with_range(
     let etag_hv = etag.and_then(|t| HeaderValue::from_str(t).ok());
 
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
-        if let Some((start, end)) = crate::blobs::handlers::parse_range_header(range_header, total_size) {
+        if let Some((start, end)) =
+            crate::blobs::handlers::parse_range_header(range_header, total_size)
+        {
             let length = end - start + 1;
-            let mut file = tokio::fs::File::open(path).await.map_err(|e| match e.kind() {
-                std::io::ErrorKind::NotFound => AppError::NotFound,
-                _ => AppError::Internal(format!("Failed to open file: {}", e)),
-            })?;
+            let mut file = tokio::fs::File::open(path)
+                .await
+                .map_err(|e| match e.kind() {
+                    std::io::ErrorKind::NotFound => AppError::NotFound,
+                    _ => AppError::Internal(format!("Failed to open file: {}", e)),
+                })?;
 
             use tokio::io::{AsyncReadExt, AsyncSeekExt};
             file.seek(std::io::SeekFrom::Start(start))
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
 
-            let stream = tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
+            let stream =
+                tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
             let body = Body::from_stream(stream);
 
             let mut builder = Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", ct)
                 .header("Content-Length", HeaderValue::from(length))
-                .header("Content-Range", HeaderValue::from_str(
-                    &format!("bytes {}-{}/{}", start, end, total_size)
-                ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
+                .header(
+                    "Content-Range",
+                    HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end, total_size))
+                        .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
+                )
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"));
+                .header(
+                    "Cache-Control",
+                    HeaderValue::from_static("private, max-age=86400"),
+                );
             if let Some(ref ev) = etag_hv {
                 builder = builder.header("ETag", ev.clone());
             }
-            return Ok(builder.body(body)
+            return Ok(builder
+                .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         } else {
             return Ok(Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header("Content-Range", HeaderValue::from_str(
-                    &format!("bytes */{}", total_size)
-                ).map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?)
+                .header(
+                    "Content-Range",
+                    HeaderValue::from_str(&format!("bytes */{}", total_size))
+                        .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
+                )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()))?);
         }
     }
 
-    let file = tokio::fs::File::open(path).await.map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => AppError::NotFound,
-        _ => AppError::Internal(format!("Failed to open file: {}", e)),
-    })?;
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Internal(format!("Failed to open file: {}", e)),
+        })?;
 
     let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
     let body = Body::from_stream(stream);
@@ -498,11 +551,15 @@ async fn serve_file_with_range(
         .header("Content-Type", ct)
         .header("Content-Length", HeaderValue::from(total_size))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-        .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"));
+        .header(
+            "Cache-Control",
+            HeaderValue::from_static("private, max-age=86400"),
+        );
     if let Some(ref ev) = etag_hv {
         builder = builder.header("ETag", ev.clone());
     }
-    Ok(builder.body(body)
+    Ok(builder
+        .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))?)
 }
 
@@ -566,19 +623,23 @@ pub async fn set_crop(
     if let Some(ref crop) = req.crop_metadata {
         let crop = sanitize::sanitize_freeform(crop, 1024);
         if serde_json::from_str::<serde_json::Value>(&crop).is_err() {
-            return Err(AppError::BadRequest("crop_metadata must be valid JSON".into()));
+            return Err(AppError::BadRequest(
+                "crop_metadata must be valid JSON".into(),
+            ));
         }
     }
 
-    let rows = sqlx::query(
-        "UPDATE photos SET crop_metadata = ? WHERE id = ? AND user_id = ?",
-    )
-    .bind(req.crop_metadata.as_ref().map(|c| sanitize::sanitize_freeform(c, 1024)))
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .execute(&state.pool)
-    .await?
-    .rows_affected();
+    let rows = sqlx::query("UPDATE photos SET crop_metadata = ? WHERE id = ? AND user_id = ?")
+        .bind(
+            req.crop_metadata
+                .as_ref()
+                .map(|c| sanitize::sanitize_freeform(c, 1024)),
+        )
+        .bind(&photo_id)
+        .bind(&auth.user_id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
 
     if rows == 0 {
         return Err(AppError::NotFound);

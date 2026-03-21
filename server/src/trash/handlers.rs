@@ -200,15 +200,17 @@ pub async fn soft_delete_blob(
     let mut tx = state.pool.begin().await?;
 
     // Fetch the blob record (storage_path + hashes for preservation)
-    let (storage_path, client_hash, content_hash) =
-        sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
-            "SELECT storage_path, client_hash, content_hash FROM blobs WHERE id = ? AND user_id = ?",
-        )
-        .bind(&blob_id)
-        .bind(&auth.user_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let (storage_path, client_hash, content_hash) = sqlx::query_as::<
+        _,
+        (String, Option<String>, Option<String>),
+    >(
+        "SELECT storage_path, client_hash, content_hash FROM blobs WHERE id = ? AND user_id = ?",
+    )
+    .bind(&blob_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
 
     // Optionally fetch thumbnail blob storage_path
     let thumb_storage_path = if let Some(ref thumb_id) = req.thumbnail_blob_id {
@@ -410,22 +412,19 @@ pub async fn permanent_delete(
 
     // Only delete files from disk if no other photo row references the same
     // file_path (which happens when the user duplicates a photo via "Save Copy").
-    let other_refs: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE file_path = ?",
-    )
-    .bind(&file_path)
-    .fetch_one(&mut *tx)
-    .await?;
+    let other_refs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE file_path = ?")
+        .bind(&file_path)
+        .fetch_one(&mut *tx)
+        .await?;
 
     let can_delete_file = other_refs == 0;
 
     let can_delete_thumb = if let Some(ref tp) = thumb_path {
-        let other_thumb_refs: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
-        )
-        .bind(tp)
-        .fetch_one(&mut *tx)
-        .await?;
+        let other_thumb_refs: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE thumb_path = ?")
+                .bind(tp)
+                .fetch_one(&mut *tx)
+                .await?;
         other_thumb_refs == 0
     } else {
         false
@@ -480,12 +479,11 @@ pub async fn empty_trash(
     let mut tx = state.pool.begin().await?;
 
     // Fetch all trash items for file cleanup
-    let items: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT file_path, thumb_path FROM trash_items WHERE user_id = ?",
-    )
-    .bind(&auth.user_id)
-    .fetch_all(&mut *tx)
-    .await?;
+    let items: Vec<(String, Option<String>)> =
+        sqlx::query_as("SELECT file_path, thumb_path FROM trash_items WHERE user_id = ?")
+            .bind(&auth.user_id)
+            .fetch_all(&mut *tx)
+            .await?;
 
     let deleted_count = items.len() as i64;
 
@@ -496,24 +494,21 @@ pub async fn empty_trash(
     let storage_root = (**state.storage_root.load()).clone();
 
     for (file_path, thumb_path) in &items {
-        let other_refs: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM photos WHERE file_path = ?",
-        )
-        .bind(file_path)
-        .fetch_one(&mut *tx)
-        .await?;
+        let other_refs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE file_path = ?")
+            .bind(file_path)
+            .fetch_one(&mut *tx)
+            .await?;
 
         if other_refs == 0 {
             files_to_delete.push(storage_root.join(file_path));
         }
 
         if let Some(tp) = thumb_path {
-            let other_thumb_refs: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
-            )
-            .bind(tp)
-            .fetch_one(&mut *tx)
-            .await?;
+            let other_thumb_refs: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE thumb_path = ?")
+                    .bind(tp)
+                    .fetch_one(&mut *tx)
+                    .await?;
 
             if other_thumb_refs == 0 {
                 files_to_delete.push(storage_root.join(tp));
@@ -558,14 +553,13 @@ pub async fn serve_trash_thumbnail(
     auth: AuthUser,
     Path(trash_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let thumb_path: Option<String> = sqlx::query_scalar(
-        "SELECT thumb_path FROM trash_items WHERE id = ? AND user_id = ?",
-    )
-    .bind(&trash_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let thumb_path: Option<String> =
+        sqlx::query_scalar("SELECT thumb_path FROM trash_items WHERE id = ? AND user_id = ?")
+            .bind(&trash_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.read_pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let thumb_path = thumb_path.ok_or(AppError::NotFound)?;
     // Lock-free read via ArcSwap.
@@ -576,12 +570,12 @@ pub async fn serve_trash_thumbnail(
         return Err(AppError::NotFound);
     }
 
-    let meta = tokio::fs::metadata(&full_path).await.map_err(|e| {
-        AppError::Internal(format!("Failed to read thumbnail: {}", e))
-    })?;
-    let file = tokio::fs::File::open(&full_path).await.map_err(|e| {
-        AppError::Internal(format!("Failed to open thumbnail: {}", e))
-    })?;
+    let meta = tokio::fs::metadata(&full_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read thumbnail: {}", e)))?;
+    let file = tokio::fs::File::open(&full_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to open thumbnail: {}", e)))?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
@@ -640,38 +634,40 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
         // Only delete files if no other photo row still references them.
         // On DB error, skip this item entirely — do NOT default to 0
         // because that would cause irreversible file deletion.
-        let other_refs: i64 = match sqlx::query_scalar(
-            "SELECT COUNT(*) FROM photos WHERE file_path = ?",
-        )
-        .bind(file_path)
-        .fetch_one(&mut *tx)
-        .await
-        {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::error!("DB error checking file refs for {}: {} — skipping", id, e);
-                continue;
-            }
-        };
+        let other_refs: i64 =
+            match sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE file_path = ?")
+                .bind(file_path)
+                .fetch_one(&mut *tx)
+                .await
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::error!("DB error checking file refs for {}: {} — skipping", id, e);
+                    continue;
+                }
+            };
 
         if other_refs == 0 {
             files_to_delete.push(storage_root.join(file_path));
         }
 
         if let Some(tp) = thumb_path {
-            let other_thumb_refs: i64 = match sqlx::query_scalar(
-                "SELECT COUNT(*) FROM photos WHERE thumb_path = ?",
-            )
-            .bind(tp)
-            .fetch_one(&mut *tx)
-            .await
-            {
-                Ok(n) => n,
-                Err(e) => {
-                    tracing::error!("DB error checking thumb refs for {}: {} — skipping", id, e);
-                    continue;
-                }
-            };
+            let other_thumb_refs: i64 =
+                match sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE thumb_path = ?")
+                    .bind(tp)
+                    .fetch_one(&mut *tx)
+                    .await
+                {
+                    Ok(n) => n,
+                    Err(e) => {
+                        tracing::error!(
+                            "DB error checking thumb refs for {}: {} — skipping",
+                            id,
+                            e
+                        );
+                        continue;
+                    }
+                };
 
             if other_thumb_refs == 0 {
                 files_to_delete.push(storage_root.join(tp));

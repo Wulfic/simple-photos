@@ -21,7 +21,7 @@ use std::time::Instant;
 use crate::error::AppError;
 use crate::state::AppState;
 
-use super::handlers::{server_start, read_rss_bytes, read_cpu_seconds, disk_stats, dir_usage};
+use super::handlers::{dir_usage, disk_stats, read_cpu_seconds, read_rss_bytes, server_start};
 use super::models::*;
 
 // ── Basic Auth Helper ─────────────────────────────────────────────────────
@@ -47,9 +47,8 @@ async fn require_basic_auth_admin(
             AppError::Unauthorized("Invalid Authorization header. Expected Basic Auth.".into())
         })?;
 
-    let decoded = base64_decode(encoded).map_err(|_| {
-        AppError::Unauthorized("Invalid Base64 in Authorization header".into())
-    })?;
+    let decoded = base64_decode(encoded)
+        .map_err(|_| AppError::Unauthorized("Invalid Base64 in Authorization header".into()))?;
 
     let (username, password) = decoded
         .split_once(':')
@@ -182,11 +181,10 @@ pub async fn external_full(
 
     // ── Server info ───────────────────────────────────────────────────
     // Offload /proc reads to spawn_blocking (they do blocking I/O)
-    let (rss_bytes, cpu_secs) = tokio::task::spawn_blocking(|| {
-        (read_rss_bytes(), read_cpu_seconds())
-    })
-    .await
-    .unwrap_or((0, 0.0));
+    let (rss_bytes, cpu_secs) =
+        tokio::task::spawn_blocking(|| (read_rss_bytes(), read_cpu_seconds()))
+            .await
+            .unwrap_or((0, 0.0));
     let storage_root = (**state.storage_root.load()).clone();
     let server_info = ServerInfo {
         version: crate::VERSION.to_string(),
@@ -235,17 +233,23 @@ pub async fn external_full(
 
     // NOTE: These names must match the actual migration table names exactly.
     let tables = [
-        "users", "photos", "blobs", "audit_log", "client_logs",
-        "refresh_tokens", "trash_items", "backup_servers", "backup_sync_log",
-        "shared_albums", "photo_tags", "encrypted_galleries",
+        "users",
+        "photos",
+        "blobs",
+        "audit_log",
+        "client_logs",
+        "refresh_tokens",
+        "trash_items",
+        "backup_servers",
+        "backup_sync_log",
+        "shared_albums",
+        "photo_tags",
+        "encrypted_galleries",
     ];
     let mut table_counts: HashMap<String, i64> = HashMap::new();
     for table in tables {
         let sql = format!("SELECT COUNT(*) FROM {}", table);
-        let count: i64 = sqlx::query_scalar(&sql)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+        let count: i64 = sqlx::query_scalar(&sql).fetch_one(pool).await.unwrap_or(0);
         table_counts.insert(table.to_string(), count);
     }
 
@@ -281,56 +285,80 @@ pub async fn external_full(
         .fetch_one(pool)
         .await
         .unwrap_or(0);
-    let admin_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let totp_enabled_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE totp_enabled = 1")
             .fetch_one(pool)
             .await
             .unwrap_or(0);
 
-    let user_stats = UserStats { total_users, admin_count, totp_enabled_count };
+    let user_stats = UserStats {
+        total_users,
+        admin_count,
+        totp_enabled_count,
+    };
 
     // ── Photo stats ───────────────────────────────────────────────────
     let total_photos: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
-        .fetch_one(pool).await.unwrap_or(0);
-    let encrypted_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM photos")
-            .fetch_one(pool).await.unwrap_or(0);
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let encrypted_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let total_file_bytes: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")
-            .fetch_one(pool).await.unwrap_or(0);
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
     // No dedicated thumb_size column — not tracked in the schema
     let total_thumb_bytes: i64 = 0;
-    let photos_with_thumbs: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE thumb_path IS NOT NULL AND thumb_path != ''")
-            .fetch_one(pool).await.unwrap_or(0);
+    let photos_with_thumbs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos WHERE thumb_path IS NOT NULL AND thumb_path != ''",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
     let favorited_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE is_favorite = 1")
-            .fetch_one(pool).await.unwrap_or(0);
-    let tagged_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(DISTINCT photo_id) FROM photo_tags")
-            .fetch_one(pool).await.unwrap_or(0);
-    let oldest_photo: Option<String> =
-        sqlx::query_scalar("SELECT MIN(created_at) FROM photos")
-            .fetch_one(pool).await.unwrap_or(None);
-    let newest_photo: Option<String> =
-        sqlx::query_scalar("SELECT MAX(created_at) FROM photos")
-            .fetch_one(pool).await.unwrap_or(None);
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+    let tagged_count: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT photo_id) FROM photo_tags")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let oldest_photo: Option<String> = sqlx::query_scalar("SELECT MIN(created_at) FROM photos")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(None);
+    let newest_photo: Option<String> = sqlx::query_scalar("SELECT MAX(created_at) FROM photos")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(None);
 
-    let media_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT media_type, COUNT(*) as cnt FROM photos GROUP BY media_type",
-    )
-    .fetch_all(pool).await.unwrap_or_default();
+    let media_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT media_type, COUNT(*) as cnt FROM photos GROUP BY media_type")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
     let photos_by_media_type: HashMap<String, i64> = media_rows.into_iter().collect();
 
     let photo_stats = PhotoStats {
-        total_photos, encrypted_count, total_file_bytes,
-        total_thumb_bytes, photos_with_thumbs, photos_by_media_type,
-        oldest_photo, newest_photo, favorited_count, tagged_count,
+        total_photos,
+        encrypted_count,
+        total_file_bytes,
+        total_thumb_bytes,
+        photos_with_thumbs,
+        photos_by_media_type,
+        oldest_photo,
+        newest_photo,
+        favorited_count,
+        tagged_count,
     };
 
     // ── Audit summary ─────────────────────────────────────────────────
@@ -339,18 +367,25 @@ pub async fn external_full(
     let d7 = (now - chrono::Duration::days(7)).to_rfc3339();
 
     let audit_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log")
-        .fetch_one(pool).await.unwrap_or(0);
-    let audit_24h: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
-            .bind(&h24).fetch_one(pool).await.unwrap_or(0);
-    let audit_7d: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
-            .bind(&d7).fetch_one(pool).await.unwrap_or(0);
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let audit_24h: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
+        .bind(&h24)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let audit_7d: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
+        .bind(&d7)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
 
-    let event_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT event_type, COUNT(*) as cnt FROM audit_log GROUP BY event_type",
-    )
-    .fetch_all(pool).await.unwrap_or_default();
+    let event_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT event_type, COUNT(*) as cnt FROM audit_log GROUP BY event_type")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
     let events_by_type: HashMap<String, i64> = event_rows.into_iter().collect();
 
     let failure_rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
@@ -362,58 +397,93 @@ pub async fn external_full(
 
     let recent_failures: Vec<AuditFailureEntry> = failure_rows
         .into_iter()
-        .map(|(event_type, ip_address, user_agent, created_at, details)| {
-            AuditFailureEntry { event_type, ip_address, user_agent, created_at, details }
-        })
+        .map(
+            |(event_type, ip_address, user_agent, created_at, details)| AuditFailureEntry {
+                event_type,
+                ip_address,
+                user_agent,
+                created_at,
+                details,
+            },
+        )
         .collect();
 
     let audit_summary = AuditSummary {
-        total_entries: audit_total, entries_last_24h: audit_24h,
-        entries_last_7d: audit_7d, events_by_type, recent_failures,
+        total_entries: audit_total,
+        entries_last_24h: audit_24h,
+        entries_last_7d: audit_7d,
+        events_by_type,
+        recent_failures,
     };
 
     // ── Client log summary ────────────────────────────────────────────
     let cl_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs")
-        .fetch_one(pool).await.unwrap_or(0);
-    let cl_24h: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
-            .bind(&h24).fetch_one(pool).await.unwrap_or(0);
-    let cl_7d: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
-            .bind(&d7).fetch_one(pool).await.unwrap_or(0);
-    let cl_level_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT level, COUNT(*) as cnt FROM client_logs GROUP BY level",
-    )
-    .fetch_all(pool).await.unwrap_or_default();
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_24h: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
+        .bind(&h24)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_7d: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
+        .bind(&d7)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_level_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT level, COUNT(*) as cnt FROM client_logs GROUP BY level")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
     let by_level: HashMap<String, i64> = cl_level_rows.into_iter().collect();
     let unique_sessions: i64 =
         sqlx::query_scalar("SELECT COUNT(DISTINCT session_id) FROM client_logs")
-            .fetch_one(pool).await.unwrap_or(0);
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
 
     let client_log_summary = ClientLogSummary {
-        total_entries: cl_total, entries_last_24h: cl_24h,
-        entries_last_7d: cl_7d, by_level, unique_sessions,
+        total_entries: cl_total,
+        entries_last_24h: cl_24h,
+        entries_last_7d: cl_7d,
+        by_level,
+        unique_sessions,
     };
 
     // ── Backup summary ────────────────────────────────────────────────
     let backup_servers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backup_servers")
-        .fetch_one(pool).await.unwrap_or(0);
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let total_sync_logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backup_sync_log")
-        .fetch_one(pool).await.unwrap_or(0);
-    let last_sync_at: Option<String> = sqlx::query_scalar("SELECT MAX(started_at) FROM backup_sync_log")
-        .fetch_one(pool).await.unwrap_or(None);
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let last_sync_at: Option<String> =
+        sqlx::query_scalar("SELECT MAX(started_at) FROM backup_sync_log")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(None);
 
     let backup_summary = BackupSummary {
-        server_count: backup_servers, total_sync_logs, last_sync_at,
+        server_count: backup_servers,
+        total_sync_logs,
+        last_sync_at,
     };
 
     // ── Performance ───────────────────────────────────────────────────
     let t0 = Instant::now();
     let _: i64 = sqlx::query_scalar("SELECT 1")
-        .fetch_one(pool).await.unwrap_or(0);
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let db_ping_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-    let performance = PerformanceStats { db_ping_ms, cache_hit_ratio: None };
+    let performance = PerformanceStats {
+        db_ping_ms,
+        cache_hit_ratio: None,
+    };
 
     Ok(Json(DiagnosticsResponse {
         enabled: true,
@@ -426,7 +496,8 @@ pub async fn external_full(
         client_logs: client_log_summary,
         backup: backup_summary,
         performance,
-    }).into_response())
+    })
+    .into_response())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -461,16 +532,21 @@ pub async fn external_storage(
 
     // Photos
     let total_photos: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
-        .fetch_one(pool).await.unwrap_or(0);
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let total_file_bytes: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM photos")
-            .fetch_one(pool).await.unwrap_or(0);
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
     // No dedicated thumb_size column — not tracked in the schema
     let total_thumb_bytes: i64 = 0;
-    let media_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT media_type, COUNT(*) as cnt FROM photos GROUP BY media_type",
-    )
-    .fetch_all(pool).await.unwrap_or_default();
+    let media_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT media_type, COUNT(*) as cnt FROM photos GROUP BY media_type")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
     let photos_by_media_type: HashMap<String, i64> = media_rows.into_iter().collect();
 
     let photos = ExternalPhotoStorageStats {
@@ -482,16 +558,26 @@ pub async fn external_storage(
 
     // Database size
     let db_path = &state.config.database.path;
-    let db_size = tokio::fs::metadata(db_path).await.map(|m| m.len()).unwrap_or(0);
+    let db_size = tokio::fs::metadata(db_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
     let wal_path = db_path.with_extension("db-wal");
-    let wal_size = tokio::fs::metadata(&wal_path).await.map(|m| m.len()).unwrap_or(0);
+    let wal_size = tokio::fs::metadata(&wal_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
 
     let database = ExternalDatabaseSize {
         size_bytes: db_size,
         wal_size_bytes: wal_size,
     };
 
-    Ok(Json(ExternalStorageResponse { storage, photos, database }))
+    Ok(Json(ExternalStorageResponse {
+        storage,
+        photos,
+        database,
+    }))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -511,18 +597,25 @@ pub async fn external_audit(
 
     // Audit
     let audit_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log")
-        .fetch_one(pool).await.unwrap_or(0);
-    let audit_24h: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
-            .bind(&h24).fetch_one(pool).await.unwrap_or(0);
-    let audit_7d: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
-            .bind(&d7).fetch_one(pool).await.unwrap_or(0);
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let audit_24h: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
+        .bind(&h24)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let audit_7d: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_log WHERE created_at > ?")
+        .bind(&d7)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
 
-    let event_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT event_type, COUNT(*) as cnt FROM audit_log GROUP BY event_type",
-    )
-    .fetch_all(pool).await.unwrap_or_default();
+    let event_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT event_type, COUNT(*) as cnt FROM audit_log GROUP BY event_type")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
     let events_by_type: HashMap<String, i64> = event_rows.into_iter().collect();
 
     let failure_rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
@@ -532,51 +625,86 @@ pub async fn external_audit(
     )
     .fetch_all(pool).await.unwrap_or_default();
 
-    let recent_failures: Vec<AuditFailureEntry> = failure_rows.into_iter()
-        .map(|(event_type, ip_address, user_agent, created_at, details)| {
-            AuditFailureEntry { event_type, ip_address, user_agent, created_at, details }
-        })
+    let recent_failures: Vec<AuditFailureEntry> = failure_rows
+        .into_iter()
+        .map(
+            |(event_type, ip_address, user_agent, created_at, details)| AuditFailureEntry {
+                event_type,
+                ip_address,
+                user_agent,
+                created_at,
+                details,
+            },
+        )
         .collect();
 
     let audit = AuditSummary {
-        total_entries: audit_total, entries_last_24h: audit_24h,
-        entries_last_7d: audit_7d, events_by_type, recent_failures,
+        total_entries: audit_total,
+        entries_last_24h: audit_24h,
+        entries_last_7d: audit_7d,
+        events_by_type,
+        recent_failures,
     };
 
     // Users
     let total_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
-        .fetch_one(pool).await.unwrap_or(0);
-    let admin_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-            .fetch_one(pool).await.unwrap_or(0);
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let admin_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
     let totp_enabled_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE totp_enabled = 1")
-            .fetch_one(pool).await.unwrap_or(0);
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
 
-    let users = UserStats { total_users, admin_count, totp_enabled_count };
+    let users = UserStats {
+        total_users,
+        admin_count,
+        totp_enabled_count,
+    };
 
     // Client logs
     let cl_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs")
-        .fetch_one(pool).await.unwrap_or(0);
-    let cl_24h: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
-            .bind(&h24).fetch_one(pool).await.unwrap_or(0);
-    let cl_7d: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
-            .bind(&d7).fetch_one(pool).await.unwrap_or(0);
-    let cl_level_rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT level, COUNT(*) as cnt FROM client_logs GROUP BY level",
-    )
-    .fetch_all(pool).await.unwrap_or_default();
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_24h: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
+        .bind(&h24)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_7d: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM client_logs WHERE created_at > ?")
+        .bind(&d7)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    let cl_level_rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT level, COUNT(*) as cnt FROM client_logs GROUP BY level")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
     let by_level: HashMap<String, i64> = cl_level_rows.into_iter().collect();
     let unique_sessions: i64 =
         sqlx::query_scalar("SELECT COUNT(DISTINCT session_id) FROM client_logs")
-            .fetch_one(pool).await.unwrap_or(0);
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
 
     let client_logs = ClientLogSummary {
-        total_entries: cl_total, entries_last_24h: cl_24h,
-        entries_last_7d: cl_7d, by_level, unique_sessions,
+        total_entries: cl_total,
+        entries_last_24h: cl_24h,
+        entries_last_7d: cl_7d,
+        by_level,
+        unique_sessions,
     };
 
-    Ok(Json(ExternalAuditResponse { audit, users, client_logs }))
+    Ok(Json(ExternalAuditResponse {
+        audit,
+        users,
+        client_logs,
+    }))
 }

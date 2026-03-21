@@ -21,12 +21,11 @@ pub async fn list_tags(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<TagListResponse>, AppError> {
-    let tags: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT tag FROM photo_tags WHERE user_id = ? ORDER BY tag ASC",
-    )
-    .bind(&auth.user_id)
-    .fetch_all(&state.read_pool)
-    .await?;
+    let tags: Vec<(String,)> =
+        sqlx::query_as("SELECT DISTINCT tag FROM photo_tags WHERE user_id = ? ORDER BY tag ASC")
+            .bind(&auth.user_id)
+            .fetch_all(&state.read_pool)
+            .await?;
 
     Ok(Json(TagListResponse {
         tags: tags.into_iter().map(|(t,)| t).collect(),
@@ -86,14 +85,13 @@ pub async fn remove_tag(
     Path(photo_id): Path<String>,
     Json(body): Json<RemoveTagRequest>,
 ) -> Result<StatusCode, AppError> {
-    let tag = sanitize::sanitize_text(&body.tag).to_lowercase();    sqlx::query(
-        "DELETE FROM photo_tags WHERE photo_id = ? AND user_id = ? AND tag = ?",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .bind(&tag)
-    .execute(&state.pool)
-    .await?;
+    let tag = sanitize::sanitize_text(&body.tag).to_lowercase();
+    sqlx::query("DELETE FROM photo_tags WHERE photo_id = ? AND user_id = ? AND tag = ?")
+        .bind(&photo_id)
+        .bind(&auth.user_id)
+        .bind(&tag)
+        .execute(&state.pool)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -149,8 +147,10 @@ pub async fn search_photos(
             if let Some(stem) = token.strip_suffix("ing") {
                 variants.push(stem.to_string());
                 // "running" -> "run" but also "running" -> "runn"
-                if stem.len() > 2 && stem.ends_with(|c: char| c == stem.chars().last().unwrap_or(' ')) {
-                    variants.push(stem[..stem.len()-1].to_string());
+                if stem.len() > 2
+                    && stem.ends_with(|c: char| c == stem.chars().last().unwrap_or(' '))
+                {
+                    variants.push(stem[..stem.len() - 1].to_string());
                 }
             }
             if let Some(stem) = token.strip_suffix("ed") {

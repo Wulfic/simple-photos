@@ -136,7 +136,8 @@ fn update_config_toml_ssl(
     cert_path: Option<&str>,
     key_path: Option<&str>,
 ) -> Result<(), AppError> {
-    let config_path = std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
+    let config_path =
+        std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
 
     let contents = std::fs::read_to_string(&config_path)
         .map_err(|e| AppError::Internal(format!("Failed to read config file: {}", e)))?;

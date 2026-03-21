@@ -62,8 +62,13 @@ pub fn normalise(
         photo_id,
         blob_id,
         source: "google_photos".to_string(),
-        title: meta.title.as_deref().map(|t| sanitize::sanitize_freeform(t, 500)),
-        description: meta.description.clone()
+        title: meta
+            .title
+            .as_deref()
+            .map(|t| sanitize::sanitize_freeform(t, 500)),
+        description: meta
+            .description
+            .clone()
             .filter(|d| !d.is_empty())
             .map(|d| sanitize::sanitize_freeform(&d, 2000)),
         taken_at,
@@ -72,7 +77,10 @@ pub fn normalise(
         longitude,
         altitude,
         image_views,
-        original_url: meta.url.as_deref().map(|u| sanitize::sanitize_freeform(u, 2048)),
+        original_url: meta
+            .url
+            .as_deref()
+            .map(|u| sanitize::sanitize_freeform(u, 2048)),
         storage_path: None,
         imported_at: now,
     }

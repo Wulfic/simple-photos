@@ -55,13 +55,10 @@ pub struct InitSetupResponse {
 /// Returns:
 /// - `setup_complete: false` → Show first-run wizard
 /// - `setup_complete: true` → Show normal login
-pub async fn status(
-    State(state): State<AppState>,
-) -> Result<Json<SetupStatusResponse>, AppError> {
-    let user_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&state.pool)
-            .await?;
+pub async fn status(State(state): State<AppState>) -> Result<Json<SetupStatusResponse>, AppError> {
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.pool)
+        .await?;
 
     Ok(Json(SetupStatusResponse {
         setup_complete: user_count > 0,
@@ -84,10 +81,9 @@ pub async fn init(
     Json(req): Json<InitSetupRequest>,
 ) -> Result<(StatusCode, Json<InitSetupResponse>), AppError> {
     // ── Guard: only works when no users exist ────────────────────────────────
-    let user_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&state.pool)
-            .await?;
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.pool)
+        .await?;
 
     if user_count > 0 {
         return Err(AppError::Forbidden(
@@ -162,14 +158,11 @@ pub async fn init(
 /// single probe per IP, supplemented by UDP broadcast and localhost fallbacks.
 ///
 /// Only works during first-run setup (zero users in DB) — no auth required.
-pub async fn discover(
-    State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, AppError> {
+pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
     // Guard: only works when no users exist
-    let user_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&state.read_pool)
-            .await?;
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.read_pool)
+        .await?;
 
     if user_count > 0 {
         return Err(AppError::Forbidden(
@@ -259,10 +252,14 @@ pub async fn discover(
     let mut local_ports: Vec<u16> = Vec::new();
     let base = (our_port / 10) * 10;
     for p in base..=(base + 9) {
-        if p != our_port && p != discovery_port { local_ports.push(p); }
+        if p != our_port && p != discovery_port {
+            local_ports.push(p);
+        }
     }
     for &p in &[3000u16, 3001, 3002, 3003, 8080, 8081, 8082, 8083, 8443] {
-        if p != our_port && p != discovery_port && !local_ports.contains(&p) { local_ports.push(p); }
+        if p != our_port && p != discovery_port && !local_ports.contains(&p) {
+            local_ports.push(p);
+        }
     }
 
     for &port in &local_ports {
@@ -270,11 +267,18 @@ pub async fn discover(
             // When discovery_port is set, skip fallback-port probes on
             // non-loopback hosts — they'll be found via the discovery
             // port in Phase 3 and probing unreachable Docker IPs is slow.
-            if discovery_port != 0 && host != "127.0.0.1" {
+            if discovery_port != 0
+                && host != "127.0.0.1"
+                && host != "host.docker.internal"
+                && !host.starts_with("172.")
+                && !host.starts_with("192.")
+            {
                 continue;
             }
             let addr = format!("{}:{}", host, port);
-            if existing_addrs.contains(&addr) { continue; }
+            if existing_addrs.contains(&addr) {
+                continue;
+            }
             local_probes.push((host.clone(), port, false));
         }
     }
@@ -288,10 +292,23 @@ pub async fn discover(
                 if let Ok(resp) = c.get(&url).send().await {
                     if resp.status().is_success() {
                         if let Ok(body) = resp.json::<serde_json::Value>().await {
-                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                                let actual_port = body.get("port").and_then(|p| p.as_u64()).map(|p| p as u16).unwrap_or(port);
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos")
+                            {
+                                let name = body
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string();
+                                let version = body
+                                    .get("version")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                let actual_port = body
+                                    .get("port")
+                                    .and_then(|p| p.as_u64())
+                                    .map(|p| p as u16)
+                                    .unwrap_or(port);
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", host_owned, actual_port),
                                     "name": name,
@@ -308,9 +325,18 @@ pub async fn discover(
                 if let Ok(resp) = c.get(&info_url).send().await {
                     if resp.status().is_success() {
                         if let Ok(body) = resp.json::<serde_json::Value>().await {
-                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos")
+                            {
+                                let name = body
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string();
+                                let version = body
+                                    .get("version")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", host_owned, port),
                                     "name": name,
@@ -323,9 +349,18 @@ pub async fn discover(
                 if let Ok(resp) = c.get(&health_url).send().await {
                     if resp.status().is_success() {
                         if let Ok(body) = resp.json::<serde_json::Value>().await {
-                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos")
+                            {
+                                let name = body
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string();
+                                let version = body
+                                    .get("version")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", host_owned, port),
                                     "name": name,
@@ -342,7 +377,11 @@ pub async fn discover(
 
     let local_results = futures_util::future::join_all(local_futures).await;
     for result in local_results.into_iter().flatten() {
-        let addr = result.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
+        let addr = result
+            .get("address")
+            .and_then(|a| a.as_str())
+            .unwrap_or("")
+            .to_string();
         if !existing_addrs.contains(&addr) {
             existing_addrs.insert(addr);
             discovered.push(result);
@@ -370,7 +409,9 @@ pub async fn discover(
         let parts: Vec<&str> = local_ip.split('.').collect();
         if parts.len() == 4 {
             let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
-            if !subnets.contains(&subnet) { subnets.push(subnet); }
+            if !subnets.contains(&subnet) {
+                subnets.push(subnet);
+            }
         }
     }
     if let Ok(addrs) = tokio::net::lookup_host("host.docker.internal:0").await {
@@ -379,7 +420,9 @@ pub async fn discover(
             let parts: Vec<&str> = ip.split('.').collect();
             if parts.len() == 4 {
                 let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
-                if !subnets.contains(&subnet) { subnets.push(subnet); }
+                if !subnets.contains(&subnet) {
+                    subnets.push(subnet);
+                }
             }
         }
     }
@@ -394,14 +437,23 @@ pub async fn discover(
             if discovery_port != 0 {
                 let addr = format!("{}:{}", ip, discovery_port);
                 if !existing_addrs.contains(&addr) {
-                    probes.push((ip, discovery_port, true));
+                    probes.push((ip.clone(), discovery_port, true));
                 }
-            } else {
-                for &port in &[our_port, 8080u16, 8081, 8082, 8083, 3000] {
-                    let addr = format!("{}:{}", ip, port);
-                    if !existing_addrs.contains(&addr) {
-                        probes.push((ip.clone(), port, false));
-                    }
+            }
+
+            // Always probe our_port and 8080 as fallbacks in Phase 3, even if discovery_port is active,
+            // just in case discovery port is firewalled.
+            let mut sub_ports = vec![our_port];
+            if our_port != 8080 {
+                sub_ports.push(8080);
+            }
+            if discovery_port == 0 {
+                sub_ports.extend(vec![8081, 8082, 8083, 3000]);
+            }
+            for port in sub_ports {
+                let addr = format!("{}:{}", ip, port);
+                if !existing_addrs.contains(&addr) {
+                    probes.push((ip.clone(), port, false));
                 }
             }
         }
@@ -411,7 +463,11 @@ pub async fn discover(
         "Setup discovery Phase 3: scanning {} subnets ({:?}) on port {}, {} total probes",
         subnets.len(),
         subnets,
-        if discovery_port != 0 { discovery_port } else { our_port },
+        if discovery_port != 0 {
+            discovery_port
+        } else {
+            our_port
+        },
         probes.len()
     );
 
@@ -427,10 +483,23 @@ pub async fn discover(
                 if let Ok(resp) = c.get(&url).send().await {
                     if resp.status().is_success() {
                         if let Ok(body) = resp.json::<serde_json::Value>().await {
-                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                                let actual_port = body.get("port").and_then(|p| p.as_u64()).map(|p| p as u16).unwrap_or(port);
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos")
+                            {
+                                let name = body
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string();
+                                let version = body
+                                    .get("version")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                let actual_port = body
+                                    .get("port")
+                                    .and_then(|p| p.as_u64())
+                                    .map(|p| p as u16)
+                                    .unwrap_or(port);
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", ip, actual_port),
                                     "name": name,
@@ -441,14 +510,50 @@ pub async fn discover(
                     }
                 }
             } else {
-                // Fallback: probe /health on a specific server port
+                // Fallback: probe /api/discover/info first to get name, then /health
+                let info_url = format!("http://{}:{}/api/discover/info", ip, port);
                 let health_url = format!("http://{}:{}/health", ip, port);
+
+                if let Ok(resp) = c.get(&info_url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(body) = resp.json::<serde_json::Value>().await {
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos")
+                            {
+                                let name = body
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("Unknown")
+                                    .to_string();
+                                let version = body
+                                    .get("version")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                return Some(serde_json::json!({
+                                    "address": format!("{}:{}", ip, port),
+                                    "name": name,
+                                    "version": version,
+                                }));
+                            }
+                        }
+                    }
+                }
+
                 if let Ok(resp) = c.get(&health_url).send().await {
                     if resp.status().is_success() {
                         if let Ok(body) = resp.json::<serde_json::Value>().await {
-                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos") {
-                                let name = body.get("name").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
-                                let version = body.get("version").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                            if body.get("service").and_then(|s| s.as_str()) == Some("simple-photos")
+                            {
+                                let name = body
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("Simple Photos")
+                                    .to_string();
+                                let version = body
+                                    .get("version")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
                                 return Some(serde_json::json!({
                                     "address": format!("{}:{}", ip, port),
                                     "name": name,
@@ -466,21 +571,24 @@ pub async fn discover(
     // Use FuturesUnordered + streaming so we collect results as they
     // complete. Previously `join_all` + `unwrap_or_default()` discarded
     // ALL results when the timeout fired — even those already finished.
-    let mut stream: futures_util::stream::FuturesUnordered<_> =
-        lan_futures.into_iter().collect();
+    let mut stream: futures_util::stream::FuturesUnordered<_> = lan_futures.into_iter().collect();
 
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(12);
     loop {
         match tokio::time::timeout_at(deadline, futures_util::StreamExt::next(&mut stream)).await {
             Ok(Some(Some(result))) => {
-                let addr = result.get("address").and_then(|a| a.as_str()).unwrap_or("").to_string();
+                let addr = result
+                    .get("address")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if !existing_addrs.contains(&addr) {
                     existing_addrs.insert(addr);
                     discovered.push(result);
                 }
             }
             Ok(Some(None)) => { /* probe returned None (no server found) */ }
-            Ok(None) => break,   // stream exhausted — all probes done
+            Ok(None) => break, // stream exhausted — all probes done
             Err(_) => {
                 tracing::warn!(
                     "Setup discovery: LAN scan timed out after 12s with {} servers found so far",
@@ -491,9 +599,77 @@ pub async fn discover(
         }
     }
 
-    tracing::info!("Setup discovery: found {} servers", discovered.len());
+    let discovered_len = discovered.len();
+    // Deduplicate discovered addresses pointing to the same server.
+    // Docker instances may see the same server via 172.17.x, 172.19.x, host.docker.internal, and 192.168.x.
+    // Prefer traditional LAN IPs (192., 10., <172.17.x)
+    let mut dedup_map: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+    for srv in discovered {
+        let name = srv
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let version = srv
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let addr = srv
+            .get("address")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
-    Ok(Json(serde_json::json!({ "servers": discovered })))
+        let key = format!("{}::{}", name, version);
+
+        if dedup_map.contains_key(&key) {
+            let existing_addr = dedup_map
+                .get(&key)
+                .unwrap()
+                .get("address")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            // Score URLs: lower is better
+            let score = |a: &str| {
+                if a.starts_with("192.168.") || a.starts_with("10.") {
+                    return 1;
+                }
+                if a.starts_with("172.") {
+                    if !a.starts_with("172.17.")
+                        && !a.starts_with("172.18.")
+                        && !a.starts_with("172.19.")
+                    {
+                        return 2;
+                    }
+                    return 3;
+                }
+                if a.starts_with("host.docker.internal") {
+                    return 4;
+                }
+                if a.starts_with("127.") || a.starts_with("localhost") {
+                    return 5;
+                }
+                return 2;
+            };
+            if score(&addr) < score(&existing_addr) {
+                dedup_map.insert(key, srv);
+            }
+        } else {
+            dedup_map.insert(key, srv);
+        }
+    }
+    let final_servers: Vec<serde_json::Value> = dedup_map.into_values().collect();
+    tracing::info!(
+        "Discovery: found {} servers ({} after dedup)",
+        discovered_len,
+        final_servers.len()
+    );
+
+    Ok(Json(serde_json::json!({ "servers": final_servers })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,10 +710,9 @@ pub async fn pair(
     Json(req): Json<PairRequest>,
 ) -> Result<(StatusCode, Json<PairResponse>), AppError> {
     // ── Guard: only works when no users exist ────────────────────────────
-    let user_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&state.pool)
-            .await?;
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.pool)
+        .await?;
 
     if user_count > 0 {
         return Err(AppError::Forbidden(
@@ -556,7 +731,7 @@ pub async fn pair(
     // ── Authenticate against the primary server ──────────────────────────
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .danger_accept_invalid_certs(true)      // self-signed certs OK during setup
+        .danger_accept_invalid_certs(true) // self-signed certs OK during setup
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 
@@ -572,10 +747,12 @@ pub async fn pair(
         .json(&login_body)
         .send()
         .await
-        .map_err(|e| AppError::BadRequest(format!(
-            "Cannot reach the primary server at {}: {}",
-            base_url, e
-        )))?;
+        .map_err(|e| {
+            AppError::BadRequest(format!(
+                "Cannot reach the primary server at {}: {}",
+                base_url, e
+            ))
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -709,10 +886,9 @@ pub async fn verify_backup(
     Json(req): Json<VerifyBackupRequest>,
 ) -> Result<Json<VerifyBackupResponse>, AppError> {
     // ── Guard: only works when no users exist ────────────────────────────
-    let user_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users")
-            .fetch_one(&state.pool)
-            .await?;
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.pool)
+        .await?;
 
     if user_count > 0 {
         return Err(AppError::Forbidden(
@@ -747,24 +923,33 @@ pub async fn verify_backup(
         .json(&login_body)
         .send()
         .await
-        .map_err(|e| AppError::BadRequest(format!(
-            "Cannot reach the backup server at {}: {}", base_url, e
-        )))?;
+        .map_err(|e| {
+            AppError::BadRequest(format!(
+                "Cannot reach the backup server at {}: {}",
+                base_url, e
+            ))
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         return Err(AppError::BadRequest(format!(
-            "Backup server rejected the credentials (HTTP {}): {}", status, body
+            "Backup server rejected the credentials (HTTP {}): {}",
+            status, body
         )));
     }
 
-    let login_data: serde_json::Value = resp.json().await
+    let login_data: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| AppError::Internal(format!("Failed to parse login response: {}", e)))?;
 
-    let access_token = login_data.get("access_token")
+    let access_token = login_data
+        .get("access_token")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Internal("No access_token in backup server login response".into()))?;
+        .ok_or_else(|| {
+            AppError::Internal("No access_token in backup server login response".into())
+        })?;
 
     // ── Get backup mode info (including API key) from the backup server ──
     let mode_url = format!("{}/api/admin/backup/mode", base_url);
@@ -781,7 +966,8 @@ pub async fn verify_backup(
 
     if mode_resp.status().is_success() {
         let mode_data: serde_json::Value = mode_resp.json().await.unwrap_or_default();
-        api_key = mode_data.get("api_key")
+        api_key = mode_data
+            .get("api_key")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
     }
@@ -820,7 +1006,8 @@ pub async fn verify_backup(
 
     tracing::info!(
         "Verified backup server at {}: {} photos available for restore",
-        base_url, photo_count
+        base_url,
+        photo_count
     );
 
     Ok(Json(VerifyBackupResponse {
@@ -831,4 +1018,3 @@ pub async fn verify_backup(
         photo_count,
     }))
 }
-

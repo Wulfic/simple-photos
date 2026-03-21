@@ -59,13 +59,19 @@ pub async fn duplicate_photo(
     let original = original.ok_or(AppError::NotFound)?;
 
     // Validate crop_metadata if provided
-    let meta = req.crop_metadata.as_deref().map(|m| {
-        let sanitized = sanitize::sanitize_freeform(m, 2048);
-        if serde_json::from_str::<serde_json::Value>(&sanitized).is_err() {
-            return Err(AppError::BadRequest("crop_metadata must be valid JSON".into()));
-        }
-        Ok(sanitized)
-    }).transpose()?;
+    let meta = req
+        .crop_metadata
+        .as_deref()
+        .map(|m| {
+            let sanitized = sanitize::sanitize_freeform(m, 2048);
+            if serde_json::from_str::<serde_json::Value>(&sanitized).is_err() {
+                return Err(AppError::BadRequest(
+                    "crop_metadata must be valid JSON".into(),
+                ));
+            }
+            Ok(sanitized)
+        })
+        .transpose()?;
 
     let new_id = Uuid::new_v4().to_string();
     let now = utc_now_iso();
@@ -149,13 +155,12 @@ pub async fn create_edit_copy(
     Json(req): Json<CreateEditCopyRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Verify the photo belongs to this user
-    let exists: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) > 0 FROM photos WHERE id = ? AND user_id = ?",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let exists: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM photos WHERE id = ? AND user_id = ?")
+            .bind(&photo_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
     if !exists {
         return Err(AppError::NotFound);
@@ -164,11 +169,14 @@ pub async fn create_edit_copy(
     // Validate edit_metadata is valid JSON
     let meta = sanitize::sanitize_freeform(&req.edit_metadata, 2048);
     if serde_json::from_str::<serde_json::Value>(&meta).is_err() {
-        return Err(AppError::BadRequest("edit_metadata must be valid JSON".into()));
+        return Err(AppError::BadRequest(
+            "edit_metadata must be valid JSON".into(),
+        ));
     }
 
     let copy_id = Uuid::new_v4().to_string();
-    let name = req.name
+    let name = req
+        .name
         .as_deref()
         .map(|n| sanitize::sanitize_freeform(n, 128))
         .unwrap_or_else(|| {
@@ -230,15 +238,13 @@ pub async fn delete_edit_copy(
     auth: AuthUser,
     Path((photo_id, copy_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let rows = sqlx::query(
-        "DELETE FROM edit_copies WHERE id = ? AND photo_id = ? AND user_id = ?",
-    )
-    .bind(&copy_id)
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .execute(&state.pool)
-    .await?
-    .rows_affected();
+    let rows = sqlx::query("DELETE FROM edit_copies WHERE id = ? AND photo_id = ? AND user_id = ?")
+        .bind(&copy_id)
+        .bind(&photo_id)
+        .bind(&auth.user_id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
 
     if rows == 0 {
         return Err(AppError::NotFound);

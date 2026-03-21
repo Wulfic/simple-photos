@@ -69,18 +69,13 @@ async fn main() -> anyhow::Result<()> {
     // (e.g. RUST_LOG=debug), otherwise defaults to "info" level.
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
     let config = config::AppConfig::load()?;
     tracing::info!("Starting Simple Photos server v{VERSION}");
-    tracing::info!(
-        "Listening on {}:{}",
-        config.server.host,
-        config.server.port
-    );
+    tracing::info!("Listening on {}:{}", config.server.host, config.server.port);
     tracing::info!("Storage root: {:?}", config.storage.root);
     tracing::info!(
         "Max blob size: {} MiB",
@@ -104,7 +99,9 @@ async fn main() -> anyhow::Result<()> {
     tokio::fs::create_dir_all(config.storage.root.join("metadata")).await?;
     tokio::fs::create_dir_all(config.storage.root.join("logs/server")).await?;
     tokio::fs::create_dir_all(config.storage.root.join("logs/app")).await?;
-    tracing::info!("Storage subdirectories initialized: blobs/, metadata/, logs/server/, logs/app/");
+    tracing::info!(
+        "Storage subdirectories initialized: blobs/, metadata/, logs/server/, logs/app/"
+    );
 
     let (pool, read_pool) = db::init_pools(&config.database).await?;
 
@@ -155,7 +152,10 @@ async fn main() -> anyhow::Result<()> {
                             .await
                         {
                             Ok(r) if r.rows_affected() > 0 => {
-                                tracing::info!("Cleaned up {} old audit log entries (> 90 days)", r.rows_affected());
+                                tracing::info!(
+                                    "Cleaned up {} old audit log entries (> 90 days)",
+                                    r.rows_affected()
+                                );
                             }
                             Err(e) => tracing::error!("Failed to clean up audit log: {}", e),
                             _ => {}
@@ -168,7 +168,10 @@ async fn main() -> anyhow::Result<()> {
                             .await
                         {
                             Ok(r) if r.rows_affected() > 0 => {
-                                tracing::info!("Cleaned up {} old client log entries (> 14 days)", r.rows_affected());
+                                tracing::info!(
+                                    "Cleaned up {} old client log entries (> 14 days)",
+                                    r.rows_affected()
+                                );
                             }
                             Err(e) => tracing::error!("Failed to clean up client logs: {}", e),
                             _ => {}
@@ -243,7 +246,8 @@ async fn main() -> anyhow::Result<()> {
                 storage_swap_clone,
                 scan_interval,
                 scan_lock_clone,
-            ).await;
+            )
+            .await;
         });
     }
 
@@ -273,7 +277,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/auth/refresh", post(auth::handlers::refresh))
         .route("/auth/logout", post(auth::handlers::logout))
         .route("/auth/password", put(auth::handlers::change_password))
-        .route("/auth/verify-password", post(auth::handlers::verify_password))
+        .route(
+            "/auth/verify-password",
+            post(auth::handlers::verify_password),
+        )
         // 2FA
         .route("/auth/2fa/status", get(auth::handlers::get_2fa_status))
         .route("/auth/2fa/setup", post(auth::handlers::setup_2fa))
@@ -291,11 +298,26 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/users", post(setup::admin::create_user))
         .route("/admin/users", get(setup::admin::list_users))
         .route("/admin/users/{id}", delete(setup::admin::delete_user))
-        .route("/admin/users/{id}/role", put(setup::admin::update_user_role))
-        .route("/admin/users/{id}/password", put(setup::admin::admin_reset_password))
-        .route("/admin/users/{id}/2fa", delete(setup::admin::admin_reset_2fa))
-        .route("/admin/users/{id}/2fa/setup", post(setup::admin::admin_setup_2fa))
-        .route("/admin/users/{id}/2fa/confirm", post(setup::admin::admin_confirm_2fa))
+        .route(
+            "/admin/users/{id}/role",
+            put(setup::admin::update_user_role),
+        )
+        .route(
+            "/admin/users/{id}/password",
+            put(setup::admin::admin_reset_password),
+        )
+        .route(
+            "/admin/users/{id}/2fa",
+            delete(setup::admin::admin_reset_2fa),
+        )
+        .route(
+            "/admin/users/{id}/2fa/setup",
+            post(setup::admin::admin_setup_2fa),
+        )
+        .route(
+            "/admin/users/{id}/2fa/confirm",
+            post(setup::admin::admin_confirm_2fa),
+        )
         .route("/admin/storage", get(setup::storage::get_storage))
         .route("/admin/storage", put(setup::storage::update_storage))
         .route("/admin/browse", get(setup::storage::browse_directory))
@@ -311,12 +333,30 @@ async fn main() -> anyhow::Result<()> {
         .route("/admin/import/file", get(setup::import::import_file))
         // Google Photos import — metadata parsing, Takeout directory scanning & import
         .route("/import/metadata", post(import::handlers::import_metadata))
-        .route("/import/metadata/batch", post(import::handlers::batch_import_metadata))
-        .route("/import/metadata/upload", post(import::handlers::upload_sidecar))
-        .route("/admin/import/google-photos/scan", get(import::takeout::scan_takeout))
-        .route("/admin/import/google-photos", post(import::takeout::import_takeout))
-        .route("/photos/{id}/metadata", get(import::handlers::get_photo_metadata))
-        .route("/photos/{id}/metadata", delete(import::handlers::delete_photo_metadata))
+        .route(
+            "/import/metadata/batch",
+            post(import::handlers::batch_import_metadata),
+        )
+        .route(
+            "/import/metadata/upload",
+            post(import::handlers::upload_sidecar),
+        )
+        .route(
+            "/admin/import/google-photos/scan",
+            get(import::takeout::scan_takeout),
+        )
+        .route(
+            "/admin/import/google-photos",
+            post(import::takeout::import_takeout),
+        )
+        .route(
+            "/photos/{id}/metadata",
+            get(import::handlers::get_photo_metadata),
+        )
+        .route(
+            "/photos/{id}/metadata",
+            delete(import::handlers::delete_photo_metadata),
+        )
         // Photos — list, serve, register, thumbnail
         .route("/photos", get(photos::handlers::list_photos))
         .route("/photos/encrypted-sync", get(photos::sync::encrypted_sync))
@@ -324,77 +364,203 @@ async fn main() -> anyhow::Result<()> {
         .route("/photos/upload", post(photos::upload::upload_photo))
         .route("/photos/{id}/file", get(photos::handlers::serve_photo))
         .route("/photos/{id}/thumb", get(photos::handlers::serve_thumbnail))
-        .route("/photos/{id}/thumbnail", get(photos::handlers::serve_thumbnail))
+        .route(
+            "/photos/{id}/thumbnail",
+            get(photos::handlers::serve_thumbnail),
+        )
         .route("/photos/{id}/web", get(photos::handlers::serve_web))
         // Favorite toggle
-        .route("/photos/{id}/favorite", put(photos::handlers::toggle_favorite))
+        .route(
+            "/photos/{id}/favorite",
+            put(photos::handlers::toggle_favorite),
+        )
         // Crop metadata
         .route("/photos/{id}/crop", put(photos::handlers::set_crop))
         // Edit copies (Save Copy — metadata-only versions)
-        .route("/photos/{id}/copies", post(photos::copies::create_edit_copy))
+        .route(
+            "/photos/{id}/copies",
+            post(photos::copies::create_edit_copy),
+        )
         .route("/photos/{id}/copies", get(photos::copies::list_edit_copies))
-        .route("/photos/{id}/copies/{copy_id}", delete(photos::copies::delete_edit_copy))
+        .route(
+            "/photos/{id}/copies/{copy_id}",
+            delete(photos::copies::delete_edit_copy),
+        )
         // Duplicate photo (Save Copy — creates a new photos row sharing the same file)
-        .route("/photos/{id}/duplicate", post(photos::copies::duplicate_photo))
+        .route(
+            "/photos/{id}/duplicate",
+            post(photos::copies::duplicate_photo),
+        )
         // Delete now soft-deletes to trash (30-day retention)
         .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Scan & register all files on disk
         .route("/admin/photos/scan", post(photos::scan::scan_and_register))
         // Store encryption key so server-side operations can encrypt autonomously
-        .route("/admin/encryption/store-key", post(photos::encryption::store_encryption_key))
+        .route(
+            "/admin/encryption/store-key",
+            post(photos::encryption::store_encryption_key),
+        )
         // Secure galleries
-        .route("/galleries/secure", get(photos::galleries::list_secure_galleries))
-        .route("/galleries/secure", post(photos::galleries::create_secure_gallery))
-        .route("/galleries/secure/unlock", post(photos::galleries::unlock_secure_galleries))
-        .route("/galleries/secure/blob-ids", get(photos::galleries::list_secure_blob_ids))
-        .route("/galleries/secure/{id}", delete(photos::galleries::delete_secure_gallery))
-        .route("/galleries/secure/{id}/items", get(photos::galleries::list_gallery_items))
-        .route("/galleries/secure/{id}/items", post(photos::galleries::add_gallery_item))
+        .route(
+            "/galleries/secure",
+            get(photos::galleries::list_secure_galleries),
+        )
+        .route(
+            "/galleries/secure",
+            post(photos::galleries::create_secure_gallery),
+        )
+        .route(
+            "/galleries/secure/unlock",
+            post(photos::galleries::unlock_secure_galleries),
+        )
+        .route(
+            "/galleries/secure/blob-ids",
+            get(photos::galleries::list_secure_blob_ids),
+        )
+        .route(
+            "/galleries/secure/{id}",
+            delete(photos::galleries::delete_secure_gallery),
+        )
+        .route(
+            "/galleries/secure/{id}/items",
+            get(photos::galleries::list_gallery_items),
+        )
+        .route(
+            "/galleries/secure/{id}/items",
+            post(photos::galleries::add_gallery_item),
+        )
         // Storage stats
-        .route("/settings/storage-stats", get(photos::storage_stats::get_storage_stats))
+        .route(
+            "/settings/storage-stats",
+            get(photos::storage_stats::get_storage_stats),
+        )
         // Trash — soft-deleted photos with 30-day retention
         .route("/trash", get(trash::handlers::list_trash))
         .route("/trash", delete(trash::handlers::empty_trash))
         .route("/trash/{id}", delete(trash::handlers::permanent_delete))
-        .route("/trash/{id}/restore", post(trash::handlers::restore_from_trash))
-        .route("/trash/{id}/thumb", get(trash::handlers::serve_trash_thumbnail))
+        .route(
+            "/trash/{id}/restore",
+            post(trash::handlers::restore_from_trash),
+        )
+        .route(
+            "/trash/{id}/thumb",
+            get(trash::handlers::serve_trash_thumbnail),
+        )
         // Blob soft-delete to trash (encrypted mode)
         .route("/blobs/{id}/trash", post(trash::handlers::soft_delete_blob))
         // Backup servers — admin only
-        .route("/admin/backup/servers", get(backup::handlers::list_backup_servers))
-        .route("/admin/backup/servers", post(backup::handlers::add_backup_server))
-        .route("/admin/backup/servers/{id}", put(backup::handlers::update_backup_server))
-        .route("/admin/backup/servers/{id}", delete(backup::handlers::remove_backup_server))
-        .route("/admin/backup/servers/{id}/status", get(backup::handlers::check_backup_server_status))
-        .route("/admin/backup/servers/{id}/logs", get(backup::handlers::get_sync_logs))
-        .route("/admin/backup/servers/{id}/sync", post(backup::sync::trigger_sync))
-        .route("/admin/backup/servers/{id}/recover", post(backup::recovery::recover_from_backup))
-        .route("/admin/backup/servers/{id}/photos", get(backup::recovery::proxy_backup_photos))
-        .route("/admin/backup/discover", get(backup::handlers::discover_servers))
+        .route(
+            "/admin/backup/servers",
+            get(backup::handlers::list_backup_servers),
+        )
+        .route(
+            "/admin/backup/servers",
+            post(backup::handlers::add_backup_server),
+        )
+        .route(
+            "/admin/backup/servers/{id}",
+            put(backup::handlers::update_backup_server),
+        )
+        .route(
+            "/admin/backup/servers/{id}",
+            delete(backup::handlers::remove_backup_server),
+        )
+        .route(
+            "/admin/backup/servers/{id}/status",
+            get(backup::handlers::check_backup_server_status),
+        )
+        .route(
+            "/admin/backup/servers/{id}/logs",
+            get(backup::handlers::get_sync_logs),
+        )
+        .route(
+            "/admin/backup/servers/{id}/sync",
+            post(backup::sync::trigger_sync),
+        )
+        .route(
+            "/admin/backup/servers/{id}/recover",
+            post(backup::recovery::recover_from_backup),
+        )
+        .route(
+            "/admin/backup/servers/{id}/photos",
+            get(backup::recovery::proxy_backup_photos),
+        )
+        .route(
+            "/admin/backup/discover",
+            get(backup::handlers::discover_servers),
+        )
         .route("/admin/backup/mode", get(backup::handlers::get_backup_mode))
-        .route("/admin/backup/mode", post(backup::handlers::set_backup_mode))
+        .route(
+            "/admin/backup/mode",
+            post(backup::handlers::set_backup_mode),
+        )
         // Audio backup setting
-        .route("/settings/audio-backup", get(backup::handlers::get_audio_backup_setting))
-        .route("/admin/audio-backup", put(backup::handlers::set_audio_backup_setting))
+        .route(
+            "/settings/audio-backup",
+            get(backup::handlers::get_audio_backup_setting),
+        )
+        .route(
+            "/admin/audio-backup",
+            put(backup::handlers::set_audio_backup_setting),
+        )
         // Auto-scan trigger — called when web UI opens
-        .route("/admin/photos/auto-scan", post(backup::autoscan::trigger_auto_scan))
+        .route(
+            "/admin/photos/auto-scan",
+            post(backup::autoscan::trigger_auto_scan),
+        )
         // Backup serve — API-key authenticated, for server-to-server recovery
         .route("/backup/list", get(backup::serve::backup_list_photos))
         .route("/backup/list-trash", get(backup::serve::backup_list_trash))
         .route("/backup/receive", post(backup::serve::backup_receive))
-        .route("/backup/download/{photo_id}", get(backup::serve::backup_download_photo))
-        .route("/backup/download/{photo_id}/thumb", get(backup::serve::backup_download_thumb))
+        .route(
+            "/backup/download/{photo_id}",
+            get(backup::serve::backup_download_photo),
+        )
+        .route(
+            "/backup/download/{photo_id}/thumb",
+            get(backup::serve::backup_download_thumb),
+        )
         // Shared albums — create, manage members, add/remove photos
-        .route("/sharing/albums", get(sharing::handlers::list_shared_albums))
-        .route("/sharing/albums", post(sharing::handlers::create_shared_album))
-        .route("/sharing/albums/{id}", delete(sharing::handlers::delete_shared_album))
-        .route("/sharing/albums/{id}/members", get(sharing::handlers::list_members))
-        .route("/sharing/albums/{id}/members", post(sharing::handlers::add_member))
-        .route("/sharing/albums/{id}/members/{user_id}", delete(sharing::handlers::remove_member))
-        .route("/sharing/albums/{id}/photos", get(sharing::handlers::list_shared_photos))
-        .route("/sharing/albums/{id}/photos", post(sharing::handlers::add_photo))
-        .route("/sharing/albums/{album_id}/photos/{photo_id}", delete(sharing::handlers::remove_photo))
-        .route("/sharing/users", get(sharing::handlers::list_users_for_sharing))
+        .route(
+            "/sharing/albums",
+            get(sharing::handlers::list_shared_albums),
+        )
+        .route(
+            "/sharing/albums",
+            post(sharing::handlers::create_shared_album),
+        )
+        .route(
+            "/sharing/albums/{id}",
+            delete(sharing::handlers::delete_shared_album),
+        )
+        .route(
+            "/sharing/albums/{id}/members",
+            get(sharing::handlers::list_members),
+        )
+        .route(
+            "/sharing/albums/{id}/members",
+            post(sharing::handlers::add_member),
+        )
+        .route(
+            "/sharing/albums/{id}/members/{user_id}",
+            delete(sharing::handlers::remove_member),
+        )
+        .route(
+            "/sharing/albums/{id}/photos",
+            get(sharing::handlers::list_shared_photos),
+        )
+        .route(
+            "/sharing/albums/{id}/photos",
+            post(sharing::handlers::add_photo),
+        )
+        .route(
+            "/sharing/albums/{album_id}/photos/{photo_id}",
+            delete(sharing::handlers::remove_photo),
+        )
+        .route(
+            "/sharing/users",
+            get(sharing::handlers::list_users_for_sharing),
+        )
         // Tags — add, remove, list tags on photos; search by tag/filename
         .route("/tags", get(tags::handlers::list_tags))
         .route("/photos/{id}/tags", get(tags::handlers::get_photo_tags))
@@ -405,15 +571,39 @@ async fn main() -> anyhow::Result<()> {
         .route("/client-logs", post(client_logs::handlers::submit_logs))
         .route("/admin/client-logs", get(client_logs::handlers::list_logs))
         // Diagnostics — admin-only server metrics & audit log viewer
-        .route("/admin/diagnostics", get(diagnostics::handlers::get_diagnostics))
-        .route("/admin/diagnostics/config", get(diagnostics::handlers::get_diagnostics_config))
-        .route("/admin/diagnostics/config", put(diagnostics::handlers::update_diagnostics_config))
-        .route("/admin/audit-logs", get(diagnostics::handlers::list_audit_logs))
+        .route(
+            "/admin/diagnostics",
+            get(diagnostics::handlers::get_diagnostics),
+        )
+        .route(
+            "/admin/diagnostics/config",
+            get(diagnostics::handlers::get_diagnostics_config),
+        )
+        .route(
+            "/admin/diagnostics/config",
+            put(diagnostics::handlers::update_diagnostics_config),
+        )
+        .route(
+            "/admin/audit-logs",
+            get(diagnostics::handlers::list_audit_logs),
+        )
         // External diagnostics — HTTP Basic Auth, for server-to-server integration
-        .route("/external/diagnostics", get(diagnostics::external::external_full))
-        .route("/external/diagnostics/health", get(diagnostics::external::external_health))
-        .route("/external/diagnostics/storage", get(diagnostics::external::external_storage))
-        .route("/external/diagnostics/audit", get(diagnostics::external::external_audit));
+        .route(
+            "/external/diagnostics",
+            get(diagnostics::external::external_full),
+        )
+        .route(
+            "/external/diagnostics/health",
+            get(diagnostics::external::external_health),
+        )
+        .route(
+            "/external/diagnostics/storage",
+            get(diagnostics::external::external_storage),
+        )
+        .route(
+            "/external/diagnostics/audit",
+            get(diagnostics::external::external_audit),
+        );
 
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))
@@ -451,11 +641,9 @@ async fn main() -> anyhow::Result<()> {
         let static_path = std::path::PathBuf::from(&config.web.static_root);
         if static_path.exists() {
             tracing::info!("Serving web frontend from {:?}", static_path);
-            app = app.fallback_service(
-                tower_http::services::ServeDir::new(&static_path).fallback(
-                    tower_http::services::ServeFile::new(static_path.join("index.html")),
-                ),
-            );
+            app = app.fallback_service(tower_http::services::ServeDir::new(&static_path).fallback(
+                tower_http::services::ServeFile::new(static_path.join("index.html")),
+            ));
         } else {
             tracing::warn!(
                 "Web static root {:?} does not exist, skipping static file serving",
@@ -467,19 +655,27 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port).parse()?;
 
     if config.tls.enabled {
-        let cert_path = config.tls.cert_path.as_deref()
+        let cert_path = config
+            .tls
+            .cert_path
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("TLS enabled but cert_path not set"))?;
-        let key_path = config.tls.key_path.as_deref()
+        let key_path = config
+            .tls
+            .key_path
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("TLS enabled but key_path not set"))?;
 
-        tracing::info!("TLS enabled — loading cert from {:?}, key from {:?}", cert_path, key_path);
-
-        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+        tracing::info!(
+            "TLS enabled — loading cert from {:?}, key from {:?}",
             cert_path,
-            key_path,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to load TLS config: {}", e))?;
+            key_path
+        );
+
+        let rustls_config =
+            axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to load TLS config: {}", e))?;
 
         tracing::info!("Server ready (HTTPS)");
         axum_server::bind_rustls(addr, rustls_config)
@@ -488,7 +684,11 @@ async fn main() -> anyhow::Result<()> {
     } else {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!("Server ready");
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await?;
     }
 
     Ok(())

@@ -25,7 +25,10 @@ pub fn blob_path(root: &Path, user_id: &str, blob_id: &str) -> PathBuf {
 pub fn relative_path(user_id: &str, blob_id: &str) -> String {
     let user_prefix = &user_id[..2.min(user_id.len())];
     let blob_prefix = &blob_id[..2.min(blob_id.len())];
-    format!("blobs/{}/{}/{}/{}.bin", user_prefix, user_id, blob_prefix, blob_id)
+    format!(
+        "blobs/{}/{}/{}/{}.bin",
+        user_prefix, user_id, blob_prefix, blob_id
+    )
 }
 
 /// Build the on-disk path for a metadata file: {root}/metadata/{user_id[0..2]}/{user_id}/{blob_id}.json
@@ -55,9 +58,9 @@ pub async fn write_metadata(
     let path = metadata_path(root, user_id, blob_id);
 
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to create metadata directory: {}", e)))?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            AppError::Internal(format!("Failed to create metadata directory: {}", e))
+        })?;
     }
 
     tokio::fs::write(&path, data)
@@ -73,13 +76,21 @@ pub async fn delete_metadata(root: &Path, storage_path: &str) -> Result<(), AppE
     match tokio::fs::remove_file(&path).await {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(AppError::Internal(format!("Failed to delete metadata: {}", e))),
+        Err(e) => Err(AppError::Internal(format!(
+            "Failed to delete metadata: {}",
+            e
+        ))),
     }
 }
 
 /// Write a blob's bytes to disk. Creates parent directories as needed.
 /// Returns the relative storage path for DB storage.
-pub async fn write_blob(root: &Path, user_id: &str, blob_id: &str, data: &[u8]) -> Result<String, AppError> {
+pub async fn write_blob(
+    root: &Path,
+    user_id: &str,
+    blob_id: &str,
+    data: &[u8],
+) -> Result<String, AppError> {
     let path = blob_path(root, user_id, blob_id);
 
     if let Some(parent) = path.parent() {
@@ -106,12 +117,10 @@ pub async fn write_blob(root: &Path, user_id: &str, blob_id: &str, data: &[u8]) 
 /// Read a blob's bytes from disk. Returns `AppError::NotFound` if the file is missing.
 pub async fn read_blob(root: &Path, storage_path: &str) -> Result<Vec<u8>, AppError> {
     let path = root.join(storage_path);
-    tokio::fs::read(&path)
-        .await
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(format!("Failed to read blob: {}", e)),
-        })
+    tokio::fs::read(&path).await.map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => AppError::NotFound,
+        _ => AppError::Internal(format!("Failed to read blob: {}", e)),
+    })
 }
 
 /// Delete a blob file from disk. Silently succeeds if the file is already gone.
@@ -160,15 +169,18 @@ pub async fn write_blob_streaming(
     // and feeding it through the SHA-256 hasher in one pass.
     let mut body = body;
     while let Some(frame_result) = body.frame().await {
-        let frame = frame_result
-            .map_err(|e| AppError::Internal(format!("Body stream error: {}", e)))?;
+        let frame =
+            frame_result.map_err(|e| AppError::Internal(format!("Body stream error: {}", e)))?;
         if let Ok(chunk) = frame.into_data() {
             total += chunk.len() as u64;
             hasher.update(&chunk);
             if let Err(e) = file.write_all(&chunk).await {
                 drop(file);
                 let _ = tokio::fs::remove_file(&path).await;
-                return Err(AppError::Internal(format!("Failed to write blob chunk: {}", e)));
+                return Err(AppError::Internal(format!(
+                    "Failed to write blob chunk: {}",
+                    e
+                )));
             }
         }
     }

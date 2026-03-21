@@ -76,7 +76,11 @@ pub async fn create_user(
             "Username must be between 3 and 50 characters".into(),
         ));
     }
-    if !req.username.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+    if !req
+        .username
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
         return Err(AppError::BadRequest(
             "Username may only contain letters, numbers, and underscores".into(),
         ));
@@ -188,7 +192,9 @@ pub async fn delete_user(
 
     // Prevent admin from deleting themselves
     if user_id == auth.user_id {
-        return Err(AppError::BadRequest("Cannot delete your own account".into()));
+        return Err(AppError::BadRequest(
+            "Cannot delete your own account".into(),
+        ));
     }
 
     // Verify user exists
@@ -244,12 +250,16 @@ pub async fn update_user_role(
     require_admin(&state, &auth).await?;
 
     if req.role != "admin" && req.role != "user" {
-        return Err(AppError::BadRequest("Role must be 'admin' or 'user'".into()));
+        return Err(AppError::BadRequest(
+            "Role must be 'admin' or 'user'".into(),
+        ));
     }
 
     // Prevent admin from demoting themselves
     if user_id == auth.user_id && req.role != "admin" {
-        return Err(AppError::BadRequest("Cannot demote your own account".into()));
+        return Err(AppError::BadRequest(
+            "Cannot demote your own account".into(),
+        ));
     }
 
     let result = sqlx::query("UPDATE users SET role = ? WHERE id = ?")
@@ -275,7 +285,12 @@ pub async fn update_user_role(
     )
     .await;
 
-    tracing::info!("Admin '{}' set user '{}' role to '{}'", auth.user_id, user_id, req.role);
+    tracing::info!(
+        "Admin '{}' set user '{}' role to '{}'",
+        auth.user_id,
+        user_id,
+        req.role
+    );
 
     Ok(Json(serde_json::json!({
         "message": "Role updated",
@@ -341,7 +356,11 @@ pub async fn admin_reset_password(
     )
     .await;
 
-    tracing::info!("Admin '{}' reset password for user '{}'", auth.user_id, user_id);
+    tracing::info!(
+        "Admin '{}' reset password for user '{}'",
+        auth.user_id,
+        user_id
+    );
 
     Ok(Json(serde_json::json!({
         "message": "Password reset successfully"
@@ -361,12 +380,10 @@ pub async fn admin_reset_2fa(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let result = sqlx::query(
-        "UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?"
-    )
-    .bind(&user_id)
-    .execute(&state.pool)
-    .await?;
+    let result = sqlx::query("UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?")
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
@@ -420,7 +437,9 @@ pub async fn admin_setup_2fa(
 
     let (username, totp_enabled) = user;
     if totp_enabled {
-        return Err(AppError::BadRequest("2FA is already enabled for this user".into()));
+        return Err(AppError::BadRequest(
+            "2FA is already enabled for this user".into(),
+        ));
     }
 
     let secret = totp_rs::Secret::generate_secret();
@@ -429,7 +448,9 @@ pub async fn admin_setup_2fa(
         6,
         1,
         30,
-        secret.to_bytes().map_err(|e| AppError::Internal(format!("TOTP secret error: {}", e)))?,
+        secret
+            .to_bytes()
+            .map_err(|e| AppError::Internal(format!("TOTP secret error: {}", e)))?,
         Some("SimplePhotos".to_string()),
         username.clone(),
     )
@@ -483,7 +504,11 @@ pub async fn admin_setup_2fa(
     )
     .await;
 
-    tracing::info!("Admin '{}' initiated 2FA setup for user '{}'", auth.user_id, user_id);
+    tracing::info!(
+        "Admin '{}' initiated 2FA setup for user '{}'",
+        auth.user_id,
+        user_id
+    );
 
     Ok(Json(TotpSetupResponse {
         otpauth_uri,
@@ -520,12 +545,14 @@ pub async fn admin_confirm_2fa(
 
     let (totp_secret, totp_enabled) = user;
     if totp_enabled {
-        return Err(AppError::BadRequest("2FA is already enabled for this user".into()));
+        return Err(AppError::BadRequest(
+            "2FA is already enabled for this user".into(),
+        ));
     }
 
-    let secret_b32 = totp_secret.ok_or(
-        AppError::BadRequest("2FA setup not initiated. Call admin setup first".into()),
-    )?;
+    let secret_b32 = totp_secret.ok_or(AppError::BadRequest(
+        "2FA setup not initiated. Call admin setup first".into(),
+    ))?;
 
     let secret = totp_rs::Secret::Encoded(secret_b32)
         .to_bytes()
@@ -542,7 +569,10 @@ pub async fn admin_confirm_2fa(
     )
     .map_err(|e| AppError::Internal(format!("TOTP creation error: {}", e)))?;
 
-    if !totp.check_current(&req.totp_code).map_err(|e| AppError::Internal(format!("TOTP error: {}", e)))? {
+    if !totp
+        .check_current(&req.totp_code)
+        .map_err(|e| AppError::Internal(format!("TOTP error: {}", e)))?
+    {
         return Err(AppError::BadRequest("Invalid TOTP code".into()));
     }
 
@@ -563,7 +593,11 @@ pub async fn admin_confirm_2fa(
     )
     .await;
 
-    tracing::info!("Admin '{}' confirmed 2FA for user '{}'", auth.user_id, user_id);
+    tracing::info!(
+        "Admin '{}' confirmed 2FA for user '{}'",
+        auth.user_id,
+        user_id
+    );
 
     Ok(Json(serde_json::json!({
         "message": "Two-factor authentication enabled for user"

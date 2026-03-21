@@ -170,7 +170,20 @@ pub async fn list_logs(
     );
 
     // We need to build the query dynamically with binds
-    let mut query = sqlx::query_as::<_, (String, String, String, String, String, String, Option<String>, String, String)>(&sql);
+    let mut query = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+            String,
+        ),
+    >(&sql);
     for b in &binds {
         query = query.bind(b);
     }
@@ -182,21 +195,22 @@ pub async fn list_logs(
     let entries: Vec<ClientLogRecord> = rows
         .into_iter()
         .take(limit as usize)
-        .map(|(id, user_id, session_id, level, tag, message, context, client_ts, created_at)| {
-            let context_value = context
-                .and_then(|c| serde_json::from_str(&c).ok());
-            ClientLogRecord {
-                id,
-                user_id,
-                session_id,
-                level,
-                tag,
-                message,
-                context: context_value,
-                client_ts,
-                created_at: created_at.clone(),
-            }
-        })
+        .map(
+            |(id, user_id, session_id, level, tag, message, context, client_ts, created_at)| {
+                let context_value = context.and_then(|c| serde_json::from_str(&c).ok());
+                ClientLogRecord {
+                    id,
+                    user_id,
+                    session_id,
+                    level,
+                    tag,
+                    message,
+                    context: context_value,
+                    client_ts,
+                    created_at: created_at.clone(),
+                }
+            },
+        )
         .collect();
 
     let next_cursor = if has_more {

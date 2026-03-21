@@ -86,11 +86,10 @@ pub async fn backup_list_trash(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     validate_api_key(&state, &headers)?;
 
-    let rows: Vec<(String, String, i64)> = sqlx::query_as(
-        "SELECT id, file_path, size_bytes FROM trash_items ORDER BY deleted_at ASC",
-    )
-    .fetch_all(&state.read_pool)
-    .await?;
+    let rows: Vec<(String, String, i64)> =
+        sqlx::query_as("SELECT id, file_path, size_bytes FROM trash_items ORDER BY deleted_at ASC")
+            .fetch_all(&state.read_pool)
+            .await?;
 
     let items: Vec<serde_json::Value> = rows
         .into_iter()
@@ -112,28 +111,33 @@ pub async fn backup_download_photo(
 ) -> Result<Response, AppError> {
     validate_api_key(&state, &headers)?;
 
-    let (file_path, mime_type): (String, String) = sqlx::query_as(
-        "SELECT file_path, mime_type FROM photos WHERE id = ?",
-    )
-    .bind(&photo_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let (file_path, mime_type): (String, String) =
+        sqlx::query_as("SELECT file_path, mime_type FROM photos WHERE id = ?")
+            .bind(&photo_id)
+            .fetch_optional(&state.read_pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&file_path);
 
-    let file = tokio::fs::File::open(&full_path).await.map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => AppError::NotFound,
-        _ => AppError::Internal(format!("Failed to open photo: {}", e)),
-    })?;
+    let file = tokio::fs::File::open(&full_path)
+        .await
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Internal(format!("Failed to open photo: {}", e)),
+        })?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
     let mut response = Response::builder()
         .status(StatusCode::OK)
-        .header("Content-Type", HeaderValue::from_str(&mime_type).unwrap_or(HeaderValue::from_static("application/octet-stream")))
+        .header(
+            "Content-Type",
+            HeaderValue::from_str(&mime_type)
+                .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+        )
         .body(body)
         .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?;
 
@@ -157,23 +161,24 @@ pub async fn backup_download_thumb(
 ) -> Result<Response, AppError> {
     validate_api_key(&state, &headers)?;
 
-    let thumb_path: Option<String> = sqlx::query_scalar(
-        "SELECT thumb_path FROM photos WHERE id = ?",
-    )
-    .bind(&photo_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let thumb_path: Option<String> =
+        sqlx::query_scalar("SELECT thumb_path FROM photos WHERE id = ?")
+            .bind(&photo_id)
+            .fetch_optional(&state.read_pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let thumb_path = thumb_path.ok_or(AppError::NotFound)?;
 
     let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&thumb_path);
 
-    let file = tokio::fs::File::open(&full_path).await.map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => AppError::NotFound,
-        _ => AppError::Internal(format!("Failed to open thumbnail: {}", e)),
-    })?;
+    let file = tokio::fs::File::open(&full_path)
+        .await
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => AppError::NotFound,
+            _ => AppError::Internal(format!("Failed to open thumbnail: {}", e)),
+        })?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
@@ -248,23 +253,29 @@ pub async fn backup_receive(
     let full_path = storage_root.join(&file_path);
 
     // Defense-in-depth: verify the resolved path is still within storage_root
-    let canonical_root = storage_root.canonicalize().unwrap_or_else(|_| storage_root.clone());
+    let canonical_root = storage_root
+        .canonicalize()
+        .unwrap_or_else(|_| storage_root.clone());
     // We can't canonicalize full_path yet (file doesn't exist), so check the parent
     if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            AppError::Internal(format!("Failed to create directories: {}", e))
-        })?;
-        let canonical_parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to create directories: {}", e)))?;
+        let canonical_parent = parent
+            .canonicalize()
+            .unwrap_or_else(|_| parent.to_path_buf());
         if !canonical_parent.starts_with(&canonical_root) {
-            return Err(AppError::BadRequest("File path escapes storage root".into()));
+            return Err(AppError::BadRequest(
+                "File path escapes storage root".into(),
+            ));
         }
     }
 
     // Write the file to disk
     let size_bytes = body.len() as i64;
-    tokio::fs::write(&full_path, &body).await.map_err(|e| {
-        AppError::Internal(format!("Failed to write file: {}", e))
-    })?;
+    tokio::fs::write(&full_path, &body)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to write file: {}", e)))?;
 
     // Get (or create) a user to own the synced photo — use first admin user
     let admin_id: String = sqlx::query_scalar(
@@ -336,7 +347,12 @@ pub async fn backup_receive(
         .await?;
     }
 
-    tracing::debug!("Received backup {} ({} bytes): {}", source, size_bytes, file_path);
+    tracing::debug!(
+        "Received backup {} ({} bytes): {}",
+        source,
+        size_bytes,
+        file_path
+    );
 
     Ok(Json(serde_json::json!({
         "status": "ok",

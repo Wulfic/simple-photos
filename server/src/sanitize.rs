@@ -46,13 +46,10 @@ const DANGEROUS_CODEPOINTS: &[char] = &[
     '\u{007F}', // DEL
     // C1 controls (0x80–0x9F): rarely used legitimately, often misinterpreted
     // by terminal emulators and web renderers. Can cause display corruption.
-    '\u{0080}', '\u{0081}', '\u{0082}', '\u{0083}', '\u{0084}',
-    '\u{0086}', '\u{0087}', '\u{0088}', '\u{0089}', '\u{008A}',
-    '\u{008B}', '\u{008C}', '\u{008D}', '\u{008E}', '\u{008F}',
-    '\u{0090}', '\u{0091}', '\u{0092}', '\u{0093}', '\u{0094}',
-    '\u{0095}', '\u{0096}', '\u{0097}', '\u{0098}', '\u{0099}',
-    '\u{009A}', '\u{009B}', '\u{009C}', '\u{009D}', '\u{009E}',
-    '\u{009F}',
+    '\u{0080}', '\u{0081}', '\u{0082}', '\u{0083}', '\u{0084}', '\u{0086}', '\u{0087}', '\u{0088}',
+    '\u{0089}', '\u{008A}', '\u{008B}', '\u{008C}', '\u{008D}', '\u{008E}', '\u{008F}', '\u{0090}',
+    '\u{0091}', '\u{0092}', '\u{0093}', '\u{0094}', '\u{0095}', '\u{0096}', '\u{0097}', '\u{0098}',
+    '\u{0099}', '\u{009A}', '\u{009B}', '\u{009C}', '\u{009D}', '\u{009E}', '\u{009F}',
     // Bidi overrides — can reverse apparent text direction
     '\u{200E}', // LRM  — Left-to-Right Mark
     '\u{200F}', // RLM  — Right-to-Left Mark
@@ -102,10 +99,7 @@ pub fn sanitize_display_name(input: &str, max_len: usize) -> Result<String, &'st
     let cleaned = sanitize_text(input);
 
     // Collapse runs of whitespace to single space
-    let collapsed: String = cleaned
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let collapsed: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
 
     if collapsed.is_empty() {
         return Err("Name must not be empty");
@@ -123,9 +117,7 @@ pub fn sanitize_display_name(input: &str, max_len: usize) -> Result<String, &'st
 pub fn sanitize_filename(input: &str) -> String {
     let cleaned = sanitize_text(input);
     // Remove path separators and traversal
-    let safe: String = cleaned
-        .replace(['/', '\\'], "")
-        .replace("..", "");
+    let safe: String = cleaned.replace(['/', '\\'], "").replace("..", "");
 
     let safe = safe.trim().to_string();
 
@@ -226,8 +218,14 @@ mod tests {
 
     #[test]
     fn test_sanitize_display_name() {
-        assert_eq!(sanitize_display_name("  My Album  ", 100).unwrap(), "My Album");
-        assert_eq!(sanitize_display_name("My   Album", 100).unwrap(), "My Album");
+        assert_eq!(
+            sanitize_display_name("  My Album  ", 100).unwrap(),
+            "My Album"
+        );
+        assert_eq!(
+            sanitize_display_name("My   Album", 100).unwrap(),
+            "My Album"
+        );
         assert!(sanitize_display_name("", 100).is_err());
         assert!(sanitize_display_name("   ", 100).is_err());
         assert!(sanitize_display_name("\x00\x01\x02", 100).is_err());
