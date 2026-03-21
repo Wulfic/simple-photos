@@ -173,8 +173,13 @@ pub async fn add_gallery_item(
         return Err(AppError::NotFound);
     }
 
-    // Fetch original blob metadata
-    let original: Option<(String, String, i64, Option<String>, String, Option<String>)> =
+    // Fetch original blob metadata — first try the `blobs` table (encrypted
+    // uploads), then fall back to the `photos` table (autoscanned/server-side
+    // files).  The client may pass either a blob ID or a photo ID.
+    let storage_root = (**state.storage_root.load()).clone();
+    let now = Utc::now().to_rfc3339();
+
+    let blob_row: Option<(String, String, i64, Option<String>, String, Option<String>)> =
         sqlx::query_as(
             "SELECT id, blob_type, size_bytes, client_hash, storage_path, content_hash \
              FROM blobs WHERE id = ? AND user_id = ?",
@@ -184,11 +189,41 @@ pub async fn add_gallery_item(
         .fetch_optional(&state.pool)
         .await?;
 
-    let (_orig_id, blob_type, size_bytes, client_hash, storage_path, content_hash) =
-        original.ok_or_else(|| AppError::BadRequest("Blob not found".into()))?;
+    // Resolve source file path, metadata, and determine blob_type
+    let (blob_type, size_bytes, client_hash, storage_path, content_hash): (
+        String,
+        i64,
+        Option<String>,
+        String,
+        Option<String>,
+    ) = if let Some((_id, bt, sz, ch, sp, coh)) = blob_row {
+        (bt, sz, ch, sp, coh)
+    } else {
+        // Not in blobs table — check the photos table (server-side / autoscanned)
+        let photo_row: Option<(String, String, i64, String, Option<String>)> = sqlx::query_as(
+            "SELECT mime_type, media_type, size_bytes, file_path, photo_hash \
+             FROM photos WHERE id = ? AND user_id = ?",
+        )
+        .bind(&req.blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?;
 
-    // Clone: read the original blob data from disk, write a new copy under a fresh ID
-    let storage_root = (**state.storage_root.load()).clone();
+        let (mime, media_type, sz, fp, ph) =
+            photo_row.ok_or_else(|| AppError::BadRequest("Photo or blob not found".into()))?;
+
+        // Derive blob_type from media_type (same logic as restore)
+        let bt = match media_type.as_str() {
+            "gif" => "gif".to_string(),
+            "video" => "video".to_string(),
+            "audio" => "audio".to_string(),
+            _ if mime.starts_with("video/") => "video".to_string(),
+            _ => "photo".to_string(),
+        };
+        (bt, sz, None, fp, ph)
+    };
+
+    // Clone: read the original file data from disk, write a new copy under a fresh ID
     let blob_data = crate::blobs::storage::read_blob(&storage_root, &storage_path)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to read source blob: {}", e)))?;
@@ -198,8 +233,6 @@ pub async fn add_gallery_item(
         crate::blobs::storage::write_blob(&storage_root, &auth.user_id, &new_blob_id, &blob_data)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to write cloned blob: {}", e)))?;
-
-    let now = Utc::now().to_rfc3339();
 
     // Insert the cloned blob record
     sqlx::query(
@@ -216,11 +249,6 @@ pub async fn add_gallery_item(
     .bind(&content_hash)
     .execute(&state.pool)
     .await?;
-
-    // Note: we do NOT clone the thumbnail blob.  Thumbnails are fetched via
-    // the `photos` table's `encrypted_thumb_blob_id`, which still references
-    // the original thumbnail.  Cloning it would create an orphaned blob
-    // since `encrypted_gallery_items` has no `thumb_blob_id` column.
 
     let item_id = Uuid::new_v4().to_string();
 

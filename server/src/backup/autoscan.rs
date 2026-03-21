@@ -78,13 +78,16 @@ pub async fn background_auto_scan_task(
 
 async fn update_last_scan_time(pool: &sqlx::SqlitePool) {
     let now = crate::photos::utils::utc_now_iso();
-    let _ = sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO server_settings (key, value) VALUES ('last_auto_scan', ?) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .bind(&now)
     .execute(pool)
-    .await;
+    .await
+    {
+        tracing::warn!("Failed to update last_auto_scan timestamp: {}", e);
+    }
 }
 
 /// POST /api/admin/photos/auto-scan

@@ -104,12 +104,16 @@ export default function AppHeader({
   async function handleLogout() {
     try {
       if (refreshToken) {
-        await api.auth.logout(refreshToken).catch(() => {});
+        await api.auth.logout(refreshToken).catch((e) => {
+          console.error("Logout API call failed:", e);
+        });
       }
     } finally {
       // Wipe all locally cached user data (IndexedDB, Cache API, memory)
       // BEFORE clearing auth state to prevent any flash of stale photos.
-      await clearAllUserData().catch(() => {});
+      await clearAllUserData().catch((e) => {
+        console.error("Failed to clear local user data during logout:", e);
+      });
       thumbMemoryCache.clear();
       clearKey();
       storeLogout();

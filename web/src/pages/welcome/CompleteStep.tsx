@@ -158,8 +158,9 @@ export default function CompleteStep({
                 );
 
                 await api.backup.recover(serverId).catch((err: unknown) => {
+                  const msg = err instanceof Error ? err.message : String(err);
                   console.warn("Recovery trigger warning:", err);
-                  // Non-fatal: recovery may still start in background
+                  setRestoreStatus(`Recovery trigger had an issue (${msg}) — it may still proceed in the background.`);
                 });
 
                 setRestoreStatus("Recovery started! Photos will sync in the background.");
@@ -175,6 +176,7 @@ export default function CompleteStep({
                 })
                 .catch((scanErr) => {
                   console.warn("[Setup] Scan failed — autoscan will catch files later:", scanErr);
+                  setRestoreStatus("Initial scan failed — your photos will appear once the server scans your library (this may take a moment).");
                 });
 
               // Store the encryption key on the server so it can run
@@ -187,8 +189,9 @@ export default function CompleteStep({
                 await api.encryption.storeKey(keyHex);
               }
             } catch (err: unknown) {
-              // Non-fatal: mode may already be set or endpoint unavailable
-              console.warn("Setup finalization:", err);
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error("Setup finalization failed:", err);
+              setError(`Setup finalization issue: ${msg}. You may need to configure some settings manually.`);
             }
 
             setRestoreStatus("");

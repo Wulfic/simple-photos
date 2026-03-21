@@ -46,7 +46,9 @@ pub async fn store_encryption_key(
     let key_bytes: [u8; 32] = {
         let mut buf = [0u8; 32];
         for (i, chunk) in req.key_hex.as_bytes().chunks(2).enumerate() {
-            buf[i] = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16)
+            let hex_str = std::str::from_utf8(chunk)
+                .map_err(|_| AppError::BadRequest("Invalid UTF-8 in key_hex".into()))?;
+            buf[i] = u8::from_str_radix(hex_str, 16)
                 .map_err(|_| AppError::BadRequest("Invalid hex in key_hex".into()))?;
         }
         buf

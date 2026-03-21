@@ -140,7 +140,9 @@ pub async fn upload(
 
     // ── Post-stream validation ──────────────────────────────────────────────
     let cleanup = || async {
-        let _ = storage::delete_blob(&storage_root, &storage_path).await;
+        if let Err(e) = storage::delete_blob(&storage_root, &storage_path).await {
+            tracing::warn!("Failed to clean up blob at {}: {}", storage_path, e);
+        }
     };
 
     if actual_size == 0 {

@@ -176,7 +176,9 @@ pub async fn write_blob_streaming(
             hasher.update(&chunk);
             if let Err(e) = file.write_all(&chunk).await {
                 drop(file);
-                let _ = tokio::fs::remove_file(&path).await;
+                if let Err(rm_err) = tokio::fs::remove_file(&path).await {
+                    tracing::warn!("Failed to clean up partial blob at {:?}: {}", path, rm_err);
+                }
                 return Err(AppError::Internal(format!(
                     "Failed to write blob chunk: {}",
                     e
@@ -187,7 +189,9 @@ pub async fn write_blob_streaming(
 
     if let Err(e) = file.flush().await {
         drop(file);
-        let _ = tokio::fs::remove_file(&path).await;
+        if let Err(rm_err) = tokio::fs::remove_file(&path).await {
+            tracing::warn!("Failed to clean up blob after flush failure at {:?}: {}", path, rm_err);
+        }
         return Err(AppError::Internal(format!("Failed to flush blob: {}", e)));
     }
 

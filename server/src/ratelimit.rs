@@ -9,7 +9,7 @@
 //! - Register: 3 per 60 seconds (prevents mass account creation)
 //! - TOTP: 5 per 60 seconds (prevents code brute-force — only 1M possibilities)
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -103,27 +103,17 @@ impl RateLimiter {
     }
 }
 
-/// Extract client IP from request headers.
+/// Extract client IP from request headers or socket peer address.
 ///
 /// When `trust_proxy` is `true`, reads `X-Forwarded-For` (leftmost) or
-/// `X-Real-IP`. When `false`, returns the loopback address so all
-/// clients share one rate-limit bucket (safe for direct-access setups).
-///
-/// # Fallback behaviour — "all clients share one bucket"
-///
-/// When `trust_proxy` is `false` (the default), no proxy headers are inspected
-/// and every request is attributed to `127.0.0.1`. This means **all** clients
-/// share a single rate-limit bucket. This is intentional for simple single-user
-/// deployments where per-IP differentiation is unnecessary. For multi-user
-/// servers behind a reverse proxy, set `trust_proxy = true` in `config.toml`
-/// so that `X-Forwarded-For` / `X-Real-IP` headers are used to distinguish
-/// clients.
+/// `X-Real-IP`. When `false`, uses the direct TCP peer address from
+/// `ConnectInfo<SocketAddr>` for accurate per-client rate limiting.
 ///
 /// # Security note
 /// Only set `trust_proxy = true` when behind a reverse proxy that
 /// overwrites these headers. Trusting them on a public-facing server
 /// lets attackers spoof arbitrary IPs to bypass rate limiting.
-pub fn extract_client_ip(headers: &HeaderMap, trust_proxy: bool) -> IpAddr {
+pub fn extract_client_ip(headers: &HeaderMap, trust_proxy: bool, peer_addr: Option<SocketAddr>) -> IpAddr {
     if trust_proxy {
         // Try X-Forwarded-For first (leftmost = original client)
         if let Some(xff) = headers.get("x-forwarded-for") {
@@ -146,10 +136,14 @@ pub fn extract_client_ip(headers: &HeaderMap, trust_proxy: bool) -> IpAddr {
         }
     }
 
-    // Fallback to loopback (ConnectInfo not used here — we extract from headers).
-    // When trust_proxy is false (default), ALL clients share one rate-limit bucket.
-    // This is safe for simple deployments; for multi-user servers behind a proxy,
-    // enable trust_proxy in config.toml.
+    // Use the direct TCP peer address when available — this gives accurate
+    // per-client rate limiting without needing to trust proxy headers.
+    if let Some(addr) = peer_addr {
+        return addr.ip();
+    }
+
+    // Final fallback — should only be reached if ConnectInfo is unavailable.
+    tracing::warn!("extract_client_ip: no peer address available, falling back to 127.0.0.1 (shared bucket)");
     "127.0.0.1".parse().unwrap()
 }
 
