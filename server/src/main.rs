@@ -209,6 +209,23 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Spawn background task that pushes diagnostics from this server to its
+    // primary (only active when the server is in backup mode). Runs every
+    // 15 minutes; silently dormant when in primary mode.
+    {
+        let pool_clone = pool.clone();
+        let storage_root_clone = config.storage.root.clone();
+        let db_path_clone = config.database.path.clone();
+        tokio::spawn(async move {
+            backup::diagnostics::background_diagnostics_push_task(
+                pool_clone,
+                storage_root_clone,
+                db_path_clone,
+            )
+            .await;
+        });
+    }
+
     // Spawn background task for backup-mode UDP broadcast
     {
         let pool_clone = pool.clone();
@@ -515,6 +532,8 @@ async fn main() -> anyhow::Result<()> {
         // Backup serve — API-key authenticated, for server-to-server recovery
         .route("/backup/list", get(backup::serve::backup_list_photos))
         .route("/backup/list-trash", get(backup::serve::backup_list_trash))
+        .route("/backup/list-users", get(backup::serve::backup_list_users))
+        .route("/backup/upsert-user", post(backup::serve::backup_upsert_user))
         .route("/backup/receive", post(backup::serve::backup_receive))
         .route(
             "/backup/download/{photo_id}",
@@ -523,6 +542,17 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/backup/download/{photo_id}/thumb",
             get(backup::serve::backup_download_thumb),
+        )
+        // Backup diagnostics — one-way push: backup server → primary.
+        // X-API-Key authenticated; no Bearer JWT required from backup senders.
+        .route(
+            "/backup/report",
+            post(backup::diagnostics::receive_backup_report),
+        )
+        // Admin: read the latest diagnostics report sent by a backup server
+        .route(
+            "/admin/backup/servers/{id}/diagnostics",
+            get(backup::diagnostics::get_backup_diagnostics),
         )
         // Shared albums — create, manage members, add/remove photos
         .route(

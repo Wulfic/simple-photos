@@ -15,6 +15,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { getErrorMessage } from "../utils/formatters";
+import { useIsBackupServer } from "../hooks/useIsBackupServer";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
@@ -149,6 +150,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
 function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   const navigate = useNavigate();
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
+  const isBackupServer = useIsBackupServer();
   const [error, setError] = useState("");
   const [showAddPhotos, setShowAddPhotos] = useState(false);
   const [showSharePicker, setShowSharePicker] = useState(false);
@@ -410,6 +412,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           </div>
 
           {/* Action buttons */}
+          {!isBackupServer && (
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={openSharePicker}
@@ -435,6 +438,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
               Delete
             </button>
           </div>
+          )}
         </div>
 
       {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}

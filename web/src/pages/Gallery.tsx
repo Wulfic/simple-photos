@@ -20,6 +20,7 @@ import { useGalleryUpload } from "../hooks/useGalleryUpload";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { useBackupStore } from "../store/backup";
 import { useAuthStore } from "../store/auth";
+import { useIsBackupServer } from "../hooks/useIsBackupServer";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export default function Gallery() {
   const { viewMode, activeBackupServerId, backupServers } = useBackupStore();
   const accessToken = useAuthStore((s) => s.accessToken);
   const isBackupView = viewMode === "backup" && !!activeBackupServerId;
+  const isBackupServer = useIsBackupServer();
 
   // BackupPhotoRecord shape returned by listBackupPhotos proxy
   type BackupPhotoRecord = {
@@ -223,8 +225,8 @@ export default function Gallery() {
       <AppHeader />
 
       <main className="p-4">
-        {/* ── Selection mode bar (hidden in backup view) ───────────────── */}
-        {selectionMode && !isBackupView && (
+        {/* ── Selection mode bar (hidden on backup servers) ──────────── */}
+        {selectionMode && !isBackupView && !isBackupServer && (
           <div className="flex items-center justify-between bg-gray-200 dark:bg-gray-800 rounded-lg px-4 py-2 mb-4">
             <div className="flex items-center gap-3">
               <button onClick={clearSelection} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white transition-colors">
@@ -245,8 +247,8 @@ export default function Gallery() {
 
         {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
 
-        {/* Floating upload button — hidden when viewing a backup server */}
-        {!isBackupView && (
+        {/* Floating upload button — hidden when viewing a backup server or when this IS a backup server */}
+        {!isBackupView && !isBackupServer && (
         <label
           className="fixed bottom-6 right-6 z-50 w-14 h-14 flex items-center justify-center rounded-2xl shadow-lg cursor-pointer select-none transition-colors"
           style={{ backgroundColor: "#A8C7FA" }}

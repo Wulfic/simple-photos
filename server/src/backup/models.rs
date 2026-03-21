@@ -125,3 +125,27 @@ pub struct BackupModeResponse {
 pub struct SetBackupModeRequest {
     pub mode: String,
 }
+
+/// Health/diagnostics snapshot pushed by a backup server to its primary.
+///
+/// Collected every 15 minutes by the backup and POSTed to
+/// `POST /api/backup/report` on the primary server.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BackupDiagnosticsReport {
+    /// Server version string
+    pub version: String,
+    /// Seconds since the backup server process started
+    pub uptime_seconds: u64,
+    /// Resident memory in bytes (Linux only; 0 on other platforms)
+    pub memory_rss_bytes: u64,
+    /// Accumulated CPU time in seconds (user + system, Linux only)
+    pub cpu_seconds: f64,
+    /// Total photos stored on this backup server
+    pub total_photos: i64,
+    /// Percentage of the storage disk that is used (0–100)
+    pub disk_used_percent: f64,
+    /// Database file size in bytes
+    pub db_size_bytes: u64,
+    /// RFC-3339 timestamp at which this report was collected on the backup
+    pub collected_at: String,
+}

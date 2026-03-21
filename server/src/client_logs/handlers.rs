@@ -24,6 +24,10 @@ use super::models::{ClientLogBatch, ClientLogListResponse, ClientLogRecord};
 /// POST /api/client-logs — receive a batch of diagnostic log entries from a
 /// mobile client. Each entry is stored with the authenticated user's ID.
 ///
+/// **Backup servers reject this endpoint** — diagnostics flow one-way from
+/// the backup server to the primary, never the other way around. Android
+/// clients should always point their log submissions at the primary server.
+///
 /// This is fire-and-forget from the client's perspective: partial insert
 /// failures are logged server-side but never returned as errors to the
 /// client (we don't want logging to interfere with the backup flow).
@@ -32,6 +36,22 @@ pub async fn submit_logs(
     State(state): State<AppState>,
     Json(batch): Json<ClientLogBatch>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    // Backup servers do not accept inbound diagnostic submissions.
+    // Diagnostics are pushed from backup → primary, not received from clients.
+    let server_mode: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+            .fetch_optional(&state.read_pool)
+            .await?
+            .unwrap_or_else(|| "primary".to_string());
+
+    if server_mode == "backup" {
+        return Err(AppError::Forbidden(
+            "This server is in backup mode and does not accept client diagnostic submissions. \
+             Please direct log submissions to the primary server."
+                .into(),
+        ));
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
 
     // Validate session_id

@@ -15,6 +15,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { getErrorMessage } from "../utils/formatters";
+import { useIsBackupServer } from "../hooks/useIsBackupServer";
 
 interface Gallery {
   id: string;
@@ -38,6 +39,7 @@ interface GalleryItem {
 export default function SecureGallery() {
   const navigate = useNavigate();
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
+  const isBackupServer = useIsBackupServer();
 
   // Auth gate state
   const [authenticated, setAuthenticated] = useState(false);
@@ -373,7 +375,7 @@ export default function SecureGallery() {
               </h2>
               <span className="text-gray-400 text-sm">{items.length} items</span>
             </div>
-            {!showAddPhotos && (
+            {!showAddPhotos && !isBackupServer && (
               <div className="flex gap-2">
                 <button
                   onClick={() => {
@@ -463,6 +465,7 @@ export default function SecureGallery() {
             <div className="text-center py-16 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
               <span className="text-4xl mb-3 block">🖼️</span>
               <p className="text-gray-400 text-sm mb-3">This album is empty.</p>
+              {!isBackupServer && (
               <button
                 onClick={() => {
                   setShowAddPhotos(true);
@@ -472,6 +475,7 @@ export default function SecureGallery() {
               >
                 Add Photos from Gallery
               </button>
+              )}
             </div>
           ) : !showAddPhotos ? (
             <div className={gridClasses}>
@@ -512,7 +516,7 @@ export default function SecureGallery() {
               End-to-end encrypted albums for your most private photos.
             </p>
           </div>
-          {!showCreate && (
+          {!showCreate && !isBackupServer && (
             <button
               onClick={() => {
                 setShowCreate(true);
@@ -598,7 +602,7 @@ export default function SecureGallery() {
             <p className="text-sm text-gray-400 mt-1">
               Create an album to store your most private photos securely.
             </p>
-            {!showCreate && (
+            {!showCreate && !isBackupServer && (
               <button
                 onClick={() => setShowCreate(true)}
                 className="mt-4 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
@@ -629,6 +633,7 @@ export default function SecureGallery() {
                     </p>
                   </div>
                 </div>
+                {!isBackupServer && (
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -639,6 +644,7 @@ export default function SecureGallery() {
                 >
                   Delete
                 </button>
+                )}
               </div>
             ))}
           </div>
