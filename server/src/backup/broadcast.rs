@@ -171,6 +171,47 @@ pub fn get_local_ip() -> Option<String> {
     Some(local_addr.ip().to_string())
 }
 
+/// Returns ALL IPv4 addresses assigned to local interfaces by parsing
+/// `/proc/net/fib_trie`. This catches Docker bridge IPs, VPN tunnels, etc.
+/// Falls back to just `get_local_ip()` if parsing fails.
+pub fn get_all_local_ips() -> Vec<String> {
+    let mut ips = std::collections::HashSet::new();
+
+    // Parse /proc/net/fib_trie — IP is on the line BEFORE "/32 host LOCAL"
+    if let Ok(content) = std::fs::read_to_string("/proc/net/fib_trie") {
+        let mut prev_ip: Option<String> = None;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.contains("/32 host LOCAL") {
+                if let Some(ip) = prev_ip.take() {
+                    if ip != "127.0.0.1" {
+                        ips.insert(ip);
+                    }
+                }
+            } else if let Some(ip) = trimmed.strip_prefix("|-- ") {
+                let ip = ip.trim();
+                // Only keep if it looks like a valid IPv4 address
+                if ip.split('.').count() == 4 {
+                    prev_ip = Some(ip.to_string());
+                } else {
+                    prev_ip = None;
+                }
+            } else {
+                prev_ip = None;
+            }
+        }
+    }
+
+    // Fallback: if /proc parsing yielded nothing, use the UDP trick
+    if ips.is_empty() {
+        if let Some(ip) = get_local_ip() {
+            ips.insert(ip);
+        }
+    }
+
+    ips.into_iter().collect()
+}
+
 pub fn get_default_gateway() -> Option<String> {
     if let Ok(content) = std::fs::read_to_string("/proc/net/route") {
         for line in content.lines().skip(1) {

@@ -282,17 +282,19 @@ pub async fn discover_servers(
 ) -> Result<Json<DiscoverResponse>, AppError> {
     require_admin(&state, &auth).await?;
 
-    // Overall safety timeout — return whatever we've collected within 20 seconds.
+    // Overall safety timeout — each phase has its own bounded timeout,
+    // so this outer limit is just a crash-stop. Inner phases use streaming
+    // collection so partial results survive phase-level timeouts.
     let discover_future = discover_servers_inner(&state);
     let discovered = match tokio::time::timeout(
-        std::time::Duration::from_secs(20),
+        std::time::Duration::from_secs(15),
         discover_future,
     )
     .await
     {
         Ok(servers) => servers,
         Err(_) => {
-            tracing::warn!("Server discovery timed out after 20s");
+            tracing::warn!("Server discovery timed out after 15s");
             Vec::new()
         }
     };
@@ -313,16 +315,33 @@ pub async fn discover_servers(
 ///     server's actual HTTP port, so no multi-port guessing is needed.
 async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
     let discovery_port = state.config.server.discovery_port;
+    let our_port = state.config.server.port;
 
-    // ── Phase 0: UDP broadcast discovery (3s) ────────────────────────────
+    // Pre-seed with our own addresses so we never list ourselves
+    let mut existing_addrs = std::collections::HashSet::new();
+    existing_addrs.insert(format!("127.0.0.1:{}", our_port));
+    existing_addrs.insert(format!("localhost:{}", our_port));
+    if let Ok(url) = reqwest::Url::parse(&state.config.server.base_url) {
+        if let Some(host) = url.host_str() {
+            let port = url.port().unwrap_or(our_port);
+            existing_addrs.insert(format!("{}:{}", host, port));
+        }
+    }
+    // Add ALL local interface IPs (Docker bridge, VPN, etc.)
+    for ip in broadcast::get_all_local_ips() {
+        existing_addrs.insert(format!("{}:{}", ip, our_port));
+    }
+
+    // ── Phase 0: UDP broadcast discovery (1s) ────────────────────────────
     let broadcast_results = tokio::task::spawn_blocking(|| {
-        broadcast::discover_via_broadcast(std::time::Duration::from_secs(3))
+        broadcast::discover_via_broadcast(std::time::Duration::from_secs(1))
     })
     .await
     .unwrap_or_default();
 
     let mut discovered: Vec<DiscoveredServer> = broadcast_results
         .into_iter()
+        .filter(|b| !existing_addrs.contains(&b.address))
         .map(|b| DiscoveredServer {
             address: b.address,
             name: b.name,
@@ -331,14 +350,16 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
         })
         .collect();
 
-    let our_port = state.config.server.port;
+    // Add broadcast results to dedup set
+    for d in &discovered {
+        existing_addrs.insert(d.address.clone());
+    }
+
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
+        .connect_timeout(std::time::Duration::from_secs(1))
+        .timeout(std::time::Duration::from_secs(1))
         .build()
         .unwrap_or_default();
-
-    let mut existing_addrs: std::collections::HashSet<String> =
-        discovered.iter().map(|d| d.address.clone()).collect();
 
     // ── Phase 1: Probe local/Docker hosts ────────────────────────────────
     // On localhost we probe both the discovery port AND the old-style
@@ -367,6 +388,8 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
 
     // Fallback: probe /api/discover/info on common ports for Docker containers
     // that might not have the discovery port forwarded.
+    // When discovery_port is active, only probe fallback ports on 127.0.0.1
+    // to avoid slow timeouts on unreachable Docker IPs.
     let mut local_ports: Vec<u16> = Vec::new();
     let base = (our_port / 10) * 10;
     for p in base..=(base + 9) {
@@ -381,6 +404,12 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
     }
     for &port in &local_ports {
         for host in &probe_hosts {
+            // When discovery_port is set, skip fallback-port probes on
+            // non-loopback hosts — they'll be found via the discovery
+            // port in Phase 2 and probing unreachable Docker IPs is slow.
+            if discovery_port != 0 && host != "127.0.0.1" {
+                continue;
+            }
             let addr = format!("{}:{}", host, port);
             if existing_addrs.contains(&addr) {
                 continue;
@@ -447,7 +476,7 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
         }
     }
 
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(100));
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(200));
 
     // Build a flat list of (ip, port, use_discovery_protocol) probes
     let mut probes: Vec<(String, u16, bool)> = Vec::new();
@@ -484,24 +513,26 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
         });
     }
 
-    // Phase 2 timeout: with only 254 probes (vs ~1,500 before), this is fast
-    let phase2_result = tokio::time::timeout(
-        std::time::Duration::from_secs(8),
-        futures_util::future::join_all(lan_futures),
-    )
-    .await;
+    // Use FuturesUnordered + streaming so partial results are preserved
+    // if the deadline fires (join_all + unwrap_or_default discards everything).
+    let mut stream: futures_util::stream::FuturesUnordered<_> =
+        lan_futures.into_iter().collect();
 
-    match phase2_result {
-        Ok(lan_results) => {
-            for result in lan_results.into_iter().flatten() {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match tokio::time::timeout_at(deadline, futures_util::StreamExt::next(&mut stream)).await {
+            Ok(Some(Some(result))) => {
                 if !existing_addrs.contains(&result.address) {
                     existing_addrs.insert(result.address.clone());
                     discovered.push(result);
                 }
             }
-        }
-        Err(_) => {
-            tracing::warn!("[DISCOVER] Phase 2 subnet scan timed out after 8s");
+            Ok(Some(None)) => { /* probe returned None */ }
+            Ok(None) => break,   // stream exhausted
+            Err(_) => {
+                tracing::warn!("[DISCOVER] Phase 2 subnet scan timed out after 10s with {} servers", discovered.len());
+                break;
+            }
         }
     }
 
