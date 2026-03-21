@@ -13,6 +13,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import { useAuthStore } from "../store/auth";
 
 type SharedAlbumInfo = {
   id: string;
@@ -62,13 +63,27 @@ export default function Albums() {
     videos: encryptedPhotos.filter(p => p.mediaType === "video").length,
     audio: encryptedPhotos.filter(p => p.mediaType === "audio").length,
   } : null;
-  const encryptedFirstThumbs = encryptedPhotos ? {
-    favorites: encryptedPhotos.find(p => !!p.isFavorite && p.thumbnailData)?.thumbnailData,
-    photos: encryptedPhotos.find(p => (p.mediaType === "photo" || p.mediaType === "gif") && p.thumbnailData)?.thumbnailData,
-    gifs: encryptedPhotos.find(p => p.mediaType === "gif" && p.thumbnailData)?.thumbnailData,
-    videos: encryptedPhotos.find(p => p.mediaType === "video" && p.thumbnailData)?.thumbnailData,
-    audio: encryptedPhotos.find(p => p.mediaType === "audio" && p.thumbnailData)?.thumbnailData,
-  } : {};
+
+  // Find the first photo with a thumbnail source for each category.
+  // Prefer photos with thumbnailData (encrypted), but fall back to
+  // server-side photos that have a serverPhotoId (autoscanned) —
+  // SmartAlbumCard will fetch those via /api/photos/:id/thumbnail.
+  function findCoverPhoto(filter: (p: CachedPhoto) => boolean): CachedPhoto | undefined {
+    if (!encryptedPhotos) return undefined;
+    // First: try to find one with local thumbnailData
+    const withData = encryptedPhotos.find(p => filter(p) && p.thumbnailData);
+    if (withData) return withData;
+    // Fallback: server-side photo with a serverPhotoId
+    return encryptedPhotos.find(p => filter(p) && p.serverSide && p.serverPhotoId);
+  }
+
+  const smartAlbumCovers = {
+    favorites: findCoverPhoto(p => !!p.isFavorite),
+    photos: findCoverPhoto(p => p.mediaType === "photo" || p.mediaType === "gif"),
+    gifs: findCoverPhoto(p => p.mediaType === "gif"),
+    videos: findCoverPhoto(p => p.mediaType === "video"),
+    audio: findCoverPhoto(p => p.mediaType === "audio"),
+  };
 
   async function loadAlbums() {
     setLoading(true);
@@ -255,31 +270,31 @@ export default function Albums() {
         <SmartAlbumCard
           label="Favorites"
           count={encryptedPhotoCounts?.favorites ?? 0}
-          encryptedThumbData={encryptedFirstThumbs.favorites}
+          coverPhoto={smartAlbumCovers.favorites}
           onClick={() => navigate("/albums/smart-favorites")}
         />
         <SmartAlbumCard
           label="Photos"
           count={encryptedPhotoCounts?.photos ?? 0}
-          encryptedThumbData={encryptedFirstThumbs.photos}
+          coverPhoto={smartAlbumCovers.photos}
           onClick={() => navigate("/albums/smart-photos")}
         />
         <SmartAlbumCard
           label="GIFs"
           count={encryptedPhotoCounts?.gifs ?? 0}
-          encryptedThumbData={encryptedFirstThumbs.gifs}
+          coverPhoto={smartAlbumCovers.gifs}
           onClick={() => navigate("/albums/smart-gifs")}
         />
         <SmartAlbumCard
           label="Videos"
           count={encryptedPhotoCounts?.videos ?? 0}
-          encryptedThumbData={encryptedFirstThumbs.videos}
+          coverPhoto={smartAlbumCovers.videos}
           onClick={() => navigate("/albums/smart-videos")}
         />
         <SmartAlbumCard
           label="Audio"
           count={encryptedPhotoCounts?.audio ?? 0}
-          encryptedThumbData={encryptedFirstThumbs.audio}
+          coverPhoto={smartAlbumCovers.audio}
           onClick={() => navigate("/albums/smart-audio")}
         />
 
@@ -443,6 +458,12 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
         setThumbUrl(URL.createObjectURL(blob));
         return;
       }
+      // Fallback: server-side photo — use the thumbnail endpoint
+      if (localPhoto?.serverSide && localPhoto?.serverPhotoId) {
+        const token = useAuthStore.getState().accessToken;
+        setThumbUrl(`/api/photos/${localPhoto.serverPhotoId}/thumbnail?token=${token}`);
+        return;
+      }
     })();
 
     return () => { cancelled = true; };
@@ -482,30 +503,37 @@ function SmartAlbumCard({
   label,
   count,
   onClick,
-  encryptedThumbData,
+  coverPhoto,
 }: {
   label: string;
   count: number;
   onClick: () => void;
-  /** Raw JPEG ArrayBuffer from IndexedDB */
-  encryptedThumbData?: ArrayBuffer;
+  /** The first matching CachedPhoto for this category (may have thumbnailData or serverPhotoId) */
+  coverPhoto?: CachedPhoto;
 }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    if (encryptedThumbData) {
-      // Thumbnail data already available from IndexedDB
-      const blob = new Blob([encryptedThumbData], { type: "image/jpeg" }); // Smart album covers are always JPEG
+    if (coverPhoto?.thumbnailData) {
+      // Encrypted thumbnail data already in IndexedDB
+      const mime = coverPhoto.thumbnailMimeType || (coverPhoto.mediaType === "gif" ? "image/gif" : "image/jpeg");
+      const blob = new Blob([coverPhoto.thumbnailData], { type: mime });
       const url = URL.createObjectURL(blob);
-      setThumbUrl(url);
+      if (!cancelled) setThumbUrl(url);
       return () => { cancelled = true; URL.revokeObjectURL(url); };
+    } else if (coverPhoto?.serverSide && coverPhoto?.serverPhotoId) {
+      // Server-side photo — fetch thumbnail from the server endpoint
+      const token = useAuthStore.getState().accessToken;
+      if (!cancelled) setThumbUrl(`/api/photos/${coverPhoto.serverPhotoId}/thumbnail?token=${token}`);
+      return () => { cancelled = true; };
     }
 
     // No thumbnail source — reset
-    setThumbUrl(null);
-  }, [encryptedThumbData]);
+    if (!cancelled) setThumbUrl(null);
+    return () => { cancelled = true; };
+  }, [coverPhoto?.thumbnailData, coverPhoto?.serverSide, coverPhoto?.serverPhotoId, coverPhoto?.thumbnailMimeType, coverPhoto?.mediaType]);
 
   // Revoke previous object URL when thumbUrl changes
   useEffect(() => {

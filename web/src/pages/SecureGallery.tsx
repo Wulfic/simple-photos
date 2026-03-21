@@ -183,7 +183,16 @@ export default function SecureGallery() {
     setError("");
     try {
       for (const blobId of selectedPhotos) {
-        await api.secureGalleries.addItem(selectedGallery.id, blobId);
+        const response = await api.secureGalleries.addItem(selectedGallery.id, blobId);
+        // The server creates a physical copy of the blob under a new ID.
+        // Duplicate the IDB cache entry to the cloned blob ID so that
+        // ItemTile (which uses the server's blob_id) can display the thumbnail.
+        if (response.new_blob_id) {
+          const originalCached = await db.photos.get(blobId);
+          if (originalCached) {
+            await db.photos.put({ ...originalCached, blobId: response.new_blob_id });
+          }
+        }
       }
 
       // ── Remove photos from regular albums ────────────────────────────────
@@ -257,10 +266,13 @@ export default function SecureGallery() {
     }
   }
 
-  // Get blob IDs already in this album (to filter from picker)
+  // Get blob IDs already in this album (to filter from picker).
+  // Also exclude server-side (autoscanned) photos: they have no encrypted blob
+  // in the blobs table so the server add-item endpoint would return "Blob not
+  // found" for them.
   const albumBlobIds = new Set(items.map((i) => i.blob_id));
   const availablePhotos = (cachedPhotos || []).filter(
-    (p) => !albumBlobIds.has(p.blobId)
+    (p) => !albumBlobIds.has(p.blobId) && !p.serverSide
   );
 
   // ── Password Gate ───────────────────────────────────────────────────────────

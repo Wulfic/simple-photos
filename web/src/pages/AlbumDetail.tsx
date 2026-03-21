@@ -16,6 +16,7 @@ import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import { useAuthStore } from "../store/auth";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
@@ -713,14 +714,21 @@ function ThumbnailImg({ photo }: { photo: CachedPhoto }) {
 
   useEffect(() => {
     if (photo.thumbnailData) {
+      // Encrypted thumbnail stored in IndexedDB
       const mime = photo.thumbnailMimeType || (photo.mediaType === "gif" ? "image/gif" : "image/jpeg");
       const url = URL.createObjectURL(
         new Blob([photo.thumbnailData], { type: mime })
       );
       setSrc(url);
       return () => URL.revokeObjectURL(url);
+    } else if (photo.serverSide && photo.serverPhotoId) {
+      // Server-side (autoscanned) photo — fetch thumbnail from the server
+      const token = useAuthStore.getState().accessToken;
+      setSrc(`/api/photos/${photo.serverPhotoId}/thumbnail?token=${token}`);
+    } else {
+      setSrc(null);
     }
-  }, [photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
+  }, [photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType, photo.serverSide, photo.serverPhotoId]);
 
   if (src) {
     return (

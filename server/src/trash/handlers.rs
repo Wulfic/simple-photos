@@ -283,6 +283,17 @@ pub async fn soft_delete_blob(
             .await?;
     }
 
+    // Remove the photos-table row that links to this encrypted blob so that
+    // the encrypted-sync endpoint stops returning the deleted item.  Without
+    // this, loadEncryptedPhotos() would re-add the photo to the client's IDB
+    // (without thumbnail data) on the very next sync, making it appear as
+    // though the deletion never happened.
+    sqlx::query("DELETE FROM photos WHERE encrypted_blob_id = ? AND user_id = ?")
+        .bind(&blob_id)
+        .bind(&auth.user_id)
+        .execute(&mut *tx)
+        .await?;
+
     // Clean up shared album references to prevent dangling photo_ref entries
     sqlx::query("DELETE FROM shared_album_photos WHERE photo_ref = ? AND ref_type = 'blob'")
         .bind(&blob_id)

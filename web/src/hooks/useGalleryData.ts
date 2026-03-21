@@ -231,6 +231,24 @@ export function useGalleryData(): GalleryDataResult {
           const updates: Partial<CachedPhoto> = {};
           if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
           if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
+          // Retry thumbnail download if the previous attempt failed (thumbnailData
+          // is absent but the thumbnail blob ID is known).  This repairs photos
+          // whose thumbnail was not fetched due to a transient network error.
+          if (!existing.thumbnailData && !isServerSide) {
+            const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
+            if (retryThumbId) {
+              try {
+                const thumbEnc = await api.blobs.download(retryThumbId);
+                const thumbDec = await decrypt(thumbEnc);
+                const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
+                const retryData = base64ToArrayBuffer(thumbPayload.data);
+                updates.thumbnailData = retryData;
+                updates.thumbnailMimeType = thumbPayload.mime_type;
+              } catch {
+                // Still unavailable — leave as-is and retry next sync
+              }
+            }
+          }
           if (Object.keys(updates).length > 0) await db.photos.update(idbKey, updates);
           continue;
         }

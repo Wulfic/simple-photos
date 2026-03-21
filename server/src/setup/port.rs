@@ -29,6 +29,12 @@ pub struct PortResponse {
     /// First available port starting from 8080 (for wizard default).
     /// Increments from 8080 until an unbound port is found.
     pub suggested_port: u16,
+    /// The port the client actually used to reach this server, extracted
+    /// from the `Host` header.  In Docker this will be the *mapped* host
+    /// port (e.g. 8081) rather than the internal container port (3000).
+    /// `None` when the `Host` header is absent or unparseable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_port: Option<u16>,
     pub message: String,
 }
 
@@ -59,25 +65,55 @@ fn find_available_port(start: u16, our_port: u16) -> u16 {
     }
 }
 
+/// Extract the port from the `Host` header (or `X-Forwarded-Host`).
+///
+/// In Docker the internal container port differs from the host-mapped port
+/// the user sees in the browser.  The `Host` header carries the latter,
+/// letting the wizard show the correct "currently running on" value.
+fn extract_external_port(headers: &HeaderMap) -> Option<u16> {
+    // Prefer X-Forwarded-Host (set by reverse proxies), then Host.
+    let host_val = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))
+        .and_then(|v| v.to_str().ok())?;
+
+    // Host may be "192.168.86.34:8081" or "[::1]:8081" (IPv6) or just
+    // "example.com" (no port → implicit 80/443).
+    // Split on the *last* colon to handle IPv6 bracketed addresses.
+    if let Some(colon) = host_val.rfind(':') {
+        let after = &host_val[colon + 1..];
+        // Make sure this is actually a port and not part of an IPv6
+        // address (e.g. "::1" without brackets).
+        after.parse::<u16>().ok()
+    } else {
+        None // no port in header → browser is on default 80/443
+    }
+}
+
 /// Admin-only: Get the current server port from config.
 ///
 /// GET /api/admin/port
 pub async fn get_port(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
 ) -> Result<Json<PortResponse>, AppError> {
     require_admin(&state, &auth).await?;
+
+    let external_port = extract_external_port(&headers);
 
     // Pass our own port so find_available_port never skips it — if we're
     // already on 8080 the suggestion should remain 8080, not 8081.
     let current_port = state.config.server.port;
-    let suggested_port = tokio::task::spawn_blocking(move || find_available_port(8080, current_port))
+    let ext = external_port.unwrap_or(current_port);
+    let suggested_port = tokio::task::spawn_blocking(move || find_available_port(ext.max(1024), current_port))
         .await
-        .unwrap_or(8080);
+        .unwrap_or(ext.max(1024));
 
     Ok(Json(PortResponse {
         port: state.config.server.port,
         suggested_port,
+        external_port,
         message: "Current server port".into(),
     }))
 }
@@ -159,6 +195,8 @@ pub async fn update_port(
         req.port
     );
 
+    let external_port = extract_external_port(&headers);
+
     let message = if config_write_ok {
         format!(
             "Port updated to {}. Server restart required for the change to take effect.",
@@ -177,6 +215,7 @@ pub async fn update_port(
         port: req.port,
         // After an explicit save the chosen port is already confirmed; echo it back.
         suggested_port: req.port,
+        external_port,
         message,
     }))
 }

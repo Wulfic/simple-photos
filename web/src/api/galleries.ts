@@ -51,7 +51,7 @@ export const secureGalleriesApi = {
     }),
 
   addItem: (galleryId: string, blobId: string) =>
-    request<{ item_id: string }>(
+    request<{ item_id: string; new_blob_id: string }>(
       `/galleries/secure/${galleryId}/items`,
       {
         method: "POST",
