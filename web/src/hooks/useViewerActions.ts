@@ -196,33 +196,55 @@ export default function useViewerActions({
     try {
       const cached = await db.photos.get(id);
 
-      if (cached?.serverSide) {
-        // Server-side (autoscanned) photo — delete via photos API
-        const photoId = cached.serverPhotoId || id;
-        await api.photos.delete(photoId);
+      // Prefer the photos API when we have a server-side photo record ID.
+      // This correctly handles: autoscanned photos (serverSide), encrypted-
+      // synced photos (serverPhotoId from sync), and copies created via
+      // the server duplicate endpoint (serverPhotoId from duplicate).
+      if (cached?.serverPhotoId) {
+        try {
+          await api.photos.delete(cached.serverPhotoId);
+        } catch (deleteErr) {
+          // If the server record no longer exists (stale cache, local-only
+          // copy whose server duplicate failed), fall through to local
+          // cleanup instead of surfacing a confusing "Not found" error.
+          const isNotFound =
+            deleteErr instanceof Error && deleteErr.message === "Not found";
+          if (!isNotFound) throw deleteErr;
+        }
         await db.photos.delete(id);
         navigate("/gallery");
         return;
       }
 
-      // Soft-delete blob to trash with client metadata
-      const result = await api.blobs.softDelete(id, {
-        thumbnail_blob_id: cached?.thumbnailBlobId,
-        filename: cached?.filename ?? "unknown",
-        mime_type: cached?.mimeType ?? "application/octet-stream",
-        media_type: cached?.mediaType,
-        size_bytes: 0,
-        width: cached?.width,
-        height: cached?.height,
-        duration_secs: cached?.duration,
-        taken_at: cached?.takenAt
-          ? new Date(cached.takenAt).toISOString()
-          : undefined,
-      });
+      // Fallback: encrypted blob without a photos-table entry.
+      // Use storageBlobId for copies that reference the original's blob.
+      const blobId = cached?.storageBlobId || id;
+      let trashResult: { trash_id: string; expires_at: string } | null = null;
+      try {
+        trashResult = await api.blobs.softDelete(blobId, {
+          thumbnail_blob_id: cached?.thumbnailBlobId,
+          filename: cached?.filename ?? "unknown",
+          mime_type: cached?.mimeType ?? "application/octet-stream",
+          media_type: cached?.mediaType,
+          size_bytes: 0,
+          width: cached?.width,
+          height: cached?.height,
+          duration_secs: cached?.duration,
+          taken_at: cached?.takenAt
+            ? new Date(cached.takenAt).toISOString()
+            : undefined,
+        });
+      } catch (deleteErr) {
+        // Blob may already be trashed or missing (e.g. local-only copy).
+        // Clean up IndexedDB regardless so the item disappears from the UI.
+        const isNotFound =
+          deleteErr instanceof Error && deleteErr.message === "Not found";
+        if (!isNotFound) throw deleteErr;
+      }
       // Move to local trash table so we can show thumbnails in Trash view
-      if (cached) {
+      if (cached && trashResult) {
         await db.trash.put({
-          trashId: result.trash_id,
+          trashId: trashResult.trash_id,
           blobId: id,
           thumbnailBlobId: cached.thumbnailBlobId,
           filename: cached.filename,
@@ -232,7 +254,7 @@ export default function useViewerActions({
           height: cached.height,
           takenAt: cached.takenAt,
           deletedAt: Date.now(),
-          expiresAt: result.expires_at,
+          expiresAt: trashResult.expires_at,
           thumbnailData: cached.thumbnailData,
           duration: cached.duration,
           albumIds: cached.albumIds ?? [],

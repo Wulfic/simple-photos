@@ -61,6 +61,9 @@ export default function Settings() {
   const [audioBackupLoading, setAudioBackupLoading] = useState(true);
   const [togglingAudioBackup, setTogglingAudioBackup] = useState(false);
 
+  // ── Force sync from primary (backup servers only) ─────────────────────
+  const [forceSyncing, setForceSyncing] = useState(false);
+
   // ── Storage stats state ─────────────────────────────────────────────────
   type StorageStats = {
     photo_bytes: number; photo_count: number;
@@ -380,6 +383,31 @@ export default function Settings() {
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">
             Changes to photos, users, passwords, and 2FA should be made on the primary server. They will be synced automatically.
           </p>
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <button
+              onClick={async () => {
+                setForceSyncing(true);
+                setError("");
+                setSuccess("");
+                try {
+                  const res = await api.backup.forceSyncFromPrimary();
+                  setSuccess(res.message || "Sync requested — the primary server will push updates shortly.");
+                } catch (err: unknown) {
+                  setError(getErrorMessage(err, "Failed to request sync from primary server."));
+                } finally {
+                  setForceSyncing(false);
+                }
+              }}
+              disabled={forceSyncing}
+              className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              <AppIcon name="reload" size="w-4 h-4" className={forceSyncing ? "animate-spin" : ""} />
+              {forceSyncing ? "Requesting Sync…" : "Force Sync from Primary"}
+            </button>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+              Request the primary server to immediately push all new photos and data to this backup.
+            </p>
+          </div>
         </section>
       ) : isAdmin && (
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">

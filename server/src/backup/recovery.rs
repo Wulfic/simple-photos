@@ -433,16 +433,20 @@ pub async fn proxy_backup_photos(
 
     match req.send().await {
         Ok(resp) if resp.status().is_success() => {
-            let photos: Vec<BackupPhotoRecord> = resp
-                .json()
-                .await
-                .map_err(|e| AppError::BadRequest(format!("Failed to parse backup server response: {}", e)))?;
+            let photos: Vec<BackupPhotoRecord> = resp.json().await.map_err(|e| {
+                AppError::BadRequest(format!("Failed to parse backup server response: {}", e))
+            })?;
             Ok(Json(photos))
         }
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            tracing::warn!("Backup server at {} returned HTTP {}: {}", address, status, body);
+            tracing::warn!(
+                "Backup server at {} returned HTTP {}: {}",
+                address,
+                status,
+                body
+            );
             Err(AppError::BadRequest(format!(
                 "Backup server returned HTTP {}",
                 status
@@ -513,9 +517,7 @@ pub async fn proxy_backup_thumbnail(
                 .body(axum::body::Body::from(bytes))
                 .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?)
         }
-        Ok(resp) if resp.status() == axum::http::StatusCode::NOT_FOUND => {
-            Err(AppError::NotFound)
-        }
+        Ok(resp) if resp.status() == axum::http::StatusCode::NOT_FOUND => Err(AppError::NotFound),
         Ok(resp) => Err(AppError::BadRequest(format!(
             "Backup server returned HTTP {} for thumbnail",
             resp.status()

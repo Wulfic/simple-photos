@@ -804,7 +804,11 @@ pub async fn pair(
     let login_data: serde_json::Value = serde_json::from_slice(&resp_bytes)
         .map_err(|_| AppError::Internal("Failed to parse login response".into()))?;
 
-    if login_data.get("requires_totp").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if login_data
+        .get("requires_totp")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return Err(AppError::BadRequest(
             "Primary server has 2FA enabled. Please temporarily disable it to pair the backup server.".into(),
         ));
@@ -841,7 +845,8 @@ pub async fn pair(
                     return Err(AppError::BadRequest(
                         "The target server is already in backup mode. \
                          You can only pair a backup server to a primary server, \
-                         not to another backup server.".into(),
+                         not to another backup server."
+                            .into(),
                     ));
                 }
             }
@@ -881,15 +886,18 @@ pub async fn pair(
 
         if host_port.is_empty() || host_port == "localhost" || host_port.starts_with("127.") {
             // base_url points at loopback — fall back to LAN IP detection
-            let ip = crate::backup::broadcast::get_local_ip()
-                .unwrap_or_else(|| {
-                    headers
-                        .get("Host")
-                        .and_then(|h| h.to_str().ok())
-                        .unwrap_or("unknown-backup-host")
-                        .to_string()
-                });
-            if ip.contains(':') { ip } else { format!("{}:{}", ip, state.config.server.port) }
+            let ip = crate::backup::broadcast::get_local_ip().unwrap_or_else(|| {
+                headers
+                    .get("Host")
+                    .and_then(|h| h.to_str().ok())
+                    .unwrap_or("unknown-backup-host")
+                    .to_string()
+            });
+            if ip.contains(':') {
+                ip
+            } else {
+                format!("{}:{}", ip, state.config.server.port)
+            }
         } else {
             host_port.to_string()
         }
@@ -921,7 +929,12 @@ pub async fn pair(
         .json(&register_body)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to connect to primary server to register backup server: {}", e)))?;
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "Failed to connect to primary server to register backup server: {}",
+                e
+            ))
+        })?;
 
     if !reg_resp.status().is_success() {
         let status = reg_resp.status();
@@ -943,8 +956,36 @@ pub async fn pair(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // ── Create local admin with the same credentials ─────────────────────
-    let user_id = Uuid::new_v4().to_string();
+    // ── Create local admin with the same ID as the primary ─────────────
+    // Fetch the primary user's actual UUID so the local account matches.
+    // This prevents user_id collisions when sync_users_to_backup runs and
+    // avoids the "Session expired" problem where the merge deletes the
+    // locally-created user (and invalidates its tokens).
+    let user_id = {
+        let users_url = format!("{}/api/admin/users", base_url);
+        let users_resp = client
+            .get(&users_url)
+            .header("Authorization", format!("Bearer {}", remote_token))
+            .send()
+            .await
+            .ok();
+        let mut primary_id: Option<String> = None;
+        if let Some(resp) = users_resp {
+            if resp.status().is_success() {
+                if let Ok(users) = resp.json::<Vec<serde_json::Value>>().await {
+                    // Find the user whose username matches the pairing username
+                    primary_id = users
+                        .iter()
+                        .find(|u| {
+                            u.get("username").and_then(|v| v.as_str()) == Some(&req.username)
+                        })
+                        .and_then(|u| u.get("id").and_then(|v| v.as_str()))
+                        .map(|s| s.to_string());
+                }
+            }
+        }
+        primary_id.unwrap_or_else(|| Uuid::new_v4().to_string())
+    };
     let password_clone = req.password.clone();
     let cost = state.config.auth.bcrypt_cost;
     let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&password_clone, cost))
@@ -1016,10 +1057,7 @@ pub async fn pair(
     // The primary server now has this backup registered. Ask it to push all
     // existing photos so the backup starts with a complete mirror.
     if let Some(server_id) = backup_server_id_on_primary {
-        let sync_url = format!(
-            "{}/api/admin/backup/servers/{}/sync",
-            base_url, server_id
-        );
+        let sync_url = format!("{}/api/admin/backup/servers/{}/sync", base_url, server_id);
         let remote_token_clone = remote_token.clone();
         let server_id_clone = server_id.clone();
 

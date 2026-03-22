@@ -533,7 +533,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/backup/list", get(backup::serve::backup_list_photos))
         .route("/backup/list-trash", get(backup::serve::backup_list_trash))
         .route("/backup/list-users", get(backup::serve::backup_list_users))
-        .route("/backup/upsert-user", post(backup::serve::backup_upsert_user))
+        .route(
+            "/backup/upsert-user",
+            post(backup::serve::backup_upsert_user),
+        )
         .route("/backup/receive", post(backup::serve::backup_receive))
         .route(
             "/backup/download/{photo_id}",
@@ -542,6 +545,16 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/backup/download/{photo_id}/thumb",
             get(backup::serve::backup_download_thumb),
+        )
+        // Backup-initiated sync — backup server requests primary to push data
+        .route(
+            "/backup/request-sync",
+            post(backup::sync::handle_request_sync),
+        )
+        // Force sync — backup admin triggers a sync from the primary
+        .route(
+            "/admin/backup/force-sync",
+            post(backup::sync::force_sync_from_primary),
         )
         // Backup diagnostics — one-way push: backup server → primary.
         // X-API-Key authenticated; no Bearer JWT required from backup senders.
