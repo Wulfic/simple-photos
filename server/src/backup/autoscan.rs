@@ -154,11 +154,14 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     .map(|v| v == "true")
     .unwrap_or(false);
 
-    // Build set of already-registered paths using a streaming cursor so we
-    // never hold the full Vec<String> + HashSet simultaneously in memory.
+    // Build set of already-registered paths (from both active photos and trash)
+    // using a streaming cursor so we never hold the full Vec<String> + HashSet
+    // simultaneously in memory.
     let mut existing_set = std::collections::HashSet::new();
     {
-        let mut rows = sqlx::query_scalar::<_, String>("SELECT file_path FROM photos").fetch(pool);
+        let mut rows = sqlx::query_scalar::<_, String>(
+            "SELECT file_path FROM photos UNION SELECT file_path FROM trash_items WHERE file_path != ''"
+        ).fetch(pool);
 
         while let Some(path) = rows.try_next().await.unwrap_or(None) {
             existing_set.insert(path);
