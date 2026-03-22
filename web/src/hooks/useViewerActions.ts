@@ -146,12 +146,22 @@ export default function useViewerActions({
           await db.photos.put({
             ...original,
             blobId: copyId,
+            // The copy has its own identity — clear fields that would cause it
+            // to be misidentified as a server-side record (serverSide: true with
+            // a random blobId would break the stale-cleanup logic) or as the
+            // original photo (contentHash must not be duplicated).
+            serverSide: undefined,
+            contentHash: undefined,
             storageBlobId: original.storageBlobId || original.blobId,
             filename: copyFilename,
             cropData: metaJson ?? undefined,
             takenAt: Date.now(),
             thumbnailData: original.thumbnailData,
             serverPhotoId: serverCopyId,
+          });
+          console.log("[Viewer:saveCopy] Copy saved to IDB:", {
+            copyId, serverCopyId, filename: copyFilename,
+            originalBlobId: id, originalServerSide: original.serverSide,
           });
         }
       }
