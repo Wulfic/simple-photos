@@ -50,12 +50,11 @@ async fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), A
         k.to_string()
     } else {
         // Check DB for a key generated via pairing or admin UI
-        let db_key: Option<String> = sqlx::query_scalar(
-            "SELECT value FROM server_settings WHERE key = 'backup_api_key'",
-        )
-        .fetch_optional(&state.read_pool)
-        .await
-        .unwrap_or(None);
+        let db_key: Option<String> =
+            sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_api_key'")
+                .fetch_optional(&state.read_pool)
+                .await
+                .unwrap_or(None);
 
         db_key.filter(|k| !k.is_empty()).ok_or_else(|| {
             AppError::Forbidden("Backup serving is not enabled on this server".into())
@@ -326,12 +325,11 @@ pub async fn backup_receive(
     // otherwise fall back to the local admin so foreign-key constraints are met.
     let primary_user_id = hdr_str(&headers, "X-User-Id");
     let owner_id: String = if let Some(ref uid) = primary_user_id {
-        let exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM users WHERE id = ?")
-                .bind(uid)
-                .fetch_one(&state.read_pool)
-                .await
-                .unwrap_or(false);
+        let exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&state.read_pool)
+            .await
+            .unwrap_or(false);
         if exists {
             uid.clone()
         } else {
@@ -351,43 +349,49 @@ pub async fn backup_receive(
         .ok_or_else(|| AppError::Internal("No admin user on backup server".into()))?
     };
 
-    // Derive filename and mime_type from file_path
-    let filename = std::path::Path::new(&file_path)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| file_path.clone());
+    // Derive filename, mime_type, and media_type from headers (if provided by primary)
+    // or fall back to deriving from the file path.
+    let filename = hdr_str(&headers, "X-Filename").unwrap_or_else(|| {
+        std::path::Path::new(&file_path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| file_path.clone())
+    });
 
-    let mime_type = crate::media::mime_from_extension(&file_path).to_string();
+    let mime_type = hdr_str(&headers, "X-Mime-Type")
+        .unwrap_or_else(|| crate::media::mime_from_extension(&filename).to_string());
 
-    let media_type = if mime_type.starts_with("video/") {
-        "video"
-    } else if mime_type.starts_with("audio/") {
-        "audio"
-    } else if mime_type == "image/gif" {
-        "gif"
-    } else {
-        "photo"
-    };
+    let media_type = hdr_str(&headers, "X-Media-Type").unwrap_or_else(|| {
+        if mime_type.starts_with("video/") {
+            "video".to_string()
+        } else if mime_type.starts_with("audio/") {
+            "audio".to_string()
+        } else if mime_type == "image/gif" {
+            "gif".to_string()
+        } else {
+            "photo".to_string()
+        }
+    });
 
     // Preserve original timestamps; fall back to now only when absent
     let now = Utc::now().to_rfc3339();
-    let created_at   = hdr_str(&headers, "X-Original-Created-At").unwrap_or_else(|| now.clone());
-    let taken_at     = hdr_str(&headers, "X-Taken-At");
-    let deleted_at   = hdr_str(&headers, "X-Deleted-At").unwrap_or_else(|| now.clone());
-    let expires_at   = hdr_str(&headers, "X-Expires-At").unwrap_or_else(|| now.clone());
+    let created_at = hdr_str(&headers, "X-Original-Created-At").unwrap_or_else(|| now.clone());
+    let taken_at = hdr_str(&headers, "X-Taken-At");
+    let deleted_at = hdr_str(&headers, "X-Deleted-At").unwrap_or_else(|| now.clone());
+    let expires_at = hdr_str(&headers, "X-Expires-At").unwrap_or_else(|| now.clone());
 
-    let width         = hdr_i64(&headers, "X-Width");
-    let height        = hdr_i64(&headers, "X-Height");
-    let latitude      = hdr_f64(&headers, "X-Latitude");
-    let longitude     = hdr_f64(&headers, "X-Longitude");
-    let duration      = hdr_f64(&headers, "X-Duration-Secs");
-    let camera_model  = hdr_str(&headers, "X-Camera-Model");
-    let is_favorite   = headers
+    let width = hdr_i64(&headers, "X-Width");
+    let height = hdr_i64(&headers, "X-Height");
+    let latitude = hdr_f64(&headers, "X-Latitude");
+    let longitude = hdr_f64(&headers, "X-Longitude");
+    let duration = hdr_f64(&headers, "X-Duration-Secs");
+    let camera_model = hdr_str(&headers, "X-Camera-Model");
+    let is_favorite = headers
         .get("X-Is-Favorite")
         .and_then(|v| v.to_str().ok())
         .map(|s| s == "1")
         .unwrap_or(false);
-    let photo_hash    = hdr_str(&headers, "X-Photo-Hash");
+    let photo_hash = hdr_str(&headers, "X-Photo-Hash");
     let crop_metadata = hdr_str(&headers, "X-Crop-Metadata");
 
     // Tags: comma-separated, each tag percent-encoded
@@ -408,7 +412,11 @@ pub async fn backup_receive(
         .unwrap_or_default();
 
     // Thumbnail path — same convention as autoscan so serving code stays identical
-    let thumb_ext = if mime_type == "image/gif" { "gif" } else { "jpg" };
+    let thumb_ext = if mime_type == "image/gif" {
+        "gif"
+    } else {
+        "jpg"
+    };
     let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
     if source == "trash" {
@@ -443,7 +451,7 @@ pub async fn backup_receive(
         .bind(&filename)
         .bind(&file_path)
         .bind(&mime_type)
-        .bind(media_type)
+        .bind(&media_type)
         .bind(size_bytes)
         .bind(width)
         .bind(height)
@@ -489,7 +497,7 @@ pub async fn backup_receive(
         .bind(&filename)
         .bind(&file_path)
         .bind(&mime_type)
-        .bind(media_type)
+        .bind(&media_type)
         .bind(size_bytes)
         .bind(width)
         .bind(height)
@@ -532,7 +540,8 @@ pub async fn backup_receive(
     // ── Generate thumbnail immediately ───────────────────────────────────────
     // Don't wait for the background autoscan pass — generate now so the
     // backup serves thumbnails right after the sync completes.
-    if media_type != "audio" {
+    // Audio files get a solid-black placeholder, matching the primary.
+    {
         let thumb_abs = storage_root.join(&thumb_rel);
         let generated = generate_thumbnail_file(&full_path, &thumb_abs, &mime_type, None).await;
         if generated {
@@ -584,9 +593,10 @@ pub async fn backup_list_users(
 }
 
 /// POST /api/backup/upsert-user
-/// Creates or updates a user stub on this backup server.
-/// Transfers id, username, role, storage_quota_bytes, created_at from the
-/// primary — **no password hash or TOTP secret** (backup logins are disabled).
+/// Creates or updates a user on this backup server with full credentials.
+/// Transfers id, username, password_hash, role, storage_quota_bytes,
+/// created_at, totp_secret, totp_enabled, and totp_backup_codes from the
+/// primary so that users can log in on the backup server.
 pub async fn backup_upsert_user(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -619,58 +629,209 @@ pub async fn backup_upsert_user(
         .unwrap_or("")
         .to_string();
 
-    // Placeholder hash with "!" prefix — standard disabled-login marker.
-    // Real credentials must never be transmitted to the backup.
-    let placeholder_hash = format!("!backup_stub_{}", id);
+    let password_hash = body
+        .get("password_hash")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("missing password_hash".into()))?
+        .to_string();
+    let totp_secret: Option<String> = body
+        .get("totp_secret")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let totp_enabled: i32 = body
+        .get("totp_enabled")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
 
-    // Try upsert by id (common path: new user or role/quota update)
+    // Upsert the user record with full credentials.
+    // ON CONFLICT updates all mutable fields so password changes,
+    // role changes, and 2FA changes propagate from the primary.
     let result = sqlx::query(
-        "INSERT INTO users (id, username, password_hash, created_at, storage_quota_bytes, role)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-             role                = excluded.role,
-             storage_quota_bytes = excluded.storage_quota_bytes",
+        "INSERT INTO users (id, username, password_hash, created_at, storage_quota_bytes, \
+         role, totp_secret, totp_enabled) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(id) DO UPDATE SET \
+             username            = excluded.username, \
+             password_hash       = excluded.password_hash, \
+             role                = excluded.role, \
+             storage_quota_bytes = excluded.storage_quota_bytes, \
+             totp_secret         = excluded.totp_secret, \
+             totp_enabled        = excluded.totp_enabled",
     )
     .bind(&id)
     .bind(&username)
-    .bind(&placeholder_hash)
+    .bind(&password_hash)
     .bind(&created_at)
     .bind(quota)
     .bind(&role)
+    .bind(&totp_secret)
+    .bind(totp_enabled)
     .execute(&state.pool)
     .await;
 
     if let Err(e) = result {
-        // Likely a UNIQUE violation on `username` from a conflicting local
-        // account.  Retry with a disambiguated username so the user ID gets
-        // created and photos can be attributed correctly on restore.
-        tracing::warn!(
-            "backup_upsert_user: insert failed for id={} ({}); retrying with \"_bak\" suffix",
-            id, e
-        );
-        let fallback_username = format!("{}_bak", username);
-        if let Err(fallback_err) = sqlx::query(
-            "INSERT OR IGNORE INTO users
-             (id, username, password_hash, created_at, storage_quota_bytes, role)
-             VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(&fallback_username)
-        .bind(&placeholder_hash)
-        .bind(&created_at)
-        .bind(quota)
-        .bind(&role)
-        .execute(&state.pool)
-        .await
-        {
+        // UNIQUE violation on `username` — a local account with the same
+        // name but a different id already exists.  Merge the local user
+        // into the primary user so all content is visible under one account.
+        let err_str = e.to_string();
+        if err_str.contains("UNIQUE constraint failed: users.username") {
+            tracing::info!(
+                "backup_upsert_user: merging local '{}' into primary id={}",
+                username,
+                id
+            );
+
+            // Find the conflicting local user id
+            let local_id: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM users WHERE username = ? AND id != ?",
+            )
+            .bind(&username)
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+
+            if let Some(ref old_id) = local_id {
+                // Reassign all content from the local user to the primary user id.
+                // FKs have ON DELETE CASCADE, but we want to keep the data — so
+                // re-parent first, then delete the old user row.
+                let reparent_tables: &[&str] = &[
+                    "UPDATE photos SET user_id = ? WHERE user_id = ?",
+                    "UPDATE trash_items SET user_id = ? WHERE user_id = ?",
+                    "UPDATE photo_tags SET user_id = ? WHERE user_id = ?",
+                    "UPDATE blobs SET user_id = ? WHERE user_id = ?",
+                    "UPDATE audit_log SET user_id = ? WHERE user_id = ?",
+                    "UPDATE client_logs SET user_id = ? WHERE user_id = ?",
+                    "UPDATE shared_albums SET owner_user_id = ? WHERE owner_user_id = ?",
+                    "UPDATE shared_album_members SET user_id = ? WHERE user_id = ?",
+                ];
+                for sql in reparent_tables {
+                    if let Err(re) = sqlx::query(sql)
+                        .bind(&id)
+                        .bind(old_id)
+                        .execute(&state.pool)
+                        .await
+                    {
+                        // Non-fatal: table may not exist on minimal setups
+                        tracing::debug!(
+                            "backup_upsert_user: reparent skipped for '{}': {}",
+                            sql.split_whitespace().nth(1).unwrap_or("?"),
+                            re
+                        );
+                    }
+                }
+
+                // Also reparent encrypted_galleries and encryption_user_keys
+                // (keyed on user_id TEXT PRIMARY KEY — needs special handling)
+                let _ = sqlx::query(
+                    "DELETE FROM encrypted_galleries WHERE user_id = ?",
+                )
+                .bind(old_id)
+                .execute(&state.pool)
+                .await;
+
+                // Remove the old local user
+                let _ = sqlx::query("DELETE FROM users WHERE id = ?")
+                    .bind(old_id)
+                    .execute(&state.pool)
+                    .await;
+
+                tracing::info!(
+                    "backup_upsert_user: removed local user {} and reparented content to {}",
+                    old_id,
+                    id
+                );
+            }
+
+            // Now insert the primary user — the conflicting row is gone
+            if let Err(insert_err) = sqlx::query(
+                "INSERT INTO users (id, username, password_hash, created_at, storage_quota_bytes, \
+                 role, totp_secret, totp_enabled) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET \
+                     username            = excluded.username, \
+                     password_hash       = excluded.password_hash, \
+                     role                = excluded.role, \
+                     storage_quota_bytes = excluded.storage_quota_bytes, \
+                     totp_secret         = excluded.totp_secret, \
+                     totp_enabled        = excluded.totp_enabled",
+            )
+            .bind(&id)
+            .bind(&username)
+            .bind(&password_hash)
+            .bind(&created_at)
+            .bind(quota)
+            .bind(&role)
+            .bind(&totp_secret)
+            .bind(totp_enabled)
+            .execute(&state.pool)
+            .await
+            {
+                tracing::error!(
+                    "backup_upsert_user: merge insert failed for id={}: {}",
+                    id,
+                    insert_err
+                );
+                return Err(AppError::Internal(format!(
+                    "Failed to create backup user record for id={}: {}",
+                    id, insert_err
+                )));
+            }
+        } else {
+            // Some other DB error — report it
             tracing::error!(
-                "backup_upsert_user: fallback insert also failed for id={}: {}",
-                id, fallback_err
+                "backup_upsert_user: unexpected error for id={}: {}",
+                id,
+                e
             );
             return Err(AppError::Internal(format!(
                 "Failed to create backup user record for id={}: {}",
-                id, fallback_err
+                id, e
             )));
+        }
+    }
+
+    // Sync TOTP backup codes — replace all codes for this user with the
+    // primary's current set so revocations and regenerations propagate.
+    if let Some(codes) = body.get("totp_backup_codes").and_then(|v| v.as_array()) {
+        // Clear existing codes for this user
+        if let Err(e) = sqlx::query("DELETE FROM totp_backup_codes WHERE user_id = ?")
+            .bind(&id)
+            .execute(&state.pool)
+            .await
+        {
+            tracing::warn!("Failed to clear TOTP backup codes for user {}: {}", id, e);
+        }
+
+        for code in codes {
+            let code_id = match code.get("id").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => continue,
+            };
+            let code_hash = match code.get("code_hash").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => continue,
+            };
+            let used = code.get("used").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+            if let Err(e) = sqlx::query(
+                "INSERT OR REPLACE INTO totp_backup_codes (id, user_id, code_hash, used) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(code_id)
+            .bind(&id)
+            .bind(code_hash)
+            .bind(used)
+            .execute(&state.pool)
+            .await
+            {
+                tracing::warn!(
+                    "Failed to sync TOTP backup code {} for user {}: {}",
+                    code_id,
+                    id,
+                    e
+                );
+            }
         }
     }
 

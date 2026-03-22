@@ -7,11 +7,11 @@
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use std::net::SocketAddr;
 use chrono::Utc;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use rand::Rng;
 use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::audit::{self, AuditEvent};

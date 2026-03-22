@@ -113,7 +113,11 @@ impl RateLimiter {
 /// Only set `trust_proxy = true` when behind a reverse proxy that
 /// overwrites these headers. Trusting them on a public-facing server
 /// lets attackers spoof arbitrary IPs to bypass rate limiting.
-pub fn extract_client_ip(headers: &HeaderMap, trust_proxy: bool, peer_addr: Option<SocketAddr>) -> IpAddr {
+pub fn extract_client_ip(
+    headers: &HeaderMap,
+    trust_proxy: bool,
+    peer_addr: Option<SocketAddr>,
+) -> IpAddr {
     if trust_proxy {
         // Try X-Forwarded-For first (leftmost = original client)
         if let Some(xff) = headers.get("x-forwarded-for") {
@@ -143,7 +147,9 @@ pub fn extract_client_ip(headers: &HeaderMap, trust_proxy: bool, peer_addr: Opti
     }
 
     // Final fallback — should only be reached if ConnectInfo is unavailable.
-    tracing::warn!("extract_client_ip: no peer address available, falling back to 127.0.0.1 (shared bucket)");
+    tracing::warn!(
+        "extract_client_ip: no peer address available, falling back to 127.0.0.1 (shared bucket)"
+    );
     "127.0.0.1".parse().unwrap()
 }
 

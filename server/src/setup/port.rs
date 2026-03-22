@@ -112,11 +112,12 @@ pub async fn get_port(
     // already on 8080 the suggestion should remain 8080, not 8081.
     let current_port = state.config.server.port;
     let ext = external_port.unwrap_or(current_port);
-    let suggested_port = tokio::task::spawn_blocking(move || find_available_port(ext.max(1024), current_port))
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(ext.max(1024));
+    let suggested_port =
+        tokio::task::spawn_blocking(move || find_available_port(ext.max(1024), current_port))
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(ext.max(1024));
 
     Ok(Json(PortResponse {
         port: state.config.server.port,
@@ -159,15 +160,17 @@ pub async fn update_port(
     // the wizard can continue.  The server operator will still need to
     // update docker-compose.yml for the actual port mapping.
     let port = req.port;
-    let config_write_result =
-        tokio::task::spawn_blocking(move || update_config_toml_port(port))
-            .await
-            .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?;
+    let config_write_result = tokio::task::spawn_blocking(move || update_config_toml_port(port))
+        .await
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?;
 
     let config_write_ok = match config_write_result {
         Ok(()) => true,
         Err(e) => {
-            tracing::warn!("Could not write port to config.toml (read-only / Docker?): {}", e);
+            tracing::warn!(
+                "Could not write port to config.toml (read-only / Docker?): {}",
+                e
+            );
             false
         }
     };

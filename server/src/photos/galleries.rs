@@ -216,21 +216,20 @@ pub async fn add_gallery_item(
     }
 
     // Full photo row needed for server-side clones
-    let photo_row_full: Option<PhotoRowFull> =
-        if is_server_side {
-            sqlx::query_as::<_, PhotoRowFull>(
-                "SELECT filename, mime_type, media_type, file_path, size_bytes, width, height, \
+    let photo_row_full: Option<PhotoRowFull> = if is_server_side {
+        sqlx::query_as::<_, PhotoRowFull>(
+            "SELECT filename, mime_type, media_type, file_path, size_bytes, width, height, \
                  duration_secs, taken_at, latitude, longitude, thumb_path, created_at, \
                  is_favorite, crop_metadata, camera_model, photo_hash \
                  FROM photos WHERE id = ? AND user_id = ?",
-            )
-            .bind(&req.blob_id)
-            .bind(&auth.user_id)
-            .fetch_optional(&state.pool)
-            .await?
-        } else {
-            None
-        };
+        )
+        .bind(&req.blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?
+    } else {
+        None
+    };
 
     // Resolve source file path, metadata, and determine blob_type
     let (blob_type, size_bytes, client_hash, storage_path, content_hash): (
@@ -243,7 +242,8 @@ pub async fn add_gallery_item(
         (bt, sz, ch, sp, coh)
     } else {
         // Not in blobs table — use the photos table row
-        let prf = photo_row_full.as_ref()
+        let prf = photo_row_full
+            .as_ref()
             .ok_or_else(|| AppError::BadRequest("Photo or blob not found".into()))?;
 
         // Derive blob_type from media_type (same logic as restore)
@@ -254,7 +254,13 @@ pub async fn add_gallery_item(
             _ if prf.mime_type.starts_with("video/") => "video".to_string(),
             _ => "photo".to_string(),
         };
-        (bt, prf.size_bytes, None, prf.file_path.clone(), prf.photo_hash.clone())
+        (
+            bt,
+            prf.size_bytes,
+            None,
+            prf.file_path.clone(),
+            prf.photo_hash.clone(),
+        )
     };
 
     // Clone: read the original file data from disk, write a new copy under a fresh ID

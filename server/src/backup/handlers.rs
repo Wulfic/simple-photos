@@ -562,7 +562,11 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
             // Prefer routable address, but merge api_key and mode from both
             let api_key = server.api_key.or_else(|| entry.api_key.clone());
             let mode = server.mode.or_else(|| entry.mode.clone());
-            *entry = DiscoveredServer { api_key, mode, ..server };
+            *entry = DiscoveredServer {
+                api_key,
+                mode,
+                ..server
+            };
         } else {
             // Keep current (better-scored) address — merge any extra info in
             if entry.api_key.is_none() && server.api_key.is_some() {

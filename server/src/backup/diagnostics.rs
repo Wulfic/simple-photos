@@ -156,7 +156,9 @@ pub async fn background_diagnostics_push_task(
     storage_root: std::path::PathBuf,
     db_path: std::path::PathBuf,
 ) {
-    use crate::diagnostics::handlers::{disk_stats, read_cpu_seconds, read_rss_bytes, server_start};
+    use crate::diagnostics::handlers::{
+        disk_stats, read_cpu_seconds, read_rss_bytes, server_start,
+    };
 
     // Push every 15 minutes — frequent enough to be useful for monitoring
     // but lean enough not to add meaningful load.
@@ -188,18 +190,19 @@ pub async fn background_diagnostics_push_task(
         .ok()
         .flatten();
 
-        let api_key: Option<String> = sqlx::query_scalar(
-            "SELECT value FROM server_settings WHERE key = 'backup_api_key'",
-        )
-        .fetch_optional(&pool)
-        .await
-        .ok()
-        .flatten();
+        let api_key: Option<String> =
+            sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_api_key'")
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten();
 
         let (primary_url, api_key) = match (primary_url, api_key) {
             (Some(u), Some(k)) if !u.is_empty() && !k.is_empty() => (u, k),
             _ => {
-                tracing::debug!("Diagnostics push: primary_server_url or backup_api_key not set — skipping");
+                tracing::debug!(
+                    "Diagnostics push: primary_server_url or backup_api_key not set — skipping"
+                );
                 continue;
             }
         };
@@ -218,13 +221,12 @@ pub async fn background_diagnostics_push_task(
             .await
             .unwrap_or(0);
 
-        let (disk_total, disk_available) =
-            tokio::task::spawn_blocking({
-                let p = storage_root.clone();
-                move || disk_stats(&p)
-            })
-            .await
-            .unwrap_or((0, 0));
+        let (disk_total, disk_available) = tokio::task::spawn_blocking({
+            let p = storage_root.clone();
+            move || disk_stats(&p)
+        })
+        .await
+        .unwrap_or((0, 0));
         let disk_used_percent = if disk_total > 0 {
             ((disk_total - disk_available) as f64 / disk_total as f64) * 100.0
         } else {

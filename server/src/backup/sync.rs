@@ -19,6 +19,7 @@
 use std::collections::HashSet;
 
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use chrono::Utc;
 use percent_encoding::{utf8_percent_encode, CONTROLS};
@@ -39,7 +40,10 @@ use super::models::*;
 struct PhotoToSync {
     id: String,
     user_id: String,
+    filename: String,
     file_path: String,
+    mime_type: String,
+    media_type: String,
     size_bytes: i64,
     taken_at: Option<String>,
     latitude: Option<f64>,
@@ -59,7 +63,10 @@ struct PhotoToSync {
 struct TrashToSync {
     id: String,
     user_id: String,
+    filename: String,
     file_path: String,
+    mime_type: String,
+    media_type: String,
     size_bytes: i64,
     taken_at: Option<String>,
     latitude: Option<f64>,
@@ -258,7 +265,11 @@ async fn run_sync(
             .execute(pool)
             .await
             {
-                tracing::warn!("Failed to update sync error status for server {}: {}", server.id, e);
+                tracing::warn!(
+                    "Failed to update sync error status for server {}: {}",
+                    server.id,
+                    e
+                );
             }
             return;
         }
@@ -283,7 +294,11 @@ async fn run_sync(
             .execute(pool)
             .await
             {
-                tracing::warn!("Failed to update sync error status for server {}: {}", server.id, e);
+                tracing::warn!(
+                    "Failed to update sync error status for server {}: {}",
+                    server.id,
+                    e
+                );
             }
             return;
         }
@@ -336,15 +351,18 @@ async fn run_sync(
     // 1. Sync photos — only those the remote doesn't have yet
     let photos: Vec<PhotoToSync> = {
         let query = if audio_backup_enabled {
-            "SELECT id, user_id, file_path, size_bytes, taken_at, latitude, longitude, \
+            "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
              width, height, duration_secs, camera_model, is_favorite, photo_hash, \
              crop_metadata, created_at FROM photos"
         } else {
-            "SELECT id, user_id, file_path, size_bytes, taken_at, latitude, longitude, \
+            "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
              width, height, duration_secs, camera_model, is_favorite, photo_hash, \
              crop_metadata, created_at FROM photos WHERE media_type != 'audio'"
         };
-        match sqlx::query_as::<_, PhotoToSync>(query).fetch_all(pool).await {
+        match sqlx::query_as::<_, PhotoToSync>(query)
+            .fetch_all(pool)
+            .await
+        {
             Ok(p) => p,
             Err(e) => {
                 update_sync_log(pool, log_id, "error", 0, 0, Some(&e.to_string())).await;
@@ -368,11 +386,23 @@ async fn run_sync(
     for photo in &photos_to_sync {
         let tags = all_tags.get(&photo.id).cloned().unwrap_or_default();
         let mut extra: Vec<(String, String)> = vec![
-            ("X-User-Id".to_string(),            photo.user_id.clone()),
-            ("X-Original-Created-At".to_string(), photo.created_at.clone()),
-            ("X-Width".to_string(),               photo.width.to_string()),
-            ("X-Height".to_string(),              photo.height.to_string()),
-            ("X-Is-Favorite".to_string(),  if photo.is_favorite { "1" } else { "0" }.to_string()),
+            ("X-User-Id".to_string(), photo.user_id.clone()),
+            (
+                "X-Original-Created-At".to_string(),
+                photo.created_at.clone(),
+            ),
+            (
+                "X-Filename".to_string(),
+                utf8_percent_encode(&photo.filename, CONTROLS).to_string(),
+            ),
+            ("X-Mime-Type".to_string(), photo.mime_type.clone()),
+            ("X-Media-Type".to_string(), photo.media_type.clone()),
+            ("X-Width".to_string(), photo.width.to_string()),
+            ("X-Height".to_string(), photo.height.to_string()),
+            (
+                "X-Is-Favorite".to_string(),
+                if photo.is_favorite { "1" } else { "0" }.to_string(),
+            ),
         ];
         if let Some(ref v) = photo.taken_at {
             extra.push(("X-Taken-At".to_string(), v.clone()));
@@ -387,13 +417,19 @@ async fn run_sync(
             extra.push(("X-Duration-Secs".to_string(), v.to_string()));
         }
         if let Some(ref v) = photo.camera_model {
-            extra.push(("X-Camera-Model".to_string(), utf8_percent_encode(v, CONTROLS).to_string()));
+            extra.push((
+                "X-Camera-Model".to_string(),
+                utf8_percent_encode(v, CONTROLS).to_string(),
+            ));
         }
         if let Some(ref v) = photo.photo_hash {
             extra.push(("X-Photo-Hash".to_string(), v.clone()));
         }
         if let Some(ref v) = photo.crop_metadata {
-            extra.push(("X-Crop-Metadata".to_string(), utf8_percent_encode(v, CONTROLS).to_string()));
+            extra.push((
+                "X-Crop-Metadata".to_string(),
+                utf8_percent_encode(v, CONTROLS).to_string(),
+            ));
         }
         if !tags.is_empty() {
             let tags_str = tags
@@ -429,7 +465,7 @@ async fn run_sync(
 
     // 2. Sync trash items — only those the remote doesn't have yet
     let trash_items: Vec<TrashToSync> = match sqlx::query_as::<_, TrashToSync>(
-        "SELECT id, user_id, file_path, size_bytes, taken_at, latitude, longitude, \
+        "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
          width, height, duration_secs, camera_model, is_favorite, photo_hash, \
          crop_metadata, deleted_at, expires_at FROM trash_items",
     )
@@ -465,13 +501,22 @@ async fn run_sync(
 
     for item in &trash_to_sync {
         let mut extra: Vec<(String, String)> = vec![
-            ("X-User-Id".to_string(),            item.user_id.clone()),
+            ("X-User-Id".to_string(), item.user_id.clone()),
             ("X-Original-Created-At".to_string(), item.deleted_at.clone()),
-            ("X-Deleted-At".to_string(),          item.deleted_at.clone()),
-            ("X-Expires-At".to_string(),          item.expires_at.clone()),
-            ("X-Width".to_string(),               item.width.to_string()),
-            ("X-Height".to_string(),              item.height.to_string()),
-            ("X-Is-Favorite".to_string(),  if item.is_favorite { "1" } else { "0" }.to_string()),
+            ("X-Deleted-At".to_string(), item.deleted_at.clone()),
+            ("X-Expires-At".to_string(), item.expires_at.clone()),
+            (
+                "X-Filename".to_string(),
+                utf8_percent_encode(&item.filename, CONTROLS).to_string(),
+            ),
+            ("X-Mime-Type".to_string(), item.mime_type.clone()),
+            ("X-Media-Type".to_string(), item.media_type.clone()),
+            ("X-Width".to_string(), item.width.to_string()),
+            ("X-Height".to_string(), item.height.to_string()),
+            (
+                "X-Is-Favorite".to_string(),
+                if item.is_favorite { "1" } else { "0" }.to_string(),
+            ),
         ];
         if let Some(ref v) = item.taken_at {
             extra.push(("X-Taken-At".to_string(), v.clone()));
@@ -486,13 +531,19 @@ async fn run_sync(
             extra.push(("X-Duration-Secs".to_string(), v.to_string()));
         }
         if let Some(ref v) = item.camera_model {
-            extra.push(("X-Camera-Model".to_string(), utf8_percent_encode(v, CONTROLS).to_string()));
+            extra.push((
+                "X-Camera-Model".to_string(),
+                utf8_percent_encode(v, CONTROLS).to_string(),
+            ));
         }
         if let Some(ref v) = item.photo_hash {
             extra.push(("X-Photo-Hash".to_string(), v.clone()));
         }
         if let Some(ref v) = item.crop_metadata {
-            extra.push(("X-Crop-Metadata".to_string(), utf8_percent_encode(v, CONTROLS).to_string()));
+            extra.push((
+                "X-Crop-Metadata".to_string(),
+                utf8_percent_encode(v, CONTROLS).to_string(),
+            ));
         }
         match send_file(
             &client,
@@ -707,16 +758,28 @@ async fn send_file(
 // ── User Sync Helpers ────────────────────────────────────────────────────────
 
 /// Sync all user accounts from the primary to the backup server.
-/// Creates stub accounts (no password hash / TOTP) so user_id foreign keys
-/// resolve correctly, enabling per-user data restoration.
+/// Sends full credentials (password hash, TOTP secret/enabled, TOTP backup
+/// codes) so users can log in on the backup. All users are sent on every
+/// run so that password changes, role changes, and 2FA changes propagate.
 async fn sync_users_to_backup(
     pool: &sqlx::SqlitePool,
     client: &reqwest::Client,
     base_url: &str,
     api_key: &Option<String>,
 ) {
-    let users: Vec<(String, String, String, i64, String)> = match sqlx::query_as(
-        "SELECT id, username, role, storage_quota_bytes, created_at FROM users",
+    // Fetch all user records including credentials
+    let users: Vec<(
+        String,         // id
+        String,         // username
+        String,         // password_hash
+        String,         // role
+        i64,            // storage_quota_bytes
+        String,         // created_at
+        Option<String>, // totp_secret
+        i32,            // totp_enabled
+    )> = match sqlx::query_as(
+        "SELECT id, username, password_hash, role, storage_quota_bytes, \
+         created_at, totp_secret, totp_enabled FROM users",
     )
     .fetch_all(pool)
     .await
@@ -728,21 +791,38 @@ async fn sync_users_to_backup(
         }
     };
 
-    // Fetch remote user IDs for delta (skip those already present)
-    let remote_user_ids: HashSet<String> =
-        fetch_remote_ids(client, base_url, "/backup/list-users", api_key).await;
-
     let mut synced = 0u32;
-    for (id, username, role, quota, created_at) in &users {
-        if remote_user_ids.contains(id) {
-            continue;
-        }
+    for (id, username, password_hash, role, quota, created_at, totp_secret, totp_enabled) in &users
+    {
+        // Fetch TOTP backup codes for this user
+        let backup_codes: Vec<(String, String, i32)> =
+            sqlx::query_as("SELECT id, code_hash, used FROM totp_backup_codes WHERE user_id = ?")
+                .bind(id)
+                .fetch_all(pool)
+                .await
+                .unwrap_or_default();
+
+        let codes_json: Vec<serde_json::Value> = backup_codes
+            .iter()
+            .map(|(code_id, code_hash, used)| {
+                serde_json::json!({
+                    "id": code_id,
+                    "code_hash": code_hash,
+                    "used": used,
+                })
+            })
+            .collect();
+
         let body = serde_json::json!({
             "id": id,
             "username": username,
+            "password_hash": password_hash,
             "role": role,
             "storage_quota_bytes": quota,
             "created_at": created_at,
+            "totp_secret": totp_secret,
+            "totp_enabled": totp_enabled,
+            "totp_backup_codes": codes_json,
         });
         let mut req = client
             .post(format!("{}/backup/upsert-user", base_url))
@@ -762,7 +842,7 @@ async fn sync_users_to_backup(
     }
 
     if synced > 0 {
-        tracing::info!("Synced {} new user account(s) to backup server", synced);
+        tracing::info!("Synced {} user account(s) to backup server", synced);
     }
 }
 
@@ -893,4 +973,172 @@ pub async fn background_sync_task(pool: sqlx::SqlitePool, storage_root: std::pat
             drop(guard); // Release the concurrency lock
         }
     }
+}
+
+// ── Backup-initiated Sync ────────────────────────────────────────────────────
+
+/// POST /api/backup/request-sync
+/// Called by a backup server to request the primary to push data to it.
+/// Authenticated via X-API-Key: the primary looks up the backup server by
+/// matching the provided key against `backup_servers.api_key`.
+pub async fn handle_request_sync(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let provided_key = headers
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::Unauthorized("Missing X-API-Key header".into()))?;
+
+    // Look up which backup server this API key belongs to
+    let server = sqlx::query_as::<_, BackupServer>(
+        "SELECT id, name, address, sync_frequency_hours, last_sync_at, \
+         last_sync_status, last_sync_error, enabled, created_at \
+         FROM backup_servers WHERE api_key = ?",
+    )
+    .bind(provided_key)
+    .fetch_optional(&state.read_pool)
+    .await?
+    .ok_or_else(|| AppError::Unauthorized("Unknown API key".into()))?;
+
+    if !server.enabled {
+        return Err(AppError::BadRequest("Backup server is disabled".into()));
+    }
+
+    // Prevent overlapping syncs to the same server
+    let guard = try_acquire_sync(&server.id).ok_or_else(|| {
+        AppError::BadRequest("A sync is already in progress for this server".into())
+    })?;
+
+    // Create sync log entry
+    let log_id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO backup_sync_log (id, server_id, started_at, status) VALUES (?, ?, ?, 'running')",
+    )
+    .bind(&log_id)
+    .bind(&server.id)
+    .bind(&now)
+    .execute(&state.pool)
+    .await?;
+
+    // Spawn the sync as a background task
+    let pool = state.pool.clone();
+    let storage_root = (**state.storage_root.load()).clone();
+    let api_key: Option<String> = Some(provided_key.to_string());
+    let log_id_clone = log_id.clone();
+    let server_name = server.name.clone();
+
+    tokio::spawn(async move {
+        let _guard = guard;
+        run_sync(&pool, &storage_root, &server, &api_key, &log_id_clone).await;
+    });
+
+    tracing::info!(
+        server_name = %server_name,
+        "Sync requested by backup server"
+    );
+
+    Ok(Json(serde_json::json!({
+        "message": "Sync started",
+        "sync_id": log_id,
+    })))
+}
+
+/// POST /api/admin/backup/force-sync
+/// Admin-only endpoint for backup servers. Contacts the primary server and
+/// requests it to push the latest data to this backup instance.
+pub async fn force_sync_from_primary(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    // This endpoint only makes sense on backup servers
+    let mode: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+            .fetch_optional(&state.read_pool)
+            .await?
+            .unwrap_or_else(|| "primary".to_string());
+
+    if mode != "backup" {
+        return Err(AppError::BadRequest(
+            "This endpoint is only available on backup servers".into(),
+        ));
+    }
+
+    // Get primary server URL and our API key
+    let primary_url: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'primary_server_url'")
+            .fetch_optional(&state.read_pool)
+            .await?
+            .ok_or_else(|| AppError::BadRequest("No primary server URL configured".into()))?;
+
+    let api_key: String = {
+        // Prefer config-file key, fall back to DB-generated key
+        if let Some(k) = state
+            .config
+            .backup
+            .api_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+        {
+            k.to_string()
+        } else {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT value FROM server_settings WHERE key = 'backup_api_key'",
+            )
+            .fetch_optional(&state.read_pool)
+            .await?
+            .flatten()
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| AppError::BadRequest("No backup API key configured".into()))?
+        }
+    };
+
+    // Contact the primary server's request-sync endpoint
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
+
+    let url = format!(
+        "{}/api/backup/request-sync",
+        primary_url.trim_end_matches('/')
+    );
+    let resp = client
+        .post(&url)
+        .header("X-API-Key", &api_key)
+        .send()
+        .await
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "Failed to contact primary server at {}: {}",
+                url, e
+            ))
+        })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AppError::Internal(format!(
+            "Primary server returned HTTP {}: {}",
+            status,
+            body.chars().take(500).collect::<String>()
+        )));
+    }
+
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    tracing::info!(
+        "Force sync requested from primary server at {}",
+        primary_url
+    );
+
+    Ok(Json(serde_json::json!({
+        "message": body.get("message").and_then(|m| m.as_str()).unwrap_or("Sync requested"),
+        "sync_id": body.get("sync_id").and_then(|s| s.as_str()),
+    })))
 }

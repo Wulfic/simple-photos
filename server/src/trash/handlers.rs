@@ -96,7 +96,7 @@ pub async fn soft_delete_photo(
 
     // Fetch the photo record first (includes metadata added in migration 020)
     let photo = sqlx::query_as::<_, TrashPhotoRow>(
-        "SELECT id, filename, file_path, mime_type, media_type, size_bytes, \
+        "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, \
          width, height, duration_secs, taken_at, latitude, longitude, thumb_path, \
          is_favorite, crop_metadata, camera_model, photo_hash, encrypted_thumb_blob_id \
          FROM photos WHERE id = ? AND user_id = ?",
@@ -104,8 +104,35 @@ pub async fn soft_delete_photo(
     .bind(&photo_id)
     .bind(&auth.user_id)
     .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    .await?;
+
+    // On backup servers, photos may be owned by a synced user stub whose ID
+    // differs from the logged-in admin. Allow admin users to manage all content.
+    let photo = match photo {
+        Some(p) => p,
+        None => {
+            if is_backup_mode(&state.read_pool).await
+                && is_admin_user(&state.read_pool, &auth.user_id).await
+            {
+                sqlx::query_as::<_, TrashPhotoRow>(
+                    "SELECT id, user_id, filename, file_path, mime_type, media_type, \
+                     size_bytes, width, height, duration_secs, taken_at, latitude, \
+                     longitude, thumb_path, is_favorite, crop_metadata, camera_model, \
+                     photo_hash, encrypted_thumb_blob_id \
+                     FROM photos WHERE id = ?",
+                )
+                .bind(&photo_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(AppError::NotFound)?
+            } else {
+                return Err(AppError::NotFound);
+            }
+        }
+    };
+    // Use the photo's actual owner for the trash entry (may differ from auth
+    // user on backup servers where the admin manages all content).
+    let owner_id = &photo.user_id;
 
     // Read retention days from server_settings (default 30)
     let retention_days: i64 = sqlx::query_scalar(
@@ -128,7 +155,7 @@ pub async fn soft_delete_photo(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&trash_id)
-    .bind(&auth.user_id)
+    .bind(owner_id)
     .bind(&photo.id)
     .bind(&photo.filename)
     .bind(&photo.file_path)
@@ -152,10 +179,10 @@ pub async fn soft_delete_photo(
     .execute(&mut *tx)
     .await?;
 
-    // Remove from photos table
+    // Remove from photos table (use owner_id to match the actual row)
     sqlx::query("DELETE FROM photos WHERE id = ? AND user_id = ?")
         .bind(&photo_id)
-        .bind(&auth.user_id)
+        .bind(owner_id)
         .execute(&mut *tx)
         .await?;
 
@@ -200,27 +227,44 @@ pub async fn soft_delete_blob(
     let mut tx = state.pool.begin().await?;
 
     // Fetch the blob record (storage_path + hashes for preservation)
-    let (storage_path, client_hash, content_hash) = sqlx::query_as::<
-        _,
-        (String, Option<String>, Option<String>),
-    >(
+    let blob_row = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
         "SELECT storage_path, client_hash, content_hash FROM blobs WHERE id = ? AND user_id = ?",
     )
     .bind(&blob_id)
     .bind(&auth.user_id)
     .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    .await?;
+
+    // On backup servers, blobs may be owned by a synced user stub whose ID
+    // differs from the logged-in admin.  Allow admin users to manage all content.
+    let (storage_path, client_hash, content_hash, blob_owner_id) = if let Some(row) = blob_row {
+        (row.0, row.1, row.2, auth.user_id.clone())
+    } else if is_backup_mode(&state.read_pool).await
+        && is_admin_user(&state.read_pool, &auth.user_id).await
+    {
+        let row = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+            "SELECT user_id, storage_path, client_hash, content_hash FROM blobs WHERE id = ?",
+        )
+        .bind(&blob_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AppError::NotFound)?;
+        (row.1, row.2, row.3, row.0)
+    } else {
+        return Err(AppError::NotFound);
+    };
 
     // Optionally fetch thumbnail blob storage_path
     let thumb_storage_path = if let Some(ref thumb_id) = req.thumbnail_blob_id {
-        sqlx::query_scalar::<_, String>(
+        // Try with auth user first, then with blob owner
+        let result = sqlx::query_scalar::<_, String>(
             "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
         )
         .bind(thumb_id)
-        .bind(&auth.user_id)
+        .bind(&blob_owner_id)
         .fetch_optional(&mut *tx)
-        .await?
+        .await?;
+        result
     } else {
         None
     };
@@ -246,7 +290,7 @@ pub async fn soft_delete_blob(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&trash_id)
-    .bind(&auth.user_id)
+    .bind(&blob_owner_id)
     .bind(&blob_id) // photo_id = blob_id for encrypted items
     .bind(&safe_filename)
     .bind(&storage_path) // file_path = blob storage_path
@@ -270,7 +314,7 @@ pub async fn soft_delete_blob(
     // Remove blob from blobs table (but keep files on disk!)
     sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
         .bind(&blob_id)
-        .bind(&auth.user_id)
+        .bind(&blob_owner_id)
         .execute(&mut *tx)
         .await?;
 
@@ -278,7 +322,7 @@ pub async fn soft_delete_blob(
     if let Some(ref thumb_id) = req.thumbnail_blob_id {
         sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
             .bind(thumb_id)
-            .bind(&auth.user_id)
+            .bind(&blob_owner_id)
             .execute(&mut *tx)
             .await?;
     }
@@ -290,7 +334,7 @@ pub async fn soft_delete_blob(
     // though the deletion never happened.
     sqlx::query("DELETE FROM photos WHERE encrypted_blob_id = ? AND user_id = ?")
         .bind(&blob_id)
-        .bind(&auth.user_id)
+        .bind(&blob_owner_id)
         .execute(&mut *tx)
         .await?;
 
@@ -719,11 +763,35 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
 
 // ── Internal helper ─────────────────────────────────────────────────────────
 
+/// Check whether this server is running in backup mode.
+async fn is_backup_mode(pool: &sqlx::SqlitePool) -> bool {
+    sqlx::query_scalar::<_, String>("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("backup")
+}
+
+/// Check whether the authenticated user has the admin role.
+async fn is_admin_user(pool: &sqlx::SqlitePool, user_id: &str) -> bool {
+    sqlx::query_scalar::<_, String>("SELECT role FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("admin")
+}
+
 /// Minimal row type used to move data between photos ↔ trash_items.
 /// Extended in migration 020 to preserve metadata through the trash round-trip.
 #[derive(Debug, sqlx::FromRow)]
 struct TrashPhotoRow {
     id: String,
+    user_id: String,
     filename: String,
     file_path: String,
     mime_type: String,

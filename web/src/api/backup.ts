@@ -179,4 +179,12 @@ export const backupApi = {
         body: JSON.stringify({ audio_backup_enabled: enabled }),
       }
     ),
+
+  /** Force sync from primary server (backup servers only, admin only).
+   *  Contacts the primary and requests it to push the latest data. */
+  forceSyncFromPrimary: () =>
+    request<{ message: string; sync_id: string | null }>(
+      "/admin/backup/force-sync",
+      { method: "POST" }
+    ),
 };
