@@ -395,7 +395,7 @@ export default function Trash() {
               const thumbUrl = item._localThumbUrl
                 ? item._localThumbUrl
                 : accessToken
-                  ? `${api.trash.thumbUrl(item.id)}?t=${accessToken}`
+                  ? `${api.trash.thumbUrl(item.id)}?token=${accessToken}`
                   : api.trash.thumbUrl(item.id);
 
               return (
