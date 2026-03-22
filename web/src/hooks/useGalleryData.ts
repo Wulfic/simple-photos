@@ -188,15 +188,13 @@ export function useGalleryData(): GalleryDataResult {
         cursor = res.next_cursor ?? undefined;
       } while (cursor);
 
-      // Build set of all valid IDB keys from the server.
-      // Includes both encrypted blob IDs and autoscanned photo IDs.
+      // Build set of all valid server IDs and Blob IDs
+      const serverPhotoIds = new Set<string>();
       const serverBlobIds = new Set<string>();
       for (const p of allSyncPhotos) {
+        serverPhotoIds.add(p.id);
         if (p.encrypted_blob_id) {
           serverBlobIds.add(p.encrypted_blob_id);
-        } else {
-          // Autoscanned (server-side) photo — keyed by photo.id
-          serverBlobIds.add(p.id);
         }
       }
 
@@ -212,34 +210,77 @@ export function useGalleryData(): GalleryDataResult {
       }
 
       // Remove stale entries from IndexedDB that no longer exist on server
-      const cachedPhotos = await db.photos.toArray();
-      const staleIds = cachedPhotos
-        .map((p) => p.blobId)
-        .filter((id) => !serverBlobIds.has(id));
+      const currentCached = await db.photos.toArray();
+      const staleIds = currentCached
+        .filter((p) => {
+          // If it is bound to a server photo record, the server must still have it
+          if (p.serverPhotoId) {
+            const stale = !serverPhotoIds.has(p.serverPhotoId);
+            if (stale) console.log("[Gallery:stale] serverPhotoId not found:", p.blobId, p.serverPhotoId);
+            return stale;
+          }
+          // Server-side (autoscanned) photos use their photo ID as blobId
+          if (p.serverSide) {
+            const stale = !serverPhotoIds.has(p.blobId);
+            if (stale) console.log("[Gallery:stale] serverSide blobId not found:", p.blobId);
+            return stale;
+          }
+          // For direct uploads or unsynced local copies check both blob IDs and
+          // server photo IDs — storageBlobId can reference either an encrypted
+          // blob or a server-side autoscanned photo (no blob to look up).
+          const underlyingId = p.storageBlobId || p.blobId;
+          const stale = !serverBlobIds.has(underlyingId) && !serverPhotoIds.has(underlyingId);
+          if (stale) console.log("[Gallery:stale] blob/photo not found:", p.blobId, "underlyingId:", underlyingId);
+          return stale;
+        })
+        .map((p) => p.blobId);
+
       if (staleIds.length > 0) {
+        console.log("[Gallery:sync] Deleting stale IDB entries:", staleIds);
         await db.photos.bulkDelete(staleIds);
       }
+      console.log("[Gallery:sync] Stale cleanup done. Remaining:", currentCached.length - staleIds.length, "of", currentCached.length);
 
       // Stale data is purged — safe to expose the live query to the UI.
       setEncryptedDataReady(true);
 
+      // We re-query since we might have deleted some
+      const survivingCached = await db.photos.toArray();
+      const idbByServerId = new Map(
+        survivingCached.filter((p) => p.serverPhotoId).map((p) => [p.serverPhotoId!, p])
+      );
+      const idbByBlobId = new Map(survivingCached.map((p) => [p.blobId, p]));
+
       // Phase 3: Populate IndexedDB from sync records.
       for (const photo of allSyncPhotos) {
-        const blobId = photo.encrypted_blob_id;
-        const isServerSide = !blobId;
-        // For encrypted photos, use the blob ID as IDB key.
-        // For autoscanned (server-side) photos, use the photo.id.
-        const idbKey = blobId || photo.id;
+        const isServerSide = !photo.encrypted_blob_id;
 
-        const existing = await db.photos.get(idbKey);
+        let existing = idbByServerId.get(photo.id);
+
+        if (!existing && !isServerSide && photo.encrypted_blob_id) {
+          // Try to bind an unbound unsynced original upload
+          const boundByBlob = idbByBlobId.get(photo.encrypted_blob_id);
+          if (boundByBlob && !boundByBlob.serverPhotoId) {
+            existing = boundByBlob;
+            existing.serverPhotoId = photo.id;
+            idbByServerId.set(photo.id, existing); // Prevent another duplicate from claiming it
+          }
+        }
+
+        if (!existing && isServerSide) {
+          existing = idbByBlobId.get(photo.id);
+        }
+
+        // If creating a NEW DB record for a duplicate that wasn't found locally,
+        // use photo.id as its unique key instead of clumping over encrypted_blob_id.
+        const idbKey = existing ? existing.blobId : photo.id;
+
         if (existing) {
           // Update mutable server-synced fields (favorites, serverPhotoId)
           const updates: Partial<CachedPhoto> = {};
           if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
           if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
-          // Retry thumbnail download if the previous attempt failed (thumbnailData
-          // is absent but the thumbnail blob ID is known).  This repairs photos
-          // whose thumbnail was not fetched due to a transient network error.
+          // Retry thumbnail download if the previous attempt failed
           if (!existing.thumbnailData && !isServerSide) {
             const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
             if (retryThumbId) {
@@ -274,7 +315,6 @@ export function useGalleryData(): GalleryDataResult {
 
         if (isServerSide) {
           // Autoscanned photo — do not pre-download here to avoid blocking sync.
-          // MediaTile will fetch it directly using the thumbnail endpoint.
           thumbnailMimeType = photo.mime_type === "image/gif" ? "image/gif" : "image/jpeg";
         } else {
           // Encrypted photo — download and decrypt thumbnail blob
@@ -294,6 +334,7 @@ export function useGalleryData(): GalleryDataResult {
 
         await db.photos.put({
           blobId: idbKey,
+          storageBlobId: isServerSide ? undefined : (photo.encrypted_blob_id ?? undefined),
           thumbnailBlobId: isServerSide ? undefined : (photo.encrypted_thumb_blob_id ?? undefined),
           filename: photo.filename,
           takenAt,
