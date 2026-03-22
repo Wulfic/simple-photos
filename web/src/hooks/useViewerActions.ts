@@ -9,6 +9,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { db, type MediaType } from "../db";
 import { useAuthStore } from "../store/auth";
+import { useBackupStore } from "../store/backup";
 import type { CropMetadata, PreloadEntry } from "./useViewerMedia";
 
 interface ViewerLocationState {
@@ -130,12 +131,10 @@ export default function useViewerActions({
           // encrypted_blob_id so no data is duplicated.
           let serverCopyId: string | undefined;
           if (original.serverPhotoId) {
-            try {
-              const res = await api.photos.duplicate(original.serverPhotoId, metaJson);
-              serverCopyId = res.id;
-            } catch (err) {
-              console.warn("[Viewer] Server duplicate failed, saving local-only copy:", err);
-            }
+            // No catch here — let errors propagate up to the outer catch so the
+            // user sees the failure rather than silently getting a local-only copy.
+            const res = await api.photos.duplicate(original.serverPhotoId, metaJson);
+            serverCopyId = res.id;
           }
 
           // Re-use original thumbnail; the UI applies cropData via CSS
@@ -143,14 +142,19 @@ export default function useViewerActions({
           const copyId = typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
             : Date.now().toString(36) + Math.random().toString(36).substring(2);
+          // For server-side originals where the duplicate succeeded, keep
+          // serverSide: true so MediaTile fetches the thumbnail via the API
+          // endpoint (/api/photos/:id/thumbnail) using the copy's serverCopyId.
+          // For encrypted originals or failed server duplicates, clear
+          // serverSide so the stale-cleanup logic doesn't delete the copy
+          // (which uses a random blobId, not a server photo ID).
+          const copyShouldBeServerSide = !!(original.serverSide && serverCopyId);
+
           await db.photos.put({
             ...original,
             blobId: copyId,
-            // The copy has its own identity — clear fields that would cause it
-            // to be misidentified as a server-side record (serverSide: true with
-            // a random blobId would break the stale-cleanup logic) or as the
-            // original photo (contentHash must not be duplicated).
-            serverSide: undefined,
+            serverSide: copyShouldBeServerSide || undefined,
+            // contentHash must not be duplicated — each row has a unique identity
             contentHash: undefined,
             storageBlobId: original.storageBlobId || original.blobId,
             filename: copyFilename,
@@ -160,9 +164,18 @@ export default function useViewerActions({
             serverPhotoId: serverCopyId,
           });
           console.log("[Viewer:saveCopy] Copy saved to IDB:", {
-            copyId, serverCopyId, filename: copyFilename,
+            copyId, serverCopyId, copyShouldBeServerSide, filename: copyFilename,
             originalBlobId: id, originalServerSide: original.serverSide,
           });
+
+          // Fire-and-forget: trigger backup sync so the copy propagates to all
+          // configured backup servers without blocking the UI.
+          if (serverCopyId) {
+            const servers = useBackupStore.getState().backupServers;
+            for (const srv of servers) {
+              api.backup.triggerSync(srv.id).catch(() => { /* non-fatal */ });
+            }
+          }
         }
       }
       setEditMode(false);
