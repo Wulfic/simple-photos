@@ -266,6 +266,15 @@ if ($Mode -eq "native") {
         $missingDeps += "java"
     }
 
+    # ── FFmpeg (required) ────────────────────────────────────────────────
+    if (Test-CommandExists "ffmpeg") {
+        $ffmpegVer = (ffmpeg -version 2>$null | Select-Object -First 1) -replace "^ffmpeg version ", ""
+        Write-Ok "FFmpeg $ffmpegVer found"
+    } else {
+        Write-Warn "FFmpeg not found (required for video thumbnails and video/audio edit downloads)"
+        $missingDeps += "ffmpeg"
+    }
+
     if ($missingDeps.Count -gt 0) {
         Write-Info "Missing: $($missingDeps -join ', ')"
 
@@ -323,11 +332,33 @@ if ($Mode -eq "native") {
                             Write-Warn "Cannot auto-install Java. Download from: https://adoptium.net"
                         }
                     }
+                    "ffmpeg" {
+                        Write-Info "Installing FFmpeg..."
+                        $installed = $false
+                        if (Test-CommandExists "winget") {
+                            winget install --id Gyan.FFmpeg --accept-source-agreements --accept-package-agreements --silent 2>$null
+                            # Refresh PATH
+                            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+                            $installed = Test-CommandExists "ffmpeg"
+                        }
+                        if (-not $installed -and (Test-CommandExists "choco")) {
+                            choco install ffmpeg -y 2>$null
+                            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+                            $installed = Test-CommandExists "ffmpeg"
+                        }
+                        if ($installed) {
+                            Write-Ok "FFmpeg installed"
+                        } else {
+                            Write-Err "Could not auto-install FFmpeg. Download from: https://ffmpeg.org/download.html"
+                            Write-Err "FFmpeg is required for video thumbnails and baking edits into video/audio downloads."
+                            exit 1
+                        }
+                    }
                 }
             }
         } else {
-            if ($missingDeps -contains "rust" -or $missingDeps -contains "node") {
-                Write-Err "Rust and Node.js are required for native mode."
+            if ($missingDeps -contains "rust" -or $missingDeps -contains "node" -or $missingDeps -contains "ffmpeg") {
+                Write-Err "Rust, Node.js, and FFmpeg are required for native mode."
                 exit 1
             }
         }

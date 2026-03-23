@@ -10,6 +10,7 @@ import { api } from "../api/client";
 import { db, type MediaType } from "../db";
 import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
+import { applyEditsToImageDownload } from "../utils/media";
 import type { CropMetadata, PreloadEntry } from "./useViewerMedia";
 
 interface ViewerLocationState {
@@ -32,6 +33,8 @@ interface UseViewerActionsParams {
   trimStart: number;
   trimEnd: number;
   mediaDuration: number;
+  cropData: CropMetadata | null;
+  mimeType: string;
   setCropData: (data: CropMetadata | null) => void;
   setCropCorners: (data: { x: number; y: number; w: number; h: number }) => void;
   setBrightness: (v: number) => void;
@@ -57,6 +60,8 @@ export default function useViewerActions({
   trimStart,
   trimEnd,
   mediaDuration,
+  cropData,
+  mimeType,
   setCropData,
   setCropCorners,
   setBrightness,
@@ -332,14 +337,62 @@ export default function useViewerActions({
     }
   }, [id, albumId, photoIds, currentIndex, navigate, setError]);
 
-  const handleDownload = useCallback(() => {
+  const handleDownload = useCallback(async () => {
     if (!mediaUrl) return;
-    // Download directly
+
+    const isImage = mediaType === "photo" || mediaType === "gif";
+    const isVideoOrAudio = mediaType === "video" || mediaType === "audio";
+
+    // ── Images: bake edits via Canvas 2D (no server round-trip needed) ─────
+    if (cropData && isImage) {
+      try {
+        const editedBlob = await applyEditsToImageDownload(mediaUrl, cropData, mimeType);
+        const url = URL.createObjectURL(editedBlob);
+        const a = document.createElement("a");
+        a.href = url;
+        const ext = mimeType.startsWith("image/png") ? ".png" : ".jpg";
+        const base = (filename || "photo").replace(/\.[^.]+$/, "");
+        a.download = base + ext;
+        a.click();
+        URL.revokeObjectURL(url);
+        return;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Download failed");
+        return;
+      }
+    }
+
+    // ── Video / Audio: send to server ffmpeg render endpoint ───────────────
+    if (cropData && isVideoOrAudio) {
+      // Look up the serverPhotoId — render endpoint is keyed by photos table ID
+      const cached = id ? await db.photos.get(id) : undefined;
+      const serverPhotoId = cached?.serverPhotoId ?? (cached?.serverSide ? id : undefined);
+      if (serverPhotoId) {
+        try {
+          const cropJson = JSON.stringify(cropData);
+          const blob = await api.photos.renderFile(serverPhotoId, cropJson);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `Edited ${filename || "media"}`;
+          a.click();
+          URL.revokeObjectURL(url);
+          return;
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Server render failed");
+          return;
+        }
+      }
+      // No serverPhotoId (encrypted-mode video) — fall through to raw download
+      // since we can't run ffmpeg client-side without WASM
+    }
+
+    // ── No edits, or encrypted video without serverPhotoId: raw file ───────
     const a = document.createElement("a");
     a.href = mediaUrl;
     a.download = filename || "media";
     a.click();
-  }, [mediaUrl, filename]);
+  }, [mediaUrl, cropData, mimeType, mediaType, filename, id, setError]);
 
   const handleDownloadOriginal = useCallback(async () => {
     if (!id) return;

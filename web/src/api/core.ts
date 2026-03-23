@@ -219,3 +219,47 @@ export async function downloadRaw(url: string): Promise<ArrayBuffer> {
   }
   return res.arrayBuffer();
 }
+
+/**
+ * POST to an endpoint and return the response body as a Blob.
+ * Handles authentication headers and automatic 401 token refresh.
+ * Used for server-side render endpoints that return binary (e.g. rendered video).
+ */
+export async function postRaw(path: string, body: string): Promise<Blob> {
+  const { accessToken } = useAuthStore.getState();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Requested-With": "SimplePhotos",
+  };
+  if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+
+  const doFetch = (tok: string | null) =>
+    fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: { ...headers, ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
+      body,
+    });
+
+  let res = await doFetch(accessToken);
+
+  if (res.status === 401) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      const newToken = useAuthStore.getState().accessToken;
+      res = await doFetch(newToken);
+    } else {
+      clearAllUserData().catch(() => {});
+      thumbMemoryCache.clear();
+      clearKey();
+      useAuthStore.getState().logout();
+      throw new Error("Session expired");
+    }
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`Server render failed (${res.status}): ${text}`);
+  }
+
+  return res.blob();
+}

@@ -7,7 +7,7 @@
  *
  * Maps to server routes: `/api/photos/*`.
  */
-import { request, downloadRaw, BASE } from "./core";
+import { request, downloadRaw, postRaw, BASE } from "./core";
 
 // ── Photos API ───────────────────────────────────────────────────────────────
 
@@ -114,6 +114,12 @@ export const photosApi = {
         body: JSON.stringify({ crop_metadata: cropMetadata }),
       },
     ),
+
+  /** POST /photos/:id/render — bake crop/trim/rotation/brightness into a
+   *  video or audio file on the server using ffmpeg and return a Blob
+   *  ready for download. cropMetadata is the JSON string from IndexedDB. */
+  renderFile: (photoId: string, cropMetadata: string): Promise<Blob> =>
+    postRaw(`/photos/${photoId}/render`, JSON.stringify({ crop_metadata: cropMetadata })),
 
   /** Create a metadata-only "copy" of a photo/video/audio */
   createEditCopy: (photoId: string, editMetadata: string, name?: string) =>

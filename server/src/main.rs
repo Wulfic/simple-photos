@@ -408,6 +408,11 @@ async fn main() -> anyhow::Result<()> {
             "/photos/{id}/duplicate",
             post(photos::copies::duplicate_photo),
         )
+        // Render video/audio with baked-in edits (trim, crop, rotation, brightness)
+        .route(
+            "/photos/{id}/render",
+            post(photos::render::render_photo),
+        )
         // Delete now soft-deletes to trash (30-day retention)
         .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Scan & register all files on disk

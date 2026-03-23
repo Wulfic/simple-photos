@@ -367,3 +367,78 @@ export async function createAudioFallbackThumbnail(): Promise<ArrayBuffer> {
     );
   });
 }
+
+/**
+ * Bake crop/rotation/brightness edits into a full-resolution image and return
+ * a Blob ready for download.  Runs entirely in the browser via Canvas 2D — no
+ * server round-trip or ffmpeg required.
+ *
+ * Strategy:
+ *  1. Draw only the cropped region (fractional 0-1 coords) at its natural pixel
+ *     size onto an intermediate canvas, applying `brightness()` via ctx.filter.
+ *  2. If rotation is non-zero, transfer the intermediate canvas to a second one
+ *     that has its axes pre-rotated so the output is correctly upright.
+ *
+ * Only suitable for image types (photo / gif rendered as JPEG).
+ * For video/audio the caller should skip this and download the raw file.
+ */
+export function applyEditsToImageDownload(
+  imageUrl: string,
+  crop: { x: number; y: number; width: number; height: number; rotate?: number; brightness?: number },
+  outputMime: string = "image/jpeg",
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const rot = ((crop.rotate ?? 0) % 360 + 360) % 360;
+
+      // Source region in natural pixel coordinates
+      const sx = Math.round(crop.x * img.naturalWidth);
+      const sy = Math.round(crop.y * img.naturalHeight);
+      const sw = Math.round(crop.width * img.naturalWidth);
+      const sh = Math.round(crop.height * img.naturalHeight);
+
+      // Step 1: crop + brightness onto an sw×sh canvas
+      const cropCanvas = document.createElement("canvas");
+      cropCanvas.width = sw;
+      cropCanvas.height = sh;
+      const cropCtx = cropCanvas.getContext("2d")!;
+      if (crop.brightness && crop.brightness !== 0) {
+        // Canvas filter API: brightness(1.0) = no change; 100-point scale → percentage
+        cropCtx.filter = `brightness(${1 + crop.brightness / 100})`;
+      }
+      cropCtx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+      cropCtx.filter = "none";
+
+      if (!rot) {
+        cropCanvas.toBlob(
+          (b) => (b ? resolve(b) : reject(new Error("Canvas toBlob failed"))),
+          outputMime.startsWith("image/png") ? "image/png" : "image/jpeg",
+          0.93,
+        );
+        return;
+      }
+
+      // Step 2: rotate.  For 90° / 270°, the output canvas axes swap.
+      const isSwapped = rot === 90 || rot === 270;
+      const outW = isSwapped ? sh : sw;
+      const outH = isSwapped ? sw : sh;
+      const rotCanvas = document.createElement("canvas");
+      rotCanvas.width = outW;
+      rotCanvas.height = outH;
+      const rotCtx = rotCanvas.getContext("2d")!;
+      rotCtx.translate(outW / 2, outH / 2);
+      rotCtx.rotate((rot * Math.PI) / 180);
+      // After rotation the source is centred on the new origin
+      rotCtx.drawImage(cropCanvas, -sw / 2, -sh / 2);
+
+      rotCanvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("Canvas toBlob failed"))),
+        outputMime.startsWith("image/png") ? "image/png" : "image/jpeg",
+        0.93,
+      );
+    };
+    img.onerror = () => reject(new Error("applyEditsToImageDownload: failed to load image"));
+    img.src = imageUrl;
+  });
+}
