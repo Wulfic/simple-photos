@@ -85,9 +85,10 @@ pub async fn backup_list_photos(
     validate_api_key(&state, &headers).await?;
 
     let photos = sqlx::query_as::<_, BackupPhotoRecord>(
-        "SELECT p.id, p.filename, p.file_path, p.mime_type, p.media_type, \
+        "SELECT p.id, p.user_id, p.filename, p.file_path, p.mime_type, p.media_type, \
          p.size_bytes, p.width, p.height, p.duration_secs, p.taken_at, \
-         p.latitude, p.longitude, p.thumb_path, p.created_at \
+         p.latitude, p.longitude, p.thumb_path, p.created_at, \
+         p.is_favorite, p.camera_model, p.photo_hash, p.crop_metadata \
          FROM photos p ORDER BY p.created_at ASC",
     )
     .fetch_all(&state.read_pool)
@@ -943,6 +944,127 @@ pub async fn backup_upsert_user(
                 );
             }
         }
+    }
+
+    Ok(StatusCode::OK)
+}
+
+/// GET /api/backup/list-users-full
+/// Returns all user records with full credentials (password_hash, TOTP secrets,
+/// backup codes) for disaster recovery. The recovering primary calls this to
+/// restore user accounts so they can log in with the same credentials.
+///
+/// **Security:** Authenticated via X-API-Key (same as all backup-serve endpoints).
+pub async fn backup_list_users_full(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    validate_api_key(&state, &headers).await?;
+
+    let users: Vec<(
+        String,         // id
+        String,         // username
+        String,         // password_hash
+        String,         // role
+        i64,            // storage_quota_bytes
+        String,         // created_at
+        Option<String>, // totp_secret
+        i32,            // totp_enabled
+    )> = sqlx::query_as(
+        "SELECT id, username, password_hash, role, storage_quota_bytes, \
+         created_at, totp_secret, totp_enabled FROM users ORDER BY created_at ASC",
+    )
+    .fetch_all(&state.read_pool)
+    .await?;
+
+    let mut result = Vec::with_capacity(users.len());
+    for (id, username, password_hash, role, quota, created_at, totp_secret, totp_enabled) in &users
+    {
+        // Fetch TOTP backup codes for this user
+        let backup_codes: Vec<(String, String, i32)> =
+            sqlx::query_as("SELECT id, code_hash, used FROM totp_backup_codes WHERE user_id = ?")
+                .bind(id)
+                .fetch_all(&state.read_pool)
+                .await
+                .unwrap_or_default();
+
+        let codes_json: Vec<serde_json::Value> = backup_codes
+            .iter()
+            .map(|(code_id, code_hash, used)| {
+                serde_json::json!({
+                    "id": code_id,
+                    "code_hash": code_hash,
+                    "used": used,
+                })
+            })
+            .collect();
+
+        result.push(serde_json::json!({
+            "id": id,
+            "username": username,
+            "password_hash": password_hash,
+            "role": role,
+            "storage_quota_bytes": quota,
+            "created_at": created_at,
+            "totp_secret": totp_secret,
+            "totp_enabled": totp_enabled,
+            "totp_backup_codes": codes_json,
+        }));
+    }
+
+    Ok(Json(result))
+}
+
+/// POST /api/backup/sync-user-deletions
+/// Accepts a list of user IDs that have been deleted on the primary server
+/// and removes them from the backup's `users` table. Foreign-key cascades
+/// clean up related rows (refresh_tokens, totp_backup_codes, etc.).
+///
+/// Content owned by deleted users (photos, trash, blobs) is also removed
+/// via ON DELETE CASCADE, matching the primary's behaviour.
+pub async fn backup_sync_user_deletions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<StatusCode, AppError> {
+    validate_api_key(&state, &headers).await?;
+
+    let ids: Vec<String> = body
+        .get("deleted_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if ids.is_empty() {
+        return Ok(StatusCode::OK);
+    }
+
+    let mut removed = 0usize;
+    for id in &ids {
+        let result = sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(id)
+            .execute(&state.pool)
+            .await;
+        match result {
+            Ok(r) if r.rows_affected() > 0 => {
+                removed += 1;
+            }
+            Ok(_) => {} // user didn't exist — nothing to do
+            Err(e) => {
+                tracing::warn!(user_id = %id, "sync-user-deletions: failed to remove user: {}", e);
+            }
+        }
+    }
+
+    if removed > 0 {
+        tracing::info!(
+            "sync-user-deletions: removed {} user(s) deleted on primary",
+            removed
+        );
     }
 
     Ok(StatusCode::OK)
