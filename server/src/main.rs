@@ -543,6 +543,7 @@ async fn main() -> anyhow::Result<()> {
             post(backup::serve::backup_upsert_user),
         )
         .route("/backup/receive", post(backup::serve::backup_receive))
+        .route("/backup/sync-deletions", post(backup::serve::backup_sync_deletions))
         .route(
             "/backup/download/{photo_id}",
             get(backup::serve::backup_download_photo),
