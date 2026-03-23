@@ -4,7 +4,7 @@
  *
  * Keeps the Viewer component focused on rendering and state management.
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { db, type MediaType } from "../db";
@@ -76,6 +76,10 @@ export default function useViewerActions({
 
   const [showLeavePrompt, setShowLeavePrompt] = useState(false);
   const [saveCopySuccess, setSaveCopySuccess] = useState(false);
+  const [isRenderingVideo, setIsRenderingVideo] = useState(false);
+  // Holds the in-flight render promise so a second download click during
+  // conversion waits for the same job rather than starting a duplicate.
+  const renderInflightRef = useRef<Promise<Blob> | null>(null);
 
   /** Build the edit metadata object from current edit state */
   const buildEditMetadata = useCallback((): CropMetadata | null => {
@@ -368,20 +372,29 @@ export default function useViewerActions({
       const cached = id ? await db.photos.get(id) : undefined;
       const serverPhotoId = cached?.serverPhotoId ?? (cached?.serverSide ? id : undefined);
       if (serverPhotoId) {
+        // If a render is already in flight reuse the same promise — when it
+        // resolves it will auto-download.  Just return so we don't queue another.
+        if (renderInflightRef.current) return;
+
+        const cropJson = JSON.stringify(cropData);
+        const renderPromise = api.photos.renderFile(serverPhotoId, cropJson);
+        renderInflightRef.current = renderPromise;
+        setIsRenderingVideo(true);
         try {
-          const cropJson = JSON.stringify(cropData);
-          const blob = await api.photos.renderFile(serverPhotoId, cropJson);
+          const blob = await renderPromise;
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
           a.download = `Edited ${filename || "media"}`;
           a.click();
           URL.revokeObjectURL(url);
-          return;
         } catch (err) {
           setError(err instanceof Error ? err.message : "Server render failed");
-          return;
+        } finally {
+          renderInflightRef.current = null;
+          setIsRenderingVideo(false);
         }
+        return;
       }
       // No serverPhotoId (encrypted-mode video) — fall through to raw download
       // since we can't run ffmpeg client-side without WASM
@@ -436,6 +449,7 @@ export default function useViewerActions({
     showLeavePrompt,
     setShowLeavePrompt,
     saveCopySuccess,
+    isRenderingVideo,
     buildEditMetadata,
     handleSaveEdit,
     handleSaveCopy,

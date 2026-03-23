@@ -126,6 +126,7 @@ export default function Viewer() {
     handleDelete, handleRemoveFromAlbum,
     handleDownload, handleDownloadOriginal,
     handleToggleFavorite,
+    isRenderingVideo,
   } = useViewerActions({
     id, mediaUrl, filename, mediaType, mimeType,
     albumId, photoIds, currentIndex,
@@ -508,11 +509,13 @@ export default function Viewer() {
           )}
           <button
             onClick={handleDownload}
-            className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
-            disabled={!mediaUrl}
-            title="Download"
+            className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors disabled:opacity-50 disabled:cursor-wait"
+            disabled={!mediaUrl || isRenderingVideo}
+            title={isRenderingVideo ? "Converting…" : "Download"}
           >
-            <AppIcon name="download" size="w-5 h-5" themed={false} className="invert" />
+            {isRenderingVideo
+              ? <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+              : <AppIcon name="download" size="w-5 h-5" themed={false} className="invert" />}
           </button>
           {!isBackupServer && (
           <>
@@ -538,6 +541,14 @@ export default function Viewer() {
         </div>
       </div>
       </div>{/* end top bar overlay */}
+
+      {/* Converting banner — shown while ffmpeg renders a video/audio file */}
+      {isRenderingVideo && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-2 rounded-full bg-black/80 text-white text-sm shadow-lg pointer-events-none">
+          <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin flex-shrink-0" />
+          Converting… download will begin automatically
+        </div>
+      )}
 
       {/* Content area — fills entire viewport for true full-screen */}
       <div
