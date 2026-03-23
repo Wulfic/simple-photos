@@ -15,7 +15,9 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use hex;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use uuid::Uuid;
 
@@ -154,6 +156,31 @@ pub async fn render_photo(
         .and_then(|e| e.to_str())
         .unwrap_or("mp4");
 
+    // ── Check render cache ────────────────────────────────────────────────────
+    // Cache key = SHA-256 of the resolved metadata string (or literal "default"
+    // when no edits are stored).  First 16 hex chars is enough for collision
+    // resistance within a single user's library.
+    let meta_key = meta_str.as_deref().unwrap_or("default");
+    let mut hasher = Sha256::new();
+    hasher.update(meta_key.as_bytes());
+    let crop_hash = hex::encode(hasher.finalize());
+    let crop_hash = &crop_hash[..16];
+
+    let cache_dir = state.config.storage.root.join(".renders");
+    tokio::fs::create_dir_all(&cache_dir)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to create render cache dir: {e}")))?;
+
+    let cache_path = cache_dir.join(format!("{}-{}.{}", photo.id, crop_hash, ext));
+
+    if cache_path.exists() {
+        tracing::info!("[render] cache hit: {:?}", cache_path);
+        let data = tokio::fs::read(&cache_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to read render cache: {e}")))?;
+        return Ok(build_response(data, &photo.mime_type, &photo.filename).into_response());
+    }
+
     let tmp_path = std::env::temp_dir().join(format!("sp-render-{}.{}", Uuid::new_v4(), ext));
 
     // ── Build ffmpeg argument list ────────────────────────────────────────────
@@ -253,21 +280,31 @@ pub async fn render_photo(
         return Err(AppError::Internal(format!("ffmpeg render failed: {last_line}")));
     }
 
-    // ── Read rendered file and stream back ────────────────────────────────────
+    // ── Read rendered file, save to cache, and stream back ───────────────────
     let data = tokio::fs::read(&tmp_path)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to read rendered file: {e}")))?;
 
-    // Clean up regardless of success
+    // Save to cache (best-effort — don't fail the request if the write fails)
+    if let Err(e) = tokio::fs::copy(&tmp_path, &cache_path).await {
+        tracing::warn!("[render] failed to write render cache {:?}: {}", cache_path, e);
+    } else {
+        tracing::info!("[render] cached render at {:?}", cache_path);
+    }
+
+    // Clean up temp file
     let _ = tokio::fs::remove_file(&tmp_path).await;
 
-    let download_filename = format!("Edited {}", photo.filename);
-    let mime = photo.mime_type.clone();
+    Ok(build_response(data, &photo.mime_type, &photo.filename).into_response())
+}
 
+/// Build the download response headers + body for a rendered media file.
+fn build_response(data: Vec<u8>, mime: &str, original_filename: &str) -> impl IntoResponse {
+    let download_filename = format!("Edited {original_filename}");
     let mut headers = HeaderMap::new();
     headers.insert(
         "Content-Type",
-        HeaderValue::from_str(&mime)
+        HeaderValue::from_str(mime)
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
     headers.insert(
@@ -278,6 +315,5 @@ pub async fn render_photo(
         ))
         .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
-
-    Ok((StatusCode::OK, headers, Body::from(data)).into_response())
+    (StatusCode::OK, headers, Body::from(data))
 }
