@@ -539,11 +539,19 @@ async fn main() -> anyhow::Result<()> {
         .route("/backup/list-trash", get(backup::serve::backup_list_trash))
         .route("/backup/list-users", get(backup::serve::backup_list_users))
         .route(
+            "/backup/list-users-full",
+            get(backup::serve::backup_list_users_full),
+        )
+        .route(
             "/backup/upsert-user",
             post(backup::serve::backup_upsert_user),
         )
         .route("/backup/receive", post(backup::serve::backup_receive))
         .route("/backup/sync-deletions", post(backup::serve::backup_sync_deletions))
+        .route(
+            "/backup/sync-user-deletions",
+            post(backup::serve::backup_sync_user_deletions),
+        )
         .route(
             "/backup/download/{photo_id}",
             get(backup::serve::backup_download_photo),

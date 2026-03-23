@@ -80,10 +80,13 @@ pub struct SyncLogEntry {
     pub error: Option<String>,
 }
 
-/// Photo record exposed over the backup API (no user_id — all photos on the server).
+/// Photo record exposed over the backup API.
+/// Includes `user_id` so recovery can preserve per-user ownership,
+/// and all metadata columns for faithful restoration.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct BackupPhotoRecord {
     pub id: String,
+    pub user_id: String,
     pub filename: String,
     pub file_path: String,
     pub mime_type: String,
@@ -97,6 +100,10 @@ pub struct BackupPhotoRecord {
     pub longitude: Option<f64>,
     pub thumb_path: Option<String>,
     pub created_at: String,
+    pub is_favorite: bool,
+    pub camera_model: Option<String>,
+    pub photo_hash: Option<String>,
+    pub crop_metadata: Option<String>,
 }
 
 /// Recovery progress response.

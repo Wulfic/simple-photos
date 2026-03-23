@@ -380,6 +380,11 @@ async fn run_sync(
     // Must run before photos/trash so user_id foreign keys resolve correctly.
     sync_users_to_backup(pool, &client, &base_url, api_key).await;
 
+    // ── Phase 0b: sync user deletions ────────────────────────────────────
+    // Users deleted on the primary must also be removed from the backup.
+    // Compare the primary's user IDs against the remote's and send deletions.
+    sync_user_deletions_to_backup(pool, &client, &base_url, api_key, &server.name).await;
+
     // Pre-fetch ALL photo tags in one query to avoid N+1 inside the transfer loop.
     let all_tags: std::collections::HashMap<String, Vec<String>> = {
         match sqlx::query_as::<_, (String, String)>(
@@ -912,6 +917,117 @@ async fn sync_users_to_backup(
 
     if synced > 0 {
         tracing::info!("Synced {} user account(s) to backup server", synced);
+    }
+}
+
+/// Detect users deleted on the primary and propagate those deletions to
+/// the backup server. Compares the primary's user IDs against the remote's
+/// `GET /api/backup/list-users` response. Any user that exists on the
+/// remote but not locally has been deleted and should be removed.
+async fn sync_user_deletions_to_backup(
+    pool: &sqlx::SqlitePool,
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &Option<String>,
+    server_name: &str,
+) {
+    // Fetch remote user IDs
+    let mut req = client.get(format!("{}/backup/list-users", base_url));
+    if let Some(ref key) = api_key {
+        req = req.header("X-API-Key", key.as_str());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct UserIdOnly {
+        id: String,
+    }
+
+    let remote_users: Vec<UserIdOnly> = match req.send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json().await {
+            Ok(users) => users,
+            Err(e) => {
+                tracing::warn!(
+                    "sync-user-deletions to '{}': failed to parse remote user list: {}",
+                    server_name,
+                    e
+                );
+                return;
+            }
+        },
+        Ok(resp) => {
+            tracing::warn!(
+                "sync-user-deletions to '{}': list-users returned HTTP {}",
+                server_name,
+                resp.status()
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(
+                "sync-user-deletions to '{}': failed to fetch remote users: {}",
+                server_name,
+                e
+            );
+            return;
+        }
+    };
+
+    if remote_users.is_empty() {
+        return;
+    }
+
+    // Fetch local user IDs
+    let local_ids: HashSet<String> = match sqlx::query_scalar::<_, String>("SELECT id FROM users")
+        .fetch_all(pool)
+        .await
+    {
+        Ok(ids) => ids.into_iter().collect(),
+        Err(e) => {
+            tracing::warn!("sync-user-deletions: failed to query local users: {}", e);
+            return;
+        }
+    };
+
+    // Users on the remote that no longer exist locally have been deleted
+    let to_delete: Vec<&String> = remote_users
+        .iter()
+        .map(|u| &u.id)
+        .filter(|id| !local_ids.contains(*id))
+        .collect();
+
+    if to_delete.is_empty() {
+        return;
+    }
+
+    let payload = serde_json::json!({ "deleted_ids": to_delete });
+    let url = format!("{}/backup/sync-user-deletions", base_url);
+    let mut req = client.post(&url).json(&payload);
+    if let Some(ref key) = api_key {
+        req = req.header("X-API-Key", key.as_str());
+    }
+
+    match req.send().await {
+        Ok(resp) if resp.status().is_success() => {
+            tracing::info!(
+                server = %server_name,
+                count = to_delete.len(),
+                "Synced user deletions to backup"
+            );
+        }
+        Ok(resp) => {
+            tracing::warn!(
+                server = %server_name,
+                status = %resp.status(),
+                "sync-user-deletions returned non-success status"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                server = %server_name,
+                "sync-user-deletions request failed: {}",
+                e
+            );
+        }
     }
 }
 
