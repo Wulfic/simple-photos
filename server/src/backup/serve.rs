@@ -468,6 +468,37 @@ pub async fn backup_receive(
         .bind(&expires_at)
         .execute(&state.pool)
         .await?;
+
+        // Remove from the main photos table if it was previously synced as an
+        // active photo — the item has been deleted on the primary and must not
+        // appear in the gallery on the backup either.
+        //
+        // X-Original-Photo-Id contains the original photo UUID (photos.id on
+        // the backup).  X-Photo-Id is the *trash row* UUID, which is a
+        // different value — deleting by it would be a no-op.
+        let gallery_id = hdr_str(&headers, "X-Original-Photo-Id")
+            .unwrap_or_else(|| photo_id.clone());
+        // Delete by both UUID and file_path.  The UUID covers the normal case;
+        // file_path covers a race where autoscan ran between Phase-0a and this
+        // receive call and re-imported the file with a different UUID.
+        if let Err(e) = sqlx::query("DELETE FROM photos WHERE id = ? OR file_path = ?")
+            .bind(&gallery_id)
+            .bind(&file_path)
+            .execute(&state.pool)
+            .await
+        {
+            tracing::warn!(
+                photo_id = %photo_id,
+                gallery_id = %gallery_id,
+                "Failed to remove photo from gallery after receiving as trash: {}",
+                e
+            );
+        }
+        // Clean up any dangling tags for the removed photo row.
+        let _ = sqlx::query("DELETE FROM photo_tags WHERE photo_id = ?")
+            .bind(&gallery_id)
+            .execute(&state.pool)
+            .await;
     } else {
         // ── Upsert into photos (full metadata) ───────────────────────────────
         sqlx::query(
@@ -535,6 +566,21 @@ pub async fn backup_receive(
                 );
             }
         }
+
+        // If this item previously existed in trash on the backup (e.g. it was
+        // synced as deleted and has since been restored on the primary), remove
+        // the stale trash entry so it only appears in the gallery.
+        if let Err(e) = sqlx::query("DELETE FROM trash_items WHERE id = ?")
+            .bind(&photo_id)
+            .execute(&state.pool)
+            .await
+        {
+            tracing::warn!(
+                photo_id = %photo_id,
+                "Failed to remove trash entry after receiving as active photo: {}",
+                e
+            );
+        }
     }
 
     // ── Generate thumbnail immediately ───────────────────────────────────────
@@ -566,6 +612,70 @@ pub async fn backup_receive(
         "photo_id": photo_id,
         "size_bytes": size_bytes,
     })))
+}
+
+// ── Deletion Sync Endpoint ──────────────────────────────────────────────────
+
+/// POST /api/backup/sync-deletions
+/// Accepts a list of photo IDs that have been deleted on the primary server
+/// (i.e., are now in the primary's trash) and removes them from the backup's
+/// `photos` + `photo_tags` tables so the items no longer appear in the gallery.
+///
+/// This is called during every sync so that items deleted on the primary are
+/// evicted from the backup gallery even when they were already in
+/// `remote_trash_ids` (and therefore skipped by the file-transfer delta logic).
+pub async fn backup_sync_deletions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<StatusCode, AppError> {
+    validate_api_key(&state, &headers).await?;
+
+    let ids: Vec<String> = body
+        .get("deleted_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if ids.is_empty() {
+        return Ok(StatusCode::OK);
+    }
+
+    let mut removed = 0usize;
+    for id in &ids {
+        // Remove from gallery; ignore if it wasn't there (nothing to do).
+        let result = sqlx::query("DELETE FROM photos WHERE id = ?")
+            .bind(id)
+            .execute(&state.pool)
+            .await;
+        match result {
+            Ok(r) if r.rows_affected() > 0 => {
+                removed += 1;
+                // Clean up orphaned tags for the removed row.
+                let _ = sqlx::query("DELETE FROM photo_tags WHERE photo_id = ?")
+                    .bind(id)
+                    .execute(&state.pool)
+                    .await;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(photo_id = %id, "sync-deletions: failed to remove from photos: {}", e);
+            }
+        }
+    }
+
+    if removed > 0 {
+        tracing::info!(
+            "sync-deletions: removed {} photo(s) from gallery that are now in primary trash",
+            removed
+        );
+    }
+
+    Ok(StatusCode::OK)
 }
 
 // ── User Sync Endpoints ────────────────────────────────────────────────────

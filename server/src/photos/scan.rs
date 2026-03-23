@@ -288,12 +288,16 @@ pub async fn scan_and_register(
 
     // Build set of already-registered paths using a streaming cursor so we
     // never hold the full Vec<String> + HashSet simultaneously in memory.
+    // Include trash_items so that files deleted on the primary (which are
+    // physically still on disk) are not re-imported into the gallery.
     let mut existing_set = std::collections::HashSet::new();
     {
-        let mut rows =
-            sqlx::query_scalar::<_, String>("SELECT file_path FROM photos WHERE user_id = ?")
-                .bind(&auth.user_id)
-                .fetch(&state.pool);
+        let mut rows = sqlx::query_scalar::<_, String>(
+            "SELECT file_path FROM photos WHERE user_id = ? \
+             UNION SELECT file_path FROM trash_items WHERE file_path != ''"
+        )
+        .bind(&auth.user_id)
+        .fetch(&state.pool);
 
         while let Some(path) = rows.try_next().await? {
             existing_set.insert(path);

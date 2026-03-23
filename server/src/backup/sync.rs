@@ -62,6 +62,9 @@ struct PhotoToSync {
 #[derive(Debug, sqlx::FromRow)]
 struct TrashToSync {
     id: String,
+    /// The original photo UUID — different from `id` (the trash row UUID).
+    /// Used by the backup to remove the item from its own `photos` table.
+    photo_id: String,
     user_id: String,
     filename: String,
     file_path: String,
@@ -310,6 +313,69 @@ async fn run_sync(
     let remote_trash_ids: HashSet<String> =
         fetch_remote_ids(&client, &base_url, "/backup/list-trash", api_key).await;
 
+    // ── Phase 0a: purge photos that have since been deleted on the primary ──
+    // Compute the IDs that the remote still has in its gallery BUT are now in
+    // the primary's trash.  These are items deleted after the last sync; they
+    // must be removed from the backup gallery even when the delta logic would
+    // otherwise skip the file transfer (because the trash entry is already
+    // present on the remote).
+    //
+    // IMPORTANT: use `photo_id` (the original photo UUID), NOT `id` (the
+    // trash row UUID) — the backup's photos table stores original photo UUIDs.
+    {
+        let primary_trash_ids: Vec<String> = match sqlx::query_scalar::<_, String>(
+            "SELECT photo_id FROM trash_items",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!("Failed to fetch primary trash photo_ids for deletion sync: {}", e);
+                vec![]
+            }
+        };
+
+        // Only send IDs that the remote's gallery actually contains — keeps the
+        // payload minimal and avoids no-op deletes on the remote.
+        let to_delete: Vec<&String> = primary_trash_ids
+            .iter()
+            .filter(|id| remote_photo_ids.contains(*id))
+            .collect();
+
+        if !to_delete.is_empty() {
+            let payload = serde_json::json!({ "deleted_ids": to_delete });
+            let url = format!("{}/backup/sync-deletions", base_url);
+            let mut req = client.post(&url).json(&payload);
+            if let Some(ref key) = api_key {
+                req = req.header("X-API-Key", key.as_str());
+            }
+            match req.send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    tracing::info!(
+                        server = %server.name,
+                        count = to_delete.len(),
+                        "Purged deleted photos from backup gallery"
+                    );
+                }
+                Ok(resp) => {
+                    tracing::warn!(
+                        server = %server.name,
+                        status = %resp.status(),
+                        "sync-deletions returned non-success status"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        server = %server.name,
+                        "sync-deletions request failed: {}",
+                        e
+                    );
+                }
+            }
+        }
+    }
+
     // ── Phase 0: sync user accounts ──────────────────────────────────────
     // Must run before photos/trash so user_id foreign keys resolve correctly.
     sync_users_to_backup(pool, &client, &base_url, api_key).await;
@@ -465,7 +531,7 @@ async fn run_sync(
 
     // 2. Sync trash items — only those the remote doesn't have yet
     let trash_items: Vec<TrashToSync> = match sqlx::query_as::<_, TrashToSync>(
-        "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
+        "SELECT id, photo_id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
          width, height, duration_secs, camera_model, is_favorite, photo_hash, \
          crop_metadata, deleted_at, expires_at FROM trash_items",
     )
@@ -505,6 +571,9 @@ async fn run_sync(
             ("X-Original-Created-At".to_string(), item.deleted_at.clone()),
             ("X-Deleted-At".to_string(), item.deleted_at.clone()),
             ("X-Expires-At".to_string(), item.expires_at.clone()),
+            // Send the original photo UUID so the backup can evict the item
+            // from its gallery (photos.id = photo_id, not the trash row id).
+            ("X-Original-Photo-Id".to_string(), item.photo_id.clone()),
             (
                 "X-Filename".to_string(),
                 utf8_percent_encode(&item.filename, CONTROLS).to_string(),
