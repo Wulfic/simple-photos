@@ -360,7 +360,7 @@ if [[ "$MODE" == "native" ]]; then
     if command -v ffmpeg &>/dev/null; then
         success "FFmpeg $(ffmpeg -version 2>/dev/null | head -1 | awk '{print $3}') found"
     else
-        warn "FFmpeg not found (needed for video/GIF thumbnails)"
+        warn "FFmpeg not found (required for video thumbnails and baking edits into video/audio downloads)"
         MISSING_DEPS+=("ffmpeg")
     fi
 
@@ -408,8 +408,12 @@ if [[ "$MODE" == "native" ]]; then
                         elif command -v dnf &>/dev/null; then sudo dnf install -y ffmpeg
                         elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm ffmpeg
                         elif command -v brew &>/dev/null; then brew install ffmpeg
-                        else warn "Cannot auto-install FFmpeg. Video thumbnails will use placeholders."; fi
-                        command -v ffmpeg &>/dev/null && success "FFmpeg installed" || warn "FFmpeg install failed — video thumbnails will use placeholders"
+                        else
+                            error "Cannot auto-install FFmpeg. Please install it manually (https://ffmpeg.org/download.html)."
+                            error "FFmpeg is required for video thumbnails and baking edits into video/audio downloads."
+                            exit 1
+                        fi
+                        command -v ffmpeg &>/dev/null && success "FFmpeg installed" || { error "FFmpeg install failed — required for video editing."; exit 1; }
                         ;;
                 esac
             done

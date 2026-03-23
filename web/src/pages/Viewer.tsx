@@ -127,10 +127,10 @@ export default function Viewer() {
     handleDownload, handleDownloadOriginal,
     handleToggleFavorite,
   } = useViewerActions({
-    id, mediaUrl, filename, mediaType,
+    id, mediaUrl, filename, mediaType, mimeType,
     albumId, photoIds, currentIndex,
     cropCorners, brightness, rotateValue, trimStart, trimEnd, mediaDuration,
-    setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd,
+    cropData, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd,
     setEditMode, setError,
     preloadCache,
   });
