@@ -52,10 +52,6 @@ export default function Settings() {
   type DiscoveredEntry = { address: string; name: string; version: string; api_key?: string };
   const [discoveredServers, setDiscoveredServers] = useState<DiscoveredEntry[]>([]);
 
-  // ── Scan state (admin) ──────────────────────────────────────────────────
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<string | null>(null);
-
   // ── Audio backup setting ────────────────────────────────────────────────
   const [audioBackupEnabled, setAudioBackupEnabled] = useState(false);
   const [audioBackupLoading, setAudioBackupLoading] = useState(true);
@@ -317,45 +313,6 @@ export default function Settings() {
           </div>
         </div>
       </section>
-
-      {/* ── Scan for New Files (admin, hidden on backup servers) ────────── */}
-      {isAdmin && !isBackupMode && (
-        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
-          <h2 className="text-lg font-semibold mb-2">Scan for New Files</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-            Scan the storage directory for new photos and videos that haven't been registered yet.
-          </p>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={async () => {
-                setScanning(true);
-                setScanResult(null);
-                setError("");
-                try {
-                  const res = await api.admin.scanAndRegister();
-                  setScanResult(
-                    res.registered > 0
-                      ? `Found and registered ${res.registered} new file${res.registered > 1 ? "s" : ""}.`
-                      : "No new files found."
-                  );
-                } catch (err: unknown) {
-                  setError(getErrorMessage(err, "Scan failed"));
-                } finally {
-                  setScanning(false);
-                }
-              }}
-              disabled={scanning}
-              className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
-            >
-              <AppIcon name="reload" size="w-4 h-4" className={scanning ? "animate-spin" : ""} />
-              {scanning ? "Scanning…" : "Scan Now"}
-            </button>
-            {scanResult && (
-              <span className="text-sm text-gray-600 dark:text-gray-400">{scanResult}</span>
-            )}
-          </div>
-        </section>
-      )}
 
       {/* ── Backup Recovery / Primary Server Connection ─────────────────── */}
       {isAdmin && isBackupMode ? (

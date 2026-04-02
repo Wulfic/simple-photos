@@ -727,14 +727,10 @@ function ThumbnailImg({ photo }: { photo: CachedPhoto }) {
       );
       setSrc(url);
       return () => URL.revokeObjectURL(url);
-    } else if (photo.serverSide && photo.serverPhotoId) {
-      // Server-side (autoscanned) photo — fetch thumbnail from the server
-      const token = useAuthStore.getState().accessToken;
-      setSrc(`/api/photos/${photo.serverPhotoId}/thumbnail?token=${token}`);
     } else {
       setSrc(null);
     }
-  }, [photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType, photo.serverSide, photo.serverPhotoId]);
+  }, [photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
 
   if (src) {
     return (

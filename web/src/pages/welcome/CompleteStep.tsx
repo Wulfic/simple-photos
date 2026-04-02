@@ -167,20 +167,8 @@ export default function CompleteStep({
               }
 
               // ── Normal setup tasks ────────────────────────────────────
-              // Fire scan in the background — don't await it, as it can take
-              // a long time and blocks navigation. Autoscan will catch anything
-              // the background scan misses.
-              api.admin.scanAndRegister()
-                .then((scanResult) => {
-                  console.log("[Setup] Background scan complete:", scanResult);
-                })
-                .catch((scanErr) => {
-                  console.warn("[Setup] Scan failed — autoscan will catch files later:", scanErr);
-                  setRestoreStatus("Initial scan failed — your photos will appear once the server scans your library (this may take a moment).");
-                });
-
               // Store the encryption key on the server so it can run
-              // auto-migration and autoscan autonomously.
+              // auto-migration autonomously.
               const keyHex = sessionStorage.getItem("sp_key") ?? undefined;
               if (!keyHex) {
                 console.error("[Setup] Encryption key missing from sessionStorage! Key derivation may have failed.");

@@ -141,21 +141,6 @@ export function useGalleryData(): GalleryDataResult {
         // secure galleries on other devices are reflected without a full reload.
         startSecureBlobIdPolling();
 
-        // Fire auto-scan in the background — don't block photo loading.
-        // When it completes, reload photos so newly scanned files appear.
-        const reloadAfterScan = async () => {
-          try {
-            await loadEncryptedPhotos();
-          } catch {
-            // Non-critical — ignore transient failures
-          }
-        };
-        api.backup.triggerAutoScan()
-          .then(() => reloadAfterScan())
-          .catch(() => {
-            // Non-critical — if the user isn't admin or endpoint fails, just ignore
-          });
-
         if (!hasCryptoKey()) {
           navigate("/setup");
           return;
@@ -252,12 +237,13 @@ export function useGalleryData(): GalleryDataResult {
       const idbByBlobId = new Map(survivingCached.map((p) => [p.blobId, p]));
 
       // Phase 3: Populate IndexedDB from sync records.
+      // Skip autoscanned photos (no encrypted_blob_id) — encrypted-only mode.
       for (const photo of allSyncPhotos) {
-        const isServerSide = !photo.encrypted_blob_id;
+        if (!photo.encrypted_blob_id) continue; // Skip plain-mode autoscanned entries
 
         let existing = idbByServerId.get(photo.id);
 
-        if (!existing && !isServerSide && photo.encrypted_blob_id) {
+        if (!existing && photo.encrypted_blob_id) {
           // Try to bind an unbound unsynced original upload
           const boundByBlob = idbByBlobId.get(photo.encrypted_blob_id);
           if (boundByBlob && !boundByBlob.serverPhotoId) {
@@ -265,10 +251,6 @@ export function useGalleryData(): GalleryDataResult {
             existing.serverPhotoId = photo.id;
             idbByServerId.set(photo.id, existing); // Prevent another duplicate from claiming it
           }
-        }
-
-        if (!existing && isServerSide) {
-          existing = idbByBlobId.get(photo.id);
         }
 
         // If creating a NEW DB record for a duplicate that wasn't found locally,
@@ -281,7 +263,7 @@ export function useGalleryData(): GalleryDataResult {
           if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
           if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
           // Retry thumbnail download if the previous attempt failed
-          if (!existing.thumbnailData && !isServerSide) {
+          if (!existing.thumbnailData) {
             const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
             if (retryThumbId) {
               try {
@@ -313,29 +295,24 @@ export function useGalleryData(): GalleryDataResult {
         let thumbnailData: ArrayBuffer | undefined;
         let thumbnailMimeType: string | undefined;
 
-        if (isServerSide) {
-          // Autoscanned photo — do not pre-download here to avoid blocking sync.
-          thumbnailMimeType = photo.mime_type === "image/gif" ? "image/gif" : "image/jpeg";
-        } else {
-          // Encrypted photo — download and decrypt thumbnail blob
-          const thumbBlobId = photo.encrypted_thumb_blob_id;
-          if (thumbBlobId) {
-            try {
-              const thumbEnc = await api.blobs.download(thumbBlobId);
-              const thumbDec = await decrypt(thumbEnc);
-              const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
-              thumbnailData = base64ToArrayBuffer(thumbPayload.data);
-              thumbnailMimeType = thumbPayload.mime_type;
-            } catch {
-              // Thumbnail fetch failed — show placeholder
-            }
+        // Encrypted photo — download and decrypt thumbnail blob
+        const thumbBlobId = photo.encrypted_thumb_blob_id;
+        if (thumbBlobId) {
+          try {
+            const thumbEnc = await api.blobs.download(thumbBlobId);
+            const thumbDec = await decrypt(thumbEnc);
+            const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
+            thumbnailData = base64ToArrayBuffer(thumbPayload.data);
+            thumbnailMimeType = thumbPayload.mime_type;
+          } catch {
+            // Thumbnail fetch failed — show placeholder
           }
         }
 
         await db.photos.put({
           blobId: idbKey,
-          storageBlobId: isServerSide ? undefined : (photo.encrypted_blob_id ?? undefined),
-          thumbnailBlobId: isServerSide ? undefined : (photo.encrypted_thumb_blob_id ?? undefined),
+          storageBlobId: photo.encrypted_blob_id ?? undefined,
+          thumbnailBlobId: photo.encrypted_thumb_blob_id ?? undefined,
           filename: photo.filename,
           takenAt,
           mimeType: photo.mime_type,
@@ -350,7 +327,6 @@ export function useGalleryData(): GalleryDataResult {
           cropData: photo.crop_metadata ?? undefined,
           isFavorite: photo.is_favorite ?? false,
           serverPhotoId: photo.id,
-          serverSide: isServerSide || undefined,
         });
       }
 

@@ -13,7 +13,6 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
-import { useAuthStore } from "../store/auth";
 
 type SharedAlbumInfo = {
   id: string;
@@ -64,17 +63,10 @@ export default function Albums() {
     audio: encryptedPhotos.filter(p => p.mediaType === "audio").length,
   } : null;
 
-  // Find the first photo with a thumbnail source for each category.
-  // Prefer photos with thumbnailData (encrypted), but fall back to
-  // server-side photos that have a serverPhotoId (autoscanned) —
-  // SmartAlbumCard will fetch those via /api/photos/:id/thumbnail.
+  // Find the first photo with a thumbnail for each category.
   function findCoverPhoto(filter: (p: CachedPhoto) => boolean): CachedPhoto | undefined {
     if (!encryptedPhotos) return undefined;
-    // First: try to find one with local thumbnailData
-    const withData = encryptedPhotos.find(p => filter(p) && p.thumbnailData);
-    if (withData) return withData;
-    // Fallback: server-side photo with a serverPhotoId
-    return encryptedPhotos.find(p => filter(p) && p.serverSide && p.serverPhotoId);
+    return encryptedPhotos.find(p => filter(p) && p.thumbnailData);
   }
 
   const smartAlbumCovers = {
@@ -458,12 +450,6 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
         setThumbUrl(URL.createObjectURL(blob));
         return;
       }
-      // Fallback: server-side photo — use the thumbnail endpoint
-      if (localPhoto?.serverSide && localPhoto?.serverPhotoId) {
-        const token = useAuthStore.getState().accessToken;
-        setThumbUrl(`/api/photos/${localPhoto.serverPhotoId}/thumbnail?token=${token}`);
-        return;
-      }
     })();
 
     return () => { cancelled = true; };
@@ -523,17 +509,12 @@ function SmartAlbumCard({
       const url = URL.createObjectURL(blob);
       if (!cancelled) setThumbUrl(url);
       return () => { cancelled = true; URL.revokeObjectURL(url); };
-    } else if (coverPhoto?.serverSide && coverPhoto?.serverPhotoId) {
-      // Server-side photo — fetch thumbnail from the server endpoint
-      const token = useAuthStore.getState().accessToken;
-      if (!cancelled) setThumbUrl(`/api/photos/${coverPhoto.serverPhotoId}/thumbnail?token=${token}`);
-      return () => { cancelled = true; };
     }
 
     // No thumbnail source — reset
     if (!cancelled) setThumbUrl(null);
     return () => { cancelled = true; };
-  }, [coverPhoto?.thumbnailData, coverPhoto?.serverSide, coverPhoto?.serverPhotoId, coverPhoto?.thumbnailMimeType, coverPhoto?.mediaType]);
+  }, [coverPhoto?.thumbnailData, coverPhoto?.thumbnailMimeType, coverPhoto?.mediaType]);
 
   // Revoke previous object URL when thumbUrl changes
   useEffect(() => {
