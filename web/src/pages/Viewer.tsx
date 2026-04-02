@@ -375,14 +375,6 @@ export default function Viewer() {
       setError("");
       setVideoError(false);
       db.photos.get(id).then((dbCached) => {
-        console.log(
-          `[DIAG:VIEWER] Loading id=${id}, ` +
-          `hasCachedEntry=${!!dbCached}, ` +
-          `serverSide=${dbCached?.serverSide}, ` +
-          `serverPhotoId=${dbCached?.serverPhotoId}, ` +
-          `storageBlobId=${dbCached?.storageBlobId}, ` +
-          `hasThumbnail=${!!dbCached?.thumbnailData}`
-        );
         if (dbCached?.thumbnailData) {
           const mime = dbCached.thumbnailMimeType || (dbCached.mediaType === "gif" ? "image/gif" : "image/jpeg");
           const url = URL.createObjectURL(new Blob([dbCached.thumbnailData], { type: mime }));

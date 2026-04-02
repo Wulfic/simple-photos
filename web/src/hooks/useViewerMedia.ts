@@ -128,47 +128,6 @@ export default function useViewerMedia(
         return;
       }
 
-      // Check if this is a server-side (autoscanned) photo — load directly
-      const dbEntry = await db.photos.get(blobId);
-      if (dbEntry?.serverSide) {
-        console.log(`[DIAG:VIEWER] Server-side photo ${blobId}, downloading directly...`);
-        const raw = await api.photos.downloadFile(blobId);
-        const resolvedMime = dbEntry.mimeType || "image/jpeg";
-        const resolvedType: MediaType = dbEntry.mediaType ?? "photo";
-        const blob = new Blob([raw], { type: resolvedMime });
-        const url = URL.createObjectURL(blob);
-
-        setMediaUrl(url);
-        setFilename(dbEntry.filename);
-        setMimeType(resolvedMime);
-        setMediaType(resolvedType);
-
-        let photoCropData = null;
-        if (dbEntry.cropData) {
-          try { photoCropData = JSON.parse(dbEntry.cropData); } catch { /* ignore */ }
-        }
-        preloadCache.current.set(blobId, {
-          url, filename: dbEntry.filename, mimeType: resolvedMime,
-          mediaType: resolvedType, cropData: photoCropData,
-          isFavorite: dbEntry.isFavorite ?? false,
-        });
-
-        // Cache for cross-session persistence
-        if (blob.size < 50 * 1024 * 1024) {
-          try {
-            await db.fullPhotos?.put({
-              photoId: blobId, filename: dbEntry.filename, mimeType: resolvedMime,
-              mediaType: resolvedType, cropData: dbEntry.cropData ?? undefined,
-              isFavorite: dbEntry.isFavorite ?? false, data: raw, cachedAt: Date.now(),
-            });
-          } catch { /* non-fatal */ }
-        }
-
-        setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
-        setLoading(false);
-        return;
-      }
-
       // Cache miss — download, decrypt, display
       console.log(`[DIAG:VIEWER] Downloading blob ${blobId}...`);
       const encrypted = await api.blobs.download(blobId);

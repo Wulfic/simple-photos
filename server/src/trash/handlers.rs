@@ -82,127 +82,6 @@ pub async fn list_trash(
     Ok(Json(TrashListResponse { items, next_cursor }))
 }
 
-/// DELETE /api/photos/:id  (updated — now soft-deletes to trash)
-/// Move a photo to the trash. The photo row is removed from `photos` and
-/// inserted into `trash_items` with a configurable expiration (default 30 days,
-/// read from `server_settings.trash_retention_days`).
-pub async fn soft_delete_photo(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path(photo_id): Path<String>,
-) -> Result<StatusCode, AppError> {
-    // Begin transaction — INSERT into trash + DELETE from photos must be atomic
-    let mut tx = state.pool.begin().await?;
-
-    // Fetch the photo record first (includes metadata added in migration 020)
-    let photo = sqlx::query_as::<_, TrashPhotoRow>(
-        "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, \
-         width, height, duration_secs, taken_at, latitude, longitude, thumb_path, \
-         is_favorite, crop_metadata, camera_model, photo_hash, encrypted_thumb_blob_id \
-         FROM photos WHERE id = ? AND user_id = ?",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    // On backup servers, photos may be owned by a synced user stub whose ID
-    // differs from the logged-in admin. Allow admin users to manage all content.
-    let photo = match photo {
-        Some(p) => p,
-        None => {
-            if is_backup_mode(&state.read_pool).await
-                && is_admin_user(&state.read_pool, &auth.user_id).await
-            {
-                sqlx::query_as::<_, TrashPhotoRow>(
-                    "SELECT id, user_id, filename, file_path, mime_type, media_type, \
-                     size_bytes, width, height, duration_secs, taken_at, latitude, \
-                     longitude, thumb_path, is_favorite, crop_metadata, camera_model, \
-                     photo_hash, encrypted_thumb_blob_id \
-                     FROM photos WHERE id = ?",
-                )
-                .bind(&photo_id)
-                .fetch_optional(&mut *tx)
-                .await?
-                .ok_or(AppError::NotFound)?
-            } else {
-                return Err(AppError::NotFound);
-            }
-        }
-    };
-    // Use the photo's actual owner for the trash entry (may differ from auth
-    // user on backup servers where the admin manages all content).
-    let owner_id = &photo.user_id;
-
-    // Read retention days from server_settings (default 30)
-    let retention_days: i64 = sqlx::query_scalar(
-        "SELECT CAST(value AS INTEGER) FROM server_settings WHERE key = 'trash_retention_days'",
-    )
-    .fetch_optional(&mut *tx)
-    .await?
-    .unwrap_or(30);
-
-    let now = Utc::now();
-    let expires_at = now + Duration::days(retention_days);
-    let trash_id = Uuid::new_v4().to_string();
-
-    // Insert into trash (preserving all metadata for lossless restore)
-    sqlx::query(
-        "INSERT INTO trash_items (id, user_id, photo_id, filename, file_path, mime_type, \
-         media_type, size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
-         thumb_path, deleted_at, expires_at, \
-         is_favorite, crop_metadata, camera_model, photo_hash, encrypted_thumb_blob_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&trash_id)
-    .bind(owner_id)
-    .bind(&photo.id)
-    .bind(&photo.filename)
-    .bind(&photo.file_path)
-    .bind(&photo.mime_type)
-    .bind(&photo.media_type)
-    .bind(photo.size_bytes)
-    .bind(photo.width)
-    .bind(photo.height)
-    .bind(photo.duration_secs)
-    .bind(&photo.taken_at)
-    .bind(photo.latitude)
-    .bind(photo.longitude)
-    .bind(&photo.thumb_path)
-    .bind(now.to_rfc3339())
-    .bind(expires_at.to_rfc3339())
-    .bind(photo.is_favorite)
-    .bind(&photo.crop_metadata)
-    .bind(&photo.camera_model)
-    .bind(&photo.photo_hash)
-    .bind(&photo.encrypted_thumb_blob_id)
-    .execute(&mut *tx)
-    .await?;
-
-    // Remove from photos table (use owner_id to match the actual row)
-    sqlx::query("DELETE FROM photos WHERE id = ? AND user_id = ?")
-        .bind(&photo_id)
-        .bind(owner_id)
-        .execute(&mut *tx)
-        .await?;
-
-    // Clean up shared album references to prevent dangling photo_ref entries
-    sqlx::query("DELETE FROM shared_album_photos WHERE photo_ref = ? AND ref_type = 'photo'")
-        .bind(&photo_id)
-        .execute(&mut *tx)
-        .await?;
-
-    tx.commit().await?;
-
-    tracing::info!(
-        "Photo {} moved to trash (expires {})",
-        photo_id,
-        expires_at.to_rfc3339()
-    );
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
 /// POST /api/blobs/:id/trash
 /// Soft-delete an encrypted blob to the trash. The client provides the metadata
 /// since the server stores blobs opaquely.
@@ -368,16 +247,7 @@ pub async fn restore_from_trash(
     // Begin transaction — all restore operations must be atomic
     let mut tx = state.pool.begin().await?;
 
-    // Fetch the trash item — all items are encrypted blobs
-    let blob_id: String = sqlx::query_scalar(
-        "SELECT encrypted_blob_id FROM trash_items WHERE id = ? AND user_id = ?",
-    )
-    .bind(&trash_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
+    // Fetch the trash item. On backup servers, admins can manage all content.
     let row = sqlx::query_as::<_, TrashBlobRow>(
         "SELECT file_path, mime_type, media_type, size_bytes, thumb_path, \
          thumbnail_blob_id, client_hash, content_hash \
@@ -385,8 +255,55 @@ pub async fn restore_from_trash(
     )
     .bind(&trash_id)
     .bind(&auth.user_id)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
+
+    let (row, owner_id) = match row {
+        Some(r) => (r, auth.user_id.clone()),
+        None => {
+            if is_backup_mode(&state.read_pool).await
+                && is_admin_user(&state.read_pool, &auth.user_id).await
+            {
+                let r = sqlx::query_as::<_, TrashBlobRow>(
+                    "SELECT file_path, mime_type, media_type, size_bytes, thumb_path, \
+                     thumbnail_blob_id, client_hash, content_hash \
+                     FROM trash_items WHERE id = ?",
+                )
+                .bind(&trash_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(AppError::NotFound)?;
+
+                let actual_owner: String = sqlx::query_scalar(
+                    "SELECT user_id FROM trash_items WHERE id = ?",
+                )
+                .bind(&trash_id)
+                .fetch_one(&mut *tx)
+                .await?;
+
+                (r, actual_owner)
+            } else {
+                return Err(AppError::NotFound);
+            }
+        }
+    };
+
+    // Fetch the encrypted blob ID. Items trashed via the encrypted path always
+    // have this set. Items from legacy plain-mode trash lack it — return a clear
+    // error so the client can surface it instead of silently failing.
+    let blob_id: String = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT encrypted_blob_id FROM trash_items WHERE id = ?",
+    )
+    .bind(&trash_id)
+    .fetch_one(&mut *tx)
+    .await?
+    .ok_or_else(|| {
+        AppError::BadRequest(
+            "This item was trashed in legacy plain mode and cannot be restored. \
+             Please permanently delete it and re-import via encrypted upload."
+                .into(),
+        )
+    })?;
 
     // Determine blob_type from media_type
     let blob_type = match row.media_type.as_str() {
@@ -405,7 +322,7 @@ pub async fn restore_from_trash(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&blob_id)
-    .bind(&auth.user_id)
+    .bind(&owner_id)
     .bind(blob_type)
     .bind(row.size_bytes)
     .bind(&now)
@@ -424,7 +341,7 @@ pub async fn restore_from_trash(
              VALUES (?, ?, 'thumbnail', 0, ?, ?)",
         )
         .bind(thumb_blob_id)
-        .bind(&auth.user_id)
+        .bind(&owner_id)
         .bind(&now)
         .bind(thumb_path)
         .execute(&mut *tx)
@@ -432,9 +349,8 @@ pub async fn restore_from_trash(
     }
 
     // Remove from trash
-    sqlx::query("DELETE FROM trash_items WHERE id = ? AND user_id = ?")
+    sqlx::query("DELETE FROM trash_items WHERE id = ?")
         .bind(&trash_id)
-        .bind(&auth.user_id)
         .execute(&mut *tx)
         .await?;
 
@@ -784,32 +700,6 @@ async fn is_admin_user(pool: &sqlx::SqlitePool, user_id: &str) -> bool {
         .flatten()
         .as_deref()
         == Some("admin")
-}
-
-/// Minimal row type used to move data between photos ↔ trash_items.
-/// Extended in migration 020 to preserve metadata through the trash round-trip.
-#[derive(Debug, sqlx::FromRow)]
-struct TrashPhotoRow {
-    id: String,
-    user_id: String,
-    filename: String,
-    file_path: String,
-    mime_type: String,
-    media_type: String,
-    size_bytes: i64,
-    width: i64,
-    height: i64,
-    duration_secs: Option<f64>,
-    taken_at: Option<String>,
-    latitude: Option<f64>,
-    longitude: Option<f64>,
-    thumb_path: Option<String>,
-    // Fields added in migration 020 to prevent data loss on restore
-    is_favorite: i32,
-    crop_metadata: Option<String>,
-    camera_model: Option<String>,
-    photo_hash: Option<String>,
-    encrypted_thumb_blob_id: Option<String>,
 }
 
 /// Row type for restoring encrypted blob items from trash.

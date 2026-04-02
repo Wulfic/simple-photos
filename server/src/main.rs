@@ -413,8 +413,6 @@ async fn main() -> anyhow::Result<()> {
             "/photos/{id}/render",
             post(photos::render::render_photo),
         )
-        // Delete now soft-deletes to trash (30-day retention)
-        .route("/photos/{id}", delete(trash::handlers::soft_delete_photo))
         // Scan & register all files on disk
         .route("/admin/photos/scan", post(photos::scan::scan_and_register))
         // Store encryption key so server-side operations can encrypt autonomously

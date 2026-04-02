@@ -25,6 +25,8 @@ export default function PairStep({
   const [serverAddress, setServerAddress] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [requiresTotp, setRequiresTotp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -80,14 +82,19 @@ export default function PairStep({
 
     setLoading(true);
     try {
+      const payload: Record<string, string> = {
+        main_server_url: serverAddress.trim(),
+        username: username.trim(),
+        password,
+      };
+      if (requiresTotp && totpCode.trim()) {
+        payload.totp_code = totpCode.trim();
+      }
+
       const res = await fetch("/api/setup/pair", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          main_server_url: serverAddress.trim(),
-          username: username.trim(),
-          password,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
@@ -96,6 +103,14 @@ export default function PairStep({
       }
 
       const data = await res.json();
+
+      // If the primary requires 2FA, show the TOTP input
+      if (data.requires_totp) {
+        setRequiresTotp(true);
+        setTotpCode("");
+        setError("");
+        return;
+      }
       onPaired({
         access_token: data.access_token,
         refresh_token: data.refresh_token,
@@ -283,10 +298,33 @@ export default function PairStep({
               <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
             </svg>
             <p className="text-blue-700 dark:text-blue-300">
-              Please log in using the admin username and password from your primary server.
+              {requiresTotp
+                ? "The primary server has 2FA enabled. Enter the 6-digit code from your authenticator app."
+                : "Please log in using the admin username and password from your primary server."}
             </p>
           </div>
         </div>
+
+        {/* 2FA Code — shown when primary requires TOTP */}
+        {requiresTotp && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              2FA Code
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={6}
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
+              placeholder="000000"
+              autoFocus
+              autoComplete="one-time-code"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono tracking-widest text-center text-lg"
+            />
+          </div>
+        )}
 
         {error && (
           <div className="text-red-600 dark:text-red-400 text-sm p-3 bg-red-50 dark:bg-red-900/30 rounded-lg">
@@ -307,14 +345,16 @@ export default function PairStep({
           </button>
           <button
             type="submit"
-            disabled={loading || !serverAddress.trim() || !username.trim() || !password}
+            disabled={loading || !serverAddress.trim() || !username.trim() || !password || (requiresTotp && totpCode.length !== 6)}
             className="flex-[2] bg-green-600 text-white py-2.5 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium transition-colors"
           >
             {loading ? (
               <span className="flex items-center justify-center gap-2">
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Pairing…
+                {requiresTotp ? "Verifying…" : "Pairing…"}
               </span>
+            ) : requiresTotp ? (
+              "Verify & Pair →"
             ) : (
               "Pair & Continue →"
             )}

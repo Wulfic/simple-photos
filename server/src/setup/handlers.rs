@@ -713,16 +713,10 @@ pub struct PairRequest {
     pub username: String,
     /// Admin password on the primary server
     pub password: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PairResponse {
-    pub message: String,
-    pub user_id: String,
-    pub username: String,
-    pub access_token: String,
-    pub refresh_token: String,
-    pub main_server_url: String,
+    /// Optional 2FA code — required when the primary admin has TOTP enabled.
+    /// On the first attempt (without this field) the server responds with
+    /// `{ "requires_totp": true }` so the client can prompt for the code.
+    pub totp_code: Option<String>,
 }
 
 /// POST /api/setup/pair
@@ -741,7 +735,7 @@ pub async fn pair(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<PairRequest>,
-) -> Result<(StatusCode, Json<PairResponse>), AppError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     // ── Guard: only works when no users exist ────────────────────────────
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(&state.pool)
@@ -804,21 +798,92 @@ pub async fn pair(
     let login_data: serde_json::Value = serde_json::from_slice(&resp_bytes)
         .map_err(|_| AppError::Internal("Failed to parse login response".into()))?;
 
-    if login_data
+    let remote_token = if login_data
         .get("requires_totp")
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
     {
-        return Err(AppError::BadRequest(
-            "Primary server has 2FA enabled. Please temporarily disable it to pair the backup server.".into(),
-        ));
-    }
+        // Primary has 2FA enabled — we need a TOTP code to complete auth.
+        let totp_session_token = login_data
+            .get("totp_session_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::Internal(
+                    "Primary returned requires_totp without a session token".into(),
+                )
+            })?;
 
-    let remote_token = login_data
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Internal("Primary server did not return an access token".into()))?
-        .to_string();
+        let totp_code = match &req.totp_code {
+            Some(code) if !code.is_empty() => code.clone(),
+            _ => {
+                // No code provided yet — tell the client to prompt for one.
+                return Ok((
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "requires_totp": true,
+                        "message": "Primary server requires a 2FA code to complete pairing."
+                    })),
+                ));
+            }
+        };
+
+        // Complete TOTP verification against the primary server.
+        let totp_url = format!("{}/api/auth/login/totp", base_url);
+        let totp_body = serde_json::json!({
+            "totp_session_token": totp_session_token,
+            "totp_code": totp_code,
+        });
+
+        let totp_resp = client
+            .post(&totp_url)
+            .header("Content-Type", "application/json")
+            .json(&totp_body)
+            .send()
+            .await
+            .map_err(|e| {
+                AppError::BadRequest(format!(
+                    "Failed to verify 2FA code with primary server: {}",
+                    e
+                ))
+            })?;
+
+        if !totp_resp.status().is_success() {
+            let err_status = totp_resp.status();
+            let err_body = totp_resp.text().await.unwrap_or_default();
+            // Parse the error message from JSON if possible.
+            let msg = serde_json::from_str::<serde_json::Value>(&err_body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                .unwrap_or_else(|| format!("HTTP {}: {}", err_status, err_body));
+            return Err(AppError::BadRequest(format!(
+                "2FA verification failed: {}",
+                msg
+            )));
+        }
+
+        let totp_data: serde_json::Value = totp_resp
+            .json()
+            .await
+            .map_err(|_| AppError::Internal("Failed to parse 2FA response".into()))?;
+
+        totp_data
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::Internal(
+                    "Primary did not return an access token after 2FA verification".into(),
+                )
+            })?
+            .to_string()
+    } else {
+        login_data
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::Internal("Primary server did not return an access token".into())
+            })?
+            .to_string()
+    };
 
     tracing::info!(
         "Successfully authenticated against primary server at {}",
@@ -1104,14 +1169,14 @@ pub async fn pair(
 
     Ok((
         StatusCode::CREATED,
-        Json(PairResponse {
-            message: "Paired successfully! This server is now a backup.".into(),
-            user_id,
-            username: req.username,
-            access_token,
-            refresh_token,
-            main_server_url: base_url,
-        }),
+        Json(serde_json::json!({
+            "message": "Paired successfully! This server is now a backup.",
+            "user_id": user_id,
+            "username": req.username,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "main_server_url": base_url,
+        })),
     ))
 }
 

@@ -61,20 +61,6 @@ export default function usePhotoPreload(
     prevIndex.current = currentIndex;
   }, [currentIndex]);
 
-  // Cached photo list (kept for API compat, may be used elsewhere)
-  const photoListCache = useRef<{ data: Awaited<ReturnType<typeof api.photos.list>>["photos"]; ts: number } | null>(null);
-
-  /** Get the photo list, using a short-lived cache (30s) to avoid duplicate fetches */
-  async function getCachedPhotoList() {
-    const now = Date.now();
-    if (photoListCache.current && now - photoListCache.current.ts < 30_000) {
-      return photoListCache.current.data;
-    }
-    const res = await api.photos.list({ limit: 500 });
-    photoListCache.current = { data: res.photos, ts: now };
-    return res.photos;
-  }
-
   /** Preload an encrypted photo into the cache (background, no state updates) */
   async function preloadEncryptedPhoto(blobId: string) {
     try {
@@ -218,7 +204,6 @@ export default function usePhotoPreload(
 
   return {
     preloadCache,
-    getCachedPhotoList,
     preloadAdjacentPhotos,
   };
 }

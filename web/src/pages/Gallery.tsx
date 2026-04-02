@@ -121,19 +121,9 @@ export default function Gallery() {
     try {
       for (const id of selectedIds) {
         const cached = await db.photos.get(id);
-        if (cached?.serverPhotoId) {
-          // Regular unencrypted photo
-          try {
-            await api.photos.delete(cached.serverPhotoId);
-          } catch (deleteErr) {
-            const isNotFound = deleteErr instanceof Error && deleteErr.message === "Not found";
-            if (!isNotFound) throw deleteErr;
-          }
-          await db.photos.delete(id);
-        } else {
-          // Encrypted mode: soft-delete to trash with client metadata
-          const blobId = cached?.storageBlobId || id;
-          const result = await api.blobs.softDelete(blobId, {
+        // Always use encrypted blob soft-delete (encrypted-only mode)
+        const blobId = cached?.storageBlobId || id;
+        const result = await api.blobs.softDelete(blobId, {
           thumbnail_blob_id: cached?.thumbnailBlobId,
           filename: cached?.filename ?? "unknown",
           mime_type: cached?.mimeType ?? "application/octet-stream",
@@ -167,7 +157,6 @@ export default function Gallery() {
         }
         // Remove immediately from local IDB so the gallery updates at once
         await db.photos.delete(id);
-        }
       }
       await loadEncryptedPhotos();
     } catch (err: unknown) {

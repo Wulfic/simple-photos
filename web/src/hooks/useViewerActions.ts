@@ -228,27 +228,7 @@ export default function useViewerActions({
     try {
       const cached = await db.photos.get(id);
 
-      // Prefer the photos API when we have a server-side photo record ID.
-      // This correctly handles: autoscanned photos (serverSide), encrypted-
-      // synced photos (serverPhotoId from sync), and copies created via
-      // the server duplicate endpoint (serverPhotoId from duplicate).
-      if (cached?.serverPhotoId) {
-        try {
-          await api.photos.delete(cached.serverPhotoId);
-        } catch (deleteErr) {
-          // If the server record no longer exists (stale cache, local-only
-          // copy whose server duplicate failed), fall through to local
-          // cleanup instead of surfacing a confusing "Not found" error.
-          const isNotFound =
-            deleteErr instanceof Error && deleteErr.message === "Not found";
-          if (!isNotFound) throw deleteErr;
-        }
-        await db.photos.delete(id);
-        navigate("/gallery");
-        return;
-      }
-
-      // Fallback: encrypted blob without a photos-table entry.
+      // Always use encrypted blob soft-delete (encrypted-only mode).
       // Use storageBlobId for copies that reference the original's blob.
       const blobId = cached?.storageBlobId || id;
       let trashResult: { trash_id: string; expires_at: string } | null = null;
