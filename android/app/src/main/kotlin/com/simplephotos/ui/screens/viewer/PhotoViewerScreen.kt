@@ -27,7 +27,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -841,435 +840,35 @@ fun PhotoViewerScreen(
         }
 
         // ── Info panel (slide up from bottom) ─────────────────────────
-        androidx.compose.animation.AnimatedVisibility(
+        ViewerInfoPanel(
             visible = showInfoPanel,
-            enter = androidx.compose.animation.slideInVertically { it },
-            exit = androidx.compose.animation.slideOutVertically { it },
+            photo = currentPhoto,
+            onDismiss = { showInfoPanel = false },
             modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            Surface(
-                color = Color(0xF2111827),
-                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 20.dp, vertical = 16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Photo Details", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                        IconButton(onClick = { showInfoPanel = false }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    currentPhoto?.let { photo ->
-                        InfoDetailRow("Filename", photo.filename)
-                        InfoDetailRow("Type", photo.mimeType)
-                        if (photo.width > 0 && photo.height > 0) {
-                            InfoDetailRow("Dimensions", "${photo.width} × ${photo.height}")
-                        }
-                        photo.sizeBytes?.let { size ->
-                            InfoDetailRow("Size", formatInfoBytes(size))
-                        }
-                        if (photo.takenAt > 0L) {
-                            InfoDetailRow("Taken", java.text.SimpleDateFormat("MMM d, yyyy  h:mm a", java.util.Locale.getDefault()).format(java.util.Date(photo.takenAt)))
-                        }
-                        if (photo.createdAt > 0L) {
-                            InfoDetailRow("Uploaded", java.text.SimpleDateFormat("MMM d, yyyy  h:mm a", java.util.Locale.getDefault()).format(java.util.Date(photo.createdAt)))
-                        }
-                        photo.durationSecs?.let { dur ->
-                            InfoDetailRow("Duration", "%.1fs".format(dur))
-                        }
-                        photo.cameraModel?.let { cam ->
-                            InfoDetailRow("Device", cam)
-                        }
-                        if (photo.latitude != null && photo.longitude != null) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Location", color = Color.Gray, fontSize = 13.sp)
-                                Text(
-                                    "%.5f, %.5f ↗".format(photo.latitude, photo.longitude),
-                                    color = Color(0xFF60A5FA),
-                                    fontSize = 13.sp,
-                                    modifier = Modifier.clickable {
-                                        val uri = Uri.parse(
-                                            "https://www.google.com/maps?q=${photo.latitude},${photo.longitude}"
-                                        )
-                                        context.startActivity(
-                                            android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
-                                        )
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        )
 
         // ── Edit mode panel (bottom) ──────────────────────────────────
-        androidx.compose.animation.AnimatedVisibility(
+        ViewerEditPanel(
             visible = editMode,
-            enter = androidx.compose.animation.slideInVertically { it },
-            exit = androidx.compose.animation.slideOutVertically { it },
+            editTab = editTab,
+            onEditTabChange = { editTab = it },
+            brightnessValue = brightnessValue,
+            onBrightnessChange = { brightnessValue = it },
+            rotateValue = rotateValue,
+            onRotateLeft = { rotateValue = (rotateValue + 270) % 360 },
+            onRotateRight = { rotateValue = (rotateValue + 90) % 360 },
+            trimStart = trimStart,
+            onTrimStartChange = { trimStart = it },
+            trimEnd = trimEnd,
+            onTrimEndChange = { trimEnd = it },
+            mediaDuration = mediaDuration,
+            currentPhoto = currentPhoto,
+            onSave = { saveEdit() },
+            onSaveCopy = { saveCopy() },
+            onReset = { clearCrop() },
+            onCancel = { editMode = false },
             modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            val currentMediaType = currentPhoto?.mediaType ?: "photo"
-            val isPhoto = currentMediaType == "photo"
-            val isVideo = currentMediaType == "video"
-            val isAudio = currentMediaType == "audio"
-            val showCrop = isPhoto || isVideo
-            val showBrightness = isPhoto || isVideo
-            val showRotate = isPhoto || isVideo
-            val showTrim = isVideo || isAudio
-
-            Surface(
-                color = Color(0xE6111827),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
-                    // Tab selector — only show tabs available for this media type
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (showCrop) {
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = if (editTab == "crop") Color.White else Color.Transparent,
-                                modifier = Modifier
-                                    .padding(horizontal = 4.dp)
-                                    .clip(RoundedCornerShape(50))
-                                    .clickable { editTab = "crop" }
-                            ) {
-                                Text(
-                                    "Crop",
-                                    color = if (editTab == "crop") Color.Black else Color.White,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                        if (showBrightness) {
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = if (editTab == "brightness") Color.White else Color.Transparent,
-                                modifier = Modifier
-                                    .padding(horizontal = 4.dp)
-                                    .clip(RoundedCornerShape(50))
-                                    .clickable { editTab = "brightness" }
-                            ) {
-                                Text(
-                                    "Brightness",
-                                    color = if (editTab == "brightness") Color.Black else Color.White,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                        if (showRotate) {
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = if (editTab == "rotate") Color.White else Color.Transparent,
-                                modifier = Modifier
-                                    .padding(horizontal = 4.dp)
-                                    .clip(RoundedCornerShape(50))
-                                    .clickable { editTab = "rotate" }
-                            ) {
-                                Text(
-                                    "Rotate",
-                                    color = if (editTab == "rotate") Color.Black else Color.White,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                        if (showTrim) {
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = if (editTab == "trim") Color.White else Color.Transparent,
-                                modifier = Modifier
-                                    .padding(horizontal = 4.dp)
-                                    .clip(RoundedCornerShape(50))
-                                    .clickable { editTab = "trim" }
-                            ) {
-                                Text(
-                                    "Trim",
-                                    color = if (editTab == "trim") Color.Black else Color.White,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    when (editTab) {
-                        "brightness" -> {
-                            Text("Brightness: ${brightnessValue.toInt()}", color = Color.White, fontSize = 12.sp)
-                            Slider(
-                                value = brightnessValue,
-                                onValueChange = { brightnessValue = it },
-                                valueRange = -100f..100f,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = Color(0xFF60A5FA),
-                                    activeTrackColor = Color(0xFF3B82F6)
-                                )
-                            )
-                        }
-                        "crop" -> {
-                            // Crop overlay is drawn on the main photo above; just show instructions here
-                            Text("Drag the corner handles on the photo to adjust crop", color = Color.Gray, fontSize = 12.sp)
-                        }
-                        "rotate" -> {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // Rotate left button
-                                IconButton(onClick = { rotateValue = (rotateValue + 270) % 360 }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_back_arrow),
-                                        contentDescription = "Rotate left",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                Spacer(Modifier.width(16.dp))
-                                Text(
-                                    "${rotateValue}°",
-                                    color = Color.White,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Spacer(Modifier.width(16.dp))
-                                // Rotate right button
-                                IconButton(onClick = { rotateValue = (rotateValue + 90) % 360 }) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_back_arrow),
-                                        contentDescription = "Rotate right",
-                                        tint = Color.White,
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .graphicsLayer(scaleX = -1f)
-                                    )
-                                }
-                            }
-                        }
-                        "trim" -> {
-                            if (mediaDuration > 0f) {
-                                // Time labels
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(formatTrimTime(trimStart), color = Color.Gray, fontSize = 12.sp)
-                                    Text(
-                                        "${formatTrimTime(trimEnd - trimStart)} selected",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Text(formatTrimTime(trimEnd), color = Color.Gray, fontSize = 12.sp)
-                                }
-                                Spacer(Modifier.height(4.dp))
-
-                                // ── Single-bar dual-thumb trim slider (matches web) ──
-                                val thumbRadiusDp = 8.dp
-                                val trackHeightDp = 6.dp
-
-                                BoxWithConstraints(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(40.dp)
-                                ) {
-                                    val trackW = constraints.maxWidth.toFloat()
-                                    val density = androidx.compose.ui.platform.LocalDensity.current
-
-                                    // Background track
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(trackHeightDp)
-                                            .align(Alignment.Center)
-                                            .clip(RoundedCornerShape(50))
-                                            .background(Color.White.copy(alpha = 0.1f))
-                                    )
-
-                                    // Selected range highlight (blue bar between start and end)
-                                    val startFrac = (trimStart / mediaDuration).coerceIn(0f, 1f)
-                                    val endFrac = (trimEnd / mediaDuration).coerceIn(0f, 1f)
-                                    Box(
-                                        modifier = Modifier
-                                            .height(trackHeightDp)
-                                            .align(Alignment.CenterStart)
-                                            .offset(x = with(density) { (startFrac * trackW).toDp() })
-                                            .width(with(density) { ((endFrac - startFrac) * trackW).toDp() })
-                                            .clip(RoundedCornerShape(50))
-                                            .background(Color(0xFF3B82F6).copy(alpha = 0.6f))
-                                    )
-
-                                    // Start thumb
-                                    val startThumbX = with(density) { (startFrac * trackW).toDp() }
-                                    Box(
-                                        modifier = Modifier
-                                            .offset(x = startThumbX - thumbRadiusDp, y = 0.dp)
-                                            .size(thumbRadiusDp * 2)
-                                            .align(Alignment.CenterStart)
-                                            .clip(CircleShape)
-                                            .background(Color.White)
-                                            .then(
-                                                Modifier.drawBehind {
-                                                    drawCircle(
-                                                        color = Color(0xFF3B82F6),
-                                                        radius = size.minDimension / 2f,
-                                                        style = Stroke(width = 2.dp.toPx())
-                                                    )
-                                                }
-                                            )
-                                            .pointerInput(mediaDuration) {
-                                                detectDragGestures { change, dragAmount ->
-                                                    change.consume()
-                                                    val dx = dragAmount.x / trackW
-                                                    trimStart = (trimStart + dx * mediaDuration)
-                                                        .coerceIn(0f, trimEnd - 0.5f)
-                                                }
-                                            }
-                                    )
-
-                                    // End thumb
-                                    val endThumbX = with(density) { (endFrac * trackW).toDp() }
-                                    Box(
-                                        modifier = Modifier
-                                            .offset(x = endThumbX - thumbRadiusDp, y = 0.dp)
-                                            .size(thumbRadiusDp * 2)
-                                            .align(Alignment.CenterStart)
-                                            .clip(CircleShape)
-                                            .background(Color.White)
-                                            .then(
-                                                Modifier.drawBehind {
-                                                    drawCircle(
-                                                        color = Color(0xFF3B82F6),
-                                                        radius = size.minDimension / 2f,
-                                                        style = Stroke(width = 2.dp.toPx())
-                                                    )
-                                                }
-                                            )
-                                            .pointerInput(mediaDuration) {
-                                                detectDragGestures { change, dragAmount ->
-                                                    change.consume()
-                                                    val dx = dragAmount.x / trackW
-                                                    trimEnd = (trimEnd + dx * mediaDuration)
-                                                        .coerceIn(trimStart + 0.5f, mediaDuration)
-                                                }
-                                            }
-                                    )
-                                }
-
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "Full duration: ${formatTrimTime(mediaDuration)}",
-                                    color = Color.Gray.copy(alpha = 0.6f),
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                            } else {
-                                // Duration not yet known
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    CircularProgressIndicator(
-                                        color = Color.Gray,
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Loading duration…", color = Color.Gray, fontSize = 12.sp)
-                                }
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "Play the media briefly if the duration doesn't appear.",
-                                    color = Color.Gray.copy(alpha = 0.5f),
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    // Action buttons — matches web: Save, Save Copy, Reset, Cancel
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Button(
-                            onClick = { saveEdit() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        ) {
-                            Text("Save", color = Color.White, fontSize = 14.sp)
-                        }
-                        Button(
-                            onClick = { saveCopy() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        ) {
-                            Text("Save Copy", color = Color.White, fontSize = 14.sp)
-                        }
-                        if (currentPhoto?.cropMetadata != null) {
-                            Button(
-                                onClick = { clearCrop() },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4B5563)),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.padding(horizontal = 4.dp)
-                            ) {
-                                Text("Reset", color = Color.White, fontSize = 14.sp)
-                            }
-                        }
-                        Button(
-                            onClick = { editMode = false },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF374151)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        ) {
-                            Text("Cancel", color = Color.White, fontSize = 14.sp)
-                        }
-                    }
-                }
-            }
-        }
+        )
 
         // ── Download confirmation snackbar ─────────────────────────────
         downloadMessage?.let { msg ->
@@ -1286,16 +885,5 @@ fun PhotoViewerScreen(
             }
         }
     }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Format seconds as MM:SS or HH:MM:SS */
-private fun formatTrimTime(secs: Float): String {
-    val s = secs.coerceAtLeast(0f).toInt()
-    val h = s / 3600
-    val m = (s % 3600) / 60
-    val sec = s % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
 }
 

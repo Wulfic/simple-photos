@@ -24,7 +24,7 @@ type AlbumMember = {
   added_at: string;
 };
 
-type ShareUser = { id: string; username: string };
+import type { ShareUser } from "../types/sharing";
 
 export default function SharedAlbumDetail() {
   const { albumId } = useParams<{ albumId: string }>();

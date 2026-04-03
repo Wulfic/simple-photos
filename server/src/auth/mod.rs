@@ -15,6 +15,9 @@
 //! - [`validation`]  — Username and password input validation
 
 pub mod handlers;
+pub mod handlers_2fa;
+pub mod handlers_login;
+pub mod handlers_password;
 pub mod lockout;
 pub mod middleware;
 pub mod models;

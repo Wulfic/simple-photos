@@ -9,30 +9,8 @@ import { api } from "../api/client";
 import { db, type MediaType } from "../db";
 import { decrypt } from "../crypto/crypto";
 import { base64ToUint8Array } from "../utils/media";
-
-export interface PreloadEntry {
-  url: string;
-  filename: string;
-  mimeType: string;
-  mediaType: MediaType;
-  cropData: { x: number; y: number; width: number; height: number; rotate: number; brightness?: number } | null;
-  isFavorite: boolean;
-}
-
-/** Encrypted blob payload shape (needed for preload decryption) */
-interface MediaPayload {
-  v: number;
-  filename: string;
-  taken_at: string;
-  mime_type: string;
-  media_type?: MediaType;
-  width: number;
-  height: number;
-  duration?: number;
-  album_ids: string[];
-  thumbnail_blob_id: string;
-  data: string; // base64-encoded raw file bytes
-}
+import type { MediaPayload, PreloadEntry } from "../types/media";
+export type { PreloadEntry };
 
 /**
  * Preloads adjacent photos into an in-memory cache for instant swiping.
