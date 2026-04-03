@@ -257,12 +257,30 @@ async fn main() -> anyhow::Result<()> {
         let storage_swap_clone = storage_root_swap.clone();
         let scan_interval = config.scan.auto_scan_interval_secs;
         let scan_lock_clone = scan_lock.clone();
+        let jwt_secret_clone = config.auth.jwt_secret.clone();
         tokio::spawn(async move {
             backup::autoscan::background_auto_scan_task(
                 pool_clone,
                 storage_swap_clone,
                 scan_interval,
                 scan_lock_clone,
+                jwt_secret_clone,
+            )
+            .await;
+        });
+    }
+
+    // Spawn background task to resume encryption migration on startup.
+    // If there are unencrypted photos and a stored key, encrypts them.
+    {
+        let pool_clone = pool.clone();
+        let storage_root_clone = config.storage.root.clone();
+        let jwt_secret_clone = config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            photos::server_migrate::resume_migration_on_startup(
+                pool_clone,
+                storage_root_clone,
+                jwt_secret_clone,
             )
             .await;
         });

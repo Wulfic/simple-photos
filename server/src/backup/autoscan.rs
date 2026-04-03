@@ -33,6 +33,7 @@ pub async fn background_auto_scan_task(
     storage_root: Arc<ArcSwap<PathBuf>>,
     interval_secs: u64,
     scan_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
+    jwt_secret: String,
 ) {
     if interval_secs == 0 {
         tracing::info!("Background auto-scan disabled (interval = 0)");
@@ -55,6 +56,16 @@ pub async fn background_auto_scan_task(
     );
     update_last_scan_time(&pool).await;
 
+    // After startup scan, trigger encryption for any unencrypted photos
+    if count > 0 {
+        let pool_clone = pool.clone();
+        let root_clone = root.clone();
+        let jwt_clone = jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::photos::server_migrate::auto_migrate_after_scan(pool_clone, root_clone, jwt_clone).await;
+        });
+    }
+
     // Then scan on a configurable interval
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
     tracing::info!("Auto-scan interval: every {} seconds", interval_secs);
@@ -73,6 +84,16 @@ pub async fn background_auto_scan_task(
             count
         );
         update_last_scan_time(&pool).await;
+
+        // Trigger encryption for any newly registered photos
+        if count > 0 {
+            let pool_clone = pool.clone();
+            let root_clone = root.clone();
+            let jwt_clone = jwt_secret.clone();
+            tokio::spawn(async move {
+                crate::photos::server_migrate::auto_migrate_after_scan(pool_clone, root_clone, jwt_clone).await;
+            });
+        }
     }
 }
 
