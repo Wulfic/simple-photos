@@ -24,7 +24,7 @@ type SharedAlbumInfo = {
   created_at: string;
 };
 
-type ShareUser = { id: string; username: string };
+import type { ShareUser } from "../types/sharing";
 
 export default function Albums() {
   const [loading, setLoading] = useState(true);

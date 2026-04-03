@@ -13,7 +13,7 @@ use crate::sanitize;
 use crate::state::AppState;
 
 use super::metadata::extract_media_metadata_from_bytes_async;
-use super::scan::generate_thumbnail_file;
+use super::thumbnail::generate_thumbnail_file;
 use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 
 /// POST /api/photos/upload

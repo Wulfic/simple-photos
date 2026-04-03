@@ -9,8 +9,13 @@
 //! - [`storage`]  — Storage root and directory browsing.
 
 pub mod admin;
+pub mod admin_2fa;
+pub mod discovery;
+pub mod discovery_phases;
 pub mod handlers;
 pub mod import;
+pub mod pair;
+pub mod pair_helpers;
 pub mod port;
 pub mod ssl;
 pub mod storage;

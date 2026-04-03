@@ -2,26 +2,26 @@
  * Full-screen photo/video viewer page.
  *
  * Orchestrates encrypted media loading, swipe/zoom gestures,
- * photo preloading, crop/brightness/rotation editing, tags, favorites,
+ * photo preloading, crop/brightness/rotation editing, favorites,
  * and prev/next navigation via photoIds passed through location.state.
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { api } from "../api/client";
-import { db, type MediaType } from "../db";
-import AppIcon from "../components/AppIcon";
+import { db } from "../db";
 import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
-import ViewerEditPanel, { type EditTab } from "../components/viewer/ViewerEditPanel";
+import ViewerEditPanel from "../components/viewer/ViewerEditPanel";
 import LeavePrompt from "../components/viewer/LeavePrompt";
 import CropOverlay from "../components/viewer/CropOverlay";
 import VideoControls from "../components/viewer/VideoControls";
+import ViewerTopBar from "../components/viewer/ViewerTopBar";
 import useZoomPan from "../hooks/useZoomPan";
 import usePhotoPreload from "../hooks/usePhotoPreload";
 import useViewerMedia from "../hooks/useViewerMedia";
 import useViewerActions from "../hooks/useViewerActions";
+import useViewerEdit from "../hooks/useViewerEdit";
 import useSwipeNavigation from "../hooks/useSwipeNavigation";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
-import type { CropMetadata, PhotoInfoData } from "../hooks/useViewerMedia";
+import type { PhotoInfoData } from "../hooks/useViewerMedia";
 
 // ── Navigation context passed via location.state ─────────────────────────────
 interface ViewerLocationState {
@@ -49,13 +49,6 @@ export default function Viewer() {
   const hasPrev = !!photoIds && currentIndex > 0;
   const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
 
-  // ── Tag state ─────────────────────────────────────────────────────────────
-  const [tags, setTags] = useState<string[]>([]);
-  const [tagInput, setTagInput] = useState("");
-  const [showTagInput, setShowTagInput] = useState(false);
-  const [allTags, setAllTags] = useState<string[]>([]);
-  const tagInputRef = useRef<HTMLInputElement>(null);
-
   // ── Favorite state ────────────────────────────────────────────────────────
   const [isFavorite, setIsFavorite] = useState(false);
 
@@ -67,27 +60,29 @@ export default function Viewer() {
   const [slideDirection, setSlideDirection] = useState<"left" | "right" | null>(null);
   const [slideKey, setSlideKey] = useState(0);
 
-  // ── Edit mode state ────────────────────────────────────────────────────
-  const [editMode, setEditMode] = useState(false);
-  const [editTab, setEditTab] = useState<EditTab>("crop");
-  const [cropData, setCropData] = useState<CropMetadata | null>(null);
-  const [cropCorners, setCropCorners] = useState<{ x: number; y: number; w: number; h: number }>({ x: 0, y: 0, w: 1, h: 1 });
-  const [draggingCorner, setDraggingCorner] = useState<string | null>(null);
-  const [brightness, setBrightness] = useState(0);
-  const [rotateValue, setRotateValue] = useState(0);
-  const [trimStart, setTrimStart] = useState(0);
-  const [trimEnd, setTrimEnd] = useState(0);
-  const [mediaDuration, setMediaDuration] = useState(0);
-  const cropImageRef = useRef<HTMLImageElement>(null);
-  const cropContainerRef = useRef<HTMLDivElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-
   // ── Full-screen overlay state ──────────────────────────────────────────
   const [showOverlay, setShowOverlay] = useState(true);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
-  const viewImgRef = useRef<HTMLImageElement>(null);
-  const [cropZoomStyle, setCropZoomStyle] = useState<React.CSSProperties>({});
+
+  // ── Edit state (from hook) ─────────────────────────────────────────────
+  const {
+    editMode, setEditMode,
+    editTab, setEditTab,
+    cropData, setCropData,
+    cropCorners, setCropCorners,
+    brightness, setBrightness,
+    rotateValue, setRotateValue,
+    trimStart, setTrimStart,
+    trimEnd, setTrimEnd,
+    mediaDuration, setMediaDuration,
+    cropZoomStyle,
+    cropImageRef, cropContainerRef, audioRef, videoRef, viewImgRef,
+    resetEditState,
+    computeRotationScale,
+    computeCropZoom,
+    enterEditMode,
+    handleCornerPointerDown, handleCornerPointerMove, handleCornerPointerUp,
+  } = useViewerEdit(viewerContainerRef);
 
   // ── Zoom state (from hook) ─────────────────────────────────────────────
   const {
@@ -136,101 +131,9 @@ export default function Viewer() {
     preloadCache,
   });
 
-  /**
-   * Compute CSS scale for 90°/270° rotation so the rotated element fits its container
-   * without stretching. Matches the Android approach: aspect-fit the original element,
-   * then scale so the rotated bounding box still fits.
-   */
-  const computeRotationScale = useCallback((el: HTMLElement | null, container: HTMLElement | null): number => {
-    if (!el || !container) return 0.75; // safe fallback
-    const containerW = container.clientWidth;
-    const containerH = container.clientHeight;
-    // Use the element's natural/intrinsic dimensions if available, else rendered size
-    const elW = (el as HTMLVideoElement).videoWidth || (el as HTMLImageElement).naturalWidth || el.clientWidth;
-    const elH = (el as HTMLVideoElement).videoHeight || (el as HTMLImageElement).naturalHeight || el.clientHeight;
-    if (elW === 0 || elH === 0 || containerW === 0 || containerH === 0) return 0.75;
-    // How the element renders when non-rotated (object-fit: contain / max-w-full max-h-full)
-    const aspect = elW / elH;
-    const containerAspect = containerW / containerH;
-    let rendW: number, rendH: number;
-    if (aspect > containerAspect) {
-      rendW = containerW; rendH = containerW / aspect;
-    } else {
-      rendH = containerH; rendW = containerH * aspect;
-    }
-    // After 90° rotation, rendW↔rendH swap; scale down so the rotated box fits
-    return Math.min(containerW / rendH, containerH / rendW);
-  }, []);
-
-  // ── Crop zoom transform ────────────────────────────────────────────────
-  // Works for both photos (<img>) and videos (<video>) by checking both refs.
-  const computeCropZoom = useCallback(() => {
-    if (!cropData || editMode || !viewerContainerRef.current) {
-      setCropZoomStyle({});
-      return;
-    }
-    // Use the photo img ref or fall back to the video ref for element dimensions
-    const el = viewImgRef.current ?? videoRef.current;
-    if (!el) { setCropZoomStyle({}); return; }
-
-    const container = viewerContainerRef.current;
-    // For videos, use videoWidth/videoHeight (natural dimensions) to compute
-    // the aspect-fit rendered size, since clientWidth/Height may be the full container.
-    const vid = videoRef.current;
-    let elW: number, elH: number;
-    if (vid && vid === el && vid.videoWidth > 0 && vid.videoHeight > 0) {
-      // Compute rendered (aspect-fit) dimensions from natural video size
-      const containerW = container.clientWidth;
-      const containerH = container.clientHeight;
-      const aspect = vid.videoWidth / vid.videoHeight;
-      if (aspect > containerW / containerH) {
-        elW = containerW; elH = containerW / aspect;
-      } else {
-        elH = containerH; elW = containerH * aspect;
-      }
-    } else {
-      elW = el.clientWidth;
-      elH = el.clientHeight;
-    }
-    const containerW = container.clientWidth;
-    const containerH = container.clientHeight;
-    if (elW === 0 || elH === 0 || containerW === 0 || containerH === 0) return;
-
-    const rot = ((cropData.rotate ?? 0) % 360 + 360) % 360;
-    const isSwapped = rot === 90 || rot === 270;
-
-    // Crop dimensions in the element's unrotated coordinate space
-    const cropPixW = cropData.width * elW;
-    const cropPixH = cropData.height * elH;
-
-    // After rotation, visible crop width/height may swap
-    const visW = isSwapped ? cropPixH : cropPixW;
-    const visH = isSwapped ? cropPixW : cropPixH;
-    const scaleW = containerW / visW;
-    const scaleH = containerH / visH;
-    // Scale down slightly (~85%) so the crop doesn't fill edge-to-edge,
-    // matching the Android app's gentle zoom-out padding.
-    const scale = Math.min(scaleW, scaleH) * 0.85;
-    const cx = cropData.x + cropData.width / 2;
-    const cy = cropData.y + cropData.height / 2;
-
-    setCropZoomStyle({
-      transform: `translate(${(0.5 - cx) * 100}%, ${(0.5 - cy) * 100}%) scale(${scale})${rot ? ` rotate(${rot}deg)` : ""}`,
-      transformOrigin: `${cx * 100}% ${cy * 100}%`,
-      filter: cropData.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
-    });
-  }, [cropData, editMode]);
-
-  useEffect(() => {
-    computeCropZoom();
-    window.addEventListener("resize", computeCropZoom);
-    return () => window.removeEventListener("resize", computeCropZoom);
-  }, [computeCropZoom]);
-
   // ── Load favorite state + info for current photo ──────────────────────────
   useEffect(() => {
     if (!id) return;
-    setTags([]);
     setIsFavorite(false);
     db.photos.get(id).then(async (cached) => {
       if (cached) {
@@ -251,61 +154,9 @@ export default function Viewer() {
     }).catch(() => { setCropData(null); });
   }, [id]);
 
-  // Auto-focus tag input when shown
-  useEffect(() => { if (showTagInput) tagInputRef.current?.focus(); }, [showTagInput]);
-
-  async function handleAddTag() {
-    const tag = tagInput.trim().toLowerCase();
-    if (!tag || !id) return;
-    try {
-      await api.tags.add(id, tag);
-      setTags((prev) => (prev.includes(tag) ? prev : [...prev, tag].sort()));
-      if (!allTags.includes(tag)) setAllTags((prev) => [...prev, tag].sort());
-      setTagInput("");
-    } catch { /* ignore */ }
-  }
-
-  async function handleRemoveTag(tag: string) {
-    if (!id) return;
-    try {
-      await api.tags.remove(id, tag);
-      setTags((prev) => prev.filter((t) => t !== tag));
-    } catch { /* ignore */ }
-  }
-
   async function onToggleFavorite() {
     const result = await handleToggleFavorite();
     if (result !== undefined) setIsFavorite(result);
-  }
-
-  // Initialize edit state from existing metadata when entering edit mode
-  function enterEditMode() {
-    // Probe the actual element duration as a fallback — mediaDuration may
-    // still be 0 if onLoadedMetadata hasn't fired yet.
-    let dur = mediaDuration;
-    if (dur <= 0) {
-      const el = audioRef.current ?? videoRef.current;
-      if (el && isFinite(el.duration) && el.duration > 0) {
-        dur = el.duration;
-        setMediaDuration(dur);
-      }
-    }
-
-    if (cropData) {
-      setCropCorners({ x: cropData.x, y: cropData.y, w: cropData.width, h: cropData.height });
-      setBrightness(cropData.brightness ?? 0);
-      setRotateValue(cropData.rotate ?? 0);
-      setTrimStart(cropData.trimStart ?? 0);
-      setTrimEnd(cropData.trimEnd ?? dur);
-    } else {
-      setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
-      setBrightness(0);
-      setRotateValue(0);
-      setTrimStart(0);
-      setTrimEnd(dur);
-    }
-    setEditTab(mediaType === "audio" || mediaType === "video" ? "trim" : "brightness");
-    setEditMode(true);
   }
 
   // ── Navigation ─────────────────────────────────────────────────────────
@@ -339,14 +190,7 @@ export default function Viewer() {
     if (!id) return;
 
     // Reset all edit / playback state so nothing leaks across photos
-    setEditMode(false);
-    setTrimStart(0);
-    setTrimEnd(0);
-    setMediaDuration(0);
-    setBrightness(0);
-    setRotateValue(0);
-    setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
-    setEditTab("crop");
+    resetEditState();
 
     const cached = preloadCache.current.get(id);
     if (cached) {
@@ -407,44 +251,6 @@ export default function Viewer() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [goPrev, goNext, navigate, editMode, showLeavePrompt]);
 
-  // ── Corner drag handlers ────────────────────────────────────────────────
-  function getMediaRect() {
-    if (mediaType === "video" && videoRef.current) return videoRef.current.getBoundingClientRect();
-    return cropImageRef.current?.getBoundingClientRect() ?? null;
-  }
-
-  function handleCornerPointerDown(corner: string) {
-    return (e: React.PointerEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
-      setDraggingCorner(corner);
-    };
-  }
-
-  function handleCornerPointerMove(e: React.PointerEvent) {
-    if (!draggingCorner) return;
-    const imgRect = getMediaRect();
-    if (!imgRect) return;
-    const px = Math.max(0, Math.min(1, (e.clientX - imgRect.left) / imgRect.width));
-    const py = Math.max(0, Math.min(1, (e.clientY - imgRect.top) / imgRect.height));
-    setCropCorners((prev) => {
-      const minSize = 0.05;
-      let { x, y, w, h } = prev;
-      if (draggingCorner === "tl") { const newX = Math.min(px, x + w - minSize); const newY = Math.min(py, y + h - minSize); w = w + (x - newX); h = h + (y - newY); x = newX; y = newY; }
-      else if (draggingCorner === "tr") { const newR = Math.max(px, x + minSize); const newY = Math.min(py, y + h - minSize); w = newR - x; h = h + (y - newY); y = newY; }
-      else if (draggingCorner === "bl") { const newX = Math.min(px, x + w - minSize); const newB = Math.max(py, y + minSize); w = w + (x - newX); x = newX; h = newB - y; }
-      else if (draggingCorner === "br") { const newR = Math.max(px, x + minSize); const newB = Math.max(py, y + minSize); w = newR - x; h = newB - y; }
-      return { x: Math.max(0, x), y: Math.max(0, y), w: Math.min(w, 1 - x), h: Math.min(h, 1 - y) };
-    });
-  }
-
-  function handleCornerPointerUp() { setDraggingCorner(null); }
-
-  const tagSuggestions = allTags.filter(
-    (t) => !tags.includes(t) && t.includes(tagInput.toLowerCase())
-  ).slice(0, 5);
-
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div
@@ -454,85 +260,24 @@ export default function Viewer() {
       onTouchEnd={handleTouchEnd}
     >
       {/* Top bar (overlay) */}
-      <div className={`absolute top-0 left-0 right-0 z-30 transition-opacity duration-300 ${
-        showOverlay || editMode ? "opacity-100" : "opacity-0 pointer-events-none"
-      }`}>
-      <div className="flex items-center justify-between px-4 py-3 bg-black/80">
-        <button
-          onClick={() => { if (editMode) setShowLeavePrompt(true); else navigate("/gallery"); }}
-          className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
-          title="Back"
-        >
-          <AppIcon name="back-arrow" size="w-5 h-5" themed={false} className="invert" />
-        </button>
-        <div className="flex gap-3 items-center">
-          <button
-            onClick={() => setShowInfoPanel((v) => !v)}
-            className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-              showInfoPanel ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
-            }`}
-            title="Info"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </button>
-          {(mediaType === "photo" || mediaType === "video" || mediaType === "audio") && !isBackupServer && (
-            <button
-              onClick={() => { if (editMode) setEditMode(false); else enterEditMode(); }}
-              className={`flex items-center gap-1 px-2 py-1 rounded text-sm font-medium transition-colors ${
-                editMode ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
-              }`}
-              title="Edit"
-            >Edit</button>
-          )}
-          {!isBackupServer && (
-          <button
-            onClick={onToggleFavorite}
-            className={`hover:scale-110 transition-transform ${isFavorite ? "text-yellow-400" : "text-white hover:text-yellow-300"}`}
-            title={isFavorite ? "Unfavorite" : "Favorite"}
-          >
-            {isFavorite ? (
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
-            ) : (
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
-            )}
-          </button>
-          )}
-          <button
-            onClick={handleDownload}
-            className="text-white hover:text-gray-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors disabled:opacity-50 disabled:cursor-wait"
-            disabled={!mediaUrl || isRenderingVideo}
-            title={isRenderingVideo ? "Converting…" : "Download"}
-          >
-            {isRenderingVideo
-              ? <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-              : <AppIcon name="download" size="w-5 h-5" themed={false} className="invert" />}
-          </button>
-          {!isBackupServer && (
-          <>
-          {albumId ? (
-            <button
-              onClick={handleRemoveFromAlbum}
-              className="text-orange-400 hover:text-orange-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
-              title="Remove from album"
-            >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-            </button>
-          ) : (
-            <button
-              onClick={handleDelete}
-              className="text-red-400 hover:text-red-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"
-              title="Delete"
-            >
-              <AppIcon name="trashcan" size="w-5 h-5" themed={false} className="invert" />
-            </button>
-          )}
-          </>
-          )}
-        </div>
-      </div>
-      </div>{/* end top bar overlay */}
+      <ViewerTopBar
+        editMode={editMode}
+        showOverlay={showOverlay}
+        showInfoPanel={showInfoPanel}
+        setShowInfoPanel={setShowInfoPanel}
+        mediaType={mediaType}
+        mediaUrl={mediaUrl}
+        isFavorite={isFavorite}
+        isBackupServer={isBackupServer}
+        isRenderingVideo={isRenderingVideo}
+        albumId={albumId}
+        onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate("/gallery"); }}
+        onToggleEdit={() => { if (editMode) setEditMode(false); else enterEditMode(mediaType); }}
+        onToggleFavorite={onToggleFavorite}
+        onDownload={handleDownload}
+        onDelete={handleDelete}
+        onRemoveFromAlbum={handleRemoveFromAlbum}
+      />
 
       {/* Converting banner — shown while ffmpeg renders a video/audio file */}
       {isRenderingVideo && (
@@ -615,7 +360,7 @@ export default function Viewer() {
           <div
             ref={cropContainerRef}
             className="relative w-full h-full flex items-center justify-center overflow-hidden"
-            onPointerMove={editTab === "crop" ? handleCornerPointerMove : undefined}
+            onPointerMove={editTab === "crop" ? (e: React.PointerEvent) => handleCornerPointerMove(e, mediaType) : undefined}
             onPointerUp={editTab === "crop" ? handleCornerPointerUp : undefined}
           >
             <img
@@ -708,7 +453,7 @@ export default function Viewer() {
           <div
             ref={cropContainerRef}
             className="relative w-full h-full flex items-center justify-center overflow-hidden"
-            onPointerMove={editTab === "crop" ? handleCornerPointerMove : undefined}
+            onPointerMove={editTab === "crop" ? (e: React.PointerEvent) => handleCornerPointerMove(e, mediaType) : undefined}
             onPointerUp={editTab === "crop" ? handleCornerPointerUp : undefined}
           >
             {/* Rotation wrapper — only the video is rotated */}

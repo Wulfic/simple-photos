@@ -17,34 +17,8 @@ import {
 import { base64ToArrayBuffer } from "../utils/media";
 import { fetchAllPages } from "../utils/gallery";
 import { useLiveQuery } from "dexie-react-hooks";
-
-// ── Encrypted payload shapes (shared with upload hook) ───────────────────────
-
-export interface PhotoPayload {
-  v: number;
-  filename: string;
-  taken_at: string;
-  mime_type: string;
-  media_type: "photo" | "gif" | "video" | "audio";
-  width: number;
-  height: number;
-  duration?: number;
-  latitude?: number;
-  longitude?: number;
-  album_ids: string[];
-  thumbnail_blob_id: string;
-  data: string; // base64
-}
-
-export interface ThumbnailPayload {
-  v: number;
-  photo_blob_id: string;
-  width: number;
-  height: number;
-  /** Optional MIME type of the thumbnail data (defaults to "image/jpeg" for backwards compat) */
-  mime_type?: string;
-  data: string; // base64 JPEG or GIF
-}
+import type { PhotoPayload, ThumbnailPayload } from "../types/media";
+export type { PhotoPayload, ThumbnailPayload };
 
 export interface GalleryDataResult {
   loading: boolean;

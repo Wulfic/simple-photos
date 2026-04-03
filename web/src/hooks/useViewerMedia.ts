@@ -9,56 +9,8 @@ import { api } from "../api/client";
 import { decrypt } from "../crypto/crypto";
 import { db, type MediaType } from "../db";
 import { base64ToUint8Array } from "../utils/media";
-
-// ── Payload shape (encrypted mode) ───────────────────────────────────────────
-export interface MediaPayload {
-  v: number;
-  filename: string;
-  taken_at: string;
-  mime_type: string;
-  media_type?: MediaType;
-  width: number;
-  height: number;
-  duration?: number;
-  album_ids: string[];
-  thumbnail_blob_id: string;
-  data: string; // base64-encoded raw file bytes
-}
-
-export interface PreloadEntry {
-  url: string;
-  filename: string;
-  mimeType: string;
-  mediaType: MediaType;
-  cropData: CropMetadata | null;
-  isFavorite: boolean;
-}
-
-export interface CropMetadata {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  rotate: number;
-  brightness?: number;
-  trimStart?: number;
-  trimEnd?: number;
-}
-
-export interface PhotoInfoData {
-  filename: string;
-  mimeType: string;
-  width?: number;
-  height?: number;
-  takenAt?: string | null;
-  sizeBytes?: number;
-  latitude?: number | null;
-  longitude?: number | null;
-  createdAt?: string;
-  durationSecs?: number | null;
-  cameraModel?: string | null;
-  albumNames?: string[];
-}
+import type { MediaPayload, PreloadEntry, CropMetadata, PhotoInfoData } from "../types/media";
+export type { MediaPayload, PreloadEntry, CropMetadata, PhotoInfoData };
 
 interface UseViewerMediaResult {
   mediaUrl: string | null;

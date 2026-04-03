@@ -13,25 +13,9 @@ import {
   mediaTypeFromMime,
 } from "../db";
 import { createFallbackThumbnail, createAudioFallbackThumbnail, arrayBufferToBase64 } from "../utils/media";
+import type { ThumbnailPayload, PhotoPayload } from "../types/media";
 import { useProcessingStore } from "../store/processing";
 import { generateThumbnail, getImageDimensions } from "../utils/gallery";
-import type { ThumbnailPayload } from "./useGalleryData";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface PhotoPayload {
-  v: number;
-  filename: string;
-  taken_at: string;
-  mime_type: string;
-  media_type: "photo" | "gif" | "video" | "audio";
-  width: number;
-  height: number;
-  duration?: number;
-  album_ids: string[];
-  thumbnail_blob_id: string;
-  data: string; // base64
-}
 
 export interface UploadDeps {
   loadEncryptedPhotos: () => Promise<void>;

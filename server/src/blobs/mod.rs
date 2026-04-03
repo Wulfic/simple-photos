@@ -9,6 +9,7 @@
 //! - [`storage`]  — Filesystem read/write/delete helpers and path builders.
 //! - [`models`]   — `BlobRecord` and API response types.
 
+pub mod download;
 pub mod handlers;
 pub mod models;
 pub mod storage;

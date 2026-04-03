@@ -18,7 +18,7 @@ use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
 use crate::photos::metadata::extract_media_metadata_async;
-use crate::photos::scan::generate_thumbnail_file;
+use crate::photos::thumbnail::generate_thumbnail_file;
 use crate::photos::utils::compute_photo_hash_streaming;
 use crate::state::AppState;
 
