@@ -61,5 +61,20 @@ pub async fn store_encryption_key(
 
     tracing::info!(user_id = %auth.user_id, "Encryption key stored by admin");
 
+    // Trigger encryption migration for any unencrypted photos
+    {
+        let pool_clone = state.pool.clone();
+        let storage_root = (**state.storage_root.load()).clone();
+        let jwt_secret = state.config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::photos::server_migrate::auto_migrate_after_scan(
+                pool_clone,
+                storage_root,
+                jwt_secret,
+            )
+            .await;
+        });
+    }
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
