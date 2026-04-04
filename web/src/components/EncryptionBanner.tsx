@@ -1,43 +1,111 @@
 /** Global encryption-progress banner.
  *
- *  Reads from IndexedDB (via Dexie live query) to count photos that are still
- *  pending server-side encryption (`serverSide === true`). Shown across all
- *  pages via ProtectedLayout; dismissible with a close button. */
-import { useState } from "react";
-import { useLiveQuery } from "dexie-react-hooks";
-import { db } from "../db";
+ *  Polls the encrypted-sync API to count photos pending encryption
+ *  (encrypted_blob_id IS NULL) and also writes serverSide entries into IDB
+ *  so the gallery shows them immediately.  Shown across all pages via
+ *  ProtectedLayout; dismissible with a close button. */
+import { useState, useEffect, useRef, useCallback } from "react";
+import { api } from "../api/client";
+import { hasCryptoKey } from "../crypto/crypto";
+import { db, mediaTypeFromMime, type MediaType } from "../db";
 
 export default function EncryptionBanner() {
   const [dismissed, setDismissed] = useState(false);
+  const [counts, setCounts] = useState<{ total: number; pending: number; encrypted: number } | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const counts = useLiveQuery(async () => {
-    const all = await db.photos.count();
-    const pending = await db.photos.filter((p) => !!p.serverSide).count();
-    return { total: all, pending, encrypted: all - pending };
-  });
+  const poll = useCallback(async () => {
+    try {
+      // Quick paginated fetch of all sync records
+      type SyncRecord = Awaited<ReturnType<typeof api.photos.encryptedSync>>["photos"][number];
+      const all: SyncRecord[] = [];
+      let cursor: string | undefined;
+      do {
+        const res = await api.photos.encryptedSync({ after: cursor, limit: 500 });
+        all.push(...res.photos);
+        cursor = res.next_cursor ?? undefined;
+      } while (cursor);
+
+      const pending = all.filter((p) => !p.encrypted_blob_id);
+      const encrypted = all.length - pending.length;
+      setCounts({ total: all.length, pending: pending.length, encrypted });
+
+      // Ensure serverSide entries exist in IDB so the gallery shows them
+      // even before useGalleryData runs its full sync.
+      if (pending.length > 0) {
+        const existingIds = new Set(
+          (await db.photos.toArray()).map((p) => p.serverPhotoId).filter(Boolean)
+        );
+        for (const photo of pending) {
+          if (existingIds.has(photo.id)) continue;
+          let takenAt: number;
+          try {
+            takenAt = photo.taken_at
+              ? new Date(photo.taken_at).getTime()
+              : new Date(photo.created_at).getTime();
+          } catch {
+            takenAt = new Date(photo.created_at).getTime();
+          }
+          await db.photos.put({
+            blobId: photo.id,
+            filename: photo.filename,
+            takenAt,
+            mimeType: photo.mime_type,
+            mediaType: (photo.media_type as MediaType) ?? mediaTypeFromMime(photo.mime_type),
+            width: photo.width,
+            height: photo.height,
+            duration: photo.duration_secs ?? undefined,
+            albumIds: [],
+            isFavorite: photo.is_favorite ?? false,
+            serverPhotoId: photo.id,
+            serverSide: true,
+          });
+        }
+      }
+    } catch {
+      // Non-critical — will retry on next interval
+    }
+  }, []);
+
+  useEffect(() => {
+    if (dismissed) return;
+    if (!hasCryptoKey()) return;
+
+    // Initial check
+    poll();
+
+    // Poll every 5 s
+    timerRef.current = setInterval(poll, 5_000);
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [dismissed, poll]);
 
   if (dismissed || !counts || counts.pending === 0) return null;
 
   const pct = counts.total > 0 ? (counts.encrypted / counts.total) * 100 : 0;
 
   return (
-    <div className="sticky top-0 z-40 px-4 pt-2">
-      <div className="flex items-center gap-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-3">
-        <div className="w-5 h-5 border-2 border-amber-400 border-t-amber-600 rounded-full animate-spin flex-shrink-0" />
+    <div className="fixed bottom-6 left-4 right-4 z-50 pointer-events-none">
+      <div className="pointer-events-auto max-w-md mx-auto flex items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 shadow-lg">
+        <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-blue-500 dark:border-t-blue-400 rounded-full animate-spin flex-shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
             Encrypting photos… {counts.encrypted}/{counts.total}
           </p>
-          <div className="mt-1.5 h-1.5 bg-amber-200 dark:bg-amber-900 rounded-full overflow-hidden">
+          <div className="mt-1.5 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
             <div
-              className="h-full bg-amber-500 dark:bg-amber-400 rounded-full transition-all duration-500"
+              className="h-full bg-blue-500 dark:bg-blue-400 rounded-full transition-all duration-500"
               style={{ width: `${pct}%` }}
             />
           </div>
         </div>
         <button
           onClick={() => setDismissed(true)}
-          className="p-1 text-amber-500 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-200 transition-colors flex-shrink-0"
+          className="p-1 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
           aria-label="Dismiss"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
