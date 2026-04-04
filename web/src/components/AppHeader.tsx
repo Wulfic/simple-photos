@@ -123,7 +123,8 @@ export default function AppHeader({
   }
 
   return (
-    <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm dark:bg-gradient-to-r dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 dark:border-white/10 dark:shadow-lg dark:shadow-black/20">
+    <>
+    <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 shadow-sm dark:bg-gradient-to-r dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 dark:border-white/10 dark:shadow-lg dark:shadow-black/20">
       <div className="max-w-screen-2xl mx-auto px-4 h-14 flex items-center gap-4 min-w-0">
         {/* ── Logo + Brand ────────────────────────────────────────────── */}
         <button
@@ -240,5 +241,7 @@ export default function AppHeader({
         )}
       </div>
     </header>
+    <div className="h-14" />
+    </>
   );
 }

@@ -63,17 +63,6 @@ pub async fn scan_and_register(
         }
     }
 
-    // Check audio backup toggle — skip audio files when disabled
-    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .map(|v| v == "true")
-    .unwrap_or(true); // default: enabled
-
     // ── Phase 1: Collect all unregistered media files (fast directory walk) ──
     struct ScanCandidate {
         abs_path: PathBuf,
@@ -86,7 +75,6 @@ pub async fn scan_and_register(
     }
 
     let mut candidates: Vec<ScanCandidate> = Vec::new();
-    let mut skipped_audio = 0i64;
     let mut queue = vec![storage_root.clone()];
 
     while let Some(dir) = queue.pop() {
@@ -127,11 +115,6 @@ pub async fn scan_and_register(
                         "photo"
                     };
 
-                    if media_type == "audio" && !audio_backup_enabled {
-                        skipped_audio += 1;
-                        continue;
-                    }
-
                     let file_meta = entry.metadata().await.ok();
                     let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
                     let modified = file_meta.and_then(|m| {
@@ -153,6 +136,19 @@ pub async fn scan_and_register(
                 }
             }
         }
+    }
+
+    // Filter out audio files when the audio-backup toggle is off.
+    let audio_enabled: bool = sqlx::query_scalar(
+        "SELECT value = 'true' FROM server_settings WHERE key = 'audio_backup_enabled'",
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false);
+    if !audio_enabled {
+        candidates.retain(|c| c.media_type != "audio");
     }
 
     tracing::info!(
@@ -247,9 +243,8 @@ pub async fn scan_and_register(
 
     let new_count = new_count.load(Ordering::Relaxed);
     tracing::info!(
-        "Scan complete: registered {} new photos (skipped {} audio)",
+        "Scan complete: registered {} new files",
         new_count,
-        skipped_audio
     );
 
     // ── Retroactively fill missing metadata for existing photos ──────────
@@ -381,7 +376,6 @@ pub async fn scan_and_register(
     Ok(Json(serde_json::json!({
         "registered": new_count,
         "metadata_updated": fixed_count,
-        "skipped_audio": skipped_audio,
-        "message": format!("{} new photos registered, {} metadata updated", new_count, fixed_count),
+        "message": format!("{} new files registered, {} metadata updated", new_count, fixed_count),
     })))
 }

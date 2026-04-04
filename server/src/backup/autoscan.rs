@@ -162,6 +162,21 @@ pub async fn run_auto_scan_public(pool: &sqlx::SqlitePool, storage_root: &std::p
 
 /// Scan storage directory and register any unregistered media files for ALL users.
 async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) -> i64 {
+    // Skip scanning while a disaster-recovery push is in-flight to avoid
+    // creating duplicate photo rows that race with the incoming sync.
+    let recovering: bool = sqlx::query_scalar(
+        "SELECT value = 'true' FROM server_settings WHERE key = 'recovery_in_progress'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false);
+    if recovering {
+        tracing::info!("[DIAG:AUTOSCAN] run_auto_scan: recovery in progress, skipping");
+        return 0;
+    }
+
     // Get the first admin user to assign new photos to
     let admin_id: Option<String> = sqlx::query_scalar(
         "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
@@ -182,15 +197,14 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
         }
     };
 
-    // Check whether audio files should be included in scan
-    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
+    // Check audio-backup toggle — skip audio files unless enabled.
+    let audio_enabled: bool = sqlx::query_scalar(
+        "SELECT value = 'true' FROM server_settings WHERE key = 'audio_backup_enabled'",
     )
     .fetch_optional(pool)
     .await
     .ok()
     .flatten()
-    .map(|v| v == "true")
     .unwrap_or(false);
 
     // Build set of already-registered paths (from both active photos and trash)
@@ -263,8 +277,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                         "photo"
                     };
 
-                    // Skip audio files when audio backup is disabled
-                    if media_type == "audio" && !audio_backup_enabled {
+                    if media_type == "audio" && !audio_enabled {
                         continue;
                     }
 
