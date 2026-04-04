@@ -413,6 +413,18 @@ pub async fn backup_receive(
         file_path
     );
 
+    // Trigger encryption for the newly received file so it doesn't stay
+    // as a plain-text entry.  Fire-and-forget — the response returns
+    // immediately while encryption runs in the background.
+    {
+        let pool = state.pool.clone();
+        let sr = storage_root.clone();
+        let jwt = state.config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::photos::server_migrate::auto_migrate_after_scan(pool, sr, jwt).await;
+        });
+    }
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "photo_id": photo_id,
