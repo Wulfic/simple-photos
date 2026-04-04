@@ -59,19 +59,10 @@ async fn run_migration(
     storage_root: std::path::PathBuf,
     progress: Arc<MigrationProgress>,
 ) {
-    // Check audio backup toggle
-    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten()
-    .map(|v| v == "true")
-    .unwrap_or(true);
-
-    // Fetch all photos that haven't been encrypted yet
-    let all_photos: Vec<PlainPhotoRow> = match sqlx::query_as::<_, PlainPhotoRow>(
+    // Fetch all photos that haven't been encrypted yet.
+    // Audio filtering happens at the intake points (autoscan + sync engine),
+    // NOT here — if a file is already in the photos table it must be encrypted.
+    let photos: Vec<PlainPhotoRow> = match sqlx::query_as::<_, PlainPhotoRow>(
         "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, \
          width, height, duration_secs, taken_at, latitude, longitude, created_at \
          FROM photos WHERE encrypted_blob_id IS NULL \
@@ -87,25 +78,6 @@ async fn run_migration(
             progress.running.store(false, Ordering::Release);
             return;
         }
-    };
-
-    // Filter out audio files if toggle is off
-    let photos: Vec<PlainPhotoRow> = if audio_backup_enabled {
-        all_photos
-    } else {
-        let before = all_photos.len();
-        let filtered: Vec<_> = all_photos
-            .into_iter()
-            .filter(|p| p.media_type != "audio")
-            .collect();
-        let skipped = before - filtered.len();
-        if skipped > 0 {
-            tracing::info!(
-                "[SERVER_MIG] skipped {} audio files (audio backup disabled)",
-                skipped
-            );
-        }
-        filtered
     };
 
     let total = photos.len() as u64;
@@ -216,6 +188,13 @@ async fn run_migration(
 
 // ── Public entry points ─────────────────────────────────────────────────────
 
+/// Count unencrypted photos eligible for migration.
+async fn count_migratable(pool: &sqlx::SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL")
+        .fetch_one(pool)
+        .await
+}
+
 /// Start encryption migration for all unencrypted photos.
 /// Called after autoscan and on startup.
 ///
@@ -239,12 +218,7 @@ pub async fn run_migration_from_stored_key(
     }
 
     loop {
-        let count: i64 = match sqlx::query_scalar(
-            "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
-        )
-        .fetch_one(&pool)
-        .await
-        {
+        let count: i64 = match count_migratable(&pool).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("[SERVER_MIG] Failed to count photos: {}", e);
@@ -272,12 +246,7 @@ pub async fn run_migration_from_stored_key(
 
         // Re-check: photos may have arrived during the migration (e.g. backup sync).
         // If there are more, loop and process them immediately.
-        let remaining: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap_or(0);
+        let remaining: i64 = count_migratable(&pool).await.unwrap_or(0);
 
         if remaining == 0 {
             tracing::info!("[SERVER_MIG] All photos encrypted");
@@ -303,12 +272,7 @@ pub async fn resume_migration_on_startup(
     // Wait for the system to settle after startup
     tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
-    let unencrypted_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(0);
+    let unencrypted_count: i64 = count_migratable(&pool).await.unwrap_or(0);
 
     if unencrypted_count == 0 {
         tracing::debug!("[STARTUP_MIG] All photos encrypted, no migration needed");
@@ -346,12 +310,7 @@ pub async fn auto_migrate_after_scan(
     storage_root: std::path::PathBuf,
     jwt_secret: String,
 ) {
-    let unencrypted_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(0);
+    let unencrypted_count: i64 = count_migratable(&pool).await.unwrap_or(0);
 
     if unencrypted_count == 0 {
         return;

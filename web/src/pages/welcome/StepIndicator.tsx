@@ -24,11 +24,8 @@ export default function StepIndicator({ step, serverRole, installType }: StepInd
             { id: "server-role", label: "Role" },
             { id: "install-type", label: "Type" },
             { id: "restore", label: "Restore" },
-            { id: "account", label: "Account" },
-            { id: "admin-2fa", label: "2FA" },
             { id: "storage", label: "Server" },
             { id: "ssl", label: "SSL" },
-            { id: "users", label: "Users" },
             { id: "android", label: "Android" },
             { id: "complete", label: "Done" },
           ]

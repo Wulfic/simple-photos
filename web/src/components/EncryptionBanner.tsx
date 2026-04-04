@@ -6,11 +6,13 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "../api/client";
 import { hasCryptoKey } from "../crypto/crypto";
+import { useProcessingStore } from "../store/processing";
 
 export default function EncryptionBanner() {
   const [dismissed, setDismissed] = useState(false);
   const [counts, setCounts] = useState<{ total: number; pending: number; encrypted: number } | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { startTask, endTask } = useProcessingStore();
 
   const poll = useCallback(async () => {
     try {
@@ -26,10 +28,17 @@ export default function EncryptionBanner() {
       const pending = all.filter((p) => !p.encrypted_blob_id);
       const encrypted = all.length - pending.length;
       setCounts({ total: all.length, pending: pending.length, encrypted });
+
+      // Drive the processing-ring on the profile icon
+      if (pending.length > 0) {
+        startTask("encryption");
+      } else {
+        endTask("encryption");
+      }
     } catch {
       // Non-critical — will retry on next interval
     }
-  }, []);
+  }, [startTask, endTask]);
 
   useEffect(() => {
     if (dismissed) return;
@@ -45,8 +54,9 @@ export default function EncryptionBanner() {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
+      endTask("encryption");
     };
-  }, [dismissed, poll]);
+  }, [dismissed, poll, endTask]);
 
   if (dismissed || !counts || counts.pending === 0) return null;
 

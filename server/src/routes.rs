@@ -364,6 +364,14 @@ fn backup_routes() -> Router<AppState> {
             post(crate::backup::sync::force_sync_from_primary),
         )
         .route(
+            "/backup/push-to",
+            post(crate::backup::recovery::push_sync_to_target),
+        )
+        .route(
+            "/backup/recovery-callback",
+            post(crate::backup::recovery::recovery_callback),
+        )
+        .route(
             "/backup/report",
             post(crate::backup::diagnostics::receive_backup_report),
         )

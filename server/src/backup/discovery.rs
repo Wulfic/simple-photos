@@ -49,6 +49,11 @@ struct DiscoveryResponse {
     version: &'static str,
     /// The actual HTTP(S) port the server API is running on.
     port: u16,
+    /// Externally-reachable `host:port` derived from `base_url` config.
+    /// Clients should prefer this over constructing an address from the
+    /// probe IP + `port`, since Docker containers report internal ports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    address: Option<String>,
     /// Operating mode: `"primary"` or `"backup"`.
     mode: String,
     /// Whether an API key is required to access backup endpoints.
@@ -163,11 +168,23 @@ async fn discovery_handler(State(state): State<DiscoveryState>) -> Json<Discover
         .map(|v| !v.is_empty())
         .unwrap_or(false);
 
+    // Extract host:port from base_url so clients can reach us via the
+    // externally-mapped address (important for Docker containers where the
+    // internal port differs from the host-mapped port).
+    let address = reqwest::Url::parse(&state.config.server.base_url)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?.to_string();
+            let port = url.port().unwrap_or(state.config.server.port);
+            Some(format!("{}:{}", host, port))
+        });
+
     Json(DiscoveryResponse {
         service: "simple-photos",
         name,
         version: crate::VERSION,
         port: state.config.server.port,
+        address,
         mode,
         api_key_required,
     })

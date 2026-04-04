@@ -9,6 +9,7 @@ import { useThemeStore } from "../store/theme";
 import { useBackupStore } from "../store/backup";
 import { clearKey } from "../crypto/crypto";
 import { api } from "../api/client";
+import { useProcessingStore } from "../store/processing";
 import AppIcon from "./AppIcon";
 import { clearAllUserData } from "../db";
 import { thumbMemoryCache } from "../utils/gallery";
@@ -64,7 +65,7 @@ export default function AppHeader({
   const { theme, toggle: toggleTheme } = useThemeStore();
   const { backupServers, loaded: backupLoaded, setBackupServers, setLoaded: setBackupLoaded } = useBackupStore();
 
-  const hasActivity = false;
+  const hasActivity = useProcessingStore((s) => s.isProcessing);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 

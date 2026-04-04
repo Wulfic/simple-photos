@@ -7,9 +7,11 @@
 
 /// Parse a response from the dedicated discovery port (`GET /`).
 ///
-/// Discovery-port responses include an `actual_port` field that indicates the
-/// real API port the server is listening on (which may differ from the
-/// discovery port itself).
+/// Discovery-port responses include an `address` field with the externally-
+/// reachable `host:port` (from `base_url`). When present, this is preferred
+/// over constructing an address from the probe IP + the reported `port`,
+/// since Docker containers report their internal port which differs from the
+/// host-mapped port.
 fn parse_discovery_response(
     body: &serde_json::Value,
     ip: &str,
@@ -28,18 +30,27 @@ fn parse_discovery_response(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    let actual_port = body
-        .get("port")
-        .and_then(|p| p.as_u64())
-        .map(|p| p as u16)
-        .unwrap_or(port);
+    // Prefer the explicit address from the response (base_url-derived),
+    // falling back to probe_ip:reported_port for backward compatibility.
+    let address = body
+        .get("address")
+        .and_then(|a| a.as_str())
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| {
+            let actual_port = body
+                .get("port")
+                .and_then(|p| p.as_u64())
+                .map(|p| p as u16)
+                .unwrap_or(port);
+            format!("{}:{}", ip, actual_port)
+        });
     let mode = body
         .get("mode")
         .and_then(|m| m.as_str())
         .unwrap_or("primary")
         .to_string();
     Some(serde_json::json!({
-        "address": format!("{}:{}", ip, actual_port),
+        "address": address,
         "name": name,
         "version": version,
         "mode": mode,
@@ -48,10 +59,9 @@ fn parse_discovery_response(
 
 /// Parse a response from `/api/discover/info` or `/health`.
 ///
-/// Uses the caller-supplied `port` for the address (no `port` field
-/// extraction).  `default_name` is used when the response lacks a `"name"`
-/// field — callers pass `"Unknown"` for info endpoints and `"Simple Photos"`
-/// for the Phase-3 `/health` fallback, matching the original behaviour.
+/// Prefers the `address` field (externally-reachable `host:port` derived from
+/// `base_url`) when present. Falls back to `probe_ip:probe_port` for servers
+/// that don't include it (e.g. older versions or plain `/health`).
 fn parse_server_response(
     body: &serde_json::Value,
     ip: &str,
@@ -76,8 +86,13 @@ fn parse_server_response(
         .and_then(|m| m.as_str())
         .unwrap_or("primary")
         .to_string();
+    let address = body
+        .get("address")
+        .and_then(|a| a.as_str())
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| format!("{}:{}", ip, port));
     Some(serde_json::json!({
-        "address": format!("{}:{}", ip, port),
+        "address": address,
         "name": name,
         "version": version,
         "mode": mode,
@@ -112,13 +127,18 @@ fn score_address(addr: &str) -> u8 {
     2
 }
 
-/// Deduplicate discovered servers and filter out backup-mode entries.
+/// Deduplicate discovered servers, optionally filtering out backup-mode entries.
 ///
 /// Servers are grouped by `(name, version)`.  When duplicates exist the
-/// address with the best [`score_address`] wins.  After dedup, any server
-/// that explicitly reported `mode = "backup"` is removed — the discover
-/// endpoint is called by backup servers looking for a *primary* to pair with.
-pub(crate) fn deduplicate_servers(discovered: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+/// address with the best [`score_address`] wins.  When `keep_backups` is
+/// false, any server that explicitly reported `mode = "backup"` is removed —
+/// the discover endpoint is called by backup servers looking for a *primary*
+/// to pair with.  When `keep_backups` is true (restore-from-backup flow),
+/// backup servers are preserved in the results.
+pub(crate) fn deduplicate_servers(
+    discovered: Vec<serde_json::Value>,
+    keep_backups: bool,
+) -> Vec<serde_json::Value> {
     let mut dedup_map: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
 
@@ -154,13 +174,17 @@ pub(crate) fn deduplicate_servers(discovered: Vec<serde_json::Value>) -> Vec<ser
         }
     }
 
-    // Only return primary-mode servers; filter out anything that reported
-    // mode="backup" explicitly. Servers with no mode field (backward compat)
-    // are kept.
-    dedup_map
-        .into_values()
-        .filter(|s| s.get("mode").and_then(|m| m.as_str()) != Some("backup"))
-        .collect()
+    if keep_backups {
+        dedup_map.into_values().collect()
+    } else {
+        // Only return primary-mode servers; filter out anything that reported
+        // mode="backup" explicitly. Servers with no mode field (backward compat)
+        // are kept.
+        dedup_map
+            .into_values()
+            .filter(|s| s.get("mode").and_then(|m| m.as_str()) != Some("backup"))
+            .collect()
+    }
 }
 
 // ── Probe helpers ───────────────────────────────────────────────────────────
@@ -293,6 +317,17 @@ fn build_local_probes(
     if discovery_port != 0 {
         for host in &probe_hosts {
             probes.push((host.clone(), discovery_port, true));
+        }
+        // Docker containers often map the internal discovery port (3301) to a
+        // different host port (e.g. 3302, 3303).  Probe a small range around
+        // the well-known port to catch those mappings.
+        for offset in 1..=5u16 {
+            let mapped_port = discovery_port + offset;
+            if mapped_port != our_port {
+                for host in &probe_hosts {
+                    probes.push((host.clone(), mapped_port, true));
+                }
+            }
         }
     }
 

@@ -36,7 +36,7 @@ export default function RestoreStep({
     setDiscovering(true);
     setError("");
     try {
-      const res = await fetch("/api/setup/discover");
+      const res = await fetch("/api/setup/discover?mode=backup");
       if (!res.ok) throw new Error("Discovery failed");
       const data = await res.json();
       setDiscovered(data.servers ?? []);

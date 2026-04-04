@@ -90,12 +90,24 @@ pub async fn discover_info(
                 }
             });
 
+    // Extract host:port from base_url so callers use the externally-reachable
+    // address (Docker containers report internal ports that differ from the
+    // host-mapped ports).
+    let address = reqwest::Url::parse(&state.config.server.base_url)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?.to_string();
+            let port = url.port().unwrap_or(state.config.server.port);
+            Some(format!("{}:{}", host, port))
+        });
+
     Ok(Json(json!({
         "service": "simple-photos",
         "name": name,
         "version": crate::VERSION,
         "mode": mode,
         "api_key": api_key,
+        "address": address,
     })))
 }
 
