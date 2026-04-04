@@ -5,7 +5,6 @@ import { useState, useEffect, useRef } from "react";
 import type { CachedPhoto } from "../../db";
 import useLongPress from "../../hooks/useLongPress";
 import { thumbnailSrc, formatDuration } from "../../utils/gallery";
-import { useAuthStore } from "../../store/auth";
 
 import { getThumbnailStyle } from "../../utils/thumbnailCss";
 
@@ -55,11 +54,8 @@ export default function MediaTile({ photo, onClick, onLongPress, selectionMode, 
       const url = thumbnailSrc(photo.thumbnailData, thumbMime(photo));
       setSrc(url);
       return () => URL.revokeObjectURL(url);
-    } else if (photo.serverSide && photo.serverPhotoId) {
-      const token = useAuthStore.getState().accessToken;
-      setSrc(`/api/photos/${photo.serverPhotoId}/thumbnail?token=${token}`);
     }
-  }, [visible, photo.thumbnailData, photo.serverSide, photo.serverPhotoId, photo.thumbnailMimeType, photo.mediaType]);
+  }, [visible, photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
 
   const longPress = useLongPress(() => onLongPress?.(), 500);
 

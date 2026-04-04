@@ -143,7 +143,7 @@ export function useGalleryData(): GalleryDataResult {
     if (!encryptedDataReady) return;
     syncIntervalRef.current = setInterval(() => {
       loadEncryptedPhotos().catch(() => {});
-    }, 5_000);
+    }, 2_000);
     return () => {
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
@@ -201,12 +201,6 @@ export function useGalleryData(): GalleryDataResult {
             if (stale) console.log("[Gallery:stale] serverPhotoId not found:", p.blobId, p.serverPhotoId);
             return stale;
           }
-          // Server-side (autoscanned) photos use their photo ID as blobId
-          if (p.serverSide) {
-            const stale = !serverPhotoIds.has(p.blobId);
-            if (stale) console.log("[Gallery:stale] serverSide blobId not found:", p.blobId);
-            return stale;
-          }
           // For direct uploads or unsynced local copies check both blob IDs and
           // server photo IDs — storageBlobId can reference either an encrypted
           // blob or a server-side autoscanned photo (no blob to look up).
@@ -235,11 +229,11 @@ export function useGalleryData(): GalleryDataResult {
 
       // Phase 3: Populate IndexedDB from sync records.
       for (const photo of allSyncPhotos) {
-        // Photos without encrypted_blob_id are server-side (autoscanned but
-        // not yet encrypted). We still show them using the server file API.
-        const isServerSide = !photo.encrypted_blob_id;
+        // Skip photos that haven't been encrypted yet — they'll appear
+        // once the server-side migration completes and sets encrypted_blob_id.
+        if (!photo.encrypted_blob_id) continue;
 
-        let existing = isServerSide ? undefined : idbByServerId.get(photo.id);
+        let existing = idbByServerId.get(photo.id);
 
         if (!existing && photo.encrypted_blob_id) {
           // Try to bind an unbound unsynced original upload
@@ -260,12 +254,6 @@ export function useGalleryData(): GalleryDataResult {
           const updates: Partial<CachedPhoto> = {};
           if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
           if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
-          // Transition from server-side to encrypted mode when encryption completes
-          if (existing.serverSide && photo.encrypted_blob_id) {
-            updates.serverSide = undefined;
-            updates.storageBlobId = photo.encrypted_blob_id;
-            updates.thumbnailBlobId = photo.encrypted_thumb_blob_id ?? undefined;
-          }
           // Retry thumbnail download if the previous attempt failed
           if (!existing.thumbnailData) {
             const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
@@ -331,7 +319,6 @@ export function useGalleryData(): GalleryDataResult {
           cropData: photo.crop_metadata ?? undefined,
           isFavorite: photo.is_favorite ?? false,
           serverPhotoId: photo.id,
-          serverSide: isServerSide || undefined,
         });
       }
 
