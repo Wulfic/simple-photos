@@ -213,6 +213,31 @@ pub async fn set_audio_backup_setting(
 
     tracing::info!("Audio backup setting updated: enabled={}", enabled);
 
+    // When audio is newly enabled, trigger a scan so audio files on disk
+    // get discovered immediately instead of waiting for the next interval.
+    if enabled {
+        let pool = state.pool.clone();
+        let storage_root = (**state.storage_root.load()).clone();
+        let jwt_secret = state.config.auth.jwt_secret.clone();
+        let scan_lock = state.scan_lock.clone();
+        tokio::spawn(async move {
+            if let Ok(_guard) = scan_lock.try_lock() {
+                let count =
+                    crate::backup::autoscan::run_auto_scan_public(&pool, &storage_root).await;
+                if count > 0 {
+                    tracing::info!(
+                        "[AUDIO_ENABLE] Discovered {} new files, starting encryption",
+                        count
+                    );
+                    crate::photos::server_migrate::auto_migrate_after_scan(
+                        pool, storage_root, jwt_secret,
+                    )
+                    .await;
+                }
+            }
+        });
+    }
+
     Ok(Json(serde_json::json!({
         "audio_backup_enabled": enabled,
         "message": if enabled {
