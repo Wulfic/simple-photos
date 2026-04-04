@@ -95,6 +95,15 @@ pub async fn recover_from_backup(
     let server_name = server.name.clone();
     let server_name_response = server_name.clone();
 
+    // Suppress auto-scan while recovery is in progress to avoid duplicate
+    // photo entries from the scan and the incoming push running concurrently.
+    sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('recovery_in_progress', 'true') \
+         ON CONFLICT(key) DO UPDATE SET value = 'true'",
+    )
+    .execute(&state.pool)
+    .await?;
+
     sqlx::query(
         "INSERT INTO backup_sync_log (id, server_id, started_at, status) \
          VALUES (?, ?, ?, 'recovering')",
@@ -133,10 +142,65 @@ pub async fn recover_from_backup(
             }
         };
 
-        // Delete the temp restore_admin user before sync pushes real users
-        let _ = sqlx::query("DELETE FROM users WHERE username = 'restore_admin'")
-            .execute(&pool)
-            .await;
+        // NOTE: Do NOT delete restore_admin here — the backup hasn't pushed
+        // real users yet, so user_count would drop to 0 and the frontend
+        // would think setup is incomplete. The recovery_callback handler
+        // deletes restore_admin after the backup finishes pushing users.
+
+        // ── Phase 0: Pull user accounts directly from the backup ─────────
+        // The push-sync engine will also sync users, but doing it here first
+        // ensures accounts are available immediately (before photos arrive)
+        // and avoids silent failures in the async push flow.
+        let users_url = format!("{}/api/backup/list-users-full", backup_base);
+        let mut users_req = client.get(&users_url);
+        if let Some(ref key) = backup_api_key {
+            users_req = users_req.header("X-API-Key", key);
+        }
+
+        let users_restored = match users_req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<Vec<serde_json::Value>>().await {
+                    Ok(users) => {
+                        let mut count = 0u32;
+                        for user in &users {
+                            if let Err(e) = upsert_user_from_backup(&pool, user).await {
+                                tracing::warn!("Recovery: failed to upsert user: {}", e);
+                            } else {
+                                count += 1;
+                            }
+                        }
+                        tracing::info!(
+                            "Recovery from '{}': restored {} user account(s) directly",
+                            server_name, count
+                        );
+                        count
+                    }
+                    Err(e) => {
+                        tracing::warn!("Recovery: failed to parse user list: {}", e);
+                        0
+                    }
+                }
+            }
+            Ok(resp) => {
+                tracing::warn!(
+                    "Recovery: list-users-full returned HTTP {}",
+                    resp.status()
+                );
+                0
+            }
+            Err(e) => {
+                tracing::warn!("Recovery: failed to fetch users from backup: {}", e);
+                0
+            }
+        };
+
+        // Now that real users exist, remove the temp restore_admin account
+        if users_restored > 0 {
+            let _ = sqlx::query("DELETE FROM users WHERE username = 'restore_admin'")
+                .execute(&pool)
+                .await;
+            tracing::info!("Recovery: removed temporary restore_admin account");
+        }
 
         // Ask the backup server to push all its data to this primary
         let push_url = format!("{}/api/backup/push-to", backup_base);
@@ -227,6 +291,19 @@ pub async fn push_sync_to_target(
         created_at: Utc::now().to_rfc3339(),
     };
 
+    // Insert a temporary row into backup_servers so the FK on
+    // backup_sync_log is satisfied. It will be cleaned up after sync.
+    sqlx::query(
+        "INSERT INTO backup_servers (id, name, address, sync_frequency_hours, last_sync_status, enabled, created_at) \
+         VALUES (?, ?, ?, 0, 'never', 0, ?)",
+    )
+    .bind(&temp_server.id)
+    .bind(&temp_server.name)
+    .bind(&temp_server.address)
+    .bind(&temp_server.created_at)
+    .execute(&state.pool)
+    .await?;
+
     let log_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -248,7 +325,8 @@ pub async fn push_sync_to_target(
     let callback_api_key = req.target_api_key;
 
     tokio::spawn(async move {
-        // Run the full sync engine targeting the recovering primary
+        // Run the full sync engine targeting the recovering primary.
+        // is_recovery=true ensures audio files are included.
         run_sync(&pool, &storage_root, &temp_server, &target_api_key, &log_id_clone).await;
 
         // Notify the primary of completion via callback
@@ -276,8 +354,8 @@ pub async fn push_sync_to_target(
             }
         }
 
-        // Clean up temp sync log entries
-        let _ = sqlx::query("DELETE FROM backup_sync_log WHERE server_id = ?")
+        // Clean up temp server + sync log entries (CASCADE deletes logs)
+        let _ = sqlx::query("DELETE FROM backup_servers WHERE id = ?")
             .bind(&temp_server.id)
             .execute(&pool)
             .await;
@@ -322,6 +400,18 @@ pub async fn recovery_callback(
         .execute(&state.pool)
         .await;
 
+    // Clear recovery flag so background auto-scan resumes, then run one
+    // immediate scan to pick up any files on disk that the backup didn't have.
+    let _ = sqlx::query("DELETE FROM server_settings WHERE key = 'recovery_in_progress'")
+        .execute(&state.pool)
+        .await;
+
+    let storage_root = (**state.storage_root.load()).clone();
+    let pool_clone = state.pool.clone();
+    tokio::spawn(async move {
+        crate::backup::autoscan::run_auto_scan_public(&pool_clone, &storage_root).await;
+    });
+
     Ok(StatusCode::OK)
 }
 
@@ -351,4 +441,148 @@ async fn cleanup_recovery_key(pool: &sqlx::SqlitePool) {
     let _ = sqlx::query("DELETE FROM server_settings WHERE key = 'backup_api_key'")
         .execute(pool)
         .await;
+}
+
+/// Insert or update a user from the backup's list-users-full response.
+///
+/// Handles username conflicts by merging: if a local user (e.g. restore_admin)
+/// has the same username, the local user is reparented and replaced.
+async fn upsert_user_from_backup(
+    pool: &sqlx::SqlitePool,
+    user: &serde_json::Value,
+) -> Result<(), String> {
+    let id = user.get("id").and_then(|v| v.as_str())
+        .ok_or("missing id")?;
+    let username = user.get("username").and_then(|v| v.as_str())
+        .ok_or("missing username")?;
+    let password_hash = user.get("password_hash").and_then(|v| v.as_str())
+        .ok_or("missing password_hash")?;
+    let role = user.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+    let quota = user.get("storage_quota_bytes").and_then(|v| v.as_i64())
+        .unwrap_or(10_737_418_240);
+    let created_at = user.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+    let totp_secret: Option<&str> = user.get("totp_secret").and_then(|v| v.as_str());
+    let totp_enabled: i32 = user.get("totp_enabled").and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
+
+    let result = sqlx::query(
+        "INSERT INTO users (id, username, password_hash, created_at, storage_quota_bytes, \
+         role, totp_secret, totp_enabled) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(id) DO UPDATE SET \
+             username            = excluded.username, \
+             password_hash       = excluded.password_hash, \
+             role                = excluded.role, \
+             storage_quota_bytes = excluded.storage_quota_bytes, \
+             totp_secret         = excluded.totp_secret, \
+             totp_enabled        = excluded.totp_enabled",
+    )
+    .bind(id)
+    .bind(username)
+    .bind(password_hash)
+    .bind(created_at)
+    .bind(quota)
+    .bind(role)
+    .bind(totp_secret)
+    .bind(totp_enabled)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = result {
+        let err_str = e.to_string();
+        if err_str.contains("UNIQUE constraint failed: users.username") {
+            // A local user with the same username but different ID exists
+            // (e.g. restore_admin won't conflict, but if there's a real
+            // collision we need to merge)
+            let local_id: Option<String> = sqlx::query_scalar(
+                "SELECT id FROM users WHERE username = ? AND id != ?",
+            )
+            .bind(username)
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            if let Some(ref old_id) = local_id {
+                // Reparent content from old user to the backup's user ID
+                for sql in &[
+                    "UPDATE photos SET user_id = ? WHERE user_id = ?",
+                    "UPDATE trash_items SET user_id = ? WHERE user_id = ?",
+                    "UPDATE photo_tags SET user_id = ? WHERE user_id = ?",
+                    "UPDATE blobs SET user_id = ? WHERE user_id = ?",
+                    "UPDATE audit_log SET user_id = ? WHERE user_id = ?",
+                    "UPDATE client_logs SET user_id = ? WHERE user_id = ?",
+                    "UPDATE shared_albums SET owner_user_id = ? WHERE owner_user_id = ?",
+                    "UPDATE shared_album_members SET user_id = ? WHERE user_id = ?",
+                ] {
+                    let _ = sqlx::query(sql).bind(id).bind(old_id).execute(pool).await;
+                }
+
+                let _ = sqlx::query("DELETE FROM encrypted_galleries WHERE user_id = ?")
+                    .bind(old_id).execute(pool).await;
+                let _ = sqlx::query("DELETE FROM users WHERE id = ?")
+                    .bind(old_id).execute(pool).await;
+
+                tracing::info!(
+                    "Recovery: merged local user {} into backup user {} ({})",
+                    old_id, id, username
+                );
+            }
+
+            // Re-attempt insert now that the conflict is resolved
+            sqlx::query(
+                "INSERT INTO users (id, username, password_hash, created_at, storage_quota_bytes, \
+                 role, totp_secret, totp_enabled) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET \
+                     username            = excluded.username, \
+                     password_hash       = excluded.password_hash, \
+                     role                = excluded.role, \
+                     storage_quota_bytes = excluded.storage_quota_bytes, \
+                     totp_secret         = excluded.totp_secret, \
+                     totp_enabled        = excluded.totp_enabled",
+            )
+            .bind(id)
+            .bind(username)
+            .bind(password_hash)
+            .bind(created_at)
+            .bind(quota)
+            .bind(role)
+            .bind(totp_secret)
+            .bind(totp_enabled)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Re-insert after merge failed: {}", e))?;
+        } else {
+            return Err(format!("DB error: {}", e));
+        }
+    }
+
+    // Sync TOTP backup codes
+    if let Some(codes) = user.get("totp_backup_codes").and_then(|v| v.as_array()) {
+        let _ = sqlx::query("DELETE FROM totp_backup_codes WHERE user_id = ?")
+            .bind(id).execute(pool).await;
+
+        for code in codes {
+            let code_id = code.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let code_hash = code.get("code_hash").and_then(|v| v.as_str()).unwrap_or("");
+            let used: i32 = code.get("used").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+
+            if !code_id.is_empty() && !code_hash.is_empty() {
+                let _ = sqlx::query(
+                    "INSERT INTO totp_backup_codes (id, user_id, code_hash, used) \
+                     VALUES (?, ?, ?, ?) \
+                     ON CONFLICT(id) DO UPDATE SET code_hash = excluded.code_hash, used = excluded.used",
+                )
+                .bind(code_id)
+                .bind(id)
+                .bind(code_hash)
+                .bind(used)
+                .execute(pool)
+                .await;
+            }
+        }
+    }
+
+    Ok(())
 }

@@ -227,6 +227,14 @@ pub async fn backup_receive(
 
     if source == "trash" {
         // ── Upsert into trash_items (full metadata) ───────────────────────────
+        // Remove conflicting row with same file_path but different id (can
+        // happen when auto-scan raced ahead of recovery sync).
+        let _ = sqlx::query("DELETE FROM trash_items WHERE file_path = ? AND id != ?")
+            .bind(&file_path)
+            .bind(&photo_id)
+            .execute(&state.pool)
+            .await;
+
         sqlx::query(
             "INSERT INTO trash_items (
                 id, user_id, photo_id, filename, file_path, mime_type, media_type,
@@ -307,6 +315,15 @@ pub async fn backup_receive(
             .await;
     } else {
         // ── Upsert into photos (full metadata) ───────────────────────────────
+        // During recovery, auto-scan may have already registered the file from
+        // disk with a different UUID. Remove the conflicting row so the upsert
+        // on id can proceed.
+        let _ = sqlx::query("DELETE FROM photos WHERE file_path = ? AND id != ?")
+            .bind(&file_path)
+            .bind(&photo_id)
+            .execute(&state.pool)
+            .await;
+
         sqlx::query(
             "INSERT INTO photos (
                 id, user_id, filename, file_path, mime_type, media_type,

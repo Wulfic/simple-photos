@@ -66,6 +66,7 @@ impl SyncCounters {
 /// **Phase 0b:** Sync user deletions.
 /// **Phase 1:** Delta-transfer photos the remote doesn't have.
 /// **Phase 2:** Delta-transfer trash items the remote doesn't have.
+///
 pub async fn run_sync(
     pool: &sqlx::SqlitePool,
     storage_root: &std::path::Path,
@@ -279,27 +280,14 @@ async fn sync_photos(
     // Pre-fetch ALL photo tags to avoid N+1 inside the transfer loop
     let all_tags = fetch_all_photo_tags(ctx.pool).await;
 
-    // Check whether audio files should be included in sync
-    let audio_backup_enabled: bool = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM server_settings WHERE key = 'audio_backup_enabled'",
-    )
-    .fetch_optional(ctx.pool)
-    .await
-    .ok()
-    .flatten()
-    .map(|v| v == "true")
-    .unwrap_or(false);
-
+    // Sync ALL registered media — including audio. The audio_backup_enabled
+    // setting only controls whether new audio files are *registered* during
+    // auto-scan, not whether already-registered files are transferred.
     let photos: Vec<PhotoToSync> = {
-        let query = if audio_backup_enabled {
+        let query =
             "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
              width, height, duration_secs, camera_model, is_favorite, photo_hash, \
-             crop_metadata, created_at FROM photos"
-        } else {
-            "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
-             width, height, duration_secs, camera_model, is_favorite, photo_hash, \
-             crop_metadata, created_at FROM photos WHERE media_type != 'audio'"
-        };
+             crop_metadata, created_at FROM photos";
         match sqlx::query_as::<_, PhotoToSync>(query)
             .fetch_all(ctx.pool)
             .await

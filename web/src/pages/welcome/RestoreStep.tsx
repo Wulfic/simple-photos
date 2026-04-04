@@ -94,6 +94,8 @@ export default function RestoreStep({
         version: data.version,
         api_key: data.api_key,
         photo_count: data.photo_count,
+        admin_username: username.trim(),
+        admin_password: password,
       });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Verification failed");

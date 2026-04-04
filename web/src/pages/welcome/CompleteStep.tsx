@@ -2,6 +2,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
+import { useAuthStore } from "../../store/auth";
+import { deriveKey } from "../../crypto/crypto";
 import type { WizardStep, CreatedUser, ServerRole, InstallType, RestoreSource } from "./types";
 
 export interface CompleteStepProps {
@@ -32,6 +34,7 @@ export default function CompleteStep({
   restoreSource,
 }: CompleteStepProps) {
   const navigate = useNavigate();
+  const { setTokens, setUsername: storeSetUsername } = useAuthStore();
   const [restoreStatus, setRestoreStatus] = useState("");
   const isRestore = serverRole !== "backup" && installType === "restore" && restoreSource;
 
@@ -164,6 +167,46 @@ export default function CompleteStep({
                 });
 
                 setRestoreStatus("Recovery started! Photos will sync in the background.");
+
+                // ── Re-authenticate as the restored admin ───────────────
+                // The recovery background task pulls real user accounts from
+                // the backup before starting photo sync. Poll until login
+                // succeeds with the original admin credentials, then swap
+                // tokens so the session stays valid after restore_admin is
+                // cleaned up.
+                if (restoreSource.admin_username && restoreSource.admin_password) {
+                  setRestoreStatus("Restoring your account\u2026");
+                  let loggedIn = false;
+                  for (let attempt = 0; attempt < 30; attempt++) {
+                    await new Promise((r) => setTimeout(r, 1000));
+                    try {
+                      const loginRes = await api.auth.login(
+                        restoreSource.admin_username,
+                        restoreSource.admin_password,
+                      );
+                      if (loginRes.access_token && loginRes.refresh_token) {
+                        setTokens(loginRes.access_token, loginRes.refresh_token);
+                        storeSetUsername(restoreSource.admin_username);
+                        try {
+                          await deriveKey(
+                            restoreSource.admin_password,
+                            restoreSource.admin_username,
+                          );
+                        } catch (e) {
+                          console.warn("Failed to derive key for restored admin:", e);
+                        }
+                        loggedIn = true;
+                        setRestoreStatus("Account restored! Finishing setup\u2026");
+                        break;
+                      }
+                    } catch {
+                      // User not available yet — keep polling
+                    }
+                  }
+                  if (!loggedIn) {
+                    console.warn("Could not auto-login as restored admin — user may need to log in manually.");
+                  }
+                }
               }
 
               // ── Normal setup tasks ────────────────────────────────────
@@ -181,9 +224,13 @@ export default function CompleteStep({
               // the storage directory are registered before the gallery loads.
               // (The background autoscan's startup pass runs before the admin
               // account exists, so it finds 0 files on fresh install.)
-              await api.backup.triggerAutoScan().catch((err: unknown) => {
-                console.warn("Post-setup auto-scan failed:", err);
-              });
+              // Skip during restore — the recovery push-sync handles all files
+              // and a post-recovery scan runs automatically when it finishes.
+              if (!isRestore) {
+                await api.backup.triggerAutoScan().catch((err: unknown) => {
+                  console.warn("Post-setup auto-scan failed:", err);
+                });
+              }
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
               console.error("Setup finalization failed:", err);

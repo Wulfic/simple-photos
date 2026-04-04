@@ -43,4 +43,8 @@ export interface RestoreSource {
   version: string;
   api_key: string | null;
   photo_count: number;
+  /** Admin username on the backup server (used to re-login after restore) */
+  admin_username?: string;
+  /** Admin password on the backup server (used to re-login after restore) */
+  admin_password?: string;
 }
