@@ -323,6 +323,57 @@ export default function Welcome() {
 
   // ── Backup pairing ─────────────────────────────────────────────────────
 
+  // ── Restore from backup (primary) ───────────────────────────────────────
+  // After verifying the backup server, create a temporary admin account so
+  // the server considers setup complete, then skip straight to server config.
+  // The recovery engine will import all real user accounts from the backup.
+
+  async function handleRestoreInit(source: RestoreSource) {
+    setError("");
+    setLoading(true);
+    try {
+      // Create a temporary admin account — the setup/init endpoint requires
+      // this before any authenticated API calls work.
+      const tempUser = "restore_admin";
+      const tempPass = "Restore_Temp_" + Math.random().toString(36).slice(2, 10) + "1!";
+
+      await fetch("/api/setup/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: tempUser, password: tempPass }),
+      }).then(async (res) => {
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "Setup init failed" }));
+          throw new Error(err.error || `HTTP ${res.status}`);
+        }
+      });
+
+      // Log in to get an auth token
+      const loginRes = await api.auth.login(tempUser, tempPass);
+      if (!loginRes.access_token || !loginRes.refresh_token) {
+        throw new Error("Unexpected login response");
+      }
+      setTokens(loginRes.access_token, loginRes.refresh_token);
+      storeSetUsername(tempUser);
+      setUsername(tempUser);
+      setPassword(tempPass);
+
+      // Derive encryption key (will be replaced when real users are restored)
+      try {
+        await deriveKey(tempPass, tempUser);
+      } catch (err) {
+        console.warn("Failed to derive encryption key:", err);
+      }
+
+      // Skip account, 2FA, and users — go straight to server config
+      loadStoragePath();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to initialize restore");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handlePaired(data: {
     access_token: string;
     refresh_token: string;
@@ -439,7 +490,8 @@ export default function Welcome() {
               onVerified={(source) => {
                 setRestoreSource(source);
                 setError("");
-                setStep("account");
+                // Skip account/2FA/users — restore imports everything from backup
+                handleRestoreInit(source);
               }}
             />
           )}

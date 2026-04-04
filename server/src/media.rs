@@ -10,7 +10,8 @@ pub const MEDIA_EXTENSIONS: &[&str] = &[
     // Images (all natively renderable by modern browsers)
     "jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "ico",
     // Videos (universally playable in <video>)
-    "mp4", "webm", // Audio (universally playable in <audio>)
+    "mp4", "webm",
+    // Audio (universally playable in <audio>)
     "mp3", "flac", "ogg", "wav",
 ];
 

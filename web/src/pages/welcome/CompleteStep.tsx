@@ -176,6 +176,14 @@ export default function CompleteStep({
               if (keyHex) {
                 await api.encryption.storeKey(keyHex);
               }
+
+              // Trigger an immediate auto-scan so pre-existing media files in
+              // the storage directory are registered before the gallery loads.
+              // (The background autoscan's startup pass runs before the admin
+              // account exists, so it finds 0 files on fresh install.)
+              await api.backup.triggerAutoScan().catch((err: unknown) => {
+                console.warn("Post-setup auto-scan failed:", err);
+              });
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
               console.error("Setup finalization failed:", err);

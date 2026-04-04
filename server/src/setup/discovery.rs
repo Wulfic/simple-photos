@@ -3,7 +3,7 @@
 //! The `discover()` handler orchestrates three phases (UDP broadcast, local
 //! probing, subnet scan) implemented in [`super::discovery_phases`].
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::Json;
 
 use crate::error::AppError;
@@ -12,6 +12,13 @@ use crate::state::AppState;
 use super::discovery_phases::{
     deduplicate_servers, phase1_udp_broadcast, phase2_local_probing, phase3_subnet_scan,
 };
+
+#[derive(serde::Deserialize, Default)]
+pub struct DiscoverParams {
+    /// When `"backup"`, include backup-mode servers in results (restore flow).
+    #[serde(default)]
+    pub mode: Option<String>,
+}
 
 // ── Handler ─────────────────────────────────────────────────────────────────
 
@@ -22,8 +29,13 @@ use super::discovery_phases::{
 /// Uses the dedicated discovery port (default 3301) to find servers with a
 /// single probe per IP, supplemented by UDP broadcast and localhost fallbacks.
 ///
+/// Pass `?mode=backup` to include backup-mode servers (restore-from-backup flow).
+///
 /// Only works during first-run setup (zero users in DB) — no auth required.
-pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
+pub async fn discover(
+    State(state): State<AppState>,
+    Query(params): Query<DiscoverParams>,
+) -> Result<Json<serde_json::Value>, AppError> {
     // Guard: only works when no users exist
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(&state.read_pool)
@@ -76,12 +88,13 @@ pub async fn discover(State(state): State<AppState>) -> Result<Json<serde_json::
     ).await;
 
     let discovered_len = discovered.len();
-    let final_servers = deduplicate_servers(discovered);
+    let keep_backups = params.mode.as_deref() == Some("backup");
+    let final_servers = deduplicate_servers(discovered, keep_backups);
     tracing::info!(
-        "Discovery: found {} servers ({} after dedup, {} after primary-only filter)",
+        "Discovery: found {} servers ({} after dedup{})",
         discovered_len,
         final_servers.len(),
-        final_servers.len()
+        if keep_backups { ", backups included" } else { ", primary-only filter" }
     );
 
     Ok(Json(serde_json::json!({ "servers": final_servers })))
