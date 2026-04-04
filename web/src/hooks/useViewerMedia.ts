@@ -9,6 +9,7 @@ import { api } from "../api/client";
 import { decrypt } from "../crypto/crypto";
 import { db, type MediaType } from "../db";
 import { base64ToUint8Array } from "../utils/media";
+import { useAuthStore } from "../store/auth";
 import type { MediaPayload, PreloadEntry, CropMetadata, PhotoInfoData } from "../types/media";
 export type { MediaPayload, PreloadEntry, CropMetadata, PhotoInfoData };
 
@@ -51,6 +52,30 @@ export default function useViewerMedia(
     setLoading(true);
     setError("");
     try {
+      // ── Server-side photo path (autoscanned, not yet encrypted) ──────
+      const cachedPhoto = await db.photos.get(blobId);
+      if (cachedPhoto?.serverSide && cachedPhoto?.serverPhotoId) {
+        const token = useAuthStore.getState().accessToken;
+        const url = `/api/photos/${cachedPhoto.serverPhotoId}/web?token=${token}`;
+        setMediaUrl(url);
+        setFilename(cachedPhoto.filename);
+        setMimeType(cachedPhoto.mimeType);
+        const resolvedType = cachedPhoto.mediaType ?? "photo";
+        setMediaType(resolvedType);
+        let photoCropData = null;
+        if (cachedPhoto.cropData) {
+          try { photoCropData = JSON.parse(cachedPhoto.cropData); } catch { /* ignore */ }
+        }
+        preloadCache.current.set(blobId, {
+          url, filename: cachedPhoto.filename, mimeType: cachedPhoto.mimeType,
+          mediaType: resolvedType, cropData: photoCropData,
+          isFavorite: cachedPhoto.isFavorite ?? false,
+        });
+        setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+        setLoading(false);
+        return;
+      }
+
       // Check IndexedDB full-photo cache for instant display
       const idbCached = await db.fullPhotos?.get(blobId);
       if (idbCached?.data) {
