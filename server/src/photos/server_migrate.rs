@@ -218,6 +218,10 @@ async fn run_migration(
 
 /// Start encryption migration for all unencrypted photos.
 /// Called after autoscan and on startup.
+///
+/// Re-checks for newly arrived unencrypted photos after each run so that
+/// files synced from a primary server during a migration batch are not left
+/// behind.
 pub async fn run_migration_from_stored_key(
     key: [u8; 32],
     pool: sqlx::SqlitePool,
@@ -234,36 +238,57 @@ pub async fn run_migration_from_stored_key(
         }
     }
 
-    let count: i64 = match sqlx::query_scalar(
-        "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
-    )
-    .fetch_one(&pool)
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("[SERVER_MIG] Failed to count photos: {}", e);
+    loop {
+        let count: i64 = match sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("[SERVER_MIG] Failed to count photos: {}", e);
+                return;
+            }
+        };
+
+        if count == 0 {
+            tracing::info!("[SERVER_MIG] No photos to migrate");
             return;
         }
-    };
 
-    if count == 0 {
-        tracing::info!("[SERVER_MIG] No photos to migrate");
-        return;
+        let progress = Arc::new(MigrationProgress::new(count as u64));
+        {
+            let mut guard = progress_store().write().await;
+            *guard = Some(progress.clone());
+        }
+
+        tracing::info!(
+            "[SERVER_MIG] Starting server-side migration for {} photos",
+            count
+        );
+
+        run_migration(key, pool.clone(), storage_root.clone(), progress).await;
+
+        // Re-check: photos may have arrived during the migration (e.g. backup sync).
+        // If there are more, loop and process them immediately.
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap_or(0);
+
+        if remaining == 0 {
+            tracing::info!("[SERVER_MIG] All photos encrypted");
+            return;
+        }
+
+        tracing::info!(
+            "[SERVER_MIG] {} new unencrypted photos arrived during migration, re-running",
+            remaining
+        );
     }
-
-    let progress = Arc::new(MigrationProgress::new(count as u64));
-    {
-        let mut guard = progress_store().write().await;
-        *guard = Some(progress.clone());
-    }
-
-    tracing::info!(
-        "[SERVER_MIG] Starting server-side migration for {} photos",
-        count
-    );
-
-    run_migration(key, pool, storage_root, progress).await;
 }
 
 /// Resume an interrupted encryption migration on server startup.

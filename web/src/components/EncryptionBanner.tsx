@@ -1,13 +1,11 @@
 /** Global encryption-progress banner.
  *
  *  Polls the encrypted-sync API to count photos pending encryption
- *  (encrypted_blob_id IS NULL) and also writes serverSide entries into IDB
- *  so the gallery shows them immediately.  Shown across all pages via
+ *  (encrypted_blob_id IS NULL).  Shown across all pages via
  *  ProtectedLayout; dismissible with a close button. */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "../api/client";
 import { hasCryptoKey } from "../crypto/crypto";
-import { db, mediaTypeFromMime, type MediaType } from "../db";
 
 export default function EncryptionBanner() {
   const [dismissed, setDismissed] = useState(false);
@@ -16,7 +14,6 @@ export default function EncryptionBanner() {
 
   const poll = useCallback(async () => {
     try {
-      // Quick paginated fetch of all sync records
       type SyncRecord = Awaited<ReturnType<typeof api.photos.encryptedSync>>["photos"][number];
       const all: SyncRecord[] = [];
       let cursor: string | undefined;
@@ -29,39 +26,6 @@ export default function EncryptionBanner() {
       const pending = all.filter((p) => !p.encrypted_blob_id);
       const encrypted = all.length - pending.length;
       setCounts({ total: all.length, pending: pending.length, encrypted });
-
-      // Ensure serverSide entries exist in IDB so the gallery shows them
-      // even before useGalleryData runs its full sync.
-      if (pending.length > 0) {
-        const existingIds = new Set(
-          (await db.photos.toArray()).map((p) => p.serverPhotoId).filter(Boolean)
-        );
-        for (const photo of pending) {
-          if (existingIds.has(photo.id)) continue;
-          let takenAt: number;
-          try {
-            takenAt = photo.taken_at
-              ? new Date(photo.taken_at).getTime()
-              : new Date(photo.created_at).getTime();
-          } catch {
-            takenAt = new Date(photo.created_at).getTime();
-          }
-          await db.photos.put({
-            blobId: photo.id,
-            filename: photo.filename,
-            takenAt,
-            mimeType: photo.mime_type,
-            mediaType: (photo.media_type as MediaType) ?? mediaTypeFromMime(photo.mime_type),
-            width: photo.width,
-            height: photo.height,
-            duration: photo.duration_secs ?? undefined,
-            albumIds: [],
-            isFavorite: photo.is_favorite ?? false,
-            serverPhotoId: photo.id,
-            serverSide: true,
-          });
-        }
-      }
     } catch {
       // Non-critical — will retry on next interval
     }
@@ -74,8 +38,8 @@ export default function EncryptionBanner() {
     // Initial check
     poll();
 
-    // Poll every 5 s
-    timerRef.current = setInterval(poll, 5_000);
+    // Poll every 2 s
+    timerRef.current = setInterval(poll, 2_000);
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
