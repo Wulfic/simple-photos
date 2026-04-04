@@ -132,10 +132,32 @@ export function useGalleryData(): GalleryDataResult {
     // the loaders update state that the effect closes over.
   }, []);
 
+  // ── Periodic re-sync — keeps the gallery live ──────────────────────────
+  // Re-fetches server state every few seconds so newly discovered / encrypted
+  // photos appear without a manual page refresh.  The useLiveQuery on IDB
+  // immediately reflects the updates to the UI.
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    // Only start polling after the initial sync has completed
+    if (!encryptedDataReady) return;
+    syncIntervalRef.current = setInterval(() => {
+      loadEncryptedPhotos().catch(() => {});
+    }, 5_000);
+    return () => {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadEncryptedPhotos is stable within the hook
+  }, [encryptedDataReady]);
+
   // ── Load encrypted-mode photos from blobs + IndexedDB ──────────────────
 
   async function loadEncryptedPhotos() {
-    setLoading(true);
+    // Only show the loading spinner on the initial sync, not background polls
+    if (!encryptedDataReady) setLoading(true);
     try {
       // Phase 1: Fetch metadata via encrypted-sync endpoint.
       type SyncRecord = Awaited<ReturnType<typeof api.photos.encryptedSync>>["photos"][number];
