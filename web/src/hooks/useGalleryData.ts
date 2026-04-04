@@ -163,6 +163,7 @@ export function useGalleryData(): GalleryDataResult {
         ...(await fetchAllPages("photo")),
         ...(await fetchAllPages("gif")),
         ...(await fetchAllPages("video")),
+        ...(await fetchAllPages("audio")),
       ];
       for (const blob of allBlobMedia) {
         serverBlobIds.add(blob.id);

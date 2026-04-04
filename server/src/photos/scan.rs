@@ -368,6 +368,16 @@ pub async fn scan_and_register(
         tracing::info!("Generated {} missing thumbnails", tc);
     }
 
+    // Trigger encryption migration for any newly registered (unencrypted) photos
+    if new_count > 0 {
+        let pool_clone = state.pool.clone();
+        let root_clone = storage_root.clone();
+        let jwt_secret = state.config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::photos::server_migrate::auto_migrate_after_scan(pool_clone, root_clone, jwt_secret).await;
+        });
+    }
+
     Ok(Json(serde_json::json!({
         "registered": new_count,
         "metadata_updated": fixed_count,
