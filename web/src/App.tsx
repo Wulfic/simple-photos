@@ -16,6 +16,7 @@ import SecureGallery from "./pages/SecureGallery";
 import SharedAlbumDetail from "./pages/SharedAlbumDetail";
 import Search from "./pages/Search";
 import Diagnostics from "./pages/Diagnostics";
+import EncryptionBanner from "./components/EncryptionBanner";
 
 /**
  * Layout route for authenticated pages.
@@ -82,6 +83,7 @@ function ProtectedLayout() {
 
   return (
     <>
+      <EncryptionBanner />
       <Outlet />
     </>
   );

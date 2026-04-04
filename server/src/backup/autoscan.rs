@@ -153,6 +153,14 @@ pub async fn trigger_auto_scan(
 }
 
 /// Scan storage directory and register any unregistered media files for ALL users.
+///
+/// Public alias so other modules (e.g. encryption key storage) can trigger a
+/// scan without going through the HTTP handler.
+pub async fn run_auto_scan_public(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) -> i64 {
+    run_auto_scan(pool, storage_root).await
+}
+
+/// Scan storage directory and register any unregistered media files for ALL users.
 async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) -> i64 {
     // Get the first admin user to assign new photos to
     let admin_id: Option<String> = sqlx::query_scalar(

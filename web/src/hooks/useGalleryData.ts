@@ -212,11 +212,12 @@ export function useGalleryData(): GalleryDataResult {
       const idbByBlobId = new Map(survivingCached.map((p) => [p.blobId, p]));
 
       // Phase 3: Populate IndexedDB from sync records.
-      // Skip autoscanned photos (no encrypted_blob_id) — encrypted-only mode.
       for (const photo of allSyncPhotos) {
-        if (!photo.encrypted_blob_id) continue; // Skip plain-mode autoscanned entries
+        // Photos without encrypted_blob_id are server-side (autoscanned but
+        // not yet encrypted). We still show them using the server file API.
+        const isServerSide = !photo.encrypted_blob_id;
 
-        let existing = idbByServerId.get(photo.id);
+        let existing = isServerSide ? undefined : idbByServerId.get(photo.id);
 
         if (!existing && photo.encrypted_blob_id) {
           // Try to bind an unbound unsynced original upload
@@ -237,6 +238,12 @@ export function useGalleryData(): GalleryDataResult {
           const updates: Partial<CachedPhoto> = {};
           if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
           if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
+          // Transition from server-side to encrypted mode when encryption completes
+          if (existing.serverSide && photo.encrypted_blob_id) {
+            updates.serverSide = undefined;
+            updates.storageBlobId = photo.encrypted_blob_id;
+            updates.thumbnailBlobId = photo.encrypted_thumb_blob_id ?? undefined;
+          }
           // Retry thumbnail download if the previous attempt failed
           if (!existing.thumbnailData) {
             const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
@@ -302,6 +309,7 @@ export function useGalleryData(): GalleryDataResult {
           cropData: photo.crop_metadata ?? undefined,
           isFavorite: photo.is_favorite ?? false,
           serverPhotoId: photo.id,
+          serverSide: isServerSide || undefined,
         });
       }
 

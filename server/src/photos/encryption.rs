@@ -61,10 +61,26 @@ pub async fn store_encryption_key(
 
     tracing::info!(user_id = %auth.user_id, "Encryption key stored by admin");
 
-    // Trigger encryption migration for any unencrypted photos
+    // Trigger a full scan → encrypt cycle.  During first-run setup the photos
+    // table is still empty (the startup autoscan ran before the admin existed),
+    // so we must scan *first*, then encrypt any newly discovered files.
+    //
+    // The scan runs synchronously so the frontend can navigate to the gallery
+    // immediately after the response and find the discovered photos.
+    // Encryption is spawned in the background because it can take a while.
     {
-        let pool_clone = state.pool.clone();
         let storage_root = (**state.storage_root.load()).clone();
+        let count = if let Ok(_guard) = state.scan_lock.try_lock() {
+            crate::backup::autoscan::run_auto_scan_public(&state.pool, &storage_root).await
+        } else {
+            tracing::info!("[STORE_KEY] Scan skipped — another scan is in progress");
+            0
+        };
+        if count > 0 {
+            tracing::info!("[STORE_KEY] Discovered {} new files, starting encryption", count);
+        }
+        // Phase 2: encrypt any unencrypted photos in the background
+        let pool_clone = state.pool.clone();
         let jwt_secret = state.config.auth.jwt_secret.clone();
         tokio::spawn(async move {
             crate::photos::server_migrate::auto_migrate_after_scan(
