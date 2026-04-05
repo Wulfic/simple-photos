@@ -18,6 +18,7 @@ use super::models::*;
 /// **Phase 2 — Photos:** Downloads all photos not already present locally
 /// (by ID or file_path), preserving the original `user_id`. Falls back to
 /// the admin's ID only when the referenced user doesn't exist locally.
+#[allow(dead_code)]
 pub(crate) async fn run_recovery(
     pool: &sqlx::SqlitePool,
     storage_root: &std::path::Path,
@@ -328,6 +329,7 @@ pub(crate) async fn run_recovery(
 /// Each user is upserted via INSERT ... ON CONFLICT(id) DO UPDATE so
 /// re-running recovery is idempotent and won't clobber local changes
 /// if the user already exists.
+#[allow(dead_code)]
 async fn recover_users(
     pool: &sqlx::SqlitePool,
     client: &reqwest::Client,

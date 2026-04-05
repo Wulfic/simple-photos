@@ -51,6 +51,7 @@ pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Parse a hex-encoded AES-256 key (64 hex chars → 32 bytes).
+#[allow(dead_code)]
 pub fn parse_key_hex(hex_str: &str) -> Result<[u8; 32], String> {
     let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid hex key: {}", e))?;
     if bytes.len() != 32 {
@@ -164,6 +165,7 @@ pub async fn load_wrapped_key(
 }
 
 /// Clear the stored encryption key from the database.
+#[allow(dead_code)]
 pub async fn clear_wrapped_key(pool: &sqlx::SqlitePool) -> Result<(), String> {
     sqlx::query(
         "DELETE FROM server_settings WHERE key IN ('encryption_key_wrapped', 'encryption_key_active')",
