@@ -15,8 +15,6 @@ use super::sync_transfer::{
 };
 use super::sync_blobs::sync_blobs;
 use super::sync_galleries::sync_secure_galleries_to_backup;
-use super::sync_metadata::sync_metadata
-use super::sync_galleries::sync_secure_galleries_to_backup;
 use super::sync_metadata::sync_metadata_to_backup;
 use super::sync_users::{sync_user_deletions_to_backup, sync_users_to_backup};
 
@@ -120,8 +118,6 @@ pub async fn run_sync(
         return;
     }
 
-    let remote_blob_ids: HashSet<String> =
-        fetch_remote_ids(ctx.client, &ctx.base_url, "/backup/list-blobs", ctx.api_key).await;
     // ── Delta: fetch IDs the remote already has ──────────────────────────
     let remote_photo_ids: HashSet<String> =
         fetch_remote_ids(ctx.client, &ctx.base_url, "/backup/list", ctx.api_key).await;

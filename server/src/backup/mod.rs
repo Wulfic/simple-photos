@@ -34,8 +34,6 @@ pub mod sync;
 pub mod sync_blobs;
 pub mod sync_engine;
 pub mod sync_galleries;
-pub mod sync_metadata
-pub mod sync_galleries;
 pub mod sync_metadata;
 pub mod sync_transfer;
 pub mod sync_users;

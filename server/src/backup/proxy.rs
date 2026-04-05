@@ -5,7 +5,6 @@
 //! proxied through this server.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::Json;
 
 use crate::auth::middleware::AuthUser;
