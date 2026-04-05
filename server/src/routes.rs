@@ -359,15 +359,6 @@ fn backup_routes() -> Router<AppState> {
             "/backup/sync-metadata",
             post(crate::backup::serve::backup_sync_metadata),
         )
-        .route("/backup/list-blobs", get(crate::backup::serve::backup_list_blobs))
-        .route(
-            "/backup/receive-blob",
-            post(crate::backup::serve::backup_receive_blob),
-        )
-        .route(
-            "/backup/sync-metadata",
-            post(crate::backup::serve::backup_sync_metadata),
-        )
         .route(
             "/backup/download/{photo_id}",
             get(crate::backup::serve::backup_download_photo),
