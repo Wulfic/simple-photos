@@ -156,3 +156,27 @@ pub struct BackupDiagnosticsReport {
     /// RFC-3339 timestamp at which this report was collected on the backup
     pub collected_at: String,
 }
+
+/// A single audit log entry forwarded from a backup server to the primary.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ForwardedAuditLog {
+    pub id: String,
+    pub event_type: String,
+    pub user_id: Option<String>,
+    pub ip_address: String,
+    pub user_agent: String,
+    pub details: String,
+    pub created_at: String,
+}
+
+/// Batch of forwarded audit log entries.
+#[derive(Debug, Deserialize)]
+pub struct ForwardLogsRequest {
+    pub logs: Vec<ForwardedAuditLog>,
+}
+
+/// Response for log forwarding.
+#[derive(Debug, Serialize)]
+pub struct ForwardLogsResponse {
+    pub accepted: usize,
+}

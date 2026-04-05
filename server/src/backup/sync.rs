@@ -15,6 +15,7 @@ use axum::Json;
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::setup::admin::require_admin;
@@ -69,6 +70,7 @@ pub fn try_acquire_sync(server_id: &str) -> Option<SyncGuard> {
 pub async fn trigger_sync(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(server_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&state, &auth).await?;
@@ -122,6 +124,18 @@ pub async fn trigger_sync(
         let _guard = guard;
         run_sync(&pool, &storage_root, &server, &api_key, &log_id_clone).await;
     });
+
+    audit::log(
+        &state,
+        AuditEvent::SyncTrigger,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "server_id": server_id,
+            "sync_id": log_id,
+        })),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "message": "Sync started",
@@ -204,6 +218,7 @@ pub async fn handle_request_sync(
 pub async fn force_sync_from_primary(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&state, &auth).await?;
 
@@ -288,6 +303,17 @@ pub async fn force_sync_from_primary(
         "Force sync requested from primary server at {}",
         primary_url
     );
+
+    audit::log(
+        &state,
+        AuditEvent::SyncForceFromPrimary,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "primary_url": primary_url,
+        })),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "message": body.get("message").and_then(|m| m.as_str()).unwrap_or("Sync requested"),
@@ -382,6 +408,17 @@ pub async fn background_sync_task(pool: sqlx::SqlitePool, storage_root: std::pat
                     .flatten();
 
             run_sync(&pool, &storage_root, server, &api_key, &log_id).await;
+
+            audit::log_background(
+                &pool,
+                AuditEvent::BackupSyncCycleComplete,
+                Some(serde_json::json!({
+                    "server_id": server.id,
+                    "server_name": server.name,
+                    "sync_id": log_id,
+                })),
+            );
+
             drop(guard);
         }
     }

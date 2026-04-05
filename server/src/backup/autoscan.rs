@@ -56,6 +56,14 @@ pub async fn background_auto_scan_task(
     );
     update_last_scan_time(&pool).await;
 
+    if count > 0 {
+        crate::audit::log_background(
+            &pool,
+            crate::audit::AuditEvent::AutoScanComplete,
+            Some(serde_json::json!({"trigger": "startup", "new_count": count})),
+        );
+    }
+
     // After startup scan, trigger encryption for any unencrypted photos
     if count > 0 {
         let pool_clone = pool.clone();
@@ -84,6 +92,14 @@ pub async fn background_auto_scan_task(
             count
         );
         update_last_scan_time(&pool).await;
+
+        if count > 0 {
+            crate::audit::log_background(
+                &pool,
+                crate::audit::AuditEvent::AutoScanComplete,
+                Some(serde_json::json!({"trigger": "interval", "new_count": count})),
+            );
+        }
 
         // Trigger encryption for any newly registered photos
         if count > 0 {
@@ -118,6 +134,7 @@ async fn update_last_scan_time(pool: &sqlx::SqlitePool) {
 pub async fn trigger_auto_scan(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
     crate::setup::admin::require_admin(&state, &auth).await?;
 
@@ -135,6 +152,18 @@ pub async fn trigger_auto_scan(
 
     // Update last scan time
     update_last_scan_time(&pool).await;
+
+    crate::audit::log(
+        &state,
+        crate::audit::AuditEvent::AutoScanComplete,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "trigger": "manual",
+            "new_count": count,
+        })),
+    )
+    .await;
 
     // Trigger encryption for any unencrypted photos (including newly discovered)
     if count > 0 {

@@ -250,6 +250,11 @@ pub async fn run_migration_from_stored_key(
 
         if remaining == 0 {
             tracing::info!("[SERVER_MIG] All photos encrypted");
+            crate::audit::log_background(
+                &pool,
+                crate::audit::AuditEvent::EncryptionMigrationComplete,
+                Some(serde_json::json!({"migrated": count})),
+            );
             return;
         }
 

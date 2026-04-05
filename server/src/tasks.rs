@@ -9,6 +9,9 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::config::AppConfig;
+use crate::state::AuditBroadcast;
+
+use crate::audit;
 
 /// Spawn every long-running background task.
 ///
@@ -20,6 +23,7 @@ pub fn spawn_all(
     config: &AppConfig,
     storage_root_swap: &Arc<arc_swap::ArcSwap<PathBuf>>,
     scan_lock: &Arc<tokio::sync::Mutex<()>>,
+    audit_tx: &tokio::sync::broadcast::Sender<AuditBroadcast>,
 ) {
     spawn_housekeeping(pool.clone());
     spawn_trash_purge(pool.clone(), config.storage.root.clone());
@@ -29,6 +33,7 @@ pub fn spawn_all(
         config.storage.root.clone(),
         PathBuf::from(&config.database.path),
     );
+    spawn_log_forward(pool.clone(), audit_tx.clone());
     spawn_broadcast(pool.clone(), config.server.port);
     spawn_discovery_listener(pool.clone(), Arc::new(config.clone()));
     spawn_auto_scan(
@@ -113,6 +118,12 @@ fn spawn_housekeeping(pool: SqlitePool) {
 
                     if let Err(e) = tx.commit().await {
                         tracing::error!("Housekeeping transaction commit failed: {}", e);
+                    } else {
+                        audit::log_background(
+                            &pool,
+                            audit::AuditEvent::HousekeepingComplete,
+                            Some(serde_json::json!({"task": "housekeeping"})),
+                        );
                     }
                 }
                 Err(e) => tracing::error!("Housekeeping: failed to begin transaction: {}", e),
@@ -144,6 +155,13 @@ fn spawn_diagnostics_push(pool: SqlitePool, storage_root: PathBuf, db_path: Path
     tokio::spawn(async move {
         crate::backup::diagnostics::background_diagnostics_push_task(pool, storage_root, db_path)
             .await;
+    });
+}
+
+/// Forward audit logs from backup to primary in real time.
+fn spawn_log_forward(pool: SqlitePool, audit_tx: tokio::sync::broadcast::Sender<AuditBroadcast>) {
+    tokio::spawn(async move {
+        crate::backup::diagnostics::background_log_forward_task(pool, audit_tx).await;
     });
 }
 

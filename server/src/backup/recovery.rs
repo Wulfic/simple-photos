@@ -17,6 +17,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::setup::admin::require_admin;
@@ -44,9 +45,21 @@ use super::sync_engine::run_sync;
 pub async fn recover_from_backup(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(server_id): Path<String>,
 ) -> Result<(StatusCode, Json<RecoveryResponse>), AppError> {
     require_admin(&state, &auth).await?;
+
+    audit::log(
+        &state,
+        AuditEvent::RecoveryStart,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "server_id": server_id,
+        })),
+    )
+    .await;
 
     let server = sqlx::query_as::<_, BackupServer>(
         "SELECT id, name, address, sync_frequency_hours, last_sync_at, \

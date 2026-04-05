@@ -145,7 +145,7 @@ pub(crate) async fn run_recovery(
     // recovered.  The INSERT below handles true autoscan duplicates.
     let missing: Vec<&BackupPhotoRecord> = remote_photos
         .iter()
-        .filter(|p| !local_id_set.contains(&p.id
+        .filter(|p| !local_id_set.contains(&p.id))
         .collect();
 
     tracing::info!(

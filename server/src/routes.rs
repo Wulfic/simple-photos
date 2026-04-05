@@ -375,6 +375,10 @@ fn backup_routes() -> Router<AppState> {
             "/backup/report",
             post(crate::backup::diagnostics::receive_backup_report),
         )
+        .route(
+            "/backup/forward-logs",
+            post(crate::backup::diagnostics::receive_forwarded_logs),
+        )
 }
 
 // ── Shared albums ────────────────────────────────────────────────────
@@ -461,6 +465,10 @@ fn diagnostics_routes() -> Router<AppState> {
         .route(
             "/admin/audit-logs",
             get(crate::diagnostics::handlers::list_audit_logs),
+        )
+        .route(
+            "/admin/audit-logs/stream",
+            get(crate::diagnostics::handlers::stream_audit_logs),
         )
         // External diagnostics (HTTP Basic Auth)
         .route(
