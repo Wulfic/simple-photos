@@ -119,35 +119,37 @@ pub(crate) async fn run_recovery(
         remote_photos.len()
     );
 
-    // Get local photo IDs AND file_paths for deduplication.
-    //   ID dedup handles re-recovery of the same backup.
-    //   file_path dedup prevents re-downloading files that were registered
-    //   by a local scan (different ID, same on-disk file).
-    let local_entries: Vec<(String, String)> =
-        match sqlx::query_as::<_, (String, String)>("SELECT id, file_path FROM photos")
+    // Get local photo IDs for deduplication.
+    // ID dedup handles re-recovery of the same backup.
+    // file_path dedup is intentionally NOT done here because photo copies
+    // ("Save Copy") share a file_path with the original.  The INSERT
+    // WHERE NOT EXISTS handles true autoscan duplicates instead.
+    let local_id_set: std::collections::HashSet<String> =
+        match sqlx::query_scalar::<_, String>("SELECT id FROM photos")
             .fetch_all(pool)
             .await
         {
-            Ok(rows) => rows,
+            Ok(rows) => rows.into_iter().collect(),
             Err(e) => {
                 update_recovery_log(pool, recovery_id, "error", 0, 0, Some(&e.to_string())).await;
                 return;
             }
         };
 
-    let local_id_set: std::collections::HashSet<String> =
-        local_entries.iter().map(|(id, _)| id.clone()).collect();
-    let local_path_set: std::collections::HashSet<String> =
-        local_entries.iter().map(|(_, fp)| fp.clone()).collect();
+    // Filter to photos not already on this server (by ID only).
 
-    // Filter to photos not already on this server (by ID or file_path)
+    // Filter to photos not already on this server (by ID only).
+    // We no longer filter by file_path because photo copies created by
+    // "Save Copy" intentionally share a file_path with the original.
+    // Filtering by file_path would prevent the second row from being
+    // recovered.  The INSERT below handles true autoscan duplicates.
     let missing: Vec<&BackupPhotoRecord> = remote_photos
         .iter()
-        .filter(|p| !local_id_set.contains(&p.id) && !local_path_set.contains(&p.file_path))
+        .filter(|p| !local_id_set.contains(&p.id
         .collect();
 
     tracing::info!(
-        "Recovery from '{}': {} photos to download ({} already exist locally by ID or file_path)",
+        "Recovery from '{}': {} photos to download ({} already exist locally by ID)",
         server.name,
         missing.len(),
         remote_photos.len() - missing.len()
@@ -231,20 +233,28 @@ pub(crate) async fn run_recovery(
 
         // Register in the photos table — preserve the original photo ID from
         // the backup so delta-sync and re-recovery can deduplicate correctly.
-        // ON CONFLICT(id) DO NOTHING makes re-runs idempotent.
-        // The WHERE NOT EXISTS guard prevents creating a duplicate row when
-        // the same file_path already exists under a different local ID
-        // (e.g. registered by a local scan between pre-filter and INSERT).
         let now = Utc::now().to_rfc3339();
         let thumb_filename = format!("{}.thumb.jpg", photo.id);
         let thumb_rel = format!(".thumbnails/{}", thumb_filename);
 
+        // INSERT OR IGNORE handles id conflicts (re-recovery idempotency).
+        // The WHERE NOT EXISTS guard prevents creating a duplicate when the
+        // same file_path was registered by a local autoscan (different ID,
+        // same file).  We only check rows that have a photo_hash (canonical
+        // INSERT OR IGNORE handles id conflicts (re-recovery idempotency).
+        // The WHERE NOT EXISTS guard prevents creating a duplicate when the
+        // same file_path was registered by a local autoscan (different ID,
+        // same file).  We only check rows that have a photo_hash (canonical
+        // rows) — copy rows (photo_hash IS NULL) intentionally share a
+        // file_path with the original and must be allowed through.
         let result = sqlx::query(
             "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
              size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
              thumb_path, created_at, is_favorite, camera_model, photo_hash, crop_metadata) \
              SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19 \
-             WHERE NOT EXISTS (SELECT 1 FROM photos WHERE file_path = ?4)",
+             WHERE NOT EXISTS (SELECT 1 FROM photos WHERE file_path = ?4 AND photo_hash IS NOT NULL AND id != ?1sh, crop_metadata) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19 \
+             WHERE NOT EXISTS (SELECT 1 FROM photos WHERE file_path = ?4 AND photo_hash IS NOT NULL AND id != ?1)",
         )
         .bind(&photo.id)           // ?1
         .bind(effective_user_id)    // ?2
