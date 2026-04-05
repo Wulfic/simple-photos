@@ -67,6 +67,7 @@ pub async fn encrypted_sync(
              is_favorite, crop_metadata, photo_hash \
              FROM photos \
              WHERE user_id = ? \
+             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
              AND COALESCE(taken_at, created_at) < ? \
              ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \
              LIMIT ?",
@@ -83,6 +84,7 @@ pub async fn encrypted_sync(
              is_favorite, crop_metadata, photo_hash \
              FROM photos \
              WHERE user_id = ? \
+             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
              ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \
              LIMIT ?",
         )

@@ -12,6 +12,19 @@ use sha2::{Digest, Sha256};
 
 // ── Sync data models ─────────────────────────────────────────────────────────
 
+/// All metadata columns needed to faithfully replicate a blob entry.
+#[derive(Debug, sqlx::FromRow)]
+pub struct BlobToSync {
+    pub id: String,
+    pub user_id: String,
+    pub blob_type: String,
+    pub size_bytes: i64,
+    pub client_hash: Option<String>,
+    pub upload_time: String,
+    pub storage_path: String,
+    pub content_hash: Option<String>,
+}
+
 /// All metadata columns needed to faithfully replicate a photo entry.
 #[derive(Debug, sqlx::FromRow)]
 pub struct PhotoToSync {
@@ -63,6 +76,23 @@ pub struct TrashToSync {
 }
 
 // ── Header building ──────────────────────────────────────────────────────────
+
+/// Build metadata headers for a blob transfer.
+pub fn build_blob_headers(blob: &BlobToSync) -> Vec<(String, String)> {
+    let mut headers = vec![
+        ("X-User-Id".to_string(), blob.user_id.clone()),
+        ("X-Blob-Type".to_string(), blob.blob_type.clone()),
+        ("X-Upload-Time".to_string(), blob.upload_time.clone()),
+        ("X-Size-Bytes".to_string(), blob.size_bytes.to_string()),
+    ];
+    if let Some(ref v) = blob.client_hash {
+        headers.push(("X-Client-Hash".to_string(), v.clone()));
+    }
+    if let Some(ref v) = blob.content_hash {
+        headers.push(("X-Original-Content-Hash".to_string(), v.clone()));
+    }
+    headers
+}
 
 /// Build the metadata headers that are common to both photo and trash
 /// transfers: optional fields like taken_at, GPS, camera model, etc.
@@ -294,6 +324,55 @@ pub async fn send_file(
         .body(file_data);
 
     // Attach all metadata headers so the backup stores a faithful replica
+    for (name, value) in extra_headers {
+        if let Ok(hv) = reqwest::header::HeaderValue::from_str(value) {
+            req = req.header(name.as_str(), hv);
+        }
+    }
+
+    if let Some(ref key) = api_key {
+        req = req.header("X-API-Key", key.as_str());
+    }
+
+    match req.send().await {
+        Ok(resp) if resp.status().is_success() => Ok(()),
+        Ok(resp) => Err(format!("HTTP {}", resp.status())),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Send a blob file to the backup's `/backup/receive-blob` endpoint.
+/// Similar to [`send_file`] but targets the blob receive endpoint and
+/// uses `X-Blob-Id` / `X-Storage-Path` headers instead of photo headers.
+pub async fn send_blob_to_backup(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &Option<String>,
+    storage_root: &std::path::Path,
+    blob: &BlobToSync,
+    extra_headers: &[(String, String)],
+) -> Result<(), String> {
+    let full_path = storage_root.join(&blob.storage_path);
+    if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
+        return Err("blob file not found on disk".to_string());
+    }
+
+    let file_data = tokio::fs::read(&full_path)
+        .await
+        .map_err(|e| format!("read error: {}", e))?;
+
+    let hash = Sha256::digest(&file_data);
+    let hash_hex = hex::encode(hash);
+
+    let encoded_path = utf8_percent_encode(&blob.storage_path, CONTROLS).to_string();
+
+    let mut req = client
+        .post(format!("{}/backup/receive-blob", base_url))
+        .header("X-Blob-Id", blob.id.as_str())
+        .header("X-Storage-Path", encoded_path.as_str())
+        .header("X-Content-Hash", hash_hex.as_str())
+        .body(file_data);
+
     for (name, value) in extra_headers {
         if let Ok(hv) = reqwest::header::HeaderValue::from_str(value) {
             req = req.header(name.as_str(), hv);

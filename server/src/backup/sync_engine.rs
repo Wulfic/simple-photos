@@ -13,6 +13,11 @@ use super::sync_transfer::{
     build_photo_headers, build_trash_headers, fetch_remote_ids, send_file, update_sync_log,
     PhotoToSync, TrashToSync,
 };
+use super::sync_blobs::sync_blobs;
+use super::sync_galleries::sync_secure_galleries_to_backup;
+use super::sync_metadata::sync_metadata
+use super::sync_galleries::sync_secure_galleries_to_backup;
+use super::sync_metadata::sync_metadata_to_backup;
 use super::sync_users::{sync_user_deletions_to_backup, sync_users_to_backup};
 
 // ── Sync context ─────────────────────────────────────────────────────────────
@@ -66,6 +71,9 @@ impl SyncCounters {
 /// **Phase 0b:** Sync user deletions.
 /// **Phase 1:** Delta-transfer photos the remote doesn't have.
 /// **Phase 2:** Delta-transfer trash items the remote doesn't have.
+/// **Phase 3:** Sync secure gallery metadata (full-state JSON).
+/// **Phase 4:** Delta-transfer client-encrypted blobs.
+/// **Phase 5:** Sync metadata tables — edit_copies, photo_metadata, shared albums (full-state JSON).
 ///
 pub async fn run_sync(
     pool: &sqlx::SqlitePool,
@@ -112,11 +120,15 @@ pub async fn run_sync(
         return;
     }
 
+    let remote_blob_ids: HashSet<String> =
+        fetch_remote_ids(ctx.client, &ctx.base_url, "/backup/list-blobs", ctx.api_key).await;
     // ── Delta: fetch IDs the remote already has ──────────────────────────
     let remote_photo_ids: HashSet<String> =
         fetch_remote_ids(ctx.client, &ctx.base_url, "/backup/list", ctx.api_key).await;
     let remote_trash_ids: HashSet<String> =
         fetch_remote_ids(ctx.client, &ctx.base_url, "/backup/list-trash", ctx.api_key).await;
+    let remote_blob_ids: HashSet<String> =
+        fetch_remote_ids(ctx.client, &ctx.base_url, "/backup/list-blobs", ctx.api_key).await;
 
     // ── Phase 0a: purge photos deleted on the primary ────────────────────
     purge_deleted_photos_from_backup(&ctx, &remote_photo_ids).await;
@@ -131,7 +143,33 @@ pub async fn run_sync(
     let mut counters = SyncCounters::new();
 
     sync_photos(&ctx, &remote_photo_ids, &mut counters).await;
+
+    // ── Phase 4: sync client-encrypted blobs ─────────────────────────────
+    // E2EE data uploaded by clients — irreplaceable, only the client has
+    // the decryption key.  Must be backed up for disaster recovery.
+    sync_blobs(&ctx, &remote_blob_ids, &mut counters).await;
+
+    // ── Phase 5: sync metadata tables ────────────────────────────────────
+    // Lightweight JSON tables: edit_copies, photo_metadata, shared_albums.
+    // Full-state sync (not delta) — sent every cycle, backup prunes stale.
+    sync_metadata_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
     sync_trash(&ctx, &remote_trash_ids, &mut counters).await;
+
+    // ── Phase 3: sync secure gallery metadata ────────────────────────────
+    // Must run AFTER photos so the clone rows exist on the backup before
+    // the gallery_items reference them.  This lets the backup's
+    // encrypted-sync endpoint correctly filter clones from the gallery.
+    sync_secure_galleries_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
+
+    // ── Phase 4: sync client-encrypted blobs ─────────────────────────────
+    // E2EE data uploaded by clients — irreplaceable, only the client has
+    // the decryption key.  Must be backed up for disaster recovery.
+    sync_blobs(&ctx, &remote_blob_ids, &mut counters).await;
+
+    // ── Phase 5: sync metadata tables ────────────────────────────────────
+    // Lightweight JSON tables: edit_copies, photo_metadata, shared_albums.
+    // Full-state sync (not delta) — sent every cycle, backup prunes stale.
+    sync_metadata_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
 
     // ── Finalize ─────────────────────────────────────────────────────────
     let (status, error_detail) = if counters.failures == 0 {
