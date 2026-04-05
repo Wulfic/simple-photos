@@ -119,8 +119,11 @@ async fn main() -> anyhow::Result<()> {
     // root — respecting runtime changes via the setup wizard.
     let storage_root_swap = Arc::new(arc_swap::ArcSwap::from_pointee(config.storage.root.clone()));
 
+    // Broadcast channel for real-time audit log events (SSE + backup forwarding).
+    let (audit_tx, _) = tokio::sync::broadcast::channel(256);
+
     // Launch all background tasks (housekeeping, backup sync, auto-scan, etc.)
-    tasks::spawn_all(&pool, &config, &storage_root_swap, &scan_lock);
+    tasks::spawn_all(&pool, &config, &storage_root_swap, &scan_lock, &audit_tx);
 
     // Build shared application state — cloned (via Arc) into every Axum handler.
     let state = AppState {
@@ -130,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         rate_limiters,
         storage_root: storage_root_swap,
         scan_lock,
+        audit_tx,
     };
 
     let mut app = Router::new()

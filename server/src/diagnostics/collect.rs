@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use sqlx::SqlitePool;
 
-use super::handlers::{dir_usage, disk_stats, read_cpu_seconds, read_rss_bytes, server_start};
+use super::handlers::{dir_usage, disk_stats, read_cpu_seconds, read_load_average, read_open_fds, read_rss_bytes, read_thread_count, server_start};
 use super::models::*;
 use crate::config::AppConfig;
 
@@ -21,10 +21,12 @@ pub async fn collect_server_info(config: &AppConfig, storage_root: &Path) -> Ser
     let (start_instant, started_at) = server_start();
     let uptime = start_instant.elapsed().as_secs();
 
-    let (rss_bytes, cpu_secs) =
-        tokio::task::spawn_blocking(|| (read_rss_bytes(), read_cpu_seconds()))
-            .await
-            .unwrap_or((0, 0.0));
+    let (rss_bytes, cpu_secs, threads, fds, load_avg) =
+        tokio::task::spawn_blocking(|| {
+            (read_rss_bytes(), read_cpu_seconds(), read_thread_count(), read_open_fds(), read_load_average())
+        })
+        .await
+        .unwrap_or((0, 0.0, 0, 0, [0.0; 3]));
 
     ServerInfo {
         version: crate::VERSION.to_string(),
@@ -40,6 +42,9 @@ pub async fn collect_server_info(config: &AppConfig, storage_root: &Path) -> Ser
         tls_enabled: config.tls.enabled,
         max_blob_size_mb: config.storage.max_blob_size_bytes / (1024 * 1024),
         started_at: started_at.clone(),
+        thread_count: threads,
+        open_fds: fds,
+        load_average: load_avg,
     }
 }
 
@@ -312,7 +317,7 @@ pub async fn collect_client_log_summary(pool: &SqlitePool) -> ClientLogSummary {
     }
 }
 
-/// Collect backup server and sync log summary.
+/// Collect backup server and sync log summary, including per-server details.
 pub async fn collect_backup_summary(pool: &SqlitePool) -> BackupSummary {
     let backup_servers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM backup_servers")
         .fetch_one(pool)
@@ -328,15 +333,86 @@ pub async fn collect_backup_summary(pool: &SqlitePool) -> BackupSummary {
             .await
             .unwrap_or(None);
 
+    // Fetch per-server details including their pushed diagnostics
+    let server_rows: Vec<(
+        String,  // id
+        String,  // name
+        String,  // address
+        bool,    // enabled
+        i64,     // sync_frequency_hours
+        Option<String>, // last_sync_at
+        String,  // last_sync_status
+        Option<String>, // last_sync_error
+        Option<String>, // last_diagnostics (JSON)
+        Option<String>, // last_diagnostics_at
+    )> = sqlx::query_as(
+        "SELECT id, name, address, enabled, sync_frequency_hours, \
+         last_sync_at, last_sync_status, last_sync_error, \
+         last_diagnostics, last_diagnostics_at \
+         FROM backup_servers ORDER BY name"
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut servers = Vec::new();
+    for row in server_rows {
+        // Fetch recent sync logs for this server
+        let sync_logs: Vec<(String, String, Option<String>, String, i64, i64, Option<String>)> =
+            sqlx::query_as(
+                "SELECT id, started_at, completed_at, status, photos_synced, \
+                 bytes_synced, error FROM backup_sync_log \
+                 WHERE server_id = ? ORDER BY started_at DESC LIMIT 10"
+            )
+            .bind(&row.0)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+        let recent_sync_logs: Vec<SyncLogBrief> = sync_logs
+            .into_iter()
+            .map(|(id, started_at, completed_at, status, photos_synced, bytes_synced, error)| {
+                SyncLogBrief {
+                    id,
+                    started_at,
+                    completed_at,
+                    status,
+                    photos_synced,
+                    bytes_synced,
+                    error,
+                }
+            })
+            .collect();
+
+        let last_diagnostics: Option<serde_json::Value> = row.8
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
+
+        servers.push(BackupServerDetail {
+            id: row.0,
+            name: row.1,
+            address: row.2,
+            enabled: row.3,
+            sync_frequency_hours: row.4,
+            last_sync_at: row.5,
+            last_sync_status: row.6,
+            last_sync_error: row.7,
+            last_diagnostics,
+            last_diagnostics_at: row.9,
+            recent_sync_logs,
+        });
+    }
+
     BackupSummary {
         server_count: backup_servers,
         total_sync_logs,
         last_sync_at,
+        servers,
     }
 }
 
-/// Measure DB round-trip latency.
-pub async fn collect_performance(pool: &SqlitePool) -> PerformanceStats {
+/// Measure DB round-trip latency and collect SQLite performance details.
+pub async fn collect_performance(pool: &SqlitePool, write_pool: &SqlitePool) -> PerformanceStats {
     let t0 = Instant::now();
     let _: i64 = sqlx::query_scalar("SELECT 1")
         .fetch_one(pool)
@@ -344,27 +420,120 @@ pub async fn collect_performance(pool: &SqlitePool) -> PerformanceStats {
         .unwrap_or(0);
     let db_ping_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
+    // SQLite cache size (in KiB when negative, pages when positive — normalize to KiB)
+    let cache_size_raw: i64 = sqlx::query_scalar("PRAGMA cache_size")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    // Negative values are KiB; positive are page counts
+    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(4096);
+    let cache_size_kib = if cache_size_raw < 0 {
+        -cache_size_raw
+    } else {
+        (cache_size_raw * page_size) / 1024
+    };
+
+    // WAL checkpoint info (passive — doesn't force a checkpoint)
+    let wal_checkpoint: Option<WalCheckpointInfo> =
+        sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(PASSIVE)")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .map(|(busy, log_pages, checkpointed_pages)| WalCheckpointInfo {
+                busy,
+                log_pages,
+                checkpointed_pages,
+            });
+
+    // SQLite compile options
+    let compile_options: Vec<String> =
+        sqlx::query_scalar::<_, String>("PRAGMA compile_options")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
+
+    // Connection pool stats
+    let read_pool_size = pool.size();
+    let read_pool_idle = pool.num_idle() as u32;
+    let write_pool_size = write_pool.size();
+    let write_pool_idle = write_pool.num_idle() as u32;
+
     PerformanceStats {
         db_ping_ms,
         cache_hit_ratio: None,
+        cache_size_kib,
+        wal_checkpoint,
+        compile_options,
+        read_pool_size,
+        write_pool_size,
+        read_pool_idle,
+        write_pool_idle,
     }
 }
 
 /// Collect the complete diagnostics snapshot used by both admin and external endpoints.
 pub async fn collect_full_diagnostics(
     pool: &SqlitePool,
+    write_pool: &SqlitePool,
     config: &AppConfig,
     storage_root: &Path,
 ) -> DiagnosticsResponse {
+    let total_start = Instant::now();
+
+    let t = Instant::now();
     let server_info = collect_server_info(config, storage_root).await;
+    let server_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let t = Instant::now();
     let database_stats = collect_database_stats(pool, &config.database.path).await;
+    let database_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let t = Instant::now();
     let storage_stats = collect_storage_stats(storage_root).await;
+    let storage_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let t = Instant::now();
     let user_stats = collect_user_stats(pool).await;
+    let users_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let t = Instant::now();
     let photo_stats = collect_photo_stats(pool).await;
+    let photos_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let t = Instant::now();
     let audit_summary = collect_audit_summary(pool).await;
+    let audit_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let t = Instant::now();
     let client_log_summary = collect_client_log_summary(pool).await;
+    let client_logs_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let t = Instant::now();
     let backup_summary = collect_backup_summary(pool).await;
-    let performance = collect_performance(pool).await;
+    let backup_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let t = Instant::now();
+    let performance = collect_performance(pool, write_pool).await;
+    let performance_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+    let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+
+    let timings = CollectionTimings {
+        total_ms,
+        server_ms,
+        database_ms,
+        storage_ms,
+        users_ms,
+        photos_ms,
+        audit_ms,
+        client_logs_ms,
+        backup_ms,
+        performance_ms,
+    };
 
     DiagnosticsResponse {
         enabled: true,
@@ -377,5 +546,6 @@ pub async fn collect_full_diagnostics(
         client_logs: client_log_summary,
         backup: backup_summary,
         performance,
+        timings,
     }
 }

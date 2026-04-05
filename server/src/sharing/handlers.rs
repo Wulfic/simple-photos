@@ -11,11 +11,12 @@
 //! destructive operations.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
@@ -129,6 +130,7 @@ pub async fn list_shared_albums(
 pub async fn create_shared_album(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(req): Json<CreateSharedAlbumRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let name = sanitize::sanitize_display_name(&req.name, 200)
@@ -146,6 +148,18 @@ pub async fn create_shared_album(
     .bind(&now)
     .execute(&state.pool)
     .await?;
+
+    audit::log(
+        &state,
+        AuditEvent::SharedAlbumCreate,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "album_id": album_id,
+            "name": name,
+        })),
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -165,6 +179,7 @@ pub async fn create_shared_album(
 pub async fn delete_shared_album(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(album_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let owner: Option<String> =
@@ -184,6 +199,17 @@ pub async fn delete_shared_album(
         .bind(&album_id)
         .execute(&state.pool)
         .await?;
+
+    audit::log(
+        &state,
+        AuditEvent::SharedAlbumDelete,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "album_id": album_id,
+        })),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -224,6 +250,7 @@ pub async fn list_members(
 pub async fn add_member(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(album_id): Path<String>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
@@ -271,6 +298,18 @@ pub async fn add_member(
     .execute(&state.pool)
     .await?;
 
+    audit::log(
+        &state,
+        AuditEvent::SharedAlbumAddMember,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "album_id": album_id,
+            "added_user_id": req.user_id,
+        })),
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -288,6 +327,7 @@ pub async fn add_member(
 pub async fn remove_member(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path((album_id, user_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
     let owner: Option<String> =
@@ -308,6 +348,18 @@ pub async fn remove_member(
         .bind(&user_id)
         .execute(&state.pool)
         .await?;
+
+    audit::log(
+        &state,
+        AuditEvent::SharedAlbumRemoveMember,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "album_id": album_id,
+            "removed_user_id": user_id,
+        })),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -342,6 +394,7 @@ pub async fn list_shared_photos(
 pub async fn add_photo(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(album_id): Path<String>,
     Json(req): Json<AddPhotoRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
@@ -367,6 +420,19 @@ pub async fn add_photo(
     .execute(&state.pool)
     .await?;
 
+    audit::log(
+        &state,
+        AuditEvent::SharedAlbumAddPhoto,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "album_id": album_id,
+            "photo_ref": req.photo_ref,
+            "ref_type": req.ref_type,
+        })),
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "photo_id": photo_id })),
@@ -382,6 +448,7 @@ pub async fn add_photo(
 pub async fn remove_photo(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path((album_id, photo_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
     require_album_access(&state.read_pool, &album_id, &auth.user_id).await?;
@@ -391,6 +458,18 @@ pub async fn remove_photo(
         .bind(&photo_id)
         .execute(&state.pool)
         .await?;
+
+    audit::log(
+        &state,
+        AuditEvent::SharedAlbumRemovePhoto,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "album_id": album_id,
+            "photo_id": photo_id,
+        })),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

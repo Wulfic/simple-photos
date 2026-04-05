@@ -4,11 +4,12 @@
 //! lives in [`super::serve`].
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
@@ -101,6 +102,7 @@ pub async fn list_photos(
 pub async fn register_photo(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(req): Json<RegisterPhotoRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     // Security: ensure file_path is a safe relative path (no traversal, no absolute)
@@ -167,6 +169,19 @@ pub async fn register_photo(
     .execute(&state.pool)
     .await?;
 
+    audit::log(
+        &state,
+        AuditEvent::PhotoRegister,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "photo_id": photo_id,
+            "filename": req.filename,
+            "media_type": media_type,
+        })),
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -187,6 +202,7 @@ pub async fn register_photo(
 pub async fn toggle_favorite(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Toggle and return new value in a single statement (RETURNING, SQLite 3.35+).
@@ -203,6 +219,18 @@ pub async fn toggle_favorite(
     .await?;
 
     let is_favorite = new_fav.ok_or(AppError::NotFound)?;
+
+    audit::log(
+        &state,
+        AuditEvent::PhotoFavorite,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "photo_id": photo_id,
+            "is_favorite": is_favorite,
+        })),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "id": photo_id,
@@ -230,6 +258,7 @@ pub struct SetCropRequest {
 pub async fn set_crop(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(photo_id): Path<String>,
     Json(req): Json<SetCropRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -258,6 +287,18 @@ pub async fn set_crop(
     if rows == 0 {
         return Err(AppError::NotFound);
     }
+
+    audit::log(
+        &state,
+        AuditEvent::PhotoCropSet,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "photo_id": photo_id,
+            "has_crop": req.crop_metadata.is_some(),
+        })),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "id": photo_id,

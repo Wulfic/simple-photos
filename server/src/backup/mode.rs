@@ -1,9 +1,11 @@
 //! Backup mode toggling (primary/backup) and audio backup settings.
 
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use uuid::Uuid;
 
+use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::setup::admin::require_admin;
@@ -67,6 +69,7 @@ pub async fn get_backup_mode(
 pub async fn set_backup_mode(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(req): Json<SetBackupModeRequest>,
 ) -> Result<Json<BackupModeResponse>, AppError> {
     require_admin(&state, &auth).await?;
@@ -118,6 +121,17 @@ pub async fn set_backup_mode(
     let port = state.config.server.port;
 
     tracing::info!("Server mode set to '{}'", mode);
+
+    audit::log(
+        &state,
+        AuditEvent::BackupModeChange,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "mode": mode,
+        })),
+    )
+    .await;
 
     // Include the API key and primary server URL when in backup mode
     let (api_key_val, primary_server_url): (Option<String>, Option<String>) = if mode == "backup" {
@@ -194,6 +208,7 @@ pub async fn get_audio_backup_setting(
 pub async fn set_audio_backup_setting(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&state, &auth).await?;
@@ -212,6 +227,17 @@ pub async fn set_audio_backup_setting(
     .await?;
 
     tracing::info!("Audio backup setting updated: enabled={}", enabled);
+
+    audit::log(
+        &state,
+        AuditEvent::AudioBackupToggle,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "audio_backup_enabled": enabled,
+        })),
+    )
+    .await;
 
     // When audio is newly enabled, trigger a scan so audio files on disk
     // get discovered immediately instead of waiting for the next interval.

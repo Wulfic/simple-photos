@@ -1,18 +1,67 @@
-/** Audit log viewer tab — filterable, paginated server-side event log. */
-import { useState, useEffect, useCallback } from "react";
+/** Audit log viewer tab — filterable, paginated, real-time server event log. */
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api, AuditLogEntry } from "../../api/client";
-import { Section, getDateCutoff, tryPrettyJson } from "./shared";
+import { BASE } from "../../api/core";
+import { useAuthStore } from "../../store/auth";
+import { getDateCutoff, tryPrettyJson } from "./shared";
 import { formatDate, relativeTime } from "../../utils/formatters";
 
 const EVENT_COLORS: Record<string, string> = {
+  // Auth
   login_success: "text-green-600 dark:text-green-400",
   login_failure: "text-red-600 dark:text-red-400",
+  totp_login_success: "text-green-600 dark:text-green-400",
   totp_login_failure: "text-red-600 dark:text-red-400",
   rate_limited: "text-orange-600 dark:text-orange-400",
   account_locked: "text-red-700 dark:text-red-300",
   register: "text-blue-600 dark:text-blue-400",
-  admin_action: "text-purple-600 dark:text-purple-400",
   password_changed: "text-yellow-600 dark:text-yellow-400",
+  totp_setup: "text-indigo-600 dark:text-indigo-400",
+  totp_enabled: "text-indigo-600 dark:text-indigo-400",
+  totp_disabled: "text-indigo-600 dark:text-indigo-400",
+  backup_code_used: "text-yellow-600 dark:text-yellow-400",
+  token_refresh: "text-gray-500 dark:text-gray-400",
+  logout: "text-gray-500 dark:text-gray-400",
+  // Blobs
+  blob_upload: "text-cyan-600 dark:text-cyan-400",
+  blob_delete: "text-red-500 dark:text-red-400",
+  // Photos
+  photo_register: "text-cyan-600 dark:text-cyan-400",
+  photo_favorite: "text-pink-500 dark:text-pink-400",
+  photo_crop_set: "text-teal-600 dark:text-teal-400",
+  // Tags
+  tag_add: "text-emerald-600 dark:text-emerald-400",
+  tag_remove: "text-orange-500 dark:text-orange-400",
+  // Trash
+  trash_soft_delete: "text-red-500 dark:text-red-400",
+  trash_restore: "text-green-600 dark:text-green-400",
+  trash_permanent_delete: "text-red-700 dark:text-red-300",
+  trash_empty: "text-red-700 dark:text-red-300",
+  // Sharing
+  shared_album_create: "text-violet-600 dark:text-violet-400",
+  shared_album_delete: "text-violet-600 dark:text-violet-400",
+  shared_album_add_member: "text-violet-500 dark:text-violet-400",
+  shared_album_remove_member: "text-violet-500 dark:text-violet-400",
+  shared_album_add_photo: "text-violet-500 dark:text-violet-400",
+  shared_album_remove_photo: "text-violet-500 dark:text-violet-400",
+  // Backup
+  backup_server_add: "text-sky-600 dark:text-sky-400",
+  backup_server_update: "text-sky-600 dark:text-sky-400",
+  backup_server_remove: "text-sky-600 dark:text-sky-400",
+  backup_mode_change: "text-amber-600 dark:text-amber-400",
+  audio_backup_toggle: "text-amber-600 dark:text-amber-400",
+  // Sync & Recovery
+  sync_trigger: "text-blue-500 dark:text-blue-400",
+  sync_force_from_primary: "text-blue-500 dark:text-blue-400",
+  recovery_start: "text-red-600 dark:text-red-400",
+  // Background tasks
+  auto_scan_complete: "text-teal-600 dark:text-teal-400",
+  trash_purge_complete: "text-orange-600 dark:text-orange-400",
+  housekeeping_complete: "text-gray-500 dark:text-gray-400",
+  encryption_migration_complete: "text-emerald-600 dark:text-emerald-400",
+  backup_sync_cycle_complete: "text-sky-600 dark:text-sky-400",
+  // Admin
+  admin_action: "text-purple-600 dark:text-purple-400",
 };
 
 function ServerLogsTab() {
@@ -22,15 +71,19 @@ function ServerLogsTab() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [streaming, setStreaming] = useState(false);
 
   // Filters
   const [eventFilter, setEventFilter] = useState("");
   const [ipFilter, setIpFilter] = useState("");
   const [searchText, setSearchText] = useState("");
   const [dateRange, setDateRange] = useState<"all" | "1h" | "24h" | "7d" | "30d">("all");
+  const [serverFilter, setServerFilter] = useState("");
 
   // Unique event types for filter dropdown
   const [eventTypes, setEventTypes] = useState<string[]>([]);
+  // Unique source servers for filter dropdown
+  const [sourceServers, setSourceServers] = useState<string[]>([]);
 
   const fetchLogs = useCallback(
     async (cursor?: string) => {
@@ -39,6 +92,7 @@ function ServerLogsTab() {
         const data = await api.diagnostics.listAuditLogs({
           event_type: eventFilter || undefined,
           ip_address: ipFilter || undefined,
+          source_server: serverFilter || undefined,
           after,
           before: cursor,
           limit: 100,
@@ -58,7 +112,7 @@ function ServerLogsTab() {
         setLoadingMore(false);
       }
     },
-    [eventFilter, ipFilter, dateRange]
+    [eventFilter, ipFilter, dateRange, serverFilter]
   );
 
   useEffect(() => {
@@ -66,11 +120,54 @@ function ServerLogsTab() {
     fetchLogs();
   }, [fetchLogs]);
 
-  // Extract unique event types from fetched logs
+  // Extract unique event types and source servers from fetched logs
   useEffect(() => {
     const types = new Set(logs.map((l) => l.event_type));
     setEventTypes(Array.from(types).sort());
+    const servers = new Set(
+      logs.map((l) => l.source_server).filter((s): s is string => s !== null)
+    );
+    setSourceServers(Array.from(servers).sort());
   }, [logs]);
+
+  // Real-time SSE subscription — prepends new entries as they arrive
+  const seenIds = useRef(new Set<string>());
+  useEffect(() => {
+    // Seed the dedup set with initially-fetched log IDs
+    seenIds.current = new Set(logs.map((l) => l.id));
+  }, []); // only on mount
+
+  useEffect(() => {
+    const token = useAuthStore.getState().accessToken;
+    if (!token) return;
+
+    const url = `${BASE}/admin/audit-logs/stream?token=${encodeURIComponent(token)}`;
+    const es = new EventSource(url);
+
+    es.onopen = () => setStreaming(true);
+
+    es.onmessage = (event) => {
+      try {
+        const entry = JSON.parse(event.data) as AuditLogEntry;
+        if (seenIds.current.has(entry.id)) return; // dedup
+        seenIds.current.add(entry.id);
+        setLogs((prev) => [entry, ...prev]);
+        setTotal((prev) => prev + 1);
+      } catch {
+        // ignore malformed messages
+      }
+    };
+
+    es.onerror = () => {
+      setStreaming(false);
+      // EventSource automatically reconnects — no manual retry needed
+    };
+
+    return () => {
+      es.close();
+      setStreaming(false);
+    };
+  }, []); // single connection for the lifetime of the tab
 
   function loadMore() {
     if (!nextCursor || loadingMore) return;
@@ -86,7 +183,8 @@ function ServerLogsTab() {
           l.ip_address.includes(searchText) ||
           (l.username && l.username.toLowerCase().includes(searchText.toLowerCase())) ||
           l.details.toLowerCase().includes(searchText.toLowerCase()) ||
-          l.user_agent.toLowerCase().includes(searchText.toLowerCase())
+          l.user_agent.toLowerCase().includes(searchText.toLowerCase()) ||
+          (l.source_server && l.source_server.toLowerCase().includes(searchText.toLowerCase()))
       )
     : logs;
 
@@ -158,9 +256,34 @@ function ServerLogsTab() {
               <option value="30d">Last 30 Days</option>
             </select>
           </div>
+          {/* Source Server Filter */}
+          {sourceServers.length > 0 && (
+            <div>
+              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                Source
+              </label>
+              <select
+                value={serverFilter}
+                onChange={(e) => setServerFilter(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="">All Servers</option>
+                <option value="local">This Server</option>
+                {sourceServers.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
-        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          Showing {filtered.length} of {total.toLocaleString()} entries
+        <div className="mt-2 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+          <span>Showing {filtered.length} of {total.toLocaleString()} entries</span>
+          <span className="flex items-center gap-1">
+            <span className={`inline-block w-2 h-2 rounded-full ${streaming ? "bg-green-500 animate-pulse" : "bg-gray-400"}`} />
+            {streaming ? "Live" : "Connecting…"}
+          </span>
         </div>
       </div>
 
@@ -191,6 +314,9 @@ function ServerLogsTab() {
                     User
                   </th>
                   <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                    Source
+                  </th>
+                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
                     IP
                   </th>
                   <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
@@ -205,7 +331,7 @@ function ServerLogsTab() {
                 {filtered.length === 0 && (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={6}
                       className="text-center py-8 text-gray-400 dark:text-gray-500"
                     >
                       No audit log entries found
@@ -251,6 +377,18 @@ function AuditLogRow({ log }: { log: AuditLogEntry }) {
         <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-300">
           {log.username || log.user_id || "—"}
         </td>
+        <td className="px-3 py-2 text-xs whitespace-nowrap">
+          {log.source_server ? (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 font-medium">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
+              </svg>
+              {log.source_server}
+            </span>
+          ) : (
+            <span className="text-gray-400 dark:text-gray-500">local</span>
+          )}
+        </td>
         <td className="px-3 py-2 text-xs font-mono text-gray-600 dark:text-gray-400">
           {log.ip_address}
         </td>
@@ -260,12 +398,18 @@ function AuditLogRow({ log }: { log: AuditLogEntry }) {
       </tr>
       {expanded && (
         <tr className="bg-gray-50 dark:bg-gray-800/80">
-          <td colSpan={5} className="px-4 py-3">
+          <td colSpan={6} className="px-4 py-3">
             <div className="text-xs space-y-1 text-gray-600 dark:text-gray-300">
               <p>
                 <span className="font-medium">Full timestamp:</span>{" "}
                 {formatDate(log.created_at)}
               </p>
+              {log.source_server && (
+                <p>
+                  <span className="font-medium">Source server:</span>{" "}
+                  <span className="font-mono">{log.source_server}</span>
+                </p>
+              )}
               <p>
                 <span className="font-medium">User Agent:</span>{" "}
                 <span className="font-mono break-all">{log.user_agent}</span>

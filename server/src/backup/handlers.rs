@@ -1,11 +1,12 @@
 //! Backup server management endpoints — CRUD for registered backup destinations.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
@@ -40,6 +41,7 @@ pub async fn list_backup_servers(
 pub async fn add_backup_server(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(req): Json<AddBackupServerRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     require_admin(&state, &auth).await?;
@@ -86,6 +88,19 @@ pub async fn add_backup_server(
 
     tracing::info!("Added backup server '{}' at {}", name, address);
 
+    audit::log(
+        &state,
+        AuditEvent::BackupServerAdd,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "server_id": id,
+            "name": name,
+            "address": address,
+        })),
+    )
+    .await;
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -102,6 +117,7 @@ pub async fn add_backup_server(
 pub async fn update_backup_server(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(server_id): Path<String>,
     Json(req): Json<UpdateBackupServerRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -167,6 +183,17 @@ pub async fn update_backup_server(
 
     tx.commit().await?;
 
+    audit::log(
+        &state,
+        AuditEvent::BackupServerUpdate,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "server_id": server_id,
+        })),
+    )
+    .await;
+
     Ok(Json(serde_json::json!({
         "message": "Backup server updated",
         "id": server_id,
@@ -178,6 +205,7 @@ pub async fn update_backup_server(
 pub async fn remove_backup_server(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(server_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     require_admin(&state, &auth).await?;
@@ -192,6 +220,17 @@ pub async fn remove_backup_server(
     }
 
     tracing::info!("Removed backup server {}", server_id);
+
+    audit::log(
+        &state,
+        AuditEvent::BackupServerRemove,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "server_id": server_id,
+        })),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

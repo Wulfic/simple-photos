@@ -26,6 +26,8 @@ pub struct DiagnosticsResponse {
     pub client_logs: ClientLogSummary,
     pub backup: BackupSummary,
     pub performance: PerformanceStats,
+    /// How long each diagnostics section took to collect (ms)
+    pub timings: CollectionTimings,
 }
 
 /// Lightweight response returned when diagnostics collection is disabled.
@@ -62,6 +64,12 @@ pub struct ServerInfo {
     pub tls_enabled: bool,
     pub max_blob_size_mb: u64,
     pub started_at: String,
+    /// Number of OS threads in use by this process (Linux only, 0 elsewhere)
+    pub thread_count: u64,
+    /// Number of open file descriptors (Linux only, 0 elsewhere)
+    pub open_fds: u64,
+    /// System load averages [1min, 5min, 15min] (Linux/Unix only)
+    pub load_average: [f64; 3],
 }
 
 #[derive(Debug, Serialize)]
@@ -140,6 +148,38 @@ pub struct BackupSummary {
     pub server_count: i64,
     pub total_sync_logs: i64,
     pub last_sync_at: Option<String>,
+    /// Per-server details including their pushed diagnostics and recent sync logs
+    pub servers: Vec<BackupServerDetail>,
+}
+
+/// Detailed info for a single backup server, including its latest diagnostics push.
+#[derive(Debug, Serialize)]
+pub struct BackupServerDetail {
+    pub id: String,
+    pub name: String,
+    pub address: String,
+    pub enabled: bool,
+    pub sync_frequency_hours: i64,
+    pub last_sync_at: Option<String>,
+    pub last_sync_status: String,
+    pub last_sync_error: Option<String>,
+    /// The most recent diagnostics report pushed by this backup server
+    pub last_diagnostics: Option<serde_json::Value>,
+    pub last_diagnostics_at: Option<String>,
+    /// Most recent sync log entries for this server
+    pub recent_sync_logs: Vec<SyncLogBrief>,
+}
+
+/// Compact sync log entry for the diagnostics overview.
+#[derive(Debug, Serialize)]
+pub struct SyncLogBrief {
+    pub id: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub status: String,
+    pub photos_synced: i64,
+    pub bytes_synced: i64,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,6 +188,47 @@ pub struct PerformanceStats {
     pub db_ping_ms: f64,
     /// SQLite cache hit ratio (if available)
     pub cache_hit_ratio: Option<f64>,
+    /// SQLite cache size in KiB (PRAGMA cache_size)
+    pub cache_size_kib: i64,
+    /// WAL checkpoint info — pages written vs checkpointed
+    pub wal_checkpoint: Option<WalCheckpointInfo>,
+    /// SQLite compile-time options (e.g. THREADSAFE, ENABLE_FTS5)
+    pub compile_options: Vec<String>,
+    /// Number of active read pool connections
+    pub read_pool_size: u32,
+    /// Number of active write pool connections
+    pub write_pool_size: u32,
+    /// Read pool idle connections
+    pub read_pool_idle: u32,
+    /// Write pool idle connections
+    pub write_pool_idle: u32,
+}
+
+/// WAL checkpoint status from PRAGMA wal_checkpoint.
+#[derive(Debug, Serialize)]
+pub struct WalCheckpointInfo {
+    /// Non-zero if a checkpoint was blocked by a concurrent reader/writer
+    pub busy: i64,
+    /// Size of the WAL in pages
+    pub log_pages: i64,
+    /// Number of pages successfully checkpointed
+    pub checkpointed_pages: i64,
+}
+
+/// Timing data for each diagnostics collection phase.
+#[derive(Debug, Serialize)]
+pub struct CollectionTimings {
+    /// Total wall-clock time to collect all diagnostics (ms)
+    pub total_ms: f64,
+    pub server_ms: f64,
+    pub database_ms: f64,
+    pub storage_ms: f64,
+    pub users_ms: f64,
+    pub photos_ms: f64,
+    pub audit_ms: f64,
+    pub client_logs_ms: f64,
+    pub backup_ms: f64,
+    pub performance_ms: f64,
 }
 
 // ── Audit log listing models ──────────────────────────────────────────────
@@ -162,6 +243,7 @@ pub struct AuditLogEntry {
     pub user_agent: String,
     pub details: String,
     pub created_at: String,
+    pub source_server: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -180,6 +262,8 @@ pub struct AuditLogParams {
     pub after: Option<String>,
     pub before: Option<String>,
     pub limit: Option<u32>,
+    /// Filter by source server name.  `"local"` = only this server's events.
+    pub source_server: Option<String>,
 }
 
 // ── Server log listing models ─────────────────────────────────────────────

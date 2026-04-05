@@ -379,15 +379,6 @@ pub async fn backup_receive(
             .bind(&photo_id)
             .execute(&state.pool)
             .await;
-        } and have photo_hash = NULL — they must not be deleted.
-        if photo_hash.is_some() {
-            let _ = sqlx::query(
-                "DELETE FROM photos WHERE file_path = ? AND id != ? AND photo_hash IS NOT NULL",
-            )
-            .bind(&file_path)
-            .bind(&photo_id)
-            .execute(&state.pool)
-            .await;
         }
 
         sqlx::query(

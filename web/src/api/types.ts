@@ -71,6 +71,9 @@ export interface DiagnosticsResponse {
     tls_enabled: boolean;
     max_blob_size_mb: number;
     started_at: string;
+    thread_count: number;
+    open_fds: number;
+    load_average: [number, number, number];
   };
   database: {
     size_bytes: number;
@@ -129,10 +132,63 @@ export interface DiagnosticsResponse {
     server_count: number;
     total_sync_logs: number;
     last_sync_at: string | null;
+    servers: Array<{
+      id: string;
+      name: string;
+      address: string;
+      enabled: boolean;
+      sync_frequency_hours: number;
+      last_sync_at: string | null;
+      last_sync_status: string;
+      last_sync_error: string | null;
+      last_diagnostics: {
+        version?: string;
+        uptime_seconds?: number;
+        memory_rss_bytes?: number;
+        cpu_seconds?: number;
+        total_photos?: number;
+        disk_used_percent?: number;
+        db_size_bytes?: number;
+        collected_at?: string;
+      } | null;
+      last_diagnostics_at: string | null;
+      recent_sync_logs: Array<{
+        id: string;
+        started_at: string;
+        completed_at: string | null;
+        status: string;
+        photos_synced: number;
+        bytes_synced: number;
+        error: string | null;
+      }>;
+    }>;
   };
   performance: {
     db_ping_ms: number;
     cache_hit_ratio: number | null;
+    cache_size_kib: number;
+    wal_checkpoint: {
+      busy: number;
+      log_pages: number;
+      checkpointed_pages: number;
+    } | null;
+    compile_options: string[];
+    read_pool_size: number;
+    write_pool_size: number;
+    read_pool_idle: number;
+    write_pool_idle: number;
+  };
+  timings: {
+    total_ms: number;
+    server_ms: number;
+    database_ms: number;
+    storage_ms: number;
+    users_ms: number;
+    photos_ms: number;
+    audit_ms: number;
+    client_logs_ms: number;
+    backup_ms: number;
+    performance_ms: number;
   };
 }
 
@@ -145,6 +201,7 @@ export interface AuditLogEntry {
   user_agent: string;
   details: string;
   created_at: string;
+  source_server: string | null;
 }
 
 export interface AuditLogListResponse {
@@ -160,6 +217,7 @@ export interface AuditLogParams {
   after?: string;
   before?: string;
   limit?: number;
+  source_server?: string;
 }
 
 export interface ClientLogEntry {

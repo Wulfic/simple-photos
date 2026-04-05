@@ -5,8 +5,10 @@
 
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::Json;
 use std::time::Instant;
+use futures_util::stream::Stream;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
@@ -67,6 +69,58 @@ pub(crate) fn read_cpu_seconds() -> f64 {
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn read_cpu_seconds() -> f64 {
     0.0
+}
+
+/// Read the number of threads from `/proc/self/status` on Linux.
+#[cfg(target_os = "linux")]
+pub(crate) fn read_thread_count() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("Threads:"))
+                .and_then(|l| l.split_whitespace().nth(1).and_then(|v| v.parse().ok()))
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn read_thread_count() -> u64 {
+    0
+}
+
+/// Count open file descriptors from `/proc/self/fd` on Linux.
+#[cfg(target_os = "linux")]
+pub(crate) fn read_open_fds() -> u64 {
+    std::fs::read_dir("/proc/self/fd")
+        .map(|entries| entries.count() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn read_open_fds() -> u64 {
+    0
+}
+
+/// Read system load averages (1min, 5min, 15min).
+#[cfg(unix)]
+pub(crate) fn read_load_average() -> [f64; 3] {
+    let mut info: libc::sysinfo = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sysinfo(&mut info) } == 0 {
+        let scale = 1.0 / (1 << libc::SI_LOAD_SHIFT) as f64;
+        [
+            info.loads[0] as f64 * scale,
+            info.loads[1] as f64 * scale,
+            info.loads[2] as f64 * scale,
+        ]
+    } else {
+        [0.0, 0.0, 0.0]
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn read_load_average() -> [f64; 3] {
+    [0.0, 0.0, 0.0]
 }
 
 /// Get disk usage via statvfs on Unix.
@@ -240,6 +294,7 @@ pub async fn get_diagnostics(
     let storage_root = (**state.storage_root.load()).clone();
     let resp = super::collect::collect_full_diagnostics(
         &state.read_pool,
+        &state.pool,
         &state.config,
         &storage_root,
     )
@@ -281,6 +336,14 @@ pub async fn list_audit_logs(
         conditions.push("a.created_at < ?".to_string());
         binds.push(before.clone());
     }
+    if let Some(ref source) = params.source_server {
+        if source == "local" {
+            conditions.push("a.source_server IS NULL".to_string());
+        } else {
+            conditions.push("a.source_server = ?".to_string());
+            binds.push(source.clone());
+        }
+    }
 
     let where_clause = if conditions.is_empty() {
         String::new()
@@ -298,7 +361,7 @@ pub async fn list_audit_logs(
 
     // Fetch rows with optional username join
     let sql = format!(
-        "SELECT a.id, a.event_type, a.user_id, u.username, a.ip_address, a.user_agent, a.details, a.created_at \
+        "SELECT a.id, a.event_type, a.user_id, u.username, a.ip_address, a.user_agent, a.details, a.created_at, a.source_server \
          FROM audit_log a LEFT JOIN users u ON a.user_id = u.id {} \
          ORDER BY a.created_at DESC LIMIT ?",
         where_clause
@@ -315,6 +378,7 @@ pub async fn list_audit_logs(
             String,
             String,
             String,
+            Option<String>,
         ),
     >(&sql);
     for b in &binds {
@@ -329,7 +393,7 @@ pub async fn list_audit_logs(
         .into_iter()
         .take(limit as usize)
         .map(
-            |(id, event_type, user_id, username, ip_address, user_agent, details, created_at)| {
+            |(id, event_type, user_id, username, ip_address, user_agent, details, created_at, source_server)| {
                 AuditLogEntry {
                     id,
                     event_type,
@@ -338,7 +402,8 @@ pub async fn list_audit_logs(
                     ip_address,
                     user_agent,
                     details,
-                    created_at: created_at.clone(),
+                    created_at,
+                    source_server,
                 }
             },
         )
@@ -355,4 +420,40 @@ pub async fn list_audit_logs(
         next_cursor,
         total,
     }))
+}
+
+/// GET /api/admin/audit-logs/stream?token=<jwt>
+///
+/// Server-Sent Events endpoint that streams new audit log entries in real time.
+/// Uses `?token=<jwt>` for authentication since EventSource cannot set headers.
+/// Admin-only — rejects non-admin users.
+pub async fn stream_audit_logs(
+    auth: AuthUser,
+    State(state): State<AppState>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let mut rx = state.audit_tx.subscribe();
+
+    let stream = async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(entry) => {
+                    if let Ok(json) = serde_json::to_string(&entry) {
+                        yield Ok(Event::default().data(json));
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    // Subscriber fell behind — notify the client
+                    let msg = serde_json::json!({ "lagged": n });
+                    yield Ok(Event::default().event("lagged").data(msg.to_string()));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    break;
+                }
+            }
+        }
+    };
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }

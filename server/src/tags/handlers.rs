@@ -5,10 +5,11 @@
 //! are batch-loaded in a single `WHERE photo_id IN (...)` query.
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Utc;
 
+use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
@@ -56,6 +57,7 @@ pub async fn get_photo_tags(
 pub async fn add_tag(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(photo_id): Path<String>,
     Json(body): Json<AddTagRequest>,
 ) -> Result<StatusCode, AppError> {
@@ -75,6 +77,18 @@ pub async fn add_tag(
     .execute(&state.pool)
     .await?;
 
+    audit::log(
+        &state,
+        AuditEvent::TagAdd,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "photo_id": photo_id,
+            "tag": tag,
+        })),
+    )
+    .await;
+
     Ok(StatusCode::CREATED)
 }
 
@@ -82,6 +96,7 @@ pub async fn add_tag(
 pub async fn remove_tag(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(photo_id): Path<String>,
     Json(body): Json<RemoveTagRequest>,
 ) -> Result<StatusCode, AppError> {
@@ -92,6 +107,18 @@ pub async fn remove_tag(
         .bind(&tag)
         .execute(&state.pool)
         .await?;
+
+    audit::log(
+        &state,
+        AuditEvent::TagRemove,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "photo_id": photo_id,
+            "tag": tag,
+        })),
+    )
+    .await;
 
     Ok(StatusCode::NO_CONTENT)
 }

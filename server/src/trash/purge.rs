@@ -117,5 +117,10 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
     let purged = ids_to_delete.len();
     if purged > 0 {
         tracing::info!("Purged {} expired trash items", purged);
+        crate::audit::log_background(
+            pool,
+            crate::audit::AuditEvent::TrashPurgeComplete,
+            Some(serde_json::json!({"purged_count": purged})),
+        );
     }
 }

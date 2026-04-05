@@ -5,11 +5,12 @@
 //! by synced user stubs.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
+use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::sanitize;
@@ -25,6 +26,7 @@ use super::models::*;
 pub async fn soft_delete_blob(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(blob_id): Path<String>,
     Json(req): Json<SoftDeleteBlobRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -162,6 +164,20 @@ pub async fn soft_delete_blob(
 
     tx.commit().await?;
 
+    audit::log(
+        &state,
+        AuditEvent::TrashSoftDelete,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "blob_id": blob_id,
+            "trash_id": trash_id,
+            "filename": safe_filename,
+            "expires_at": expires_at.to_rfc3339(),
+        })),
+    )
+    .await;
+
     tracing::info!(
         "Encrypted blob {} moved to trash (expires {})",
         blob_id,
@@ -181,6 +197,7 @@ pub async fn soft_delete_blob(
 pub async fn restore_from_trash(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(trash_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     // Begin transaction — all restore operations must be atomic
@@ -295,6 +312,18 @@ pub async fn restore_from_trash(
 
     tracing::info!("Encrypted blob {} restored from trash", blob_id);
 
+    audit::log(
+        &state,
+        AuditEvent::TrashRestore,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "trash_id": trash_id,
+            "blob_id": blob_id,
+        })),
+    )
+    .await;
+
     tx.commit().await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -307,6 +336,7 @@ pub async fn restore_from_trash(
 pub async fn permanent_delete(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(trash_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     // Begin transaction — ref-count check + DELETE must be atomic to prevent TOCTOU races
@@ -378,6 +408,17 @@ pub async fn permanent_delete(
 
     tracing::info!("Permanently deleted trash item {}", trash_id);
 
+    audit::log(
+        &state,
+        AuditEvent::TrashPermanentDelete,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "trash_id": trash_id,
+        })),
+    )
+    .await;
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -388,6 +429,7 @@ pub async fn permanent_delete(
 pub async fn empty_trash(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Begin transaction — ref-count checks + batch DELETE must be atomic
     let mut tx = state.pool.begin().await?;
@@ -453,6 +495,17 @@ pub async fn empty_trash(
         auth.user_id,
         deleted_count
     );
+
+    audit::log(
+        &state,
+        AuditEvent::TrashEmpty,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "deleted_count": deleted_count,
+        })),
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "deleted": deleted_count,

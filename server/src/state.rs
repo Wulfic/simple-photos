@@ -9,6 +9,20 @@ use arc_swap::ArcSwap;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::broadcast;
+
+/// A serialised audit log entry broadcast to SSE subscribers and backup forwarders.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AuditBroadcast {
+    pub id: String,
+    pub event_type: String,
+    pub user_id: Option<String>,
+    pub ip_address: String,
+    pub user_agent: String,
+    pub details: String,
+    pub created_at: String,
+    pub source_server: Option<String>,
+}
 
 /// Shared state for all request handlers and background tasks.
 #[derive(Clone)]
@@ -36,4 +50,9 @@ pub struct AppState {
     /// autoscan).  Prevents concurrent scans from racing and creating
     /// duplicate photo entries even when the DB UNIQUE constraint exists.
     pub scan_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Broadcast channel for real-time audit log events.
+    /// SSE subscribers and backup log forwarders listen on this channel.
+    /// Capacity of 256 — lagging receivers simply miss old entries (they
+    /// can always fetch history via the REST endpoint).
+    pub audit_tx: broadcast::Sender<AuditBroadcast>,
 }

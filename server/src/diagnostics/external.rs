@@ -186,6 +186,7 @@ pub async fn external_full(
     let storage_root = (**state.storage_root.load()).clone();
     let resp = super::collect::collect_full_diagnostics(
         &state.read_pool,
+        &state.pool,
         &state.config,
         &storage_root,
     )
