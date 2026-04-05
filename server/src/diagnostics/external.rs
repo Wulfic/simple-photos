@@ -132,7 +132,11 @@ pub async fn external_health(
 
     // Disk usage
     let storage_root = (**state.storage_root.load()).clone();
-    let (disk_total, disk_available) = disk_stats(&storage_root);
+    let root_clone = storage_root.clone();
+    let (disk_total, disk_available) =
+        tokio::task::spawn_blocking(move || disk_stats(&root_clone))
+            .await
+            .unwrap_or((0, 0));
     let disk_used_percent = if disk_total > 0 {
         ((disk_total - disk_available) as f64 / disk_total as f64) * 100.0
     } else {
@@ -149,13 +153,17 @@ pub async fn external_health(
         .await
         .unwrap_or(0);
 
+    let (rss, cpu) = tokio::task::spawn_blocking(|| (read_rss_bytes(), read_cpu_seconds()))
+        .await
+        .unwrap_or((0, 0.0));
+
     Ok(Json(ExternalHealthResponse {
         status: "ok".into(),
         version: crate::VERSION.into(),
         uptime_seconds: uptime,
         started_at: started_at.clone(),
-        memory_rss_bytes: read_rss_bytes(),
-        cpu_seconds: read_cpu_seconds(),
+        memory_rss_bytes: rss,
+        cpu_seconds: cpu,
         db_ping_ms,
         disk_used_percent,
         total_photos,

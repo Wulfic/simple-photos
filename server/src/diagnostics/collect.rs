@@ -108,7 +108,11 @@ pub async fn collect_database_stats(pool: &SqlitePool, db_path: &Path) -> Databa
 /// Collect storage usage: directory walk + disk capacity.
 pub async fn collect_storage_stats(storage_root: &Path) -> StorageStats {
     let (dir_bytes, file_count) = dir_usage(storage_root).await;
-    let (disk_total, disk_available) = disk_stats(storage_root);
+    let root = storage_root.to_path_buf();
+    let (disk_total, disk_available) =
+        tokio::task::spawn_blocking(move || disk_stats(&root))
+            .await
+            .unwrap_or((0, 0));
     let disk_used_percent = if disk_total > 0 {
         ((disk_total - disk_available) as f64 / disk_total as f64) * 100.0
     } else {

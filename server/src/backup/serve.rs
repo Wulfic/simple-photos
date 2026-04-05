@@ -239,14 +239,19 @@ pub async fn backup_sync_deletions(
 
     let mut removed = 0usize;
     for id in &ids {
-        // Remove from gallery; ignore if it wasn't there (nothing to do).
-        let result = sqlx::query("DELETE FROM photos WHERE id = ?")
-            .bind(id)
-            .execute(&state.pool)
-            .await;
+        // Remove from gallery by id OR encrypted_blob_id — for encrypted
+        // items the trash stores blob_id as photo_id, which maps to
+        // photos.encrypted_blob_id rather than photos.id on the backup.
+        let result = sqlx::query(
+            "DELETE FROM photos WHERE id = ? OR encrypted_blob_id = ?",
+        )
+        .bind(id)
+        .bind(id)
+        .execute(&state.pool)
+        .await;
         match result {
             Ok(r) if r.rows_affected() > 0 => {
-                removed += 1;
+                removed += r.rows_affected() as usize;
                 // Clean up orphaned tags for the removed row.
                 let _ = sqlx::query("DELETE FROM photo_tags WHERE photo_id = ?")
                     .bind(id)

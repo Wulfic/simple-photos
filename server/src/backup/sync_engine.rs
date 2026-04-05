@@ -216,10 +216,14 @@ async fn preflight_health_check(
 /// still exists in the remote's photo list.
 async fn purge_deleted_photos_from_backup(
     ctx: &SyncContext<'_>,
-    remote_photo_ids: &HashSet<String>,
+    _remote_photo_ids: &HashSet<String>,
 ) {
+    // Collect photo_id AND encrypted_blob_id from trash — for encrypted items
+    // photo_id is the blob UUID which differs from photos.id on the backup.
+    // We send both so the backup can match by either column.
     let primary_trash_ids: Vec<String> = match sqlx::query_scalar::<_, String>(
-        "SELECT photo_id FROM trash_items",
+        "SELECT photo_id FROM trash_items \
+         UNION SELECT encrypted_blob_id FROM trash_items WHERE encrypted_blob_id IS NOT NULL",
     )
     .fetch_all(ctx.pool)
     .await
@@ -231,9 +235,12 @@ async fn purge_deleted_photos_from_backup(
         }
     };
 
+    // Don't filter by remote_photo_ids — encrypted items have photo_id =
+    // blob_id which won't appear in remote_photo_ids (which lists photos.id).
+    // Sending extra IDs is harmless (DELETE is a no-op for non-matches).
     let to_delete: Vec<&String> = primary_trash_ids
         .iter()
-        .filter(|id| remote_photo_ids.contains(*id))
+        .filter(|id| !id.is_empty())
         .collect();
 
     if to_delete.is_empty() {

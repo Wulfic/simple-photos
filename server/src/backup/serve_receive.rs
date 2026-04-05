@@ -292,14 +292,34 @@ pub async fn backup_receive(
         // different value — deleting by it would be a no-op.
         let gallery_id = hdr_str(&headers, "X-Original-Photo-Id")
             .unwrap_or_else(|| photo_id.clone());
-        // Delete by both UUID and file_path.  The UUID covers the normal case;
-        // file_path covers a race where autoscan ran between Phase-0a and this
-        // receive call and re-imported the file with a different UUID.
-        if let Err(e) = sqlx::query("DELETE FROM photos WHERE id = ? OR file_path = ?")
-            .bind(&gallery_id)
-            .bind(&file_path)
-            .execute(&state.pool)
-            .await
+
+        // Before deleting the gallery row, look up its thumb_path so we can
+        // copy the existing thumbnail to the trash thumbnail path later.
+        // This handles encrypted items where thumbnail generation from the
+        // encrypted file will fail.
+        let existing_thumb_path: Option<String> = sqlx::query_scalar(
+            "SELECT thumb_path FROM photos WHERE id = ? OR encrypted_blob_id = ? OR file_path = ? LIMIT 1",
+        )
+        .bind(&gallery_id)
+        .bind(&gallery_id)
+        .bind(&file_path)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten();
+
+        // Delete by UUID, encrypted_blob_id, and file_path.  The UUID covers
+        // the normal case; encrypted_blob_id covers encrypted items (photo_id
+        // = blob_id); file_path covers a race where autoscan ran between
+        // Phase-0a and this receive call and re-imported with a different UUID.
+        if let Err(e) = sqlx::query(
+            "DELETE FROM photos WHERE id = ? OR encrypted_blob_id = ? OR file_path = ?",
+        )
+        .bind(&gallery_id)
+        .bind(&gallery_id)
+        .bind(&file_path)
+        .execute(&state.pool)
+        .await
         {
             tracing::warn!(
                 photo_id = %photo_id,
@@ -313,6 +333,34 @@ pub async fn backup_receive(
             .bind(&gallery_id)
             .execute(&state.pool)
             .await;
+
+        // ── Trash thumbnail fallback ────────────────────────────────────
+        // After the standard thumbnail generation (which may fail for
+        // encrypted blobs), copy the original photo's thumbnail if it
+        // exists.  This ensures trash thumbnails render on backup servers
+        // where the encrypted file content cannot be decoded.
+        {
+            let thumb_abs = storage_root.join(&thumb_rel);
+            let generated = generate_thumbnail_file(&full_path, &thumb_abs, &mime_type, None).await;
+            if generated {
+                tracing::debug!(photo_id = %photo_id, "Generated trash thumbnail on receive");
+            } else if let Some(ref orig_thumb) = existing_thumb_path {
+                let orig_abs = storage_root.join(orig_thumb);
+                if tokio::fs::try_exists(&orig_abs).await.unwrap_or(false) {
+                    if let Err(e) = tokio::fs::copy(&orig_abs, &thumb_abs).await {
+                        tracing::warn!(
+                            photo_id = %photo_id,
+                            "Failed to copy original thumbnail for trash: {}", e
+                        );
+                    } else {
+                        tracing::debug!(
+                            photo_id = %photo_id,
+                            "Copied original thumbnail for trash item"
+                        );
+                    }
+                }
+            }
+        }
     } else {
         // ── Upsert into photos (full metadata) ───────────────────────────────
         // During recovery, auto-scan may have already registered the file from
@@ -406,11 +454,13 @@ pub async fn backup_receive(
         }
     }
 
-    // ── Generate thumbnail immediately ───────────────────────────────────────
+    // ── Generate thumbnail immediately (photos only) ───────────────────────
     // Don't wait for the background autoscan pass — generate now so the
     // backup serves thumbnails right after the sync completes.
     // Audio files get a solid-black placeholder, matching the primary.
-    {
+    // Trash items handle their own thumbnail logic above (with fallback to
+    // the original photo's thumbnail for encrypted items).
+    if source != "trash" {
         let thumb_abs = storage_root.join(&thumb_rel);
         let generated = generate_thumbnail_file(&full_path, &thumb_abs, &mime_type, None).await;
         if generated {
