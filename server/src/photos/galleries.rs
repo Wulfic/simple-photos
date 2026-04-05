@@ -371,6 +371,18 @@ pub async fn add_gallery_item(
         "[DIAG:SECURE_ADD] Cloned blob into secure gallery"
     );
 
+    // Trigger encryption migration for the newly created clone so the
+    // EncryptionBanner doesn't report it as "pending" indefinitely.
+    // Fire-and-forget — the response returns immediately.
+    if is_server_side {
+        let pool = state.pool.clone();
+        let sr = (**state.storage_root.load()).clone();
+        let jwt = state.config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::photos::server_migrate::auto_migrate_after_scan(pool, sr, jwt).await;
+        });
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({

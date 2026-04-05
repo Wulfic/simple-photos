@@ -343,9 +343,30 @@ fn backup_routes() -> Router<AppState> {
         )
         .route("/backup/receive", post(crate::backup::serve_receive::backup_receive))
         .route("/backup/sync-deletions", post(crate::backup::serve::backup_sync_deletions))
-        .route(
-            "/backup/sync-user-deletions",
+        .route("/backup/sync-user-deletions",
             post(crate::backup::serve_users::backup_sync_user_deletions),
+        )
+        .route(
+            "/backup/sync-secure-galleries",
+            post(crate::backup::serve::backup_sync_secure_galleries),
+        )
+        .route("/backup/list-blobs", get(crate::backup::serve::backup_list_blobs))
+        .route(
+            "/backup/receive-blob",
+            post(crate::backup::serve::backup_receive_blob),
+        )
+        .route(
+            "/backup/sync-metadata",
+            post(crate::backup::serve::backup_sync_metadata),
+        )
+        .route("/backup/list-blobs", get(crate::backup::serve::backup_list_blobs))
+        .route(
+            "/backup/receive-blob",
+            post(crate::backup::serve::backup_receive_blob),
+        )
+        .route(
+            "/backup/sync-metadata",
+            post(crate::backup::serve::backup_sync_metadata),
         )
         .route(
             "/backup/download/{photo_id}",
