@@ -47,7 +47,9 @@ pub async fn list_photos(
     let mut sql = String::from(
         "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
          duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, crop_metadata, camera_model, photo_hash \
-         FROM photos WHERE user_id = ?"
+         FROM photos WHERE user_id = ? \
+         AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+         AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)"
     );
     let mut binds: Vec<String> = vec![auth.user_id.clone()];
 
