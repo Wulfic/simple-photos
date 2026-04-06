@@ -651,6 +651,155 @@ class TestSyncSecureGalleries:
             f"Blob count GREW after gallery deletion: {len(before_blobs)} -> {len(after_blobs)}"
         )
 
+    def test_photo_synced_then_hidden_removed_from_backup(self, primary_admin, user_client,
+                                                           backup_configured, backup_client):
+        """Photo synced to backup FIRST, then added to secure gallery →
+        must be REMOVED from backup on the next sync (retroactive purge).
+
+        This tests the critical order-dependent scenario: the item was already
+        on the backup before it was hidden.  The sync engine must not only
+        skip sending it again, but actively purge the stale copy."""
+        before_photos = _backup_photo_ids(backup_client)
+
+        # Upload and sync — photo lands on backup
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        _trigger_and_wait(primary_admin, backup_configured)
+
+        mid_photos = _backup_photo_ids(backup_client)
+        _assert_no_duplicates(mid_photos, "photos after initial sync")
+        assert pid in mid_photos, f"Photo {pid} should be on backup after first sync"
+
+        # Now add to secure gallery (hides it on primary)
+        gallery = user_client.create_secure_gallery("RetroHidePhotoGallery")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        add_result = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], pid, token,
+        )
+        clone_id = add_result["new_blob_id"]
+
+        # Verify hidden on primary
+        primary_photos = [p["id"] for p in user_client.list_photos(limit=500).get("photos", [])]
+        assert pid not in primary_photos, (
+            f"Photo {pid} should be hidden on primary after secure gallery add"
+        )
+
+        # Sync again → photo MUST be removed from backup
+        result = _trigger_and_wait(primary_admin, backup_configured)
+        assert result.get("status") != "error", f"Sync failed: {result}"
+
+        after_photos = _backup_photo_ids(backup_client)
+        _assert_no_duplicates(after_photos, "photos after retroactive hide")
+        assert pid not in after_photos, (
+            f"BUG: Photo {pid} still on backup after being added to secure gallery. "
+            f"Sync should retroactively remove previously-synced items when they become hidden."
+        )
+        assert clone_id not in after_photos, (
+            f"BUG: Clone {clone_id} appeared on backup"
+        )
+        # Count should have decreased by exactly 1 (the hidden photo)
+        expected_count = len(mid_photos) - 1
+        assert len(after_photos) == expected_count, (
+            f"Expected {expected_count} photos after retroactive purge, got {len(after_photos)}"
+        )
+
+    def test_blob_synced_then_hidden_removed_from_backup(self, primary_admin, user_client,
+                                                          backup_configured, backup_client):
+        """Blob synced to backup FIRST, then added to secure gallery →
+        must be REMOVED from backup on the next sync (retroactive purge).
+
+        Same principle as the photo test, but for client-encrypted blobs."""
+        before_blobs = _backup_blob_ids(backup_client)
+
+        # Upload blob and sync — blob lands on backup
+        content = generate_random_bytes(1024)
+        blob = user_client.upload_blob("photo", content)
+        bid = blob["blob_id"]
+
+        _trigger_and_wait(primary_admin, backup_configured)
+
+        mid_blobs = _backup_blob_ids(backup_client)
+        _assert_no_duplicates(mid_blobs, "blobs after initial sync")
+        assert bid in mid_blobs, f"Blob {bid} should be on backup after first sync"
+
+        # Now add to secure gallery (hides it)
+        gallery = user_client.create_secure_gallery("RetroHideBlobGallery")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        add_result = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], bid, token,
+        )
+        clone_id = add_result["new_blob_id"]
+
+        # Sync again → blob MUST be removed from backup
+        result = _trigger_and_wait(primary_admin, backup_configured)
+        assert result.get("status") != "error", f"Sync failed: {result}"
+
+        after_blobs = _backup_blob_ids(backup_client)
+        _assert_no_duplicates(after_blobs, "blobs after retroactive hide")
+        assert bid not in after_blobs, (
+            f"BUG: Blob {bid} still on backup after being added to secure gallery. "
+            f"Sync should retroactively remove previously-synced blobs when they become hidden."
+        )
+        assert clone_id not in after_blobs, (
+            f"BUG: Clone {clone_id} appeared on backup blobs"
+        )
+        # Count should have decreased by exactly 1
+        expected_count = len(mid_blobs) - 1
+        assert len(after_blobs) == expected_count, (
+            f"Expected {expected_count} blobs after retroactive purge, got {len(after_blobs)}"
+        )
+
+    def test_mixed_presynced_and_new_gallery_items(self, primary_admin, user_client,
+                                                    backup_configured, backup_client):
+        """Mix of pre-synced and new items added to gallery: all must be
+        absent from backup after sync, and regular items unaffected."""
+        before_blobs = _backup_blob_ids(backup_client)
+
+        # Upload 3 blobs
+        b1 = user_client.upload_blob("photo", generate_random_bytes(512))
+        b2 = user_client.upload_blob("photo", generate_random_bytes(768))
+        b3 = user_client.upload_blob("photo", generate_random_bytes(1024))
+
+        # Sync all 3 to backup
+        _trigger_and_wait(primary_admin, backup_configured)
+        mid_blobs = _backup_blob_ids(backup_client)
+        for b in (b1, b2, b3):
+            assert b["blob_id"] in mid_blobs
+
+        # Add b1 to gallery (pre-synced, retroactive purge needed)
+        gallery = user_client.create_secure_gallery("MixedRetroGallery")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        r1 = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], b1["blob_id"], token,
+        )
+
+        # Upload b4, add to gallery immediately (never synced)
+        b4 = user_client.upload_blob("photo", generate_random_bytes(256))
+        r4 = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], b4["blob_id"], token,
+        )
+
+        # Sync
+        result = _trigger_and_wait(primary_admin, backup_configured)
+        assert result.get("status") != "error"
+
+        after_blobs = _backup_blob_ids(backup_client)
+        _assert_no_duplicates(after_blobs, "blobs after mixed retroactive purge")
+
+        # b1 should be REMOVED (retroactive purge)
+        assert b1["blob_id"] not in after_blobs, (
+            f"BUG: Pre-synced blob {b1['blob_id']} not purged after gallery add"
+        )
+        # b4 should never have been sent
+        assert b4["blob_id"] not in after_blobs
+        # Clones should not be on backup
+        assert r1["new_blob_id"] not in after_blobs
+        assert r4["new_blob_id"] not in after_blobs
+        # b2 and b3 should still be there (regular, unaffected)
+        assert b2["blob_id"] in after_blobs
+        assert b3["blob_id"] in after_blobs
+
 
 class TestSyncMetadata:
     """Phase 5: Metadata sync (edit copies, shared albums, tags)."""

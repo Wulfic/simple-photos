@@ -350,6 +350,39 @@ pub async fn backup_sync_secure_galleries(
 
         item_ids.insert(id.to_string());
 
+        // The clone blob_id may not exist on the backup (clones are excluded
+        // from blob sync).  Insert a placeholder row to satisfy the FK
+        // constraint on encrypted_gallery_items.blob_id → blobs(id).
+        // Only the metadata matters — the actual encrypted data stays on the
+        // primary and is never served from the backup.
+        let blob_exists: bool = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM blobs WHERE id = ?)",
+        )
+        .bind(blob_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(false);
+
+        if !blob_exists {
+            // Resolve a valid user_id for the FK on blobs.user_id.
+            let admin_uid: String = sqlx::query_scalar(
+                "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
+            )
+            .fetch_optional(&mut *tx)
+            .await
+            .unwrap_or(None)
+            .unwrap_or_default();
+
+            let _ = sqlx::query(
+                "INSERT OR IGNORE INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+                 VALUES (?, ?, 'gallery-placeholder', 0, '', '')",
+            )
+            .bind(blob_id)
+            .bind(&admin_uid)
+            .execute(&mut *tx)
+            .await;
+        }
+
         sqlx::query(
             "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id) \
              VALUES (?, ?, ?, ?, ?) \
@@ -403,7 +436,88 @@ pub async fn backup_sync_secure_galleries(
         }
     }
 
+    // ── Retroactive purge ────────────────────────────────────────────────
+    // Items that were synced to this backup BEFORE being added to a secure
+    // gallery on the primary still exist in our photos/blobs tables.  Now
+    // that we have the authoritative gallery item list, remove any stale
+    // rows so they no longer appear in backup listings.
+    //
+    // Collect all IDs that should be hidden: clone blob_ids and the
+    // original_blob_ids they shadow.
+    let hidden_ids: Vec<String> = sqlx::query_scalar::<_, String>(
+        "SELECT blob_id FROM encrypted_gallery_items \
+         UNION \
+         SELECT original_blob_id FROM encrypted_gallery_items \
+         WHERE original_blob_id IS NOT NULL",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap_or_default();
+
+    let mut purged_photos = 0usize;
+    let mut purged_blobs = 0usize;
+
+    for hidden_id in &hidden_ids {
+        // Remove server-side encryption blobs linked to the photo row
+        // before deleting the photo itself (avoids orphaned blob rows).
+        let enc_ids: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT encrypted_blob_id, encrypted_thumb_blob_id \
+             FROM photos WHERE id = ?",
+        )
+        .bind(hidden_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .unwrap_or(None);
+
+        if let Some((ref enc_blob, ref enc_thumb)) = enc_ids {
+            if let Some(ref bid) = enc_blob {
+                let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
+                    .bind(bid)
+                    .execute(&mut *tx)
+                    .await;
+            }
+            if let Some(ref tid) = enc_thumb {
+                let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
+                    .bind(tid)
+                    .execute(&mut *tx)
+                    .await;
+            }
+        }
+
+        // Remove from photos table (covers pre-synced originals + clones)
+        let r = sqlx::query("DELETE FROM photos WHERE id = ?")
+            .bind(hidden_id)
+            .execute(&mut *tx)
+            .await;
+        if let Ok(ref res) = r {
+            purged_photos += res.rows_affected() as usize;
+        }
+
+        // Clean up orphaned photo_tags
+        let _ = sqlx::query("DELETE FROM photo_tags WHERE photo_id = ?")
+            .bind(hidden_id)
+            .execute(&mut *tx)
+            .await;
+
+        // Remove from blobs table (covers pre-synced client-encrypted blobs)
+        let r = sqlx::query("DELETE FROM blobs WHERE id = ?")
+            .bind(hidden_id)
+            .execute(&mut *tx)
+            .await;
+        if let Ok(ref res) = r {
+            purged_blobs += res.rows_affected() as usize;
+        }
+    }
+
     tx.commit().await?;
+
+    if purged_photos > 0 || purged_blobs > 0 {
+        tracing::info!(
+            "Secure gallery sync: purged {} stale photos and {} stale blobs from backup",
+            purged_photos,
+            purged_blobs
+        );
+    }
 
     tracing::info!(
         "Received secure gallery sync: {} galleries, {} items",
@@ -425,7 +539,9 @@ pub async fn backup_list_blobs(
     validate_api_key(&state, &headers).await?;
 
     let blobs: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT id, size_bytes FROM blobs ORDER BY upload_time ASC",
+        "SELECT id, size_bytes FROM blobs \
+         WHERE blob_type != 'gallery-placeholder' \
+         ORDER BY upload_time ASC",
     )
     .fetch_all(&state.read_pool)
     .await?;

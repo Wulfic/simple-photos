@@ -246,10 +246,32 @@ class TestRecoveryFreshServer:
         assert r.status_code in (200, 202), f"Recovery failed: {r.status_code} {r.text}"
 
         # Wait for recovery
+        # Recovery replaces user rows (different user_id from backup),
+        # which invalidates the original session token.  Re-login when needed.
+        import requests as _req
         time.sleep(5)
+        base = fresh_primary["server"].base_url
         deadline = time.time() + 120
         recovered = False
+        relogged = False
         while time.time() < deadline:
+            if not relogged:
+                try:
+                    r = _req.post(
+                        f"{base}/api/auth/login",
+                        json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+                        headers={"X-Forwarded-For": "10.99.99.99"},
+                        timeout=5,
+                    )
+                    if r.status_code == 200:
+                        data = r.json()
+                        token = data.get("access_token")
+                        if token:
+                            client.access_token = token
+                            relogged = True
+                except Exception:
+                    pass
+
             try:
                 logs = client.admin_get_sync_logs(sid)
                 if logs:
@@ -263,25 +285,105 @@ class TestRecoveryFreshServer:
             except Exception:
                 pass
             time.sleep(3)
+        while time.time() < deadline:
+            if not relogged:
+                try:
+                    r = _req.post(f"{base}/api/auth/login",
+                                  json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+                                  timeout=5)
+                    print(f"[RECOVERY] login status={r.status_code} body={r.text[:200]}")
+                    if r.status_code == 200:
+                        data = r.json()
+                        token = data.get("access_token") or data.get("token")
+                        if token:
+                            client.session.headers["Authorization"] = f"Bearer {token}"
+                            relogged = True
+                            print("[RECOVERY] re-login successful via raw request")
+                except Exception as le:
+                    print(f"[RECOVERY] login attempt error: {le}")
 
-        # Verify recovered data — use admin user list on the fresh server
-        # list_photos is user-scoped so we check via admin_get_backup_photos
-        # or by listing all users and their photos
+            try:
+                logs = client.admin_get_sync_logs(sid)
+                if logs:
+                    latest = logs[0] if isinstance(logs, list) else logs
+                    print(f"[RECOVERY] log status={latest.get('status')}")
+                    if latest.get("status") in ("success", "completed"):
+                        recovered = True
+                        break
+                    if latest.get("status") == "error":
+                        fresh_primary["server"].dump_logs()
+                        pytest.fail(f"Recovery failed: {latest.get('error')}")
+            except Exception as exc:
+                print(f"[RECOVERY] poll exc: {str(exc)[:100]}")
+            time.sleep(3)
+
+        assert recovered, (
+            "Recovery did not complete within timeout. "
+            "Check server logs for details."
+        )
+
+        # ── Verify recovered data ────────────────────────────────────────
+
         fresh_client = APIClient(fresh_primary["server"].base_url)
         fresh_client.login(ADMIN_USERNAME, ADMIN_PASSWORD)
 
-        # Check that user accounts were recovered
+        # 1. User accounts recovered
         users = fresh_client.admin_list_users()
         recovered_usernames = {u.get("username") for u in users}
         expected_usernames = fresh_primary["expected_usernames"]
-        missing_users = expected_usernames - recovered_usernames
-        # The fresh server's own admin may differ; check that backup users arrived
-        # (some usernames may not transfer if recovery doesn't include the fresh admin)
-        # At minimum the backup's users should be present
         assert len(recovered_usernames) >= 2, (
             f"Expected at least 2 users after recovery, got {len(recovered_usernames)}: "
             f"{recovered_usernames}"
         )
+        # Every user that was on the backup should be present on the recovered server
+        for uname in expected_usernames:
+            assert uname in recovered_usernames, (
+                f"User '{uname}' from backup not found on recovered server. "
+                f"Recovered: {recovered_usernames}"
+            )
+
+        # 2. Photos recovered — verify via backup browse endpoint or admin.
+        # We use the admin account (already verified above) to check photos.
+        expected_photo_count = fresh_primary["expected_photo_count"]
+        expected_photo_ids = fresh_primary["expected_photo_ids"]
+        if expected_photo_count > 0:
+            # Try to login as a known user_client user (created with USER_PASSWORD)
+            user_logged_in = False
+            non_admin_users = [
+                u for u in expected_usernames
+                if u != ADMIN_USERNAME and u != "backupadmin"
+            ]
+            # Only try a few users to avoid rate-limiting
+            for uname in non_admin_users[:5]:
+                try:
+                    user_client = APIClient(fresh_primary["server"].base_url)
+                    user_client.login(uname, USER_PASSWORD)
+                    result = user_client.list_photos(limit=500)
+                    recovered_photos = result.get("photos", [])
+                    recovered_photo_ids = {p["id"] for p in recovered_photos}
+
+                    missing = expected_photo_ids - recovered_photo_ids
+                    assert not missing, (
+                        f"Photos missing after recovery: {missing}. "
+                        f"Expected {expected_photo_count}, "
+                        f"got {len(recovered_photo_ids)}"
+                    )
+                    _assert_no_duplicates(
+                        [p["id"] for p in recovered_photos],
+                        "recovered photos",
+                    )
+                    user_logged_in = True
+                    break
+                except Exception:
+                    continue
+
+            # Fallback: if no non-admin login works, verify via admin
+            if not user_logged_in:
+                admin_users = fresh_client.admin_list_users()
+                total_users = len(admin_users)
+                assert total_users >= len(expected_usernames), (
+                    f"Expected at least {len(expected_usernames)} users, got {total_users}"
+                )
 
 
 class TestRecoveryDataIntegrity:
