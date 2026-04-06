@@ -10,6 +10,9 @@ use super::sync_engine::{SyncContext, SyncCounters};
 use super::sync_transfer::{build_blob_headers, send_blob_to_backup, BlobToSync};
 
 /// Phase 4: delta-transfer blobs the remote doesn't have.
+/// Excludes secure-gallery clones — both the clone blob_id and the original
+/// blob_id that it shadows are filtered out, matching the primary's
+/// GET /api/blobs listing behaviour.
 pub async fn sync_blobs(
     ctx: &SyncContext<'_>,
     remote_blob_ids: &HashSet<String>,
@@ -17,7 +20,19 @@ pub async fn sync_blobs(
 ) {
     let blobs: Vec<BlobToSync> = match sqlx::query_as::<_, BlobToSync>(
         "SELECT id, user_id, blob_type, size_bytes, client_hash, upload_time, \
-         storage_path, content_hash FROM blobs",
+         storage_path, content_hash FROM blobs \
+         WHERE id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+           AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+           AND id NOT IN ( \
+               SELECT p.encrypted_blob_id FROM photos p \
+               WHERE p.encrypted_blob_id IS NOT NULL \
+               AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                    OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+           AND id NOT IN ( \
+               SELECT p.encrypted_thumb_blob_id FROM photos p \
+               WHERE p.encrypted_thumb_blob_id IS NOT NULL \
+               AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                    OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)))",
     )
     .fetch_all(ctx.pool)
     .await

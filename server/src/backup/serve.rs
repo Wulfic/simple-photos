@@ -556,7 +556,8 @@ pub async fn backup_receive_blob(
            blob_type = excluded.blob_type, \
            size_bytes = excluded.size_bytes, \
            client_hash = excluded.client_hash, \
-           content_hash = excluded.content_hash",
+           content_hash = excluded.content_hash, \
+           storage_path = excluded.storage_path",
     )
     .bind(&blob_id)
     .bind(&effective_user_id)

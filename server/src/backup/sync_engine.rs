@@ -157,16 +157,6 @@ pub async fn run_sync(
     // encrypted-sync endpoint correctly filter clones from the gallery.
     sync_secure_galleries_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
 
-    // ── Phase 4: sync client-encrypted blobs ─────────────────────────────
-    // E2EE data uploaded by clients — irreplaceable, only the client has
-    // the decryption key.  Must be backed up for disaster recovery.
-    sync_blobs(&ctx, &remote_blob_ids, &mut counters).await;
-
-    // ── Phase 5: sync metadata tables ────────────────────────────────────
-    // Lightweight JSON tables: edit_copies, photo_metadata, shared_albums.
-    // Full-state sync (not delta) — sent every cycle, backup prunes stale.
-    sync_metadata_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
-
     // ── Finalize ─────────────────────────────────────────────────────────
     let (status, error_detail) = if counters.failures == 0 {
         ("success", None)
@@ -324,11 +314,18 @@ async fn sync_photos(
     // Sync ALL registered media — including audio. The audio_backup_enabled
     // setting only controls whether new audio files are *registered* during
     // auto-scan, not whether already-registered files are transferred.
+    // Exclude secure-gallery clones: the `encrypted_gallery_items` table
+    // tracks cloned blob_ids and the original_blob_ids they shadow.  The
+    // primary's gallery-listing endpoints already filter these out; the
+    // sync engine must do the same so the backup never receives clone rows
+    // that would appear as duplicates.
     let photos: Vec<PhotoToSync> = {
         let query =
             "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
              width, height, duration_secs, camera_model, is_favorite, photo_hash, \
-             crop_metadata, created_at FROM photos";
+             crop_metadata, created_at FROM photos \
+             WHERE id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+               AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)";
         match sqlx::query_as::<_, PhotoToSync>(query)
             .fetch_all(ctx.pool)
             .await
