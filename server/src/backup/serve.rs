@@ -85,7 +85,10 @@ pub async fn backup_list_photos(
          p.size_bytes, p.width, p.height, p.duration_secs, p.taken_at, \
          p.latitude, p.longitude, p.thumb_path, p.created_at, \
          p.is_favorite, p.camera_model, p.photo_hash, p.crop_metadata \
-         FROM photos p ORDER BY p.created_at ASC",
+         FROM photos p \
+         WHERE p.id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+           AND p.id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+         ORDER BY p.created_at ASC",
     )
     .fetch_all(&state.read_pool)
     .await?;
@@ -456,8 +459,41 @@ pub async fn backup_sync_secure_galleries(
 
     let mut purged_photos = 0usize;
     let mut purged_blobs = 0usize;
+    // Collect file paths to delete from disk AFTER the transaction commits.
+    // This prevents autoscan from re-registering purged gallery items.
+    let mut files_to_delete: Vec<String> = Vec::new();
 
     for hidden_id in &hidden_ids {
+        // Collect file paths and thumb paths BEFORE deleting the photo row
+        let paths: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT file_path, thumb_path FROM photos WHERE id = ?",
+        )
+        .bind(hidden_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .unwrap_or(None);
+        if let Some((ref fp, ref tp)) = paths {
+            if let Some(ref p) = fp {
+                files_to_delete.push(p.clone());
+            }
+            if let Some(ref p) = tp {
+                files_to_delete.push(p.clone());
+            }
+        }
+
+        // Also collect storage_path for blob rows we're about to delete
+        let blob_path: Option<String> = sqlx::query_scalar(
+            "SELECT storage_path FROM blobs WHERE id = ? \
+             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items)",
+        )
+        .bind(hidden_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .unwrap_or(None);
+        if let Some(ref bp) = blob_path {
+            files_to_delete.push(bp.clone());
+        }
+
         // Remove server-side encryption blobs linked to the photo row
         // before deleting the photo itself (avoids orphaned blob rows).
         let enc_ids: Option<(Option<String>, Option<String>)> = sqlx::query_as(
@@ -471,12 +507,34 @@ pub async fn backup_sync_secure_galleries(
 
         if let Some((ref enc_blob, ref enc_thumb)) = enc_ids {
             if let Some(ref bid) = enc_blob {
+                // Collect encrypted blob storage path before deletion
+                let enc_path: Option<String> = sqlx::query_scalar(
+                    "SELECT storage_path FROM blobs WHERE id = ?",
+                )
+                .bind(bid)
+                .fetch_optional(&mut *tx)
+                .await
+                .unwrap_or(None);
+                if let Some(ref ep) = enc_path {
+                    files_to_delete.push(ep.clone());
+                }
                 let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
                     .bind(bid)
                     .execute(&mut *tx)
                     .await;
             }
             if let Some(ref tid) = enc_thumb {
+                // Collect encrypted thumb blob storage path before deletion
+                let enc_thumb_path: Option<String> = sqlx::query_scalar(
+                    "SELECT storage_path FROM blobs WHERE id = ?",
+                )
+                .bind(tid)
+                .fetch_optional(&mut *tx)
+                .await
+                .unwrap_or(None);
+                if let Some(ref etp) = enc_thumb_path {
+                    files_to_delete.push(etp.clone());
+                }
                 let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
                     .bind(tid)
                     .execute(&mut *tx)
@@ -500,16 +558,53 @@ pub async fn backup_sync_secure_galleries(
             .await;
 
         // Remove from blobs table (covers pre-synced client-encrypted blobs)
-        let r = sqlx::query("DELETE FROM blobs WHERE id = ?")
-            .bind(hidden_id)
-            .execute(&mut *tx)
-            .await;
+        // BUT skip blobs that are referenced by encrypted_gallery_items.blob_id
+        // because those FK rows need to stay (ON DELETE CASCADE would destroy
+        // the gallery item we just synced).
+        let r = sqlx::query(
+            "DELETE FROM blobs WHERE id = ? \
+             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items)",
+        )
+        .bind(hidden_id)
+        .execute(&mut *tx)
+        .await;
         if let Ok(ref res) = r {
             purged_blobs += res.rows_affected() as usize;
         }
     }
 
     tx.commit().await?;
+
+    // Delete physical files from disk so autoscan cannot re-register them.
+    // This runs after commit to ensure DB changes are durable first.
+    if !files_to_delete.is_empty() {
+        let storage_root = (**state.storage_root.load()).clone();
+        let mut deleted_files = 0usize;
+        for rel_path in &files_to_delete {
+            let full_path = storage_root.join(rel_path);
+            match tokio::fs::remove_file(&full_path).await {
+                Ok(_) => {
+                    deleted_files += 1;
+                    tracing::debug!("Purged file from disk: {}", rel_path);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // Already gone — not an error
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to delete purged file {}: {}",
+                        rel_path, e
+                    );
+                }
+            }
+        }
+        if deleted_files > 0 {
+            tracing::info!(
+                "Secure gallery purge: deleted {} physical files from disk",
+                deleted_files
+            );
+        }
+    }
 
     if purged_photos > 0 || purged_blobs > 0 {
         tracing::info!(
@@ -541,6 +636,18 @@ pub async fn backup_list_blobs(
     let blobs: Vec<(String, i64)> = sqlx::query_as(
         "SELECT id, size_bytes FROM blobs \
          WHERE blob_type != 'gallery-placeholder' \
+           AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+           AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+           AND id NOT IN ( \
+               SELECT p.encrypted_blob_id FROM photos p \
+               WHERE p.encrypted_blob_id IS NOT NULL \
+               AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                    OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+           AND id NOT IN ( \
+               SELECT p.encrypted_thumb_blob_id FROM photos p \
+               WHERE p.encrypted_thumb_blob_id IS NOT NULL \
+               AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                    OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
          ORDER BY upload_time ASC",
     )
     .fetch_all(&state.read_pool)

@@ -454,6 +454,11 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    def admin_trigger_autoscan(self) -> dict:
+        r = self.post("/api/admin/photos/auto-scan")
+        r.raise_for_status()
+        return r.json()
+
     # ── Backup serve endpoints (X-API-Key auth) ─────────────────────
 
     def backup_list(self) -> list:
