@@ -245,6 +245,18 @@ pub async fn list(
             sqlx::query_as::<_, BlobRecord>(
                 "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
                  WHERE user_id = ? AND blob_type = ? AND upload_time > ? \
+                 AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+                 AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+                 AND id NOT IN ( \
+                     SELECT p.encrypted_blob_id FROM photos p \
+                     WHERE p.encrypted_blob_id IS NOT NULL \
+                     AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                          OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+                 AND id NOT IN ( \
+                     SELECT p.encrypted_thumb_blob_id FROM photos p \
+                     WHERE p.encrypted_thumb_blob_id IS NOT NULL \
+                     AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                          OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
                  ORDER BY upload_time ASC LIMIT ?",
             )
             .bind(&auth.user_id)
@@ -257,6 +269,18 @@ pub async fn list(
             sqlx::query_as::<_, BlobRecord>(
                 "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
                  WHERE user_id = ? AND blob_type = ? \
+                 AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+                 AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+                 AND id NOT IN ( \
+                     SELECT p.encrypted_blob_id FROM photos p \
+                     WHERE p.encrypted_blob_id IS NOT NULL \
+                     AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                          OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+                 AND id NOT IN ( \
+                     SELECT p.encrypted_thumb_blob_id FROM photos p \
+                     WHERE p.encrypted_thumb_blob_id IS NOT NULL \
+                     AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                          OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
                  ORDER BY upload_time ASC LIMIT ?",
             )
             .bind(&auth.user_id)
@@ -269,6 +293,18 @@ pub async fn list(
         sqlx::query_as::<_, BlobRecord>(
             "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
              WHERE user_id = ? AND upload_time > ? \
+             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+             AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+             AND id NOT IN ( \
+                 SELECT p.encrypted_blob_id FROM photos p \
+                 WHERE p.encrypted_blob_id IS NOT NULL \
+                 AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                      OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+             AND id NOT IN ( \
+                 SELECT p.encrypted_thumb_blob_id FROM photos p \
+                 WHERE p.encrypted_thumb_blob_id IS NOT NULL \
+                 AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                      OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
              ORDER BY upload_time ASC LIMIT ?",
         )
         .bind(&auth.user_id)
@@ -280,6 +316,18 @@ pub async fn list(
         sqlx::query_as::<_, BlobRecord>(
             "SELECT id, blob_type, size_bytes, client_hash, upload_time, content_hash FROM blobs \
              WHERE user_id = ? \
+             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+             AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+             AND id NOT IN ( \
+                 SELECT p.encrypted_blob_id FROM photos p \
+                 WHERE p.encrypted_blob_id IS NOT NULL \
+                 AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                      OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+             AND id NOT IN ( \
+                 SELECT p.encrypted_thumb_blob_id FROM photos p \
+                 WHERE p.encrypted_thumb_blob_id IS NOT NULL \
+                 AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
+                      OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
              ORDER BY upload_time ASC LIMIT ?",
         )
         .bind(&auth.user_id)

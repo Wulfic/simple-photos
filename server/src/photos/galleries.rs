@@ -402,6 +402,8 @@ pub async fn list_secure_blob_ids(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Return BOTH the cloned blob IDs and the original blob IDs so the
     // main gallery can hide originals that have been moved to secure albums.
+    // Also include encrypted_blob_id and encrypted_thumb_blob_id of photos
+    // in secure galleries so the web client can filter those from blob listings.
     let rows: Vec<(String, Option<String>)> = sqlx::query_as(
         "SELECT gi.blob_id, gi.original_blob_id \
          FROM encrypted_gallery_items gi \
@@ -414,13 +416,41 @@ pub async fn list_secure_blob_ids(
 
     let mut ids = std::collections::HashSet::new();
     for (cloned_id, original_id) in &rows {
-        ids.insert(cloned_id.as_str());
+        ids.insert(cloned_id.clone());
         if let Some(orig) = original_id {
-            ids.insert(orig.as_str());
+            ids.insert(orig.clone());
         }
     }
 
-    let id_vec: Vec<&str> = ids.into_iter().collect();
+    // Also include encrypted_blob_id and encrypted_thumb_blob_id of photos
+    // that are in secure galleries.  These blobs are created by server-side
+    // encryption migration and have different IDs from the photos.id entries.
+    let enc_blob_rows: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT p.encrypted_blob_id, p.encrypted_thumb_blob_id \
+         FROM photos p \
+         WHERE (p.id IN (SELECT gi.blob_id FROM encrypted_gallery_items gi \
+                         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+                         WHERE g.user_id = ?) \
+                OR p.id IN (SELECT gi.original_blob_id FROM encrypted_gallery_items gi \
+                            JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+                            WHERE g.user_id = ? AND gi.original_blob_id IS NOT NULL)) \
+         AND (p.encrypted_blob_id IS NOT NULL OR p.encrypted_thumb_blob_id IS NOT NULL)",
+    )
+    .bind(&auth.user_id)
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    for (enc_blob, enc_thumb) in &enc_blob_rows {
+        if let Some(eb) = enc_blob {
+            ids.insert(eb.clone());
+        }
+        if let Some(et) = enc_thumb {
+            ids.insert(et.clone());
+        }
+    }
+
+    let id_vec: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
 
     tracing::debug!(
         user_id = %auth.user_id,
