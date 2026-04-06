@@ -44,10 +44,12 @@ class TestLibraryExport:
         """Upload blobs, start export, poll to completion, download & verify."""
         # 1. Upload a few blobs so there's content to export
         blob_ids = []
+        blob_contents = {}  # blob_id -> raw bytes for integrity check
         for i in range(3):
             content = generate_random_bytes(2048 + i)  # unique sizes to avoid dedup
             blob = user_client.upload_blob("photo", content)
             blob_ids.append(blob["blob_id"])
+            blob_contents[blob["blob_id"]] = content
 
         assert len(blob_ids) == 3
 
@@ -61,6 +63,12 @@ class TestLibraryExport:
         assert job["id"]
         job_id = job["id"]
 
+        # 2b. While job is still pending/running, files must NOT be visible
+        r_early = user_client.get("/api/export/files")
+        assert r_early.status_code == 200
+        assert r_early.json()["files"] == [], \
+            "Export files must not be visible before job completes"
+
         # 3. Poll for completion (timeout after 30 seconds)
         deadline = time.time() + 30
         final_status = None
@@ -71,11 +79,15 @@ class TestLibraryExport:
             final_status = data["job"]["status"]
             if final_status in ("completed", "failed"):
                 break
+            # While still running, files list should stay empty
+            if final_status in ("pending", "running"):
+                assert data["files"] == [], \
+                    "Files appeared in status response before job completed"
             time.sleep(0.5)
 
         assert final_status == "completed", f"Export did not complete: {data['job']}"
 
-        # 4. Verify files are listed
+        # 4. Verify files are listed (only AFTER completion)
         files = data["files"]
         assert len(files) >= 1
         first_file = files[0]
@@ -84,20 +96,39 @@ class TestLibraryExport:
         assert first_file["size_bytes"] > 0
         assert first_file["download_url"]
 
-        # 5. Download the first zip and verify it's a valid zip
+        # 5. Download the first zip and verify it's a valid, non-corrupt zip
         r = user_client.get(first_file['download_url'])
         assert r.status_code == 200
         assert r.headers.get("Content-Type") == "application/zip"
 
-        # Verify it's a valid zip file
         zip_data = io.BytesIO(r.content)
         with zipfile.ZipFile(zip_data, "r") as zf:
+            # testzip() returns None if every file CRC is OK
+            bad_file = zf.testzip()
+            assert bad_file is None, f"Zip integrity check failed on: {bad_file}"
+
             names = zf.namelist()
-            # Should contain manifest.json
+
+            # Should contain manifest.json with valid JSON
             assert "manifest.json" in names
-            # Should contain at least one blob file
+            import json
+            manifest = json.loads(zf.read("manifest.json"))
+            assert manifest["export_version"] == 1
+            assert manifest["blob_count"] == 3
+            assert len(manifest["blobs"]) == 3
+
+            # Should contain all 3 blob files
             blob_files = [n for n in names if n.startswith("blobs/")]
-            assert len(blob_files) >= 1
+            assert len(blob_files) == 3, \
+                f"Expected 3 blob files in zip, found {len(blob_files)}: {blob_files}"
+
+            # Verify each blob's content matches the original upload
+            for blob_id, original_content in blob_contents.items():
+                zip_entry = f"blobs/photo/{blob_id}.bin"
+                assert zip_entry in names, f"Missing blob entry: {zip_entry}"
+                extracted = zf.read(zip_entry)
+                assert extracted == original_content, \
+                    f"Blob {blob_id} content mismatch: expected {len(original_content)} bytes, got {len(extracted)}"
 
         # 6. GET /api/export/files also returns the files
         r = user_client.get("/api/export/files")

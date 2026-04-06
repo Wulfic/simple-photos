@@ -149,13 +149,19 @@ pub async fn export_status(
     let (job_id, status, size_limit, created_at, completed_at, error) = row
         .ok_or_else(|| AppError::NotFound)?;
 
-    let file_rows: Vec<(String, String, String, i64, String, String)> = sqlx::query_as(
-        "SELECT id, job_id, filename, size_bytes, created_at, expires_at \
-         FROM export_files WHERE job_id = ? ORDER BY filename",
-    )
-    .bind(&job_id)
-    .fetch_all(&state.read_pool)
-    .await?;
+    // Only return files once the job is fully completed to prevent
+    // downloading partially-written zip archives.
+    let file_rows: Vec<(String, String, String, i64, String, String)> = if status == "completed" {
+        sqlx::query_as(
+            "SELECT id, job_id, filename, size_bytes, created_at, expires_at \
+             FROM export_files WHERE job_id = ? ORDER BY filename",
+        )
+        .bind(&job_id)
+        .fetch_all(&state.read_pool)
+        .await?
+    } else {
+        Vec::new()
+    };
 
     let now = chrono::Utc::now();
     let files: Vec<ExportFileResponse> = file_rows
@@ -199,7 +205,7 @@ pub async fn list_export_files(
         "SELECT ef.id, ef.job_id, ef.filename, ef.size_bytes, ef.created_at, ef.expires_at \
          FROM export_files ef \
          JOIN export_jobs ej ON ef.job_id = ej.id \
-         WHERE ej.user_id = ? AND ef.expires_at > ? \
+         WHERE ej.user_id = ? AND ej.status = 'completed' AND ef.expires_at > ? \
          ORDER BY ef.filename",
     )
     .bind(&auth.user_id)
@@ -236,7 +242,7 @@ pub async fn download_export_file(
         "SELECT ef.filename, ef.file_path \
          FROM export_files ef \
          JOIN export_jobs ej ON ef.job_id = ej.id \
-         WHERE ef.id = ? AND ej.user_id = ? AND ef.expires_at > ?",
+         WHERE ef.id = ? AND ej.user_id = ? AND ej.status = 'completed' AND ef.expires_at > ?",
     )
     .bind(&file_id)
     .bind(&auth.user_id)

@@ -145,7 +145,9 @@ async fn do_export(
         // Use a conservative estimate (zip overhead ~100 bytes per file)
         if current_zip_size + size_bytes + 100 > size_limit && current_zip_size > 0 {
             // Finalize current zip and start a new one
-            current_zip.finish()?;
+            let file = current_zip.finish()?;
+            file.sync_all()?;
+            drop(file);
             register_zip_file(pool, job_id, &export_dir, part_number).await?;
 
             part_number += 1;
@@ -183,7 +185,9 @@ async fn do_export(
     }
 
     // Finalize the last zip
-    current_zip.finish()?;
+    let file = current_zip.finish()?;
+    file.sync_all()?;
+    drop(file);
     register_zip_file(pool, job_id, &export_dir, part_number).await?;
 
     Ok(())
