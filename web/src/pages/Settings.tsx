@@ -6,7 +6,9 @@
  * user management (admin), and thumbnail size preference.
  */
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import type { ExportJob, ExportFile } from "../api/export";
 import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
 import AppHeader from "../components/AppHeader";
@@ -25,11 +27,19 @@ export default function Settings() {
   const { username } = useAuthStore();
   const isAdmin = useIsAdmin();
   const { thumbnailSize, toggle: toggleThumbnailSize } = useThumbnailSizeStore();
+  const navigate = useNavigate();
 
   // ── General state ────────────────────────────────────────────────────────
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // ── Export state ─────────────────────────────────────────────────────────
+  const [exportSizeLimit, setExportSizeLimit] = useState<number>(10_737_418_240); // 10 GB
+  const [exportJob, setExportJob] = useState<ExportJob | null>(null);
+  const [exportFiles, setExportFiles] = useState<ExportFile[]>([]);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportStatusLoading, setExportStatusLoading] = useState(true);
 
   // ── Backup mode state (is this a backup server?) ────────────────────────
   const [isBackupMode, setIsBackupMode] = useState(false);
@@ -72,6 +82,7 @@ export default function Settings() {
     loadStorageStats();
     loadAudioBackupSetting();
     loadBackupMode();
+    loadExportStatus();
   }, [loadBackupServers]);
 
   async function loadBackupMode() {
@@ -108,6 +119,57 @@ export default function Settings() {
     }
   }
 
+  async function loadExportStatus() {
+    setExportStatusLoading(true);
+    try {
+      const res = await api.export.status();
+      setExportJob(res.job);
+      setExportFiles(res.files);
+    } catch {
+      // No export job yet — that's fine
+      setExportJob(null);
+      setExportFiles([]);
+    } finally {
+      setExportStatusLoading(false);
+    }
+  }
+
+  async function startExport() {
+    setExportLoading(true);
+    setError("");
+    try {
+      const job = await api.export.start(exportSizeLimit);
+      setExportJob(job);
+      setSuccess("Export started! This may take a while for large libraries.");
+      // Poll for status updates
+      pollExportStatus();
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to start export."));
+    } finally {
+      setExportLoading(false);
+    }
+  }
+
+  function pollExportStatus() {
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.export.status();
+        setExportJob(res.job);
+        setExportFiles(res.files);
+        if (res.job.status === "completed" || res.job.status === "failed") {
+          clearInterval(interval);
+          if (res.job.status === "completed") {
+            setSuccess("Export completed! Your download files are ready.");
+          } else if (res.job.error) {
+            setError(`Export failed: ${res.job.error}`);
+          }
+        }
+      } catch {
+        clearInterval(interval);
+      }
+    }, 3000);
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <AppHeader />
@@ -137,6 +199,81 @@ export default function Settings() {
 
       {/* ── Storage Usage ──────────────────────────────────────────────────── */}
       <StorageStatsSection stats={storageStats} loading={storageLoading} />
+
+      {/* ── Library Export ─────────────────────────────────────────────────── */}
+      {!isBackupMode && (
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+          <h2 className="text-lg font-semibold mb-3">Library Export</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Package your entire media library with metadata into downloadable zip files.
+            Files are available for 24 hours after export.
+          </p>
+
+          {/* Export controls */}
+          <div className="flex items-center gap-3 mb-4">
+            <select
+              value={exportSizeLimit}
+              onChange={(e) => setExportSizeLimit(Number(e.target.value))}
+              disabled={exportLoading || (exportJob?.status === "pending" || exportJob?.status === "running")}
+              className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+            >
+              <option value={10_737_418_240}>10 GB per file</option>
+              <option value={21_474_836_480}>20 GB per file</option>
+              <option value={53_687_091_200}>50 GB per file</option>
+            </select>
+
+            <button
+              onClick={startExport}
+              disabled={exportLoading || exportJob?.status === "pending" || exportJob?.status === "running"}
+              className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exportJob?.status === "pending" || exportJob?.status === "running"
+                ? "Exporting…"
+                : "Export Library"}
+            </button>
+
+            <button
+              onClick={() => navigate("/export-downloads")}
+              disabled={exportFiles.length === 0}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm transition-colors ${
+                exportFiles.length > 0
+                  ? "bg-green-600 text-white hover:bg-green-700"
+                  : "bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+              }`}
+            >
+              Downloads{exportFiles.length > 0 ? ` (${exportFiles.length})` : ""}
+            </button>
+          </div>
+
+          {/* Status indicator */}
+          {!exportStatusLoading && exportJob && (
+            <div className="text-sm">
+              {exportJob.status === "pending" && (
+                <p className="text-yellow-600 dark:text-yellow-400 flex items-center gap-2">
+                  <span className="w-3 h-3 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin inline-block" />
+                  Export queued…
+                </p>
+              )}
+              {exportJob.status === "running" && (
+                <p className="text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                  <span className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin inline-block" />
+                  Packaging your library…
+                </p>
+              )}
+              {exportJob.status === "completed" && (
+                <p className="text-green-600 dark:text-green-400">
+                  Export completed — {exportFiles.length} file{exportFiles.length !== 1 ? "s" : ""} ready for download.
+                </p>
+              )}
+              {exportJob.status === "failed" && (
+                <p className="text-red-600 dark:text-red-400">
+                  Export failed{exportJob.error ? `: ${exportJob.error}` : "."}
+                </p>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ── Server Selection (hidden on backup servers) ─────────────────── */}
       {backupLoaded && !isBackupMode && (

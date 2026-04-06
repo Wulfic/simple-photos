@@ -25,6 +25,7 @@ pub fn api_routes() -> Router<AppState> {
         .merge(tag_routes())
         .merge(client_log_routes())
         .merge(diagnostics_routes())
+        .merge(export_routes())
 }
 
 // ── Setup & first-run ────────────────────────────────────────────────
@@ -498,5 +499,22 @@ fn diagnostics_routes() -> Router<AppState> {
         .route(
             "/external/diagnostics/audit",
             get(crate::diagnostics::external::external_audit),
+        )
+}
+
+// ── Library export ───────────────────────────────────────────────────
+
+fn export_routes() -> Router<AppState> {
+    Router::new()
+        .route("/export", post(crate::export::handlers::start_export))
+        .route("/export/status", get(crate::export::handlers::export_status))
+        .route("/export/files", get(crate::export::handlers::list_export_files))
+        .route(
+            "/export/files/{id}/download",
+            get(crate::export::handlers::download_export_file),
+        )
+        .route(
+            "/export/{job_id}",
+            delete(crate::export::handlers::delete_export),
         )
 }

@@ -16,6 +16,7 @@ import SecureGallery from "./pages/SecureGallery";
 import SharedAlbumDetail from "./pages/SharedAlbumDetail";
 import Search from "./pages/Search";
 import Diagnostics from "./pages/Diagnostics";
+import ExportDownloads from "./pages/ExportDownloads";
 import EncryptionBanner from "./components/EncryptionBanner";
 
 /**
@@ -210,6 +211,7 @@ export default function App() {
           <Route path="/search" element={<Search />} />
           <Route path="/secure-gallery" element={<SecureGallery />} />
           <Route path="/diagnostics" element={<Diagnostics />} />
+          <Route path="/export-downloads" element={<ExportDownloads />} />
         </Route>
 
         <Route path="*" element={<RootRedirect />} />

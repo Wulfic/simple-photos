@@ -48,6 +48,7 @@ pub fn spawn_all(
         config.storage.root.clone(),
         config.auth.jwt_secret.clone(),
     );
+    spawn_export_cleanup(pool.clone(), storage_root_swap.clone());
 }
 
 // ── Individual task spawners ─────────────────────────────────────────
@@ -204,5 +205,96 @@ fn spawn_encryption_migration(pool: SqlitePool, storage_root: PathBuf, jwt_secre
     tokio::spawn(async move {
         crate::photos::server_migrate::resume_migration_on_startup(pool, storage_root, jwt_secret)
             .await;
+    });
+}
+
+/// Hourly cleanup of expired export zip files (24-hour TTL).
+fn spawn_export_cleanup(pool: SqlitePool, storage_root_swap: Arc<arc_swap::ArcSwap<PathBuf>>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            let now = chrono::Utc::now().to_rfc3339();
+            let storage_root = storage_root_swap.load();
+
+            // Find expired export files
+            let expired: Vec<(String, String, String)> = match sqlx::query_as::<_, (String, String, String)>(
+                "SELECT ef.id, ef.file_path, ef.job_id FROM export_files ef WHERE ef.expires_at < ?",
+            )
+            .bind(&now)
+            .fetch_all(&pool)
+            .await
+            {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::error!("Export cleanup: failed to query expired files: {}", e);
+                    continue;
+                }
+            };
+
+            if expired.is_empty() {
+                continue;
+            }
+
+            let mut deleted_count = 0u64;
+            let mut job_ids = std::collections::HashSet::new();
+
+            for (file_id, file_path, job_id) in &expired {
+                // Delete file from disk
+                let full_path = storage_root.join(file_path);
+                if full_path.exists() {
+                    if let Err(e) = tokio::fs::remove_file(&full_path).await {
+                        tracing::warn!(file_id = %file_id, error = %e, "Failed to delete expired export file");
+                    }
+                }
+
+                // Delete DB record
+                if let Err(e) = sqlx::query("DELETE FROM export_files WHERE id = ?")
+                    .bind(file_id)
+                    .execute(&pool)
+                    .await
+                {
+                    tracing::error!(file_id = %file_id, error = %e, "Failed to delete export file record");
+                } else {
+                    deleted_count += 1;
+                }
+
+                job_ids.insert(job_id.clone());
+            }
+
+            // Clean up empty export directories and completed/failed jobs with no remaining files
+            for job_id in &job_ids {
+                let remaining: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) FROM export_files WHERE job_id = ?",
+                )
+                .bind(job_id)
+                .fetch_optional(&pool)
+                .await
+                .ok()
+                .flatten();
+
+                if remaining.map(|(c,)| c).unwrap_or(0) == 0 {
+                    // Remove export directory
+                    let export_dir = storage_root.join("exports").join(job_id);
+                    if export_dir.exists() {
+                        let _ = tokio::fs::remove_dir_all(&export_dir).await;
+                    }
+                    // Delete the job record
+                    let _ = sqlx::query("DELETE FROM export_jobs WHERE id = ?")
+                        .bind(job_id)
+                        .execute(&pool)
+                        .await;
+                }
+            }
+
+            if deleted_count > 0 {
+                tracing::info!("Export cleanup: removed {} expired export files", deleted_count);
+                audit::log_background(
+                    &pool,
+                    audit::AuditEvent::HousekeepingComplete,
+                    Some(serde_json::json!({"task": "export_cleanup", "files_removed": deleted_count})),
+                );
+            }
+        }
     });
 }

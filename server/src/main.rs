@@ -27,6 +27,7 @@ mod db;
 mod diagnostics;
 mod downloads;
 mod error;
+mod export;
 mod health;
 mod http_utils;
 mod import;

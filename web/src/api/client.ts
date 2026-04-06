@@ -17,6 +17,7 @@ import { trashApi } from "./trash";
 import { backupApi } from "./backup";
 import { sharingApi } from "./sharing";
 import { tagsApi, searchApi } from "./tags";
+import { exportApi } from "./export";
 
 // Re-export all types for backward compatibility
 export type {
@@ -53,4 +54,5 @@ export const api = {
   tags: tagsApi,
   search: searchApi,
   diagnostics: diagnosticsApi,
+  export: exportApi,
 };
