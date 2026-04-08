@@ -4,6 +4,7 @@
 //! making the startup sequence easier to read and each task easier to find.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -24,6 +25,7 @@ pub fn spawn_all(
     storage_root_swap: &Arc<arc_swap::ArcSwap<PathBuf>>,
     scan_lock: &Arc<tokio::sync::Mutex<()>>,
     audit_tx: &tokio::sync::broadcast::Sender<AuditBroadcast>,
+    storage_available: &Arc<AtomicBool>,
 ) {
     spawn_housekeeping(pool.clone());
     spawn_trash_purge(pool.clone(), config.storage.root.clone());
@@ -49,6 +51,7 @@ pub fn spawn_all(
         config.auth.jwt_secret.clone(),
     );
     spawn_export_cleanup(pool.clone(), storage_root_swap.clone());
+    spawn_storage_health_monitor(storage_root_swap.clone(), storage_available.clone());
 }
 
 // ── Individual task spawners ─────────────────────────────────────────
@@ -297,4 +300,88 @@ fn spawn_export_cleanup(pool: SqlitePool, storage_root_swap: Arc<arc_swap::ArcSw
             }
         }
     });
+}
+
+/// Storage health monitor — probes the storage root every 10 seconds by
+/// writing and reading back a small sentinel file.  If the probe fails
+/// (e.g. network drive disconnected), the `storage_available` flag is set
+/// to `false` and handlers return 503 instead of hanging on stale I/O.
+///
+/// When the storage comes back, the flag is restored and normal operation
+/// resumes automatically.
+fn spawn_storage_health_monitor(
+    storage_root_swap: Arc<arc_swap::ArcSwap<PathBuf>>,
+    storage_available: Arc<AtomicBool>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        let mut was_available = true;
+
+        loop {
+            interval.tick().await;
+
+            let storage_root = (**storage_root_swap.load()).clone();
+            let probe_path = storage_root.join(".storage_probe");
+
+            let probe_ok = probe_storage(&probe_path).await;
+
+            let previously_available = storage_available.load(Ordering::Relaxed);
+            storage_available.store(probe_ok, Ordering::Relaxed);
+
+            if probe_ok && !previously_available {
+                tracing::info!(
+                    "Storage reconnected — resuming normal operation (root: {:?})",
+                    storage_root
+                );
+                was_available = true;
+            } else if !probe_ok && was_available {
+                tracing::error!(
+                    "Storage unavailable — probe failed at {:?}. \
+                     Will retry every 10 seconds until reconnected.",
+                    storage_root
+                );
+                was_available = false;
+            } else if !probe_ok {
+                tracing::warn!(
+                    "Storage still unavailable — retrying in 10s (root: {:?})",
+                    storage_root
+                );
+            }
+        }
+    });
+}
+
+/// Attempt to write and read back a sentinel file to verify storage is healthy.
+async fn probe_storage(probe_path: &std::path::Path) -> bool {
+    use tokio::io::AsyncWriteExt;
+
+    let payload = b"storage-health-probe";
+
+    // Try to write the probe file
+    let write_result = async {
+        let mut file = tokio::fs::File::create(probe_path).await?;
+        file.write_all(payload).await?;
+        file.flush().await?;
+        Ok::<(), std::io::Error>(())
+    }
+    .await;
+
+    if write_result.is_err() {
+        // Clean up on failure (best-effort)
+        let _ = tokio::fs::remove_file(probe_path).await;
+        return false;
+    }
+
+    // Try to read it back and verify contents
+    match tokio::fs::read(probe_path).await {
+        Ok(data) if data == payload => {
+            // Clean up probe file (best-effort)
+            let _ = tokio::fs::remove_file(probe_path).await;
+            true
+        }
+        _ => {
+            let _ = tokio::fs::remove_file(probe_path).await;
+            false
+        }
+    }
 }

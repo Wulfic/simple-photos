@@ -29,6 +29,11 @@ pub async fn download(
     headers: HeaderMap,
     Path(blob_id): Path<String>,
 ) -> Result<Response, AppError> {
+    // Reject early if storage backend is unreachable (network drive disconnected)
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
     // Validate blob_id format (UUID v4) to prevent path traversal
     if Uuid::parse_str(&blob_id).is_err() {
         return Err(AppError::BadRequest("Invalid blob ID format".into()));
@@ -199,6 +204,11 @@ pub async fn download_thumb(
     headers: HeaderMap,
     Path(blob_id): Path<String>,
 ) -> Result<Response, AppError> {
+    // Reject early if storage backend is unreachable (network drive disconnected)
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
     // Validate blob_id format
     if Uuid::parse_str(&blob_id).is_err() {
         return Err(AppError::BadRequest("Invalid blob ID format".into()));

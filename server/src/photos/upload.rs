@@ -29,6 +29,11 @@ pub async fn upload_photo(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    // Reject early if storage backend is unreachable (network drive disconnected)
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
     let filename = headers
         .get("X-Filename")
         .and_then(|v| v.to_str().ok())

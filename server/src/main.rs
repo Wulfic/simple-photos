@@ -124,7 +124,8 @@ async fn main() -> anyhow::Result<()> {
     let (audit_tx, _) = tokio::sync::broadcast::channel(256);
 
     // Launch all background tasks (housekeeping, backup sync, auto-scan, etc.)
-    tasks::spawn_all(&pool, &config, &storage_root_swap, &scan_lock, &audit_tx);
+    let storage_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    tasks::spawn_all(&pool, &config, &storage_root_swap, &scan_lock, &audit_tx, &storage_available);
 
     // Build shared application state — cloned (via Arc) into every Axum handler.
     let state = AppState {
@@ -135,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
         storage_root: storage_root_swap,
         scan_lock,
         audit_tx,
+        storage_available,
     };
 
     let mut app = Router::new()

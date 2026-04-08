@@ -8,6 +8,7 @@ use crate::ratelimit::RateLimiters;
 use arc_swap::ArcSwap;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -55,4 +56,17 @@ pub struct AppState {
     /// Capacity of 256 — lagging receivers simply miss old entries (they
     /// can always fetch history via the REST endpoint).
     pub audit_tx: broadcast::Sender<AuditBroadcast>,
+    /// Whether the storage backend (network drive, local disk) is currently
+    /// reachable.  Set by the background storage health monitor which probes
+    /// the storage root every 10 seconds.  Handlers check this before
+    /// performing I/O to return 503 immediately rather than hanging on a
+    /// stale mount.
+    pub storage_available: Arc<AtomicBool>,
+}
+
+impl AppState {
+    /// Returns `true` if the storage backend is currently reachable.
+    pub fn is_storage_available(&self) -> bool {
+        self.storage_available.load(Ordering::Relaxed)
+    }
 }

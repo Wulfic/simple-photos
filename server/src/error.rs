@@ -35,6 +35,9 @@ pub enum AppError {
     #[error("Too many requests")]
     TooManyRequests,
 
+    #[error("Storage temporarily unavailable")]
+    StorageUnavailable,
+
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -63,6 +66,13 @@ impl IntoResponse for AppError {
             }
             AppError::TooManyRequests => {
                 (StatusCode::TOO_MANY_REQUESTS, "Too many requests".into())
+            }
+            AppError::StorageUnavailable => {
+                tracing::warn!("Storage unavailable — rejecting request with 503");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Storage temporarily unavailable".into(),
+                )
             }
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);

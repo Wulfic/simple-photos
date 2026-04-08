@@ -10,11 +10,18 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 /// GET /health — lightweight health check for load balancers and uptime monitors.
-pub async fn health() -> Json<Value> {
+///
+/// Reports `"ok"` when all subsystems are healthy, `"degraded"` when the
+/// storage backend is unreachable (network drive disconnected, mount stale,
+/// etc.).  The `storage` field provides the detailed storage status.
+pub async fn health(State(state): State<AppState>) -> Json<Value> {
+    let storage_ok = state.is_storage_available();
+    let status = if storage_ok { "ok" } else { "degraded" };
     Json(json!({
-        "status": "ok",
+        "status": status,
         "service": "simple-photos",
-        "version": crate::VERSION
+        "version": crate::VERSION,
+        "storage": if storage_ok { "connected" } else { "disconnected" }
     }))
 }
 

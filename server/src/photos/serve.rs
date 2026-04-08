@@ -155,6 +155,11 @@ pub async fn serve_photo(
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
+    // Reject early if storage backend is unreachable (network drive disconnected)
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
     let (file_path, mime_type, size_bytes): (String, String, i64) = sqlx::query_as(
         "SELECT file_path, mime_type, size_bytes FROM photos WHERE id = ? AND user_id = ?",
     )
@@ -292,6 +297,11 @@ pub async fn serve_thumbnail(
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
+    // Reject early if storage backend is unreachable (network drive disconnected)
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
     let thumb_path: Option<String> =
         sqlx::query_scalar("SELECT thumb_path FROM photos WHERE id = ? AND user_id = ?")
             .bind(&photo_id)
@@ -367,6 +377,11 @@ pub async fn serve_web(
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
+    // Reject early if storage backend is unreachable (network drive disconnected)
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
     let (file_path, mime_type, _filename, size_bytes): (String, String, String, i64) = sqlx::query_as(
         "SELECT file_path, mime_type, filename, size_bytes FROM photos WHERE id = ? AND user_id = ?",
     )

@@ -63,6 +63,11 @@ pub async fn upload(
     headers: HeaderMap,
     body: Body,
 ) -> Result<(StatusCode, Json<BlobUploadResponse>), AppError> {
+    // Reject early if storage backend is unreachable (network drive disconnected)
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
     let blob_type = headers
         .get("x-blob-type")
         .and_then(|v| v.to_str().ok())
@@ -354,6 +359,11 @@ pub async fn delete(
     headers: HeaderMap,
     Path(blob_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // Reject early if storage backend is unreachable (network drive disconnected)
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
     // Validate blob_id format
     if Uuid::parse_str(&blob_id).is_err() {
         return Err(AppError::BadRequest("Invalid blob ID format".into()));
