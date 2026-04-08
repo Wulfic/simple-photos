@@ -26,13 +26,11 @@ pub async fn sync_blobs(
            AND id NOT IN ( \
                SELECT p.encrypted_blob_id FROM photos p \
                WHERE p.encrypted_blob_id IS NOT NULL \
-               AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                    OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+               AND p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
            AND id NOT IN ( \
                SELECT p.encrypted_thumb_blob_id FROM photos p \
                WHERE p.encrypted_thumb_blob_id IS NOT NULL \
-               AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                    OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)))",
+               AND p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))",
     )
     .fetch_all(ctx.pool)
     .await

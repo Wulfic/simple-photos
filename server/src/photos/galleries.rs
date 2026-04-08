@@ -232,7 +232,7 @@ pub async fn add_gallery_item(
     };
 
     // Resolve source file path, metadata, and determine blob_type
-    let (blob_type, size_bytes, client_hash, storage_path, content_hash): (
+    let (blob_type, size_bytes, client_hash, storage_path, _content_hash): (
         String,
         i64,
         Option<String>,
@@ -274,10 +274,14 @@ pub async fn add_gallery_item(
             .await
             .map_err(|e| AppError::Internal(format!("Failed to write cloned blob: {}", e)))?;
 
-    // Insert the cloned blob record
+    // Insert the cloned blob record.
+    // content_hash is deliberately set to NULL so the server-side encryption
+    // migration's dedup check does NOT match this plaintext clone blob.
+    // Without this, the dedup incorrectly "reuses" the clone's own blob as
+    // the encrypted_blob_id (pointing to unencrypted data → AES/GCM errors).
     sqlx::query(
         "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
     )
     .bind(&new_blob_id)
     .bind(&auth.user_id)
@@ -286,7 +290,6 @@ pub async fn add_gallery_item(
     .bind(&client_hash)
     .bind(&now)
     .bind(&new_storage_path)
-    .bind(&content_hash)
     .execute(&state.pool)
     .await?;
 
@@ -489,8 +492,12 @@ pub async fn list_gallery_items(
         })?;
 
     let items: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT gi.id, gi.blob_id, gi.added_at \
-         FROM encrypted_gallery_items gi WHERE gi.gallery_id = ? \
+        "SELECT gi.id, \
+                COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
+                gi.added_at \
+         FROM encrypted_gallery_items gi \
+         LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
+         WHERE gi.gallery_id = ? \
          ORDER BY gi.added_at DESC",
     )
     .bind(&gallery_id)

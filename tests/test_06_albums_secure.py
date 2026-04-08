@@ -10,10 +10,11 @@ import time
 from collections import Counter
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from helpers import APIClient, generate_random_bytes, generate_test_jpeg, unique_filename
 
 # Password to use for secure gallery unlock (must match user's account password)
-from conftest import USER_PASSWORD
+from conftest import USER_PASSWORD, TEST_ENCRYPTION_KEY
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -508,3 +509,206 @@ class TestSecureGalleryEncryptedBlobLeak:
                 f"secureBlobIds — web client cannot filter it out.  "
                 f"secureBlobIds={secure_set}"
             )
+
+
+# ── AES-GCM decryption helper ────────────────────────────────────────
+
+NONCE_LENGTH = 12  # AES-256-GCM uses 96-bit nonces
+
+def _aes_gcm_decrypt(key_hex: str, data: bytes) -> bytes:
+    """Decrypt AES-256-GCM data in the server wire format:
+    [12-byte nonce][ciphertext + 16-byte auth tag]."""
+    key = bytes.fromhex(key_hex)
+    assert len(key) == 32, f"Key must be 32 bytes, got {len(key)}"
+    if len(data) < NONCE_LENGTH + 16:
+        raise ValueError(
+            f"aes/gcm: invalid nonce length — data too short "
+            f"({len(data)} bytes, minimum {NONCE_LENGTH + 16})"
+        )
+    nonce = data[:NONCE_LENGTH]
+    ciphertext = data[NONCE_LENGTH:]
+    try:
+        return AESGCM(key).decrypt(nonce, ciphertext, None)
+    except Exception as e:
+        raise ValueError(f"AES/GCM invalid ghash tag — decryption failed: {e}")
+
+
+class TestSecureGalleryDecryption:
+    """Regression tests for decryption errors when viewing secure gallery items.
+
+    Bug 1 (Primary): list_gallery_items returns the UNENCRYPTED clone blob_id
+    instead of the encrypted_blob_id.  Client downloads raw photo data and
+    AES-GCM decrypt fails with "AES/GCM invalid ghash tag".
+
+    Bug 2 (Backup): The encrypted version of gallery items is never synced to
+    the backup.  Client gets a placeholder blob (0 bytes) and decryption fails
+    with "aes/gcm: invalid nonce length".
+    """
+
+    def _wait_for_encryption_migration(self, user_client, photo_id, max_wait=15):
+        """Poll encrypted-sync until the photo gets an encrypted_blob_id."""
+        start = time.time()
+        while time.time() - start < max_wait:
+            sync = user_client.encrypted_sync()
+            for p in sync.get("photos", []):
+                if p.get("id") == photo_id and p.get("encrypted_blob_id"):
+                    return p["encrypted_blob_id"]
+            time.sleep(0.5)
+        return None
+
+    def test_gallery_item_blob_is_decryptable_primary(self, user_client):
+        """PRIMARY BUG: Server-side photo in secure gallery → download the
+        blob_id from list_gallery_items → must be valid AES-GCM ciphertext
+        decryptable with the test encryption key.
+
+        Regression: list_gallery_items returned the clone's raw blob_id
+        (unencrypted file copy), not the encrypted_blob_id created by
+        server-side migration.  The client tried to AES-GCM decrypt
+        unencrypted JPEG data → "AES/GCM invalid ghash tag".
+        """
+        # Upload a server-side photo (goes through /api/photos/upload)
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        # Create secure gallery and add the photo
+        gallery = user_client.create_secure_gallery("Decrypt Test Primary")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        result = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], pid, token,
+        )
+        clone_id = result["new_blob_id"]
+
+        # Wait for server-side encryption migration to complete.
+        # After migration, the clone photo gets encrypted_blob_id set.
+        time.sleep(3)
+
+        # List gallery items — the blob_id returned here is what the client
+        # downloads and tries to decrypt
+        items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)
+        assert len(items["items"]) == 1, f"Expected 1 item, got {len(items['items'])}"
+        item_blob_id = items["items"][0]["blob_id"]
+
+        # The blob_id must NOT be the plaintext clone — it must be the encrypted version
+        assert item_blob_id != clone_id, (
+            f"list_gallery_items returned the plaintext clone blob_id {clone_id} "
+            f"instead of the encrypted_blob_id"
+        )
+
+        # Download the blob
+        resp = user_client.download_blob(item_blob_id)
+        assert resp.status_code == 200, (
+            f"Failed to download gallery item blob {item_blob_id}: HTTP {resp.status_code}"
+        )
+        blob_data = resp.content
+        assert len(blob_data) >= NONCE_LENGTH + 16, (
+            f"aes/gcm: invalid nonce length — blob data too short "
+            f"({len(blob_data)} bytes).  This means the gallery item blob "
+            f"is empty or a placeholder, not valid encrypted content."
+        )
+
+        # Decrypt — this is exactly what the web client does
+        try:
+            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+        except ValueError as e:
+            pytest.fail(
+                f"Gallery item blob {item_blob_id} is NOT valid AES-GCM "
+                f"ciphertext: {e}.  list_gallery_items likely returned the "
+                f"unencrypted clone blob_id instead of encrypted_blob_id."
+            )
+
+        # The decrypted payload should be a JSON object with a "v" field
+        # (the wire format used by server-side encryption)
+        assert len(plaintext) > 0, "Decrypted payload is empty"
+
+    def test_gallery_item_blob_is_not_raw_photo_data(self, user_client):
+        """Verify that the blob returned for a gallery item is NOT the raw
+        unencrypted photo data.  If it is, the server is serving the wrong blob.
+        """
+        # Upload a known JPEG
+        jpeg_content = generate_test_jpeg()
+        photo = user_client.upload_photo(unique_filename(), content=jpeg_content)
+        pid = photo["photo_id"]
+
+        gallery = user_client.create_secure_gallery("Raw Check Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        user_client.add_secure_gallery_item(gallery["gallery_id"], pid, token)
+
+        # Wait for migration
+        time.sleep(3)
+
+        items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)
+        item_blob_id = items["items"][0]["blob_id"]
+
+        resp = user_client.download_blob(item_blob_id)
+        assert resp.status_code == 200
+        blob_data = resp.content
+
+        # JPEG files start with FF D8 FF. If the blob starts with this magic,
+        # the server is serving raw unencrypted photo data — the bug!
+        is_jpeg = blob_data[:3] == b'\xff\xd8\xff'
+        assert not is_jpeg, (
+            f"BUG: Gallery item blob {item_blob_id} is raw JPEG data "
+            f"(starts with FF D8 FF).  list_gallery_items is returning the "
+            f"unencrypted clone blob_id instead of the encrypted_blob_id."
+        )
+
+    def test_gallery_item_blob_decryptable_on_backup(
+        self, user_client, primary_admin, backup_server, backup_admin,
+        backup_configured,
+    ):
+        """BACKUP BUG: After sync, gallery items on backup must also be
+        decryptable.  Currently fails because:
+        1. The encrypted blob is excluded from sync_blobs
+        2. Placeholder blobs have 0 bytes → "aes/gcm: invalid nonce length"
+        """
+        # Upload server-side photo and add to secure gallery
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        gallery = user_client.create_secure_gallery("Decrypt Test Backup")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        result = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], pid, token,
+        )
+
+        # Wait for encryption migration
+        time.sleep(3)
+
+        # Trigger sync to backup
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(5)  # Allow sync to complete
+
+        # Now verify on backup: create a user client for the backup
+        # The user was synced along with photos
+        backup_user = APIClient(backup_server.base_url)
+        backup_user.login(user_client.username, USER_PASSWORD)
+
+        # List gallery items on backup
+        backup_token = backup_user.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        items = backup_user.list_secure_gallery_items(gallery["gallery_id"], backup_token)
+        assert len(items["items"]) >= 1, "Gallery items should be synced to backup"
+        item_blob_id = items["items"][0]["blob_id"]
+
+        # Download the blob on backup
+        resp = backup_user.download_blob(item_blob_id)
+        assert resp.status_code == 200, (
+            f"Failed to download gallery item blob on backup: HTTP {resp.status_code}.  "
+            f"The encrypted blob may not have been synced."
+        )
+        blob_data = resp.content
+        assert len(blob_data) >= NONCE_LENGTH + 16, (
+            f"aes/gcm: invalid nonce length — backup blob too short "
+            f"({len(blob_data)} bytes).  The blob is likely a placeholder "
+            f"rather than actual encrypted content."
+        )
+
+        # Decrypt
+        try:
+            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+        except ValueError as e:
+            pytest.fail(
+                f"Gallery item blob on backup is NOT valid AES-GCM "
+                f"ciphertext: {e}"
+            )
+
+        assert len(plaintext) > 0, "Decrypted payload is empty on backup"

@@ -405,6 +405,7 @@ pub async fn backup_sync_secure_galleries(
         let blob_id = i["blob_id"].as_str().unwrap_or_default();
         let added_at = i["added_at"].as_str().unwrap_or_default();
         let original_blob_id = i["original_blob_id"].as_str();
+        let encrypted_blob_id = i["encrypted_blob_id"].as_str();
 
         if id.is_empty() || gallery_id.is_empty() || blob_id.is_empty() {
             continue;
@@ -446,17 +447,19 @@ pub async fn backup_sync_secure_galleries(
         }
 
         sqlx::query(
-            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id) \
-             VALUES (?, ?, ?, ?, ?) \
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id, encrypted_blob_id) \
+             VALUES (?, ?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
                blob_id = excluded.blob_id, \
-               original_blob_id = excluded.original_blob_id",
+               original_blob_id = excluded.original_blob_id, \
+               encrypted_blob_id = excluded.encrypted_blob_id",
         )
         .bind(id)
         .bind(gallery_id)
         .bind(blob_id)
         .bind(added_at)
         .bind(original_blob_id)
+        .bind(encrypted_blob_id)
         .execute(&mut *tx)
         .await?;
     }
@@ -700,13 +703,11 @@ pub async fn backup_list_blobs(
            AND id NOT IN ( \
                SELECT p.encrypted_blob_id FROM photos p \
                WHERE p.encrypted_blob_id IS NOT NULL \
-               AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                    OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+               AND p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
            AND id NOT IN ( \
                SELECT p.encrypted_thumb_blob_id FROM photos p \
                WHERE p.encrypted_thumb_blob_id IS NOT NULL \
-               AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
-                    OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+               AND p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
          ORDER BY upload_time ASC",
     )
     .fetch_all(&state.read_pool)
