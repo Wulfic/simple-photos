@@ -52,10 +52,9 @@ pub async fn scan_and_register(
     let mut existing_set = std::collections::HashSet::new();
     {
         let mut rows = sqlx::query_scalar::<_, String>(
-            "SELECT file_path FROM photos WHERE user_id = ? \
+            "SELECT file_path FROM photos WHERE file_path != '' \
              UNION SELECT file_path FROM trash_items WHERE file_path != ''"
         )
-        .bind(&auth.user_id)
         .fetch(&state.pool);
 
         while let Some(path) = rows.try_next().await? {

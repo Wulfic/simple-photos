@@ -459,6 +459,12 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    def admin_trigger_scan(self) -> dict:
+        """Trigger the user-scoped filesystem scan (POST /api/admin/photos/scan)."""
+        r = self.post("/api/admin/photos/scan")
+        r.raise_for_status()
+        return r.json()
+
     # ── Backup serve endpoints (X-API-Key auth) ─────────────────────
 
     def backup_list(self) -> list:

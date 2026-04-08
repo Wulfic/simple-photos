@@ -139,6 +139,58 @@ pub async fn encrypt_one_photo(
         photo.mime_type
     );
 
+    // Check if a blob with this content already exists (e.g. synced from primary).
+    // If so, reuse it instead of re-encrypting and creating a duplicate blob.
+    let content_hash = hex::encode(&Sha256::digest(&file_data)[..6]);
+    let existing_blob: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM blobs WHERE content_hash = ? AND user_id = ? LIMIT 1",
+    )
+    .bind(&content_hash)
+    .bind(&photo.user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Check existing blob: {}", e))?;
+
+    if let Some((existing_blob_id,)) = existing_blob {
+        // Find an unlinked thumbnail blob of the right type for this user.
+        let thumb_type = if photo.media_type == "video" {
+            "video_thumbnail"
+        } else {
+            "thumbnail"
+        };
+        let existing_thumb_id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM blobs \
+             WHERE user_id = ? AND blob_type = ? \
+               AND id NOT IN (SELECT encrypted_thumb_blob_id FROM photos WHERE encrypted_thumb_blob_id IS NOT NULL) \
+             ORDER BY upload_time ASC LIMIT 1",
+        )
+        .bind(&photo.user_id)
+        .bind(thumb_type)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Check existing thumb: {}", e))?;
+
+        tracing::info!(
+            "[SERVER_MIG] reusing existing synced blob {} for {} (content_hash={})",
+            existing_blob_id,
+            photo.filename,
+            content_hash
+        );
+
+        sqlx::query(
+            "UPDATE photos SET encrypted_blob_id = ?, encrypted_thumb_blob_id = ? WHERE id = ? AND user_id = ?",
+        )
+        .bind(&existing_blob_id)
+        .bind(existing_thumb_id.as_deref())
+        .bind(&photo.id)
+        .bind(&photo.user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Link existing blob failed: {}", e))?;
+
+        return Ok(());
+    }
+
     // Generate web preview and thumbnail concurrently
     let web_preview_fut = build_web_preview(&photo, &full_path, &file_data, storage_root);
     let thumbnail_fut = build_thumbnail(&photo, &full_path, &file_data, storage_root);
@@ -194,7 +246,6 @@ pub async fn encrypt_one_photo(
     };
 
     let enc_photo_hash = hex::encode(Sha256::digest(&enc_photo));
-    let content_hash = hex::encode(&Sha256::digest(&file_data)[..6]);
 
     // Write encrypted blob to disk
     let blob_id = Uuid::new_v4().to_string();

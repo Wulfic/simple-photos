@@ -793,6 +793,44 @@ pub async fn backup_receive_blob(
     .execute(&state.pool)
     .await?;
 
+    // Deduplicate: if migration already created a blob with the same content_hash,
+    // reassign photo references to this (authoritative) synced blob and delete the duplicate.
+    if let Some(ref ch) = content_hash {
+        let dupes: Vec<(String,)> = sqlx::query_as(
+            "SELECT id FROM blobs WHERE content_hash = ? AND user_id = ? AND id != ?",
+        )
+        .bind(ch)
+        .bind(&effective_user_id)
+        .bind(&blob_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
+
+        for (dupe_id,) in &dupes {
+            sqlx::query("UPDATE photos SET encrypted_blob_id = ? WHERE encrypted_blob_id = ?")
+                .bind(&blob_id)
+                .bind(dupe_id)
+                .execute(&state.pool)
+                .await
+                .ok();
+            sqlx::query("UPDATE photos SET encrypted_thumb_blob_id = ? WHERE encrypted_thumb_blob_id = ?")
+                .bind(&blob_id)
+                .bind(dupe_id)
+                .execute(&state.pool)
+                .await
+                .ok();
+            sqlx::query("DELETE FROM blobs WHERE id = ?")
+                .bind(dupe_id)
+                .execute(&state.pool)
+                .await
+                .ok();
+            tracing::info!(
+                "[BLOB_DEDUP] replaced migration blob {} with synced blob {} (content_hash={})",
+                dupe_id, blob_id, ch
+            );
+        }
+    }
+
     Ok(StatusCode::OK)
 }
 

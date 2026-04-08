@@ -1018,10 +1018,130 @@ class TestMegaDuplicateRegression:
          secure gallery, is retroactively REMOVED from backup listings
          on the next sync (pre-synced-then-secured scenario).
       3) After a second sync, no duplicate IDs exist anywhere.
+      4) Autoscan on backup does NOT re-register synced photos under the
+         admin user (the core duplication bug for regular photos).
 
     This is the exact scenario from bugs 2, 5, 8, 9.
     """
 
+    # ── Autoscan duplication: synced photos must not be re-registered ─────
+
+    def test_autoscan_no_duplicate_photos_on_backup(self, backup_server, backup_client):
+        """Filesystem scans on backup must NOT re-register photos synced from primary.
+
+        The core duplication bug: scan_and_register (POST /api/admin/photos/scan)
+        checks `SELECT file_path FROM photos WHERE user_id = ?` scoped to the
+        admin user. Photos synced from primary belong to non-admin users, so
+        the scan doesn't see them and re-registers the same physical files
+        under the admin user with new UUIDs.
+
+        This test triggers BOTH scan endpoints after sync and checks for:
+          - No increase in total photo count
+          - No duplicate file_path values among canonical photos (photo_hash IS NOT NULL)
+          - No duplicate photo_hash values (same content, different IDs)
+
+        Note: Intentional photo copies (duplicate_photo) have photo_hash=NULL
+        and share file_path with the original — these are NOT duplicates.
+        """
+        # Snapshot BEFORE scan
+        photos_before = backup_client.backup_list()
+        count_before = len(photos_before)
+
+        # Trigger BOTH scan endpoints on backup as admin
+        backup_admin = APIClient(backup_server.base_url)
+        backup_admin.login(ADMIN_USERNAME, ADMIN_PASSWORD)
+
+        # 1) User-scoped scan (the buggy one: /api/admin/photos/scan)
+        scan_result = backup_admin.admin_trigger_scan()
+        assert scan_result.get("registered", -1) >= 0, (
+            f"User-scoped scan on backup failed: {scan_result}"
+        )
+
+        # 2) Global autoscan (/api/admin/photos/auto-scan)
+        scan_result2 = backup_admin.admin_trigger_autoscan()
+        assert scan_result2.get("message") == "Scan complete", (
+            f"Autoscan on backup failed: {scan_result2}"
+        )
+
+        # Check AFTER scans
+        photos_after = backup_client.backup_list()
+        count_after = len(photos_after)
+
+        # Count must NOT increase — scans should not re-register synced photos
+        assert count_after == count_before, (
+            f"DUPLICATE BUG: Filesystem scan on backup created "
+            f"{count_after - count_before} duplicate photo(s) "
+            f"(was {count_before}, now {count_after}). "
+            f"scan_and_register existing-path check is scoped to "
+            f"admin user_id, so it doesn't see photos synced for "
+            f"other users and re-registers them under admin."
+        )
+
+        # Check for duplicate file_path among CANONICAL photos only
+        # (photo_hash IS NOT NULL). Intentional copies have photo_hash=NULL
+        # and legitimately share file_path with the original.
+        canonical = [p for p in photos_after
+                     if p.get("file_path") and p.get("photo_hash")]
+        file_paths = [p["file_path"] for p in canonical]
+        path_counts = Counter(file_paths)
+        dupe_paths = {k: v for k, v in path_counts.items() if v > 1}
+        assert not dupe_paths, (
+            f"DUPLICATE BUG: Same file_path registered multiple times "
+            f"for canonical photos (photo_hash IS NOT NULL) after scan: "
+            f"{dupe_paths}. scan_and_register re-registers synced files "
+            f"under admin because existing-path query is user-scoped."
+        )
+
+        # Check for duplicate photo_hash per user (same user, same content,
+        # different IDs). Different users may legitimately share the same hash.
+        user_hashes = [
+            (p.get("user_id", ""), p["photo_hash"])
+            for p in photos_after if p.get("photo_hash")
+        ]
+        hash_counts = Counter(user_hashes)
+        dupe_hashes = {k: v for k, v in hash_counts.items() if v > 1}
+        assert not dupe_hashes, (
+            f"DUPLICATE BUG: Same (user_id, photo_hash) under different IDs "
+            f"after scan: {dupe_hashes}"
+        )
+
+    # ── Blob duplication: server-side migration must not create duplicate blobs ─
+
+    def test_no_duplicate_blobs_on_backup(self, backup_server, backup_client):
+        """Server-side encryption migration must NOT create duplicate blobs.
+
+        The bug: when the primary syncs photos via backup_receive, the backup's
+        auto_migrate_after_scan fires immediately and re-encrypts them, creating
+        NEW blob entries (Uuid::new_v4). Later, blob sync delivers the primary's
+        original encrypted blobs — resulting in every blob appearing twice with
+        the same content_hash but different IDs.
+
+        This test checks that no content_hash appears more than once in the
+        backup's blob table. Each unique piece of content should have exactly
+        ONE blob entry.
+        """
+        import time
+        from collections import Counter
+        # Wait for any in-progress server-side migration to complete on backup.
+        time.sleep(4)
+
+        # Get backup blob list
+        backup_blobs = backup_client.backup_list_blobs()
+
+        # Check for duplicate content_hash values (the exact signature of the bug).
+        # Thumbnails have content_hash=None so we only check non-null hashes.
+        content_hashes = [
+            b.get("content_hash") for b in backup_blobs
+            if b.get("content_hash")
+        ]
+        hash_counts = Counter(content_hashes)
+        dupes = {h: c for h, c in hash_counts.items() if c > 1}
+        assert not dupes, (
+            f"DUPLICATE BUG: Backup has blobs with duplicate content_hash values: "
+            f"{dupes}. Server-side encrypt_one_photo creates new blob entries "
+            f"(Uuid::new_v4) even when the primary's synced blob already "
+            f"exists with the same content_hash."
+        )
     # ── Cross-listing: gallery items must not appear in regular listings ──
 
     def test_gallery_items_not_in_backup_photos(self, backup_server):
