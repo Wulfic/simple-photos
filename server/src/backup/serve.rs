@@ -236,7 +236,17 @@ pub async fn backup_sync_deletions(
         })
         .unwrap_or_default();
 
-    if ids.is_empty() {
+    let file_paths: Vec<String> = body
+        .get("deleted_file_paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if ids.is_empty() && file_paths.is_empty() {
         return Ok(StatusCode::OK);
     }
 
@@ -268,10 +278,59 @@ pub async fn backup_sync_deletions(
         }
     }
 
-    if removed > 0 {
+    // Fallback: match by file_path for rows where the backup's
+    // encrypted_blob_id differs from the primary's (each server generates
+    // its own encryption blob IDs independently).
+    for fp in &file_paths {
+        let result = sqlx::query(
+            "DELETE FROM photos WHERE file_path = ?",
+        )
+        .bind(fp)
+        .execute(&state.pool)
+        .await;
+        match result {
+            Ok(r) if r.rows_affected() > 0 => {
+                removed += r.rows_affected() as usize;
+                // Clean up orphaned tags — match by file_path via subquery.
+                let _ = sqlx::query(
+                    "DELETE FROM photo_tags WHERE photo_id IN \
+                     (SELECT id FROM photos WHERE file_path = ?)",
+                )
+                .bind(fp)
+                .execute(&state.pool)
+                .await;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(file_path = %fp, "sync-deletions: failed to remove by file_path: {}", e);
+            }
+        }
+    }
+
+    // Also remove from the blobs table — trashed client-encrypted blobs
+    // live in `blobs` rather than `photos`, so Phase 0a must clean up both.
+    let mut blobs_removed = 0usize;
+    for id in &ids {
+        let result = sqlx::query("DELETE FROM blobs WHERE id = ?")
+            .bind(id)
+            .execute(&state.pool)
+            .await;
+        match result {
+            Ok(r) if r.rows_affected() > 0 => {
+                blobs_removed += r.rows_affected() as usize;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(blob_id = %id, "sync-deletions: failed to remove from blobs: {}", e);
+            }
+        }
+    }
+
+    if removed > 0 || blobs_removed > 0 {
         tracing::info!(
-            "sync-deletions: removed {} photo(s) from gallery that are now in primary trash",
-            removed
+            "sync-deletions: removed {} photo(s) and {} blob(s) from gallery that are now in primary trash",
+            removed,
+            blobs_removed
         );
     }
 
@@ -1138,16 +1197,50 @@ pub async fn backup_sync_metadata(
         }
     }
 
+    // ── photo_states (is_favorite, crop_metadata) ────────────────────────
+    // Photos are delta-synced by file transfer (Phase 1) so mutable fields
+    // that change after the initial sync need a separate update channel.
+    let photo_states = body
+        .get("photo_states")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut ps_updated = 0usize;
+    for row in &photo_states {
+        let id = row["id"].as_str().unwrap_or_default();
+        if id.is_empty() {
+            continue;
+        }
+        let is_favorite = row["is_favorite"].as_bool().unwrap_or(false);
+        let crop_metadata = row["crop_metadata"].as_str();
+
+        let result = sqlx::query(
+            "UPDATE photos SET is_favorite = ?, crop_metadata = COALESCE(?, crop_metadata) WHERE id = ?",
+        )
+        .bind(is_favorite)
+        .bind(crop_metadata)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() > 0 {
+            ps_updated += 1;
+        }
+    }
+
     tx.commit().await?;
 
     tracing::info!(
         "Received metadata sync: {} edit_copies, {} photo_metadata, \
-         {} shared_albums, {} members, {} album_photos",
+         {} shared_albums, {} members, {} album_photos, {} photo_states ({} updated)",
         edit_copies.len(),
         photo_metadata.len(),
         shared_albums.len(),
         shared_members.len(),
         shared_photos.len(),
+        photo_states.len(),
+        ps_updated,
     );
 
     Ok(StatusCode::OK)

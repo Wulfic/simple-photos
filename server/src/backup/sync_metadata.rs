@@ -188,12 +188,41 @@ pub async fn sync_metadata_to_backup(
         })
         .collect();
 
+    // ── photo_states (is_favorite, crop_metadata) ────────────────────────
+    // Photos are delta-synced by ID: once a photo lands on the backup its
+    // file is never re-sent.  Mutable fields like is_favorite and
+    // crop_metadata therefore need their own full-state sync channel.
+    let photo_states: Vec<(String, bool, Option<String>)> = match sqlx::query_as(
+        "SELECT id, is_favorite, crop_metadata FROM photos",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("Failed to fetch photo states for backup sync: {}", e);
+            Vec::new()
+        }
+    };
+
+    let photo_states_json: Vec<serde_json::Value> = photo_states
+        .iter()
+        .map(|(id, is_fav, crop)| {
+            serde_json::json!({
+                "id": id,
+                "is_favorite": *is_fav,
+                "crop_metadata": crop,
+            })
+        })
+        .collect();
+
     let body = serde_json::json!({
         "edit_copies": edit_copies_json,
         "photo_metadata": photo_metadata_json,
         "shared_albums": shared_albums_json,
         "shared_album_members": shared_members_json,
         "shared_album_photos": shared_photos_json,
+        "photo_states": photo_states_json,
     });
 
     let mut req = client
@@ -207,12 +236,13 @@ pub async fn sync_metadata_to_backup(
         Ok(resp) if resp.status().is_success() => {
             tracing::info!(
                 "Synced metadata to backup: {} edit_copies, {} photo_metadata, \
-                 {} shared_albums, {} members, {} album_photos",
+                 {} shared_albums, {} members, {} album_photos, {} photo_states",
                 edit_copies.len(),
                 photo_metadata.len(),
                 shared_albums.len(),
                 shared_members.len(),
                 shared_photos.len(),
+                photo_states.len(),
             );
         }
         Ok(resp) => {

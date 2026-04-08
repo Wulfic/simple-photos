@@ -308,6 +308,24 @@ pub async fn backup_receive(
         .ok()
         .flatten();
 
+        // Fallback: if the gallery row was already deleted (e.g. Phase 0a
+        // sync-deletions ran first), try the conventional thumbnail path on
+        // disk.  The thumbnail file may still exist even though the DB row
+        // is gone.
+        let existing_thumb_path = existing_thumb_path.or_else(|| {
+            let candidates = [
+                format!(".thumbnails/{}.thumb.jpg", gallery_id),
+                format!(".thumbnails/{}.thumb.gif", gallery_id),
+            ];
+            for candidate in &candidates {
+                let abs = storage_root.join(candidate);
+                if abs.exists() {
+                    return Some(candidate.clone());
+                }
+            }
+            None
+        });
+
         // Delete by UUID, encrypted_blob_id, and file_path.  The UUID covers
         // the normal case; encrypted_blob_id covers encrypted items (photo_id
         // = blob_id); file_path covers a race where autoscan ran between
@@ -328,6 +346,11 @@ pub async fn backup_receive(
                 e
             );
         }
+        // Also remove from blobs table — client-encrypted items live there.
+        let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
+            .bind(&gallery_id)
+            .execute(&state.pool)
+            .await;
         // Clean up any dangling tags for the removed photo row.
         let _ = sqlx::query("DELETE FROM photo_tags WHERE photo_id = ?")
             .bind(&gallery_id)

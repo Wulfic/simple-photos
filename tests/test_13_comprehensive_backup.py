@@ -1003,6 +1003,203 @@ class TestMegaBackupSync:
 
 
 # =====================================================================
+# Phase 2a: Multi-sync regression — bugs that only manifest across syncs
+# =====================================================================
+
+
+class TestMegaMultiSyncRegression:
+    """Tests for bugs that only appear when data is modified BETWEEN two syncs.
+
+    These reproduce real-world scenarios that the single-sync Phase 2 misses:
+      1. Favorite a photo that was ALREADY synced → re-sync → verify
+         the favourite flag propagated to the backup (Bug: sync_photos is
+         delta-by-ID so a re-sync never re-sends the same photo; metadata
+         sync omits is_favorite / crop_metadata → update lost).
+      2. Trash a photo that was ALREADY synced → re-sync → verify:
+         a) photo REMOVED from the backup gallery;
+         b) trash item has a working thumbnail on the backup
+         (Bug: Phase 0a deletes the gallery row first, so by the time
+         trash-receive runs the thumbnail lookup finds nothing; also
+         sync-deletions fails to match encrypted rows whose blob IDs
+         differ between primary and backup).
+    """
+
+    def test_favorite_after_sync_propagates(
+        self, primary_admin, primary_server, backup_configured,
+        backup_client, backup_server,
+    ):
+        """Upload photo → sync → favorite → re-sync → verify on backup."""
+        client_a = APIClient(primary_server.base_url)
+        client_a.login(_state["user_a_name"], USER_PASSWORD)
+
+        # 1. Upload a brand-new photo
+        content = generate_test_jpeg(width=55, height=55)
+        fname = unique_filename()
+        photo = client_a.upload_photo(fname, content=content)
+        fav_pid = photo["photo_id"]
+
+        # 2. First sync — photo lands on backup WITHOUT favorite flag
+        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        assert result.get("status") != "error", f"Sync (fav-1) failed: {result}"
+
+        # Confirm photo arrived and is NOT favorited yet
+        ba = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        assert ba, "User A cannot login on backup"
+        photos_after_1 = ba.list_photos(limit=500).get("photos", [])
+        p = next((x for x in photos_after_1 if x["id"] == fav_pid), None)
+        assert p is not None, f"Photo {fav_pid} not on backup after first sync"
+        assert p.get("is_favorite") in (False, 0, None), (
+            f"Photo should NOT be favorited yet: {p.get('is_favorite')}"
+        )
+
+        # Also check backup API-key endpoint
+        api_photos_1 = backup_client.backup_list()
+        api_p = next((x for x in api_photos_1 if x["id"] == fav_pid), None)
+        assert api_p is not None, f"Photo {fav_pid} not in backup API after first sync"
+        assert api_p.get("is_favorite") in (False, 0, None), (
+            f"Backup API: photo should NOT be favorited yet"
+        )
+
+        # 3. Favorite the photo on primary
+        client_a.favorite_photo(fav_pid)
+        # Verify locally
+        local_photos = client_a.list_photos(limit=500).get("photos", [])
+        local_p = next(x for x in local_photos if x["id"] == fav_pid)
+        assert local_p["is_favorite"] in (True, 1), "Local favorite failed"
+
+        # 4. Re-sync
+        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        assert result.get("status") != "error", f"Sync (fav-2) failed: {result}"
+
+        # 5. Verify favourite propagated to backup (user-facing)
+        ba2 = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        assert ba2, "User A cannot login on backup for post-fav check"
+        photos_after_2 = ba2.list_photos(limit=500).get("photos", [])
+        p2 = next((x for x in photos_after_2 if x["id"] == fav_pid), None)
+        assert p2 is not None, f"Photo {fav_pid} missing from backup after re-sync"
+        assert p2["is_favorite"] in (True, 1), (
+            f"BUG: Favourite not synced to backup after re-sync. "
+            f"is_favorite={p2.get('is_favorite')}. "
+            f"sync_photos is delta-by-ID so it does not re-send "
+            f"already-synced photos; sync_metadata omits is_favorite."
+        )
+
+        # Also check backup API-key endpoint
+        api_photos_2 = backup_client.backup_list()
+        api_p2 = next((x for x in api_photos_2 if x["id"] == fav_pid), None)
+        assert api_p2 is not None, "Photo missing from backup API after re-sync"
+        assert api_p2["is_favorite"] in (True, 1), (
+            f"BUG: Backup API favourite not updated: {api_p2.get('is_favorite')}"
+        )
+
+        _state["multi_sync_fav_pid"] = fav_pid
+
+    def test_trash_after_sync_removes_from_gallery(
+        self, primary_admin, primary_server, backup_configured,
+        backup_client, backup_server,
+    ):
+        """Upload blob → sync → trash → re-sync → NOT in gallery on backup."""
+        client_a = APIClient(primary_server.base_url)
+        client_a.login(_state["user_a_name"], USER_PASSWORD)
+
+        # 1. Upload a new blob (the encrypted-client workflow for photos)
+        content = generate_random_bytes(2048)
+        blob = client_a.upload_blob("photo", content)
+        trash_bid = blob["blob_id"]
+
+        # 2. First sync — blob lands on backup
+        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        assert result.get("status") != "error", f"Sync (trash-1) failed: {result}"
+
+        # Verify blob is on backup
+        api_blobs_1 = backup_client.backup_list_blobs()
+        api_blob_ids_1 = [b["id"] for b in api_blobs_1]
+        assert trash_bid in api_blob_ids_1, (
+            f"Blob {trash_bid} not on backup after first sync"
+        )
+
+        ba = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        assert ba, "User A cannot login on backup"
+        blobs_1 = ba.list_blobs(limit=500).get("blobs", [])
+        assert any(b["id"] == trash_bid for b in blobs_1), (
+            f"Blob {trash_bid} not visible on backup after first sync"
+        )
+
+        # 3. Trash the blob on primary
+        trash_resp = client_a.soft_delete_blob(
+            trash_bid,
+            filename="trashed_multi_sync.jpg",
+            mime_type="image/jpeg",
+            size_bytes=len(content),
+        )
+        post_trash_id = trash_resp["trash_id"]
+
+        # Verify blob gone from primary listing
+        local_blobs = client_a.list_blobs(limit=500).get("blobs", [])
+        assert not any(b["id"] == trash_bid for b in local_blobs), (
+            "Trashed blob still visible on primary"
+        )
+
+        # 4. Re-sync
+        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        assert result.get("status") != "error", f"Sync (trash-2) failed: {result}"
+
+        # 5. Verify blob GONE from backup (user-facing blob listing)
+        ba2 = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        assert ba2, "User A cannot login on backup"
+        blobs_2 = ba2.list_blobs(limit=500).get("blobs", [])
+        blob_ids_2 = [b["id"] for b in blobs_2]
+        assert trash_bid not in blob_ids_2, (
+            f"BUG: Trashed blob {trash_bid} still in backup blob listing. "
+            f"sync-deletions (Phase 0a) failed to remove the row, "
+            f"likely because encrypted_blob_id differs between primary "
+            f"and backup."
+        )
+
+        # Also verify via backup API
+        api_blobs_2 = backup_client.backup_list_blobs()
+        api_blob_ids_2 = [b["id"] for b in api_blobs_2]
+        assert trash_bid not in api_blob_ids_2, (
+            f"BUG: Trashed blob {trash_bid} still in backup API blobs"
+        )
+
+        # Verify trash item EXISTS on backup
+        ba2_trash = ba2.list_trash(limit=500).get("items", [])
+        assert any(t["id"] == post_trash_id for t in ba2_trash), (
+            f"Trash item {post_trash_id} not on backup after re-sync"
+        )
+
+        _state["multi_sync_trash_bid"] = trash_bid
+        _state["multi_sync_trash_id"] = post_trash_id
+
+    def test_trash_after_sync_has_thumbnail(
+        self, primary_admin, primary_server, backup_configured,
+        backup_client, backup_server,
+    ):
+        """Trash item synced after the photo was already on backup must
+        have a working thumbnail (Bug: Phase 0a deletes gallery row first,
+        so the existing thumbnail path cannot be looked up when trash-receive
+        runs)."""
+        trash_id = _state.get("multi_sync_trash_id")
+        assert trash_id, "Prior trash test did not run"
+
+        ba = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        assert ba, "User A cannot login on backup"
+
+        r = ba.get(f"/api/trash/{trash_id}/thumb")
+        assert r.status_code == 200, (
+            f"BUG: Trash thumbnail missing on backup (HTTP {r.status_code}). "
+            f"Phase 0a deletes the gallery row (and its thumb_path) before "
+            f"trash-receive can copy the existing thumbnail."
+        )
+        assert len(r.content) > 0, "Trash thumbnail is empty"
+        content_type = r.headers.get("content-type", "")
+        assert "image" in content_type, (
+            f"Trash thumbnail content-type is not an image: {content_type}"
+        )
+
+
+# =====================================================================
 # Phase 2b: Duplicate regression — cross-listing & pre-synced-then-secured
 # =====================================================================
 
@@ -1778,8 +1975,10 @@ class TestMegaRecovery:
         assert p5 not in photo_ids_a, (
             f"DUPLICATE BUG: p5 {p5} (gallery-hidden) visible after recovery"
         )
-        assert len(photo_ids_a) == 5, (
-            f"User A: expected 5 photos (p5 gallery-hidden), got {len(photo_ids_a)}: {photo_ids_a}"
+        # 5 original (p1-p4 + dup, p5 gallery-hidden) + 1 from multi-sync
+        # regression test (test_favorite_after_sync_propagates).
+        assert len(photo_ids_a) == 6, (
+            f"User A: expected 6 photos (p5 gallery-hidden), got {len(photo_ids_a)}: {photo_ids_a}"
         )
 
         # ── 3. USER A METADATA ────────────────────────────────────────

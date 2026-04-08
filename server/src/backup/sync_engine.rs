@@ -259,6 +259,22 @@ async fn purge_deleted_photos_from_backup(
         }
     };
 
+    // Also collect file_paths from trash — the backup may have a different
+    // encrypted_blob_id (each server generates its own), so matching by
+    // file_path is a reliable fallback.
+    let trash_file_paths: Vec<String> = match sqlx::query_scalar::<_, String>(
+        "SELECT file_path FROM trash_items WHERE file_path != ''",
+    )
+    .fetch_all(ctx.pool)
+    .await
+    {
+        Ok(fps) => fps,
+        Err(e) => {
+            tracing::warn!("Failed to fetch trash file_paths for deletion sync: {}", e);
+            Vec::new()
+        }
+    };
+
     // Don't filter by remote_photo_ids — encrypted items have photo_id =
     // blob_id which won't appear in remote_photo_ids (which lists photos.id).
     // Sending extra IDs is harmless (DELETE is a no-op for non-matches).
@@ -267,11 +283,14 @@ async fn purge_deleted_photos_from_backup(
         .filter(|id| !id.is_empty())
         .collect();
 
-    if to_delete.is_empty() {
+    if to_delete.is_empty() && trash_file_paths.is_empty() {
         return;
     }
 
-    let payload = serde_json::json!({ "deleted_ids": to_delete });
+    let payload = serde_json::json!({
+        "deleted_ids": to_delete,
+        "deleted_file_paths": trash_file_paths,
+    });
     let url = format!("{}/backup/sync-deletions", ctx.base_url);
     let mut req = ctx.client.post(&url).json(&payload);
     if let Some(ref key) = ctx.api_key {
