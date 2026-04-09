@@ -1030,3 +1030,103 @@ class TestSecureGalleryDecryption:
             assert len(resp.content) >= NONCE_LENGTH + 16, (
                 f"Thumbnail blob too short ({len(resp.content)} bytes)."
             )
+
+    def test_gallery_encrypted_blobs_hidden_from_backup_blob_listing(
+        self, user_client, primary_admin, backup_server,
+        backup_admin, backup_configured,
+    ):
+        """BACKUP BUG: GIF/photo encrypted blobs of secure gallery items
+        appear in the regular blob listing on the backup, causing
+        "Queued" items in the web client's main gallery.
+
+        Root cause: backup's list_blobs uses a JOIN on the photos table to
+        find encrypted_blob_ids of gallery items, but clone photos are NOT
+        synced to the backup's photos table (excluded since Bug 5).  The
+        JOIN fails for clones, so their encrypted blobs leak through.
+
+        The secureBlobIds endpoint has the same JOIN-based gap, so the web
+        client cannot filter them out client-side either.
+        """
+        # 1. Upload a server-side photo on primary
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        # 2. Wait for primary encryption migration
+        time.sleep(4)
+
+        # 3. Add photo to secure gallery on primary (creates clone)
+        gallery = user_client.create_secure_gallery("Backup Blob Leak Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        add_result = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], pid, token,
+        )
+        clone_id = add_result["new_blob_id"]
+
+        # 4. Wait for clone encryption migration on primary
+        time.sleep(4)
+
+        # 5. Verify primary hides everything from blob listing
+        primary_blobs = [b["id"] for b in user_client.list_blobs(limit=500).get("blobs", [])]
+        assert pid not in primary_blobs, "Original photo hidden from primary list_blobs"
+        assert clone_id not in primary_blobs, "Clone hidden from primary list_blobs"
+
+        # 6. Sync to backup
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(8)
+
+        # 7. Log in as user on backup and check blob listing
+        backup_user = APIClient(backup_server.base_url)
+        backup_user.login(user_client.username, USER_PASSWORD)
+
+        backup_blobs = backup_user.list_blobs(limit=500)
+        backup_blob_ids = [b["id"] for b in backup_blobs.get("blobs", [])]
+
+        # 8. Gallery items and their encrypted blobs must NOT appear
+        assert pid not in backup_blob_ids, (
+            f"BUG: Original photo {pid} visible in backup list_blobs"
+        )
+        assert clone_id not in backup_blob_ids, (
+            f"BUG: Clone blob {clone_id} visible in backup list_blobs"
+        )
+
+        # 9. Check that no encrypted blobs leaked through either.
+        #    The gallery item's encrypted_blob_id should not be in the listing.
+        backup_token = backup_user.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        items = backup_user.list_secure_gallery_items(gallery["gallery_id"], backup_token)
+        item_list = items if isinstance(items, list) else items.get("items", [])
+        for item in item_list:
+            enc_blob = item.get("encrypted_blob_id")
+            enc_thumb = item.get("encrypted_thumb_blob_id")
+            if enc_blob:
+                assert enc_blob not in backup_blob_ids, (
+                    f"BUG: Gallery item's encrypted_blob_id {enc_blob} leaked "
+                    f"into backup list_blobs — shows as 'Queued' in web client"
+                )
+            if enc_thumb:
+                assert enc_thumb not in backup_blob_ids, (
+                    f"BUG: Gallery item's encrypted_thumb_blob_id {enc_thumb} "
+                    f"leaked into backup list_blobs"
+                )
+
+        # 10. secureBlobIds on backup must cover all gallery encrypted blobs
+        secure_data = backup_user.get_secure_gallery_blob_ids()
+        secure_set = set(secure_data.get("blob_ids", []))
+        assert pid in secure_set, (
+            f"secureBlobIds on backup missing original photo ID {pid}"
+        )
+        assert clone_id in secure_set, (
+            f"secureBlobIds on backup missing clone ID {clone_id}"
+        )
+        for item in item_list:
+            enc_blob = item.get("encrypted_blob_id")
+            enc_thumb = item.get("encrypted_thumb_blob_id")
+            if enc_blob:
+                assert enc_blob in secure_set, (
+                    f"BUG: secureBlobIds on backup missing encrypted_blob_id "
+                    f"{enc_blob} — web client cannot filter it out"
+                )
+            if enc_thumb:
+                assert enc_thumb in secure_set, (
+                    f"BUG: secureBlobIds on backup missing encrypted_thumb_blob_id "
+                    f"{enc_thumb} — web client cannot filter it out"
+                )

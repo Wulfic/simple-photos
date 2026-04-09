@@ -262,6 +262,8 @@ pub async fn list(
                      WHERE p.encrypted_thumb_blob_id IS NOT NULL \
                      AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
                           OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+                 AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
+                 AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
                  ORDER BY upload_time ASC LIMIT ?",
             )
             .bind(&auth.user_id)
@@ -286,6 +288,8 @@ pub async fn list(
                      WHERE p.encrypted_thumb_blob_id IS NOT NULL \
                      AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
                           OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+                 AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
+                 AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
                  ORDER BY upload_time ASC LIMIT ?",
             )
             .bind(&auth.user_id)
@@ -310,6 +314,8 @@ pub async fn list(
                  WHERE p.encrypted_thumb_blob_id IS NOT NULL \
                  AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
                       OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+             AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
+             AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
              ORDER BY upload_time ASC LIMIT ?",
         )
         .bind(&auth.user_id)
@@ -333,6 +339,8 @@ pub async fn list(
                  WHERE p.encrypted_thumb_blob_id IS NOT NULL \
                  AND (p.id IN (SELECT blob_id FROM encrypted_gallery_items) \
                       OR p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL))) \
+             AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
+             AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
              ORDER BY upload_time ASC LIMIT ?",
         )
         .bind(&auth.user_id)

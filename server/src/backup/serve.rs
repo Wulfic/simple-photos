@@ -759,6 +759,8 @@ pub async fn backup_list_blobs(
                    SELECT p2.encrypted_thumb_blob_id FROM photos p2 \
                    WHERE p2.encrypted_thumb_blob_id IS NOT NULL \
                    AND p2.id IN (SELECT blob_id FROM encrypted_gallery_items))) \
+           AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
+           AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
          ORDER BY upload_time ASC",
     )
     .fetch_all(&state.read_pool)

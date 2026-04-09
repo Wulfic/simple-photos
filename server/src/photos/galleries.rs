@@ -453,6 +453,31 @@ pub async fn list_secure_blob_ids(
         }
     }
 
+    // Also include encrypted_blob_id and encrypted_thumb_blob_id stored
+    // directly on encrypted_gallery_items (populated on backup servers by
+    // gallery metadata sync).  On the primary these columns are typically
+    // NULL, but on backup the clone photos row may not exist in the photos
+    // table, so the JOIN above would miss them.
+    let egi_enc_rows: Vec<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT gi.encrypted_blob_id, gi.encrypted_thumb_blob_id \
+         FROM encrypted_gallery_items gi \
+         JOIN encrypted_galleries g ON g.id = gi.gallery_id \
+         WHERE g.user_id = ? \
+         AND (gi.encrypted_blob_id IS NOT NULL OR gi.encrypted_thumb_blob_id IS NOT NULL)",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    for (enc_blob, enc_thumb) in &egi_enc_rows {
+        if let Some(eb) = enc_blob {
+            ids.insert(eb.clone());
+        }
+        if let Some(et) = enc_thumb {
+            ids.insert(et.clone());
+        }
+    }
+
     let id_vec: Vec<&str> = ids.iter().map(|s| s.as_str()).collect();
 
     tracing::debug!(
