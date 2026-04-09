@@ -192,8 +192,8 @@ pub async fn sync_metadata_to_backup(
     // Photos are delta-synced by ID: once a photo lands on the backup its
     // file is never re-sent.  Mutable fields like is_favorite and
     // crop_metadata therefore need their own full-state sync channel.
-    let photo_states: Vec<(String, bool, Option<String>)> = match sqlx::query_as(
-        "SELECT id, is_favorite, crop_metadata FROM photos",
+    let photo_states: Vec<(String, bool, Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
+        "SELECT id, is_favorite, crop_metadata, encrypted_blob_id, encrypted_thumb_blob_id FROM photos",
     )
     .fetch_all(pool)
     .await
@@ -207,11 +207,13 @@ pub async fn sync_metadata_to_backup(
 
     let photo_states_json: Vec<serde_json::Value> = photo_states
         .iter()
-        .map(|(id, is_fav, crop)| {
+        .map(|(id, is_fav, crop, enc_blob, enc_thumb)| {
             serde_json::json!({
                 "id": id,
                 "is_favorite": *is_fav,
                 "crop_metadata": crop,
+                "encrypted_blob_id": enc_blob,
+                "encrypted_thumb_blob_id": enc_thumb,
             })
         })
         .collect();

@@ -1269,12 +1269,18 @@ pub async fn backup_sync_metadata(
         }
         let is_favorite = row["is_favorite"].as_bool().unwrap_or(false);
         let crop_metadata = row["crop_metadata"].as_str();
+        let encrypted_blob_id = row["encrypted_blob_id"].as_str();
+        let encrypted_thumb_blob_id = row["encrypted_thumb_blob_id"].as_str();
 
         let result = sqlx::query(
-            "UPDATE photos SET is_favorite = ?, crop_metadata = COALESCE(?, crop_metadata) WHERE id = ?",
+            "UPDATE photos SET is_favorite = ?, crop_metadata = COALESCE(?, crop_metadata), \
+             encrypted_blob_id = COALESCE(?, encrypted_blob_id), \
+             encrypted_thumb_blob_id = COALESCE(?, encrypted_thumb_blob_id) WHERE id = ?",
         )
         .bind(is_favorite)
         .bind(crop_metadata)
+        .bind(encrypted_blob_id)
+        .bind(encrypted_thumb_blob_id)
         .bind(id)
         .execute(&mut *tx)
         .await?;

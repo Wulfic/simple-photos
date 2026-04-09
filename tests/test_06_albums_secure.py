@@ -1130,3 +1130,81 @@ class TestSecureGalleryDecryption:
                     f"BUG: secureBlobIds on backup missing encrypted_thumb_blob_id "
                     f"{enc_thumb} — web client cannot filter it out"
                 )
+
+    def test_backup_no_duplicate_encrypted_blob_in_gallery(
+        self, user_client, primary_admin, backup_server,
+        backup_admin, backup_configured,
+    ):
+        """BACKUP BUG: After syncing an encrypted photo to backup, the web
+        client shows a DUPLICATE — the photo appears BOTH via encrypted-sync
+        AND as a separate "Queued" blob in list_blobs.
+
+        Root cause: sync_photos did not include encrypted_blob_id in the
+        transfer headers, so the backup's photos.encrypted_blob_id was set
+        by the backup's own independent migration (a different blob ID).
+        The primary's encrypted blob (sent by sync_blobs) was not connected
+        to any photos row on the backup, so list_blobs filter 3 could not
+        exclude it.  The web client's dedup logic (syncedBlobIds) used the
+        backup's blob ID, leaving the primary's blob as "unsynced."
+
+        Fix: sync_photos and sync_metadata now include encrypted_blob_id
+        and encrypted_thumb_blob_id so the backup's photos table references
+        the primary's encrypted blobs.
+        """
+        # Upload a GIF on primary and wait for encryption
+        gif_content = (
+            b'GIF89a\x01\x00\x01\x00\x80\x00\x00'
+            b'\xff\x00\x00\x00\x00\x00'
+            b'!\xf9\x04\x00\x00\x00\x00\x00'
+            b',\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;'
+        )
+        fname = unique_filename().replace(".jpg", ".gif")
+        photo = user_client.upload_photo(fname, content=gif_content, mime_type="image/gif")
+        pid = photo["photo_id"]
+
+        # Trigger migration and wait for encryption
+        primary_admin.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
+        enc_blob_id = self._wait_for_encryption_migration(user_client, pid, max_wait=30)
+        assert enc_blob_id, f"GIF {pid} not encrypted within timeout"
+
+        # Sync to backup
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(8)
+
+        # Check what the web client would see on backup
+        backup_user = APIClient(backup_server.base_url)
+        backup_user.login(user_client.username, USER_PASSWORD)
+
+        # encrypted-sync: should show the photo with encrypted_blob_id
+        sync_res = backup_user.encrypted_sync(limit=500)
+        sync_photos = sync_res.get("photos", [])
+        synced_blob_ids = {
+            p["encrypted_blob_id"]
+            for p in sync_photos
+            if p.get("encrypted_blob_id")
+        }
+
+        # list_blobs: all media types
+        all_blobs = []
+        for btype in ("photo", "gif", "video", "audio"):
+            res = backup_user.list_blobs(blob_type=btype, limit=200)
+            all_blobs.extend(res.get("blobs", []))
+
+        # Unsynced blobs = blobs NOT deduped by synced_blob_ids
+        unsynced = [b for b in all_blobs if b["id"] not in synced_blob_ids]
+
+        # The primary's encrypted blob must NOT appear as an unsynced blob
+        assert enc_blob_id not in {b["id"] for b in unsynced}, (
+            f"BUG: Primary encrypted blob {enc_blob_id} leaked into "
+            f"list_blobs as an unsynced blob. synced_blob_ids={synced_blob_ids}. "
+            f"This causes a 'duplicate photo' in the web gallery."
+        )
+
+        # Combined visible = encrypted-sync photos + unsynced blobs
+        # Should be exactly 1
+        visible_count = len([p for p in sync_photos if p.get("encrypted_blob_id")]) + len(unsynced)
+        assert visible_count == 1, (
+            f"Expected 1 visible item on backup, got {visible_count}. "
+            f"encrypted-sync={len(sync_photos)}, unsynced_blobs={len(unsynced)}. "
+            f"This is the 'extra duplicate photo' the user sees."
+        )

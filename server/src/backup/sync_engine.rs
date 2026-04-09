@@ -342,7 +342,7 @@ async fn sync_photos(
         let query =
             "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
              width, height, duration_secs, camera_model, is_favorite, photo_hash, \
-             crop_metadata, created_at FROM photos \
+             crop_metadata, created_at, encrypted_blob_id, encrypted_thumb_blob_id FROM photos \
              WHERE id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
                AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)";
         match sqlx::query_as::<_, PhotoToSync>(query)

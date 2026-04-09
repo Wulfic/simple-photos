@@ -409,8 +409,8 @@ pub async fn backup_receive(
                 id, user_id, filename, file_path, mime_type, media_type,
                 size_bytes, width, height, taken_at, latitude, longitude,
                 duration_secs, camera_model, is_favorite, photo_hash, crop_metadata,
-                thumb_path, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 file_path     = excluded.file_path,
                 size_bytes    = excluded.size_bytes,
@@ -424,7 +424,9 @@ pub async fn backup_receive(
                 is_favorite   = excluded.is_favorite,
                 photo_hash    = COALESCE(excluded.photo_hash,     photo_hash),
                 crop_metadata = COALESCE(excluded.crop_metadata,  crop_metadata),
-                thumb_path    = COALESCE(excluded.thumb_path,     thumb_path)",
+                thumb_path    = COALESCE(excluded.thumb_path,     thumb_path),
+                encrypted_blob_id       = COALESCE(excluded.encrypted_blob_id,       encrypted_blob_id),
+                encrypted_thumb_blob_id = COALESCE(excluded.encrypted_thumb_blob_id, encrypted_thumb_blob_id)",
         )
         .bind(&photo_id)
         .bind(&owner_id)
@@ -445,6 +447,8 @@ pub async fn backup_receive(
         .bind(&crop_metadata)
         .bind(&thumb_rel)
         .bind(&created_at)
+        .bind(&hdr_str(&headers, "X-Encrypted-Blob-Id"))
+        .bind(&hdr_str(&headers, "X-Encrypted-Thumb-Blob-Id"))
         .execute(&state.pool)
         .await?;
 

@@ -46,6 +46,8 @@ pub struct PhotoToSync {
     pub photo_hash: Option<String>,
     pub crop_metadata: Option<String>,
     pub created_at: String,
+    pub encrypted_blob_id: Option<String>,
+    pub encrypted_thumb_blob_id: Option<String>,
 }
 
 /// All metadata columns needed to faithfully replicate a trash item.
@@ -180,6 +182,13 @@ pub fn build_photo_headers(
             .collect::<Vec<_>>()
             .join(",");
         headers.push(("X-Tags".to_string(), tags_str));
+    }
+
+    if let Some(ref ebi) = photo.encrypted_blob_id {
+        headers.push(("X-Encrypted-Blob-Id".to_string(), ebi.clone()));
+    }
+    if let Some(ref etbi) = photo.encrypted_thumb_blob_id {
+        headers.push(("X-Encrypted-Thumb-Blob-Id".to_string(), etbi.clone()));
     }
 
     headers
