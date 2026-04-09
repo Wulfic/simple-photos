@@ -1208,3 +1208,68 @@ class TestSecureGalleryDecryption:
             f"encrypted-sync={len(sync_photos)}, unsynced_blobs={len(unsynced)}. "
             f"This is the 'extra duplicate photo' the user sees."
         )
+
+    def test_presynced_photo_no_flash_after_gallery_add(
+        self, user_client, primary_admin, backup_server,
+        backup_admin, backup_configured,
+    ):
+        """SYNC ORDERING BUG: A pre-synced photo added to a secure gallery
+        on the primary briefly appeared in the backup's regular gallery
+        during sync, before disappearing.
+
+        Root cause: sync_galleries (which purges pre-synced gallery photos
+        from backup and adds egi metadata) ran LAST — after sync_blobs and
+        sync_metadata had already delivered the encrypted blob and updated
+        encrypted_blob_id.  During this window the backup's encrypted-sync
+        returned the photo (it had encrypted_blob_id but no egi filter).
+
+        Fix: sync_galleries now runs BEFORE sync_blobs and sync_metadata,
+        so the backup has gallery exclusion data before any encrypted data
+        arrives.
+        """
+        # Upload and encrypt on primary
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+        primary_admin.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
+        enc_blob_id = self._wait_for_encryption_migration(user_client, pid, max_wait=30)
+        assert enc_blob_id, f"Photo {pid} not encrypted"
+
+        # First sync: photo goes to backup (pre-synced)
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(8)
+
+        # Verify photo visible on backup
+        backup_user = APIClient(backup_server.base_url)
+        backup_user.login(user_client.username, USER_PASSWORD)
+        sync_res = backup_user.encrypted_sync(limit=500)
+        backup_photo_ids = {p["id"] for p in sync_res.get("photos", [])}
+        assert pid in backup_photo_ids, "Photo should be on backup before gallery add"
+
+        # Add to secure gallery on primary
+        gallery = user_client.create_secure_gallery("Flash Order Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        user_client.add_secure_gallery_item(gallery["gallery_id"], pid, token)
+        time.sleep(5)  # clone migration
+
+        # Second sync (with fixed ordering: galleries before blobs/metadata)
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(10)
+
+        # After sync: photo MUST NOT be in encrypted-sync on backup
+        sync_res = backup_user.encrypted_sync(limit=500)
+        backup_photo_ids = {p["id"] for p in sync_res.get("photos", [])}
+        assert pid not in backup_photo_ids, (
+            f"Pre-synced photo {pid} still in backup's encrypted-sync after "
+            f"gallery add + sync. The sync_galleries phase should have purged "
+            f"it before sync_metadata could update encrypted_blob_id."
+        )
+
+        # Also not in list_blobs
+        all_blobs = []
+        for btype in ("photo", "gif", "video", "audio"):
+            res = backup_user.list_blobs(blob_type=btype, limit=200)
+            all_blobs.extend(res.get("blobs", []))
+        blob_ids = {b["id"] for b in all_blobs}
+        assert enc_blob_id not in blob_ids, (
+            f"Encrypted blob {enc_blob_id} leaked into backup list_blobs"
+        )

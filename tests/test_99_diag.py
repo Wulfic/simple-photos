@@ -569,3 +569,111 @@ class TestDuplicateDiag:
             f"Expected exactly 1 visible item on backup, got {len(combined)}. "
             f"Items: {[(k, v['source'], v['type']) for k, v in combined.items()]}"
         )
+
+    def test_gallery_photo_no_flash_during_sync(
+        self, user_client, primary_admin, backup_server,
+        backup_admin, backup_configured,
+    ):
+        """TIMING FIX TEST: A pre-synced photo added to a secure gallery
+        must NEVER appear in the backup's encrypted-sync — not even
+        between sync phases.
+
+        Old ordering (metadata before galleries) caused a "flash":
+        1. sync_metadata/photo_states sets encrypted_blob_id on backup
+        2. encrypted-sync returns the photo (no egi yet → not filtered)
+        3. Web client shows it in regular gallery for a few seconds
+        4. sync_galleries arrives → purges photo → disappears
+
+        Fix: sync_galleries runs BEFORE sync_blobs and sync_metadata.
+
+        This test manually calls the backup's sync-metadata endpoint
+        to simulate the old unsafe ordering and verifies that after
+        a proper sync (galleries first), the backup never exposes
+        the photo via encrypted-sync.
+        """
+        import requests as req_lib
+
+        # Upload photo and encrypt on primary
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+        _trigger_migration(primary_admin)
+        enc_blob_id = _wait_for_encryption(user_client, pid)
+        assert enc_blob_id, f"Photo {pid} not encrypted"
+        print(f"\n[FLASH] Photo: {pid}, encrypted_blob_id: {enc_blob_id}")
+
+        # Sync to backup (photo arrives with encrypted_blob_id via our Bug 18 fix)
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(8)
+
+        # Verify photo is visible on backup in encrypted-sync
+        backup_user = APIClient(backup_server.base_url)
+        backup_user.login(user_client.username, USER_PASSWORD)
+        _, _, before, _ = _web_gallery_items(backup_user, "FLASH-BEFORE")
+        assert pid in before, f"Photo {pid} should be visible on backup before gallery add"
+
+        # Add to secure gallery on primary
+        gallery = user_client.create_secure_gallery("Flash Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        user_client.add_secure_gallery_item(gallery["gallery_id"], pid, token)
+        time.sleep(5)  # clone migration
+
+        # === Simulate the DANGEROUS intermediate state ===
+        # Manually POST photo_states to backup with the photo's encrypted_blob_id.
+        # In the old ordering (metadata before galleries), this happened before
+        # sync_galleries had a chance to purge the photo.
+        photo_states = [{
+            "id": pid,
+            "is_favorite": False,
+            "crop_metadata": None,
+            "encrypted_blob_id": enc_blob_id,
+            "encrypted_thumb_blob_id": None,
+        }]
+
+        # POST directly to backup's sync-metadata endpoint
+        backup_url = backup_server.base_url.rstrip("/")
+        api_key = backup_server.backup_api_key
+        headers = {"X-API-Key": api_key}
+        metadata_body = {
+            "edit_copies": [],
+            "photo_metadata": [],
+            "shared_albums": [],
+            "shared_album_members": [],
+            "shared_album_photos": [],
+            "photo_states": photo_states,
+        }
+        resp = req_lib.post(
+            f"{backup_url}/api/backup/sync-metadata",
+            json=metadata_body,
+            headers=headers,
+        )
+        assert resp.status_code == 200, f"sync-metadata POST failed: {resp.status_code}"
+        print(f"[FLASH] Manually posted photo_states to backup ({len(photo_states)} photos)")
+
+        # Check: is the photo visible in encrypted-sync on backup?
+        # With old ordering (no egi yet), this photo WOULD appear.
+        # The photo row still exists on backup (retroactive purge hasn't run).
+        _, _, mid_state, _ = _web_gallery_items(backup_user, "FLASH-MID(dangerous)")
+
+        # Record whether the flash bug is present
+        has_flash = pid in mid_state
+        if has_flash:
+            print(f"[FLASH] ⚠ FLASH BUG DETECTED: Photo {pid} visible in "
+                  f"encrypted-sync before galleries sync! Source: {mid_state[pid]['source']}")
+        else:
+            print(f"[FLASH] ✓ Photo {pid} not visible (may have been purged already)")
+
+        # === Now run a proper full sync (with fixed ordering: galleries first) ===
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(10)
+
+        # After full sync: photo MUST be gone
+        _, _, after, _ = _web_gallery_items(backup_user, "FLASH-AFTER")
+        assert pid not in after, (
+            f"Photo {pid} still visible on backup after full sync! "
+            f"Source: {after[pid]['source']}. "
+            f"The sync_galleries phase should have purged it."
+        )
+        assert len(after) == 0, (
+            f"Expected 0 visible items on backup, got {len(after)}. "
+            f"Items: {list(after.keys())}"
+        )

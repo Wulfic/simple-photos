@@ -68,10 +68,12 @@ impl SyncCounters {
 /// **Phase 0:** Sync user accounts (must run before photos/trash for FK integrity).
 /// **Phase 0b:** Sync user deletions.
 /// **Phase 1:** Delta-transfer photos the remote doesn't have.
-/// **Phase 2:** Delta-transfer trash items the remote doesn't have.
-/// **Phase 3:** Sync secure gallery metadata (full-state JSON).
-/// **Phase 4:** Delta-transfer client-encrypted blobs.
-/// **Phase 5:** Sync metadata tables — edit_copies, photo_metadata, shared albums (full-state JSON).
+/// **Phase 2:** Sync secure gallery metadata (full-state JSON) — must run before
+///             blobs/metadata so the backup has gallery exclusion data before any
+///             encrypted_blob_id or encrypted blobs arrive (prevents timing flash).
+/// **Phase 3:** Delta-transfer client-encrypted blobs.
+/// **Phase 4:** Sync metadata tables — edit_copies, photo_metadata, shared albums (full-state JSON).
+/// **Phase 5:** Delta-transfer trash items.
 ///
 pub async fn run_sync(
     pool: &sqlx::SqlitePool,
@@ -140,22 +142,26 @@ pub async fn run_sync(
 
     sync_photos(&ctx, &remote_photo_ids, &mut counters).await;
 
-    // ── Phase 4: sync client-encrypted blobs ─────────────────────────────
+    // ── Phase 2: sync secure gallery metadata ────────────────────────────
+    // Must run BEFORE blobs and metadata so the backup has gallery
+    // exclusion data (encrypted_gallery_items rows) before encrypted blobs
+    // or encrypted_blob_id updates arrive.  This prevents a timing window
+    // where a pre-synced photo briefly appears in the backup's regular
+    // gallery between receiving its encrypted_blob_id (via photo_states)
+    // and receiving the gallery metadata that filters it out.
+    // Placeholder blobs are created server-side for FK constraints.
+    sync_secure_galleries_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
+
+    // ── Phase 3: sync client-encrypted blobs ─────────────────────────────
     // E2EE data uploaded by clients — irreplaceable, only the client has
     // the decryption key.  Must be backed up for disaster recovery.
     sync_blobs(&ctx, &remote_blob_ids, &mut counters).await;
 
-    // ── Phase 5: sync metadata tables ────────────────────────────────────
+    // ── Phase 4: sync metadata tables ────────────────────────────────────
     // Lightweight JSON tables: edit_copies, photo_metadata, shared_albums.
     // Full-state sync (not delta) — sent every cycle, backup prunes stale.
     sync_metadata_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
     sync_trash(&ctx, &remote_trash_ids, &mut counters).await;
-
-    // ── Phase 3: sync secure gallery metadata ────────────────────────────
-    // Must run AFTER photos so the clone rows exist on the backup before
-    // the gallery_items reference them.  This lets the backup's
-    // encrypted-sync endpoint correctly filter clones from the gallery.
-    sync_secure_galleries_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
 
     // ── Finalize ─────────────────────────────────────────────────────────
     let (status, error_detail) = if counters.failures == 0 {
