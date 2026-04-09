@@ -29,12 +29,12 @@ pub async fn sync_secure_galleries_to_backup(
         }
     };
 
-    // Fetch all gallery items
-    // Fetch all gallery items, joining photos to get encrypted_blob_id
-    // for server-side clones (needed by the backup's list_gallery_items COALESCE query)
-    let items: Vec<(String, String, String, String, Option<String>, Option<String>)> = match sqlx::query_as(
+    // Fetch all gallery items, joining photos to get encrypted_blob_id and
+    // encrypted_thumb_blob_id for server-side clones (needed by the backup's
+    // list_gallery_items COALESCE query and thumbnail display)
+    let items: Vec<(String, String, String, String, Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
         "SELECT gi.id, gi.gallery_id, gi.blob_id, gi.added_at, gi.original_blob_id, \
-                p.encrypted_blob_id \
+                p.encrypted_blob_id, p.encrypted_thumb_blob_id \
          FROM encrypted_gallery_items gi \
          LEFT JOIN photos p ON p.id = gi.blob_id",
     )
@@ -67,7 +67,7 @@ pub async fn sync_secure_galleries_to_backup(
 
     let items_json: Vec<serde_json::Value> = items
         .iter()
-        .map(|(id, gallery_id, blob_id, added_at, original_blob_id, encrypted_blob_id)| {
+        .map(|(id, gallery_id, blob_id, added_at, original_blob_id, encrypted_blob_id, encrypted_thumb_blob_id)| {
             serde_json::json!({
                 "id": id,
                 "gallery_id": gallery_id,
@@ -75,6 +75,7 @@ pub async fn sync_secure_galleries_to_backup(
                 "added_at": added_at,
                 "original_blob_id": original_blob_id,
                 "encrypted_blob_id": encrypted_blob_id,
+                "encrypted_thumb_blob_id": encrypted_thumb_blob_id,
             })
         })
         .collect();

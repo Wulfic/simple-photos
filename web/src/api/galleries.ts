@@ -45,7 +45,7 @@ export const secureGalleriesApi = {
 
   listItems: (galleryId: string, galleryToken: string) =>
     request<{
-      items: Array<{ id: string; blob_id: string; added_at: string }>;
+      items: Array<{ id: string; blob_id: string; added_at: string; encrypted_thumb_blob_id?: string | null }>;
     }>(`/galleries/secure/${galleryId}/items`, {
       headers: { "X-Gallery-Token": galleryToken },
     }),

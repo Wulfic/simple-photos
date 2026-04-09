@@ -491,10 +491,11 @@ pub async fn list_gallery_items(
             AppError::Unauthorized("Gallery token required. Unlock the gallery first.".into())
         })?;
 
-    let items: Vec<(String, String, String)> = sqlx::query_as(
+    let items: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT gi.id, \
                 COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
-                gi.added_at \
+                gi.added_at, \
+                COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id) as encrypted_thumb_blob_id \
          FROM encrypted_gallery_items gi \
          LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
          WHERE gi.gallery_id = ? \
@@ -506,11 +507,12 @@ pub async fn list_gallery_items(
 
     let items_json: Vec<serde_json::Value> = items
         .iter()
-        .map(|(id, blob_id, added_at)| {
+        .map(|(id, blob_id, added_at, encrypted_thumb_blob_id)| {
             serde_json::json!({
                 "id": id,
                 "blob_id": blob_id,
                 "added_at": added_at,
+                "encrypted_thumb_blob_id": encrypted_thumb_blob_id,
             })
         })
         .collect();

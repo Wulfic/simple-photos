@@ -406,6 +406,7 @@ pub async fn backup_sync_secure_galleries(
         let added_at = i["added_at"].as_str().unwrap_or_default();
         let original_blob_id = i["original_blob_id"].as_str();
         let encrypted_blob_id = i["encrypted_blob_id"].as_str();
+        let encrypted_thumb_blob_id = i["encrypted_thumb_blob_id"].as_str();
 
         if id.is_empty() || gallery_id.is_empty() || blob_id.is_empty() {
             continue;
@@ -447,12 +448,13 @@ pub async fn backup_sync_secure_galleries(
         }
 
         sqlx::query(
-            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id, encrypted_blob_id) \
-             VALUES (?, ?, ?, ?, ?, ?) \
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id, encrypted_blob_id, encrypted_thumb_blob_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
                blob_id = excluded.blob_id, \
                original_blob_id = excluded.original_blob_id, \
-               encrypted_blob_id = excluded.encrypted_blob_id",
+               encrypted_blob_id = excluded.encrypted_blob_id, \
+               encrypted_thumb_blob_id = excluded.encrypted_thumb_blob_id",
         )
         .bind(id)
         .bind(gallery_id)
@@ -460,6 +462,7 @@ pub async fn backup_sync_secure_galleries(
         .bind(added_at)
         .bind(original_blob_id)
         .bind(encrypted_blob_id)
+        .bind(encrypted_thumb_blob_id)
         .execute(&mut *tx)
         .await?;
     }
@@ -569,38 +572,78 @@ pub async fn backup_sync_secure_galleries(
 
         if let Some((ref enc_blob, ref enc_thumb)) = enc_ids {
             if let Some(ref bid) = enc_blob {
-                // Collect encrypted blob storage path before deletion
-                let enc_path: Option<String> = sqlx::query_scalar(
-                    "SELECT storage_path FROM blobs WHERE id = ?",
+                // Guard: do NOT delete this blob if a gallery item references
+                // it via encrypted_blob_id or encrypted_thumb_blob_id.
+                // The backup_receive_blob dedup logic can reassign the
+                // original photo's encrypted_blob_id to point to the synced
+                // clone's encrypted blob (same content_hash).  Without this
+                // guard, the purge would delete the clone's encrypted blob
+                // that the gallery needs → 404 on backup.
+                let is_gallery_ref: bool = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM encrypted_gallery_items \
+                     WHERE encrypted_blob_id = ? OR encrypted_thumb_blob_id = ?)",
                 )
                 .bind(bid)
-                .fetch_optional(&mut *tx)
+                .bind(bid)
+                .fetch_one(&mut *tx)
                 .await
-                .unwrap_or(None);
-                if let Some(ref ep) = enc_path {
-                    files_to_delete.push(ep.clone());
-                }
-                let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
+                .unwrap_or(true);
+
+                if !is_gallery_ref {
+                    let enc_path: Option<String> = sqlx::query_scalar(
+                        "SELECT storage_path FROM blobs WHERE id = ?",
+                    )
                     .bind(bid)
-                    .execute(&mut *tx)
-                    .await;
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .unwrap_or(None);
+                    if let Some(ref ep) = enc_path {
+                        files_to_delete.push(ep.clone());
+                    }
+                    let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
+                        .bind(bid)
+                        .execute(&mut *tx)
+                        .await;
+                } else {
+                    tracing::info!(
+                        "Purge: skipping encrypted blob {} (referenced by gallery item)",
+                        bid
+                    );
+                }
             }
             if let Some(ref tid) = enc_thumb {
-                // Collect encrypted thumb blob storage path before deletion
-                let enc_thumb_path: Option<String> = sqlx::query_scalar(
-                    "SELECT storage_path FROM blobs WHERE id = ?",
+                // Same guard for encrypted thumbnail blobs.
+                let is_gallery_ref: bool = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM encrypted_gallery_items \
+                     WHERE encrypted_blob_id = ? OR encrypted_thumb_blob_id = ?)",
                 )
                 .bind(tid)
-                .fetch_optional(&mut *tx)
+                .bind(tid)
+                .fetch_one(&mut *tx)
                 .await
-                .unwrap_or(None);
-                if let Some(ref etp) = enc_thumb_path {
-                    files_to_delete.push(etp.clone());
-                }
-                let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
+                .unwrap_or(true);
+
+                if !is_gallery_ref {
+                    let enc_thumb_path: Option<String> = sqlx::query_scalar(
+                        "SELECT storage_path FROM blobs WHERE id = ?",
+                    )
                     .bind(tid)
-                    .execute(&mut *tx)
-                    .await;
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .unwrap_or(None);
+                    if let Some(ref etp) = enc_thumb_path {
+                        files_to_delete.push(etp.clone());
+                    }
+                    let _ = sqlx::query("DELETE FROM blobs WHERE id = ?")
+                        .bind(tid)
+                        .execute(&mut *tx)
+                        .await;
+                } else {
+                    tracing::info!(
+                        "Purge: skipping encrypted thumb blob {} (referenced by gallery item)",
+                        tid
+                    );
+                }
             }
         }
 
@@ -703,11 +746,19 @@ pub async fn backup_list_blobs(
            AND id NOT IN ( \
                SELECT p.encrypted_blob_id FROM photos p \
                WHERE p.encrypted_blob_id IS NOT NULL \
-               AND p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
+               AND p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+               AND p.encrypted_blob_id NOT IN ( \
+                   SELECT p2.encrypted_blob_id FROM photos p2 \
+                   WHERE p2.encrypted_blob_id IS NOT NULL \
+                   AND p2.id IN (SELECT blob_id FROM encrypted_gallery_items))) \
            AND id NOT IN ( \
                SELECT p.encrypted_thumb_blob_id FROM photos p \
                WHERE p.encrypted_thumb_blob_id IS NOT NULL \
-               AND p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
+               AND p.id IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+               AND p.encrypted_thumb_blob_id NOT IN ( \
+                   SELECT p2.encrypted_thumb_blob_id FROM photos p2 \
+                   WHERE p2.encrypted_thumb_blob_id IS NOT NULL \
+                   AND p2.id IN (SELECT blob_id FROM encrypted_gallery_items))) \
          ORDER BY upload_time ASC",
     )
     .fetch_all(&state.read_pool)
@@ -836,6 +887,7 @@ pub async fn backup_receive_blob(
         "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(id) DO UPDATE SET \
+           user_id = excluded.user_id, \
            blob_type = excluded.blob_type, \
            size_bytes = excluded.size_bytes, \
            client_hash = excluded.client_hash, \

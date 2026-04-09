@@ -712,3 +712,321 @@ class TestSecureGalleryDecryption:
             )
 
         assert len(plaintext) > 0, "Decrypted payload is empty on backup"
+
+    # ── Thumbnail availability tests ─────────────────────────────────────
+
+    def test_gallery_items_include_thumb_blob_id(self, user_client):
+        """list_gallery_items MUST include encrypted_thumb_blob_id so the web
+        client can download and decrypt the thumbnail for display.
+
+        Without this field the client has no way to locate the encrypted
+        thumbnail blob and falls back to showing a lock icon (🔐).
+        """
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        gallery = user_client.create_secure_gallery("Thumb Info Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        user_client.add_secure_gallery_item(gallery["gallery_id"], pid, token)
+
+        # Wait for encryption migration to create the encrypted thumbnail
+        time.sleep(3)
+
+        items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)
+        assert len(items["items"]) == 1
+        item = items["items"][0]
+
+        # The response must include encrypted_thumb_blob_id
+        assert "encrypted_thumb_blob_id" in item, (
+            "list_gallery_items response is missing 'encrypted_thumb_blob_id'. "
+            "Without it the web client cannot fetch encrypted thumbnails "
+            "and shows a lock icon instead of the actual photo thumbnail."
+        )
+        assert item["encrypted_thumb_blob_id"] is not None, (
+            "encrypted_thumb_blob_id is null — encryption migration may not "
+            "have generated a thumbnail for this photo."
+        )
+
+    def test_gallery_thumbnail_blob_decryptable_primary(self, user_client):
+        """The encrypted_thumb_blob_id returned by list_gallery_items must be
+        downloadable and AES-GCM decryptable on the primary server.
+        """
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        gallery = user_client.create_secure_gallery("Thumb Decrypt Primary")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        user_client.add_secure_gallery_item(gallery["gallery_id"], pid, token)
+
+        time.sleep(3)
+
+        items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)
+        item = items["items"][0]
+        thumb_blob_id = item.get("encrypted_thumb_blob_id")
+        assert thumb_blob_id, "encrypted_thumb_blob_id missing from response"
+
+        # Download the thumbnail blob directly
+        resp = user_client.download_blob(thumb_blob_id)
+        assert resp.status_code == 200, (
+            f"Failed to download thumbnail blob {thumb_blob_id}: "
+            f"HTTP {resp.status_code}"
+        )
+
+        blob_data = resp.content
+        assert len(blob_data) >= NONCE_LENGTH + 16, (
+            f"Thumbnail blob too short ({len(blob_data)} bytes) — "
+            f"not valid AES-GCM ciphertext."
+        )
+
+        try:
+            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+        except ValueError as e:
+            pytest.fail(
+                f"Thumbnail blob {thumb_blob_id} is not valid AES-GCM: {e}"
+            )
+        assert len(plaintext) > 0, "Decrypted thumbnail payload is empty"
+
+    def test_gallery_thumbnail_blob_downloadable_on_backup(
+        self, user_client, primary_admin, backup_server, backup_admin,
+        backup_configured,
+    ):
+        """BACKUP BUG: Thumbnail blob for secure gallery items must be
+        available on the backup server.  Currently the backup has no way
+        to resolve the thumbnail because:
+
+        1. The clone photo row is excluded from sync_photos
+        2. encrypted_thumb_blob_id is not included in the gallery item response
+        3. Even if included, the thumbnail blob may not be synced to backup
+        """
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        gallery = user_client.create_secure_gallery("Thumb Backup Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        user_client.add_secure_gallery_item(gallery["gallery_id"], pid, token)
+
+        time.sleep(3)
+
+        # Trigger sync
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(5)
+
+        # Verify on backup
+        backup_user = APIClient(backup_server.base_url)
+        backup_user.login(user_client.username, USER_PASSWORD)
+        backup_token = backup_user.unlock_secure_gallery(USER_PASSWORD)[
+            "gallery_token"
+        ]
+
+        items = backup_user.list_secure_gallery_items(
+            gallery["gallery_id"], backup_token,
+        )
+        assert len(items["items"]) >= 1, "Gallery items not synced to backup"
+        item = items["items"][0]
+
+        # Thumbnail blob ID must be in the response
+        thumb_blob_id = item.get("encrypted_thumb_blob_id")
+        assert thumb_blob_id, (
+            "encrypted_thumb_blob_id missing from backup gallery item response. "
+            "Without it the client gets 'Download failed http 404' when "
+            "trying to view the photo."
+        )
+
+        # And the thumbnail blob must actually be downloadable on backup
+        resp = backup_user.download_blob(thumb_blob_id)
+        assert resp.status_code == 200, (
+            f"Thumbnail blob download on backup failed: HTTP {resp.status_code}. "
+            f"The encrypted thumbnail blob was not synced to backup."
+        )
+
+        # Verify it's valid encrypted content
+        blob_data = resp.content
+        assert len(blob_data) >= NONCE_LENGTH + 16, (
+            f"Backup thumbnail blob too short ({len(blob_data)} bytes)"
+        )
+
+        try:
+            _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+        except ValueError as e:
+            pytest.fail(f"Backup thumbnail blob not valid AES-GCM: {e}")
+
+    # ── Client-encrypted blob gallery tests ──────────────────────────
+
+    def test_client_encrypted_blob_in_gallery_downloadable_on_backup(
+        self, user_client, primary_admin, backup_server, backup_admin,
+        backup_configured,
+    ):
+        """BACKUP BUG: Client-encrypted blobs added to secure galleries
+        must be downloadable on the backup server.
+
+        The web/Android client uploads photos as client-encrypted blobs via
+        /api/blobs (not /api/photos/upload).  When such a blob is added to
+        a secure gallery:
+        - A clone is created in the blobs table
+        - No photos table row is created (is_server_side = false)
+        - No server-side encryption migration runs
+
+        On the primary this works — the clone blob has the correct user_id.
+        On the backup, sync_blobs EXCLUDES the clone (it's in
+        encrypted_gallery_items.blob_id) and the backup only has a
+        gallery-placeholder with admin user_id.  list_gallery_items COALESCE
+        falls through to gi.blob_id → placeholder → user_id mismatch → 404.
+        """
+        # Upload a client-encrypted blob (the workflow the web client uses)
+        blob_data = generate_random_bytes(512)
+        blob = user_client.upload_blob("photo", blob_data)
+        blob_id = blob["blob_id"]
+
+        # Create secure gallery and add the client-encrypted blob
+        gallery = user_client.create_secure_gallery("Client Blob Backup Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        result = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], blob_id, token,
+        )
+        clone_id = result["new_blob_id"]
+
+        # Client-encrypted blobs don't get server-side encryption, but
+        # give the server a moment to settle
+        time.sleep(1)
+
+        # Verify on primary first: list_gallery_items returns clone blob_id
+        items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)
+        assert len(items["items"]) == 1
+        primary_blob_id = items["items"][0]["blob_id"]
+
+        # For client-encrypted blobs, blob_id should be the clone itself
+        # (no encrypted version exists)
+        assert primary_blob_id == clone_id, (
+            f"Expected blob_id={clone_id} (clone), got {primary_blob_id}"
+        )
+
+        # Download on primary works
+        resp = user_client.download_blob(primary_blob_id)
+        assert resp.status_code == 200, (
+            f"Primary download failed: HTTP {resp.status_code}"
+        )
+
+        # Trigger sync to backup
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(5)
+
+        # Verify on backup
+        backup_user = APIClient(backup_server.base_url)
+        backup_user.login(user_client.username, USER_PASSWORD)
+        backup_token = backup_user.unlock_secure_gallery(USER_PASSWORD)[
+            "gallery_token"
+        ]
+
+        items = backup_user.list_secure_gallery_items(
+            gallery["gallery_id"], backup_token,
+        )
+        assert len(items["items"]) >= 1, "Gallery items not synced to backup"
+        backup_blob_id = items["items"][0]["blob_id"]
+
+        # The backup should return the same blob_id as the primary
+        assert backup_blob_id == clone_id, (
+            f"Backup blob_id mismatch: expected {clone_id}, got {backup_blob_id}. "
+            f"The COALESCE may have fallen through to a placeholder."
+        )
+
+        # Download the blob on backup — THIS is where the 404 occurs
+        resp = backup_user.download_blob(backup_blob_id)
+        assert resp.status_code == 200, (
+            f"Client-encrypted gallery blob download on backup failed: "
+            f"HTTP {resp.status_code}. The clone blob was likely excluded "
+            f"from sync_blobs and only a gallery-placeholder exists on "
+            f"the backup (with admin user_id → user mismatch → 404)."
+        )
+
+        # Content should match what was uploaded
+        assert len(resp.content) == len(blob_data), (
+            f"Downloaded blob size mismatch: expected {len(blob_data)}, "
+            f"got {len(resp.content)} bytes. The backup may have a "
+            f"gallery-placeholder (0 bytes) instead of actual data."
+        )
+
+    def test_server_photo_gallery_viewable_on_backup_after_prior_sync(
+        self, user_client, primary_admin, backup_server,
+        backup_admin, backup_configured,
+    ):
+        """BACKUP BUG: Server-side photo synced to backup BEFORE being added
+        to a secure gallery becomes un-viewable after a second sync.
+
+        Root cause: the sync_blobs exclusion filter hides the original
+        photo's encrypted_blob_id from backup transfer.  When the
+        encryption migration reuses the same encrypted blob for the gallery
+        clone (content_hash dedup), the gallery item references a blob that
+        was never sent to the backup → 404.
+
+        This requires a two-sync scenario:
+        1. Photo synced to backup → backup migration encrypts it locally
+        2. Photo added to gallery → clone reuses original's encrypted blob
+        3. Second sync must send the reused blob to backup
+        """
+        # 1. Upload a server-side photo on primary
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        # 2. Wait for primary encryption migration to process the photo
+        time.sleep(4)
+
+        # 3. First sync: photo + its encrypted blob get synced to backup
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(6)
+
+        # 4. Wait for backup encryption migration to process the synced photo.
+        time.sleep(5)
+
+        # 5. Add photo to secure gallery on primary (creates clone)
+        gallery = user_client.create_secure_gallery("Prior Sync Bug Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        user_client.add_secure_gallery_item(gallery["gallery_id"], pid, token)
+
+        # 6. Wait for clone encryption on primary
+        time.sleep(4)
+
+        # 7. Second sync
+        primary_admin.admin_trigger_sync(backup_configured)
+        time.sleep(6)
+
+        # 8. Verify on backup: list gallery items and download
+        backup_user = APIClient(backup_server.base_url)
+        backup_user.login(user_client.username, USER_PASSWORD)
+        backup_token = backup_user.unlock_secure_gallery(USER_PASSWORD)[
+            "gallery_token"
+        ]
+
+        items = backup_user.list_secure_gallery_items(
+            gallery["gallery_id"], backup_token,
+        )
+        assert len(items["items"]) >= 1, "Gallery items not synced to backup"
+        item = items["items"][0]
+
+        blob_id = item["blob_id"]
+
+        # Download the blob — this is what the web client does
+        resp = backup_user.download_blob(blob_id)
+        assert resp.status_code == 200, (
+            f"Gallery blob download on backup failed after prior sync: "
+            f"HTTP {resp.status_code}. blob_id={blob_id}. "
+            f"The encrypted blob was likely excluded from sync_blobs "
+            f"transfer due to aggressive gallery-original filtering."
+        )
+
+        # Verify it's valid encrypted content (not a 0-byte placeholder)
+        assert len(resp.content) >= NONCE_LENGTH + 16, (
+            f"Blob too short ({len(resp.content)} bytes) — likely a "
+            f"gallery-placeholder instead of real encrypted data."
+        )
+
+        # Also verify thumbnail is downloadable if present
+        thumb_blob_id = item.get("encrypted_thumb_blob_id")
+        if thumb_blob_id:
+            resp = backup_user.download_blob(thumb_blob_id)
+            assert resp.status_code == 200, (
+                f"Thumbnail blob download on backup failed after prior sync: "
+                f"HTTP {resp.status_code}. thumb_blob_id={thumb_blob_id}."
+            )
+            assert len(resp.content) >= NONCE_LENGTH + 16, (
+                f"Thumbnail blob too short ({len(resp.content)} bytes)."
+            )

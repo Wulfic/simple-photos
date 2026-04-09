@@ -30,6 +30,7 @@ interface GalleryItem {
   id: string;
   blob_id: string;
   added_at: string;
+  encrypted_thumb_blob_id?: string | null;
 }
 
 /**
