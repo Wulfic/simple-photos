@@ -120,8 +120,11 @@ export default function JustifiedGrid<T>({
         const rowItems = items.slice(row.startIdx, row.startIdx + row.count);
         const rowAspects = aspectRatios.slice(row.startIdx, row.startIdx + row.count);
         const isLastRow = row.startIdx + row.count >= items.length;
-        // Check if this is a "full" row (height was computed to fit container)
-        const isFullRow = !isLastRow || rowItems.length > 1;
+        // Only rows whose height was computed to exactly fill the container
+        // width should use flex-grow. The last incomplete row must use fixed
+        // widths so items keep their natural proportions and aren't stretched
+        // (which causes photos/video previews to be cut off).
+        const isFullRow = !isLastRow;
 
         return (
           <div

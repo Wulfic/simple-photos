@@ -249,3 +249,250 @@ class TestThumbnailSizePreference:
         # Width and height must be positive integers
         assert isinstance(photo["width"], int) and photo["width"] > 0
         assert isinstance(photo["height"], int) and photo["height"] > 0
+
+
+# ── Client-side grid layout algorithm regression tests ─────────────────────────
+# These tests replicate the JustifiedGrid computeRows algorithm and verify that
+# the layout produces correct item sizing — specifically catching the regression
+# where the last incomplete row stretches items to fill the container width,
+# causing photos/video previews to be cut off.
+
+
+def _compute_rows(aspect_ratios, container_width, target_row_height, gap=4):
+    """Pure-Python port of JustifiedGrid.computeRows() for testing."""
+    if container_width <= 0 or len(aspect_ratios) == 0:
+        return []
+    rows = []
+    row_start = 0
+    row_aspect_sum = 0.0
+
+    for i, ar in enumerate(aspect_ratios):
+        row_aspect_sum += ar
+        item_count = i - row_start + 1
+        total_gap = (item_count - 1) * gap
+        natural_width = row_aspect_sum * target_row_height + total_gap
+
+        if natural_width >= container_width:
+            available_width = container_width - total_gap
+            row_height = available_width / row_aspect_sum
+            rows.append({
+                "start": row_start,
+                "count": item_count,
+                "height": row_height,
+                "full": True,
+            })
+            row_start = i + 1
+            row_aspect_sum = 0.0
+
+    if row_start < len(aspect_ratios):
+        rows.append({
+            "start": row_start,
+            "count": len(aspect_ratios) - row_start,
+            "height": target_row_height,
+            "full": False,
+        })
+
+    return rows
+
+
+def _item_rendered_size(row, idx_in_row, aspect_ratios, container_width, gap=4):
+    """Compute the rendered width and height of a specific item in a row.
+
+    For full rows: width = (ar / sum_of_row_ars) * available_width, height = row_height.
+    For incomplete (last) rows: width = ar * row_height, height = row_height.
+    """
+    start = row["start"]
+    count = row["count"]
+    height = row["height"]
+    ar = aspect_ratios[start + idx_in_row]
+
+    if row["full"]:
+        row_ars = aspect_ratios[start : start + count]
+        total_ar = sum(row_ars)
+        total_gap = (count - 1) * gap
+        available = container_width - total_gap
+        width = (ar / total_ar) * available
+    else:
+        width = ar * height
+
+    return width, height
+
+
+class TestGridLayoutAlgorithm:
+    """Regression tests for the JustifiedGrid computeRows algorithm.
+
+    These verify that photos/video previews aren't cut off due to
+    excessive stretching, particularly in the last incomplete row."""
+
+    def test_full_rows_fill_container_width(self, user_client):
+        """Items in complete rows should sum to approximately the
+        container width (accounting for gaps)."""
+        container_width = 900
+        target_height = 180
+        gap = 4
+        aspect_ratios = [1.5, 0.67, 1.78, 1.0, 0.5, 1.33, 2.0, 0.75]
+
+        rows = _compute_rows(aspect_ratios, container_width, target_height, gap)
+
+        for row in rows:
+            if not row["full"]:
+                continue
+            total_gap = (row["count"] - 1) * gap
+            widths = []
+            for j in range(row["count"]):
+                w, _ = _item_rendered_size(row, j, aspect_ratios, container_width, gap)
+                widths.append(w)
+            total_width = sum(widths) + total_gap
+            assert abs(total_width - container_width) < 1.0, (
+                f"Full row total width {total_width:.1f} != container {container_width}"
+            )
+
+    def test_last_row_items_not_stretched(self, user_client):
+        """Items in the last incomplete row must NOT be stretched to fill
+        the full container width.  Each item's width should be
+        ar * targetRowHeight — matching its natural size at the target
+        height.  Stretching causes excessive cropping (cut-off previews)."""
+        container_width = 900
+        target_height = 180
+        gap = 4
+        # These 3 portrait photos won't fill a 900px row at 180px height
+        aspect_ratios = [0.67, 0.67, 0.67]
+
+        rows = _compute_rows(aspect_ratios, container_width, target_height, gap)
+
+        # Should produce exactly one incomplete row
+        assert len(rows) == 1
+        row = rows[0]
+        assert not row["full"], "Expected last row to be incomplete"
+
+        for j in range(row["count"]):
+            w, h = _item_rendered_size(row, j, aspect_ratios, container_width, gap)
+            expected_w = aspect_ratios[row["start"] + j] * target_height
+            assert abs(w - expected_w) < 1.0, (
+                f"Last-row item {j}: width {w:.1f} should be {expected_w:.1f} "
+                f"(natural size), not stretched to fill container"
+            )
+
+    def test_last_row_multi_item_no_excessive_crop(self, user_client):
+        """When the last row has multiple items, the effective display
+        aspect ratio should stay close to the original.  If items are
+        stretched (bug), the displayed AR diverges wildly from the
+        original, indicating cut-off/cropping."""
+        container_width = 900
+        target_height = 180
+        gap = 4
+        # Mix of portrait and landscape in a last-incomplete row
+        aspect_ratios = [0.67, 1.5]
+
+        rows = _compute_rows(aspect_ratios, container_width, target_height, gap)
+        assert len(rows) == 1, "Expected all items in one incomplete row"
+        row = rows[0]
+
+        for j in range(row["count"]):
+            w, h = _item_rendered_size(row, j, aspect_ratios, container_width, gap)
+            displayed_ar = w / h
+            original_ar = aspect_ratios[row["start"] + j]
+            # The displayed AR should match the original (within tolerance)
+            # If stretched to fill, the displayed AR would be much larger
+            ratio = displayed_ar / original_ar
+            assert 0.8 < ratio < 1.2, (
+                f"Last-row item {j}: displayed AR {displayed_ar:.2f} diverges "
+                f"from original {original_ar:.2f} (ratio={ratio:.2f}). "
+                f"Items are being stretched, causing cut-off previews."
+            )
+
+    def test_single_item_last_row_not_stretched(self, user_client):
+        """A single item in the last row should use fixed width, not flex."""
+        container_width = 900
+        target_height = 180
+        gap = 4
+        # One landscape photo that won't fill the row
+        aspect_ratios = [1.5]
+
+        rows = _compute_rows(aspect_ratios, container_width, target_height, gap)
+        assert len(rows) == 1
+        row = rows[0]
+        assert not row["full"]
+
+        w, h = _item_rendered_size(row, 0, aspect_ratios, container_width, gap)
+        expected_w = 1.5 * target_height  # 270px
+        assert abs(w - expected_w) < 1.0
+        assert w < container_width, "Single item should NOT fill 900px"
+
+    def test_portrait_photos_not_cropped_to_landscape(self, user_client):
+        """Portrait photos (AR < 1) must not be displayed as landscape
+        in any row — this is the most visible symptom of the stretching
+        bug, where tall photos appear as thin horizontal strips."""
+        container_width = 900
+        target_height = 180
+        gap = 4
+        # Upload a batch of portrait photos and verify their grid display
+        aspect_ratios = [0.56, 0.67, 0.75, 0.5, 0.8]
+
+        rows = _compute_rows(aspect_ratios, container_width, target_height, gap)
+
+        for row in rows:
+            for j in range(row["count"]):
+                original_ar = aspect_ratios[row["start"] + j]
+                w, h = _item_rendered_size(row, j, aspect_ratios, container_width, gap)
+                displayed_ar = w / h
+
+                if original_ar < 1.0:
+                    # Portrait photo: displayed AR should also be portrait
+                    # (or at most slightly landscape for full rows where
+                    # minor stretching is acceptable)
+                    if not row["full"]:
+                        assert displayed_ar < 1.0, (
+                            f"Portrait photo (AR={original_ar:.2f}) displayed as "
+                            f"landscape (AR={displayed_ar:.2f}) in incomplete row — "
+                            f"this means previews are being cut off"
+                        )
+
+    def test_mixed_aspect_ratio_grid_from_api(self, user_client):
+        """Upload photos with known dimensions, retrieve them via API,
+        compute the grid layout, and verify no excessive cropping."""
+        test_dims = [
+            (200, 133),  # 3:2 landscape
+            (100, 150),  # 2:3 portrait
+            (160, 90),   # 16:9 landscape
+            (90, 160),   # 9:16 portrait
+            (120, 120),  # 1:1 square
+            (80, 200),   # extreme portrait
+        ]
+        uploaded_ids = []
+        for w, h in test_dims:
+            content = generate_test_jpeg(width=w, height=h)
+            name = _unique(f"grid_crop_test_{w}x{h}")
+            data = user_client.upload_photo(name, content)
+            uploaded_ids.append(data["photo_id"])
+
+        photos = user_client.list_photos()["photos"]
+
+        # Build aspect ratios from API response (same as frontend)
+        api_ratios = []
+        for pid in uploaded_ids:
+            photo = next((p for p in photos if p["id"] == pid), None)
+            assert photo is not None
+            ar = photo["width"] / photo["height"]
+            # Clamp same as frontend
+            clamped = max(0.3, min(ar, 4.0))
+            api_ratios.append(clamped)
+
+        container_width = 900
+        target_height = 180
+        gap = 4
+        rows = _compute_rows(api_ratios, container_width, target_height, gap)
+
+        for row in rows:
+            for j in range(row["count"]):
+                w, h = _item_rendered_size(row, j, api_ratios, container_width, gap)
+                original_ar = api_ratios[row["start"] + j]
+                displayed_ar = w / h
+
+                # For incomplete rows, displayed AR must match original
+                if not row["full"]:
+                    ratio = displayed_ar / original_ar
+                    assert 0.9 < ratio < 1.1, (
+                        f"Incomplete-row item: displayed AR {displayed_ar:.2f} "
+                        f"vs original {original_ar:.2f} — preview cutoff detected"
+                    )

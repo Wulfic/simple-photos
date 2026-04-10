@@ -70,7 +70,7 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
   if (cachedPhoto?.thumbnailData) {
     return (
       <div
-        className="aspect-square bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+        className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
         onClick={onClick}
       >
         <PhotoThumbnail photo={cachedPhoto} />
@@ -82,7 +82,7 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
   if (cachedPhoto?.serverSide && cachedPhoto?.serverPhotoId) {
     return (
       <div
-        className="aspect-square bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+        className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
         onClick={onClick}
       >
         <PhotoThumbnail photo={cachedPhoto} />
@@ -94,7 +94,7 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
   if (encThumbSrc) {
     return (
       <div
-        className="aspect-square bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+        className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
         onClick={onClick}
       >
         <img
@@ -109,7 +109,7 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
 
   return (
     <div
-      className="aspect-square bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+      className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
       onClick={onClick}
     >
       <div className="text-center text-gray-400">
