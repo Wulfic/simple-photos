@@ -123,6 +123,22 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    def register_photo(self, filename: str, file_path: str, mime_type: str = "image/jpeg",
+                       size_bytes: int = 0, taken_at: str = None, **kwargs) -> dict:
+        """Register an existing file on disk as a photo via /api/photos/register."""
+        body = {
+            "filename": filename,
+            "file_path": file_path,
+            "mime_type": mime_type,
+            "size_bytes": size_bytes,
+            **kwargs,
+        }
+        if taken_at is not None:
+            body["taken_at"] = taken_at
+        r = self.post("/api/photos/register", json_data=body)
+        r.raise_for_status()
+        return r.json()
+
     def list_photos(self, **params) -> dict:
         r = self.get("/api/photos", params=params)
         r.raise_for_status()
@@ -620,6 +636,59 @@ def _ffmpeg_available() -> bool:
         return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
+
+
+def generate_test_tiff_with_exif(exif_date: str = "2020:06:15 10:30:00") -> bytes:
+    """Generate a minimal valid TIFF image (2x2 red pixels) with EXIF DateTimeOriginal.
+
+    The exif_date should be in EXIF format: "YYYY:MM:DD HH:MM:SS".
+    """
+    import struct
+
+    width, height = 2, 2
+    pixel_data = bytes([0xFF, 0x00, 0x00] * (width * height))
+
+    # EXIF DateTimeOriginal string (null-terminated ASCII)
+    dto_str = exif_date.encode("ascii") + b"\x00"
+
+    ifd0_count = 11  # 10 standard + ExifIFDPointer
+    ifd0_entries_start = 8 + 2  # header + count
+    next_ifd_ptr = ifd0_entries_start + ifd0_count * 12
+    bps_offset = next_ifd_ptr + 4
+    exif_ifd_offset = bps_offset + 6
+
+    exif_ifd_count = 1
+    exif_next_ifd = exif_ifd_offset + 2 + exif_ifd_count * 12
+    dto_str_offset = exif_next_ifd + 4
+    strip_offset = dto_str_offset + len(dto_str)
+
+    def tag(tag_id, typ, count, value):
+        return struct.pack("<HHII", tag_id, typ, count, value)
+
+    # Main IFD (tags must be in ascending order)
+    ifd = struct.pack("<H", ifd0_count)
+    ifd += tag(0x0100, 3, 1, width)            # ImageWidth
+    ifd += tag(0x0101, 3, 1, height)           # ImageLength
+    ifd += tag(0x0102, 3, 3, bps_offset)       # BitsPerSample (offset)
+    ifd += tag(0x0103, 3, 1, 1)                # Compression = None
+    ifd += tag(0x0106, 3, 1, 2)                # PhotometricInterpretation = RGB
+    ifd += tag(0x0111, 4, 1, strip_offset)     # StripOffsets
+    ifd += tag(0x0115, 3, 1, 3)                # SamplesPerPixel
+    ifd += tag(0x0116, 4, 1, height)           # RowsPerStrip
+    ifd += tag(0x0117, 4, 1, len(pixel_data))  # StripByteCounts
+    ifd += tag(0x011C, 3, 1, 1)                # PlanarConfiguration = Chunky
+    ifd += tag(0x8769, 4, 1, exif_ifd_offset)  # ExifIFDPointer
+    ifd += struct.pack("<I", 0)                # Next IFD = 0
+
+    bps_data = struct.pack("<HHH", 8, 8, 8)
+
+    # EXIF Sub IFD
+    exif_ifd = struct.pack("<H", exif_ifd_count)
+    exif_ifd += tag(0x9003, 2, len(dto_str), dto_str_offset)  # DateTimeOriginal
+    exif_ifd += struct.pack("<I", 0)
+
+    header = b"II" + struct.pack("<HI", 42, 8)
+    return header + ifd + bps_data + exif_ifd + dto_str + pixel_data
 
 
 def generate_test_tiff() -> bytes:

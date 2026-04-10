@@ -4,9 +4,10 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
-use chrono::Utc;
 use percent_encoding::percent_decode_str;
 use sha2::{Digest, Sha256};
+
+use crate::photos::utils::normalize_iso_timestamp;
 
 use crate::error::AppError;
 use crate::photos::thumbnail::generate_thumbnail_file;
@@ -179,12 +180,21 @@ pub async fn backup_receive(
         }
     });
 
-    // Preserve original timestamps; fall back to now only when absent
-    let now = Utc::now().to_rfc3339();
-    let created_at = hdr_str(&headers, "X-Original-Created-At").unwrap_or_else(|| now.clone());
-    let taken_at = hdr_str(&headers, "X-Taken-At");
-    let deleted_at = hdr_str(&headers, "X-Deleted-At").unwrap_or_else(|| now.clone());
-    let expires_at = hdr_str(&headers, "X-Expires-At").unwrap_or_else(|| now.clone());
+    // Preserve original timestamps; fall back to now only when absent.
+    // Normalize all incoming timestamps to canonical ISO-8601 Z-suffix format
+    // so that text-based ORDER BY in SQLite produces correct chronological ordering.
+    let now = crate::photos::utils::utc_now_iso();
+    let created_at = hdr_str(&headers, "X-Original-Created-At")
+        .map(|t| normalize_iso_timestamp(&t))
+        .unwrap_or_else(|| now.clone());
+    let taken_at = hdr_str(&headers, "X-Taken-At")
+        .map(|t| normalize_iso_timestamp(&t));
+    let deleted_at = hdr_str(&headers, "X-Deleted-At")
+        .map(|t| normalize_iso_timestamp(&t))
+        .unwrap_or_else(|| now.clone());
+    let expires_at = hdr_str(&headers, "X-Expires-At")
+        .map(|t| normalize_iso_timestamp(&t))
+        .unwrap_or_else(|| now.clone());
 
     let width = hdr_i64(&headers, "X-Width");
     let height = hdr_i64(&headers, "X-Height");

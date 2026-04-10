@@ -52,6 +52,14 @@ pub async fn upload_photo(
     }
 
     // ── Convert non-native formats to browser-native equivalents ────
+    // Save original upload bytes so we can extract EXIF metadata from them
+    // BEFORE conversion (FFmpeg/ImageMagick strips EXIF from the output).
+    let original_upload = if conversion::is_convertible(&filename) {
+        Some((body.to_vec(), filename.clone()))
+    } else {
+        None
+    };
+
     let (body, filename, mime_type) = if let Some(target) = conversion::conversion_target(&filename) {
         let tmp_dir = std::env::temp_dir().join("sp_upload_conv");
         let conv_id = Uuid::new_v4();
@@ -208,9 +216,26 @@ pub async fn upload_photo(
     };
     let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
-    // Extract metadata from the uploaded bytes (offloaded to spawn_blocking — CPU-bound EXIF parsing)
+    // Extract metadata — when the file was converted, extract from BOTH the
+    // original upload (EXIF dates/GPS/camera) and the converted output
+    // (dimensions), since conversion strips EXIF from the output.
     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
-        extract_media_metadata_from_bytes_async(body.to_vec(), final_filename.clone()).await;
+        if let Some((orig_bytes, orig_filename)) = original_upload {
+            let (_, _, orig_cam, orig_lat, orig_lon, orig_taken) =
+                extract_media_metadata_from_bytes_async(orig_bytes, orig_filename).await;
+            let (conv_w, conv_h, conv_cam, conv_lat, conv_lon, conv_taken) =
+                extract_media_metadata_from_bytes_async(body.to_vec(), final_filename.clone()).await;
+            (
+                conv_w,
+                conv_h,
+                orig_cam.or(conv_cam),
+                orig_lat.or(conv_lat),
+                orig_lon.or(conv_lon),
+                orig_taken.or(conv_taken),
+            )
+        } else {
+            extract_media_metadata_from_bytes_async(body.to_vec(), final_filename.clone()).await
+        };
 
     let final_taken_at = exif_taken
         .map(|t| normalize_iso_timestamp(&t))

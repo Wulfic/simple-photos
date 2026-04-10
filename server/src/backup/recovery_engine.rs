@@ -5,6 +5,7 @@
 
 use chrono::Utc;
 
+use crate::photos::utils::normalize_iso_timestamp;
 use crate::sanitize;
 use super::models::*;
 
@@ -234,7 +235,7 @@ pub(crate) async fn run_recovery(
 
         // Register in the photos table — preserve the original photo ID from
         // the backup so delta-sync and re-recovery can deduplicate correctly.
-        let now = Utc::now().to_rfc3339();
+        let _now = Utc::now().to_rfc3339();
         let thumb_filename = format!("{}.thumb.jpg", photo.id);
         let thumb_rel = format!(".thumbnails/{}", thumb_filename);
 
@@ -267,11 +268,11 @@ pub(crate) async fn run_recovery(
         .bind(photo.width)         // ?8
         .bind(photo.height)        // ?9
         .bind(photo.duration_secs) // ?10
-        .bind(&photo.taken_at)     // ?11
+        .bind(photo.taken_at.as_ref().map(|t| normalize_iso_timestamp(t)))     // ?11
         .bind(photo.latitude)      // ?12
         .bind(photo.longitude)     // ?13
         .bind(&thumb_rel)          // ?14
-        .bind(&now)                // ?15
+        .bind(&normalize_iso_timestamp(&photo.created_at))  // ?15 — preserve original created_at
         .bind(photo.is_favorite)   // ?16
         .bind(&photo.camera_model) // ?17
         .bind(&photo.photo_hash)   // ?18

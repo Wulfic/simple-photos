@@ -246,11 +246,25 @@ pub async fn run_conversion_pass(
                 let thumb_ext = if work_mime == "image/gif" { "gif" } else { "jpg" };
                 let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
-                let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
+                // Extract metadata from the ORIGINAL file first — it has the real
+                // EXIF DateTimeOriginal, GPS, and camera data.  Conversion
+                // (FFmpeg/ImageMagick) typically strips EXIF from the output,
+                // so reading the converted file would lose the original dates.
+                let (_, _, orig_cam, orig_lat, orig_lon, orig_taken) =
+                    extract_media_metadata_async(candidate.abs_path.clone()).await;
+
+                // Extract dimensions from the converted file (the output format
+                // may have different dimensions due to SAR correction, etc.).
+                let (img_w, img_h, conv_cam, conv_lat, conv_lon, conv_taken) =
                     extract_media_metadata_async(conv_abs.clone()).await;
 
-                let final_taken_at = exif_taken
+                // Prefer original file's metadata; fall back to converted, then mtime.
+                let cam_model = orig_cam.or(conv_cam);
+                let exif_lat = orig_lat.or(conv_lat);
+                let exif_lon = orig_lon.or(conv_lon);
+                let final_taken_at = orig_taken
                     .map(|t| normalize_iso_timestamp(&t))
+                    .or(conv_taken.map(|t| normalize_iso_timestamp(&t)))
                     .or(candidate.modified.clone());
 
                 let photo_hash = compute_photo_hash_streaming(&conv_abs).await;

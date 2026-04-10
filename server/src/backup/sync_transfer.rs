@@ -10,6 +10,8 @@ use chrono::Utc;
 use percent_encoding::{utf8_percent_encode, CONTROLS};
 use sha2::{Digest, Sha256};
 
+use crate::photos::utils::normalize_iso_timestamp;
+
 // ── Sync data models ─────────────────────────────────────────────────────────
 
 /// All metadata columns needed to faithfully replicate a blob entry.
@@ -111,7 +113,7 @@ fn push_common_optional_headers(
     crop_metadata: &Option<String>,
 ) {
     if let Some(ref v) = taken_at {
-        headers.push(("X-Taken-At".to_string(), v.clone()));
+        headers.push(("X-Taken-At".to_string(), normalize_iso_timestamp(v)));
     }
     if let Some(v) = latitude {
         headers.push(("X-Latitude".to_string(), v.to_string()));
@@ -148,7 +150,7 @@ pub fn build_photo_headers(
         ("X-User-Id".to_string(), photo.user_id.clone()),
         (
             "X-Original-Created-At".to_string(),
-            photo.created_at.clone(),
+            normalize_iso_timestamp(&photo.created_at),
         ),
         (
             "X-Filename".to_string(),
@@ -198,9 +200,9 @@ pub fn build_photo_headers(
 pub fn build_trash_headers(item: &TrashToSync) -> Vec<(String, String)> {
     let mut headers = vec![
         ("X-User-Id".to_string(), item.user_id.clone()),
-        ("X-Original-Created-At".to_string(), item.deleted_at.clone()),
-        ("X-Deleted-At".to_string(), item.deleted_at.clone()),
-        ("X-Expires-At".to_string(), item.expires_at.clone()),
+        ("X-Original-Created-At".to_string(), normalize_iso_timestamp(&item.deleted_at)),
+        ("X-Deleted-At".to_string(), normalize_iso_timestamp(&item.deleted_at)),
+        ("X-Expires-At".to_string(), normalize_iso_timestamp(&item.expires_at)),
         ("X-Original-Photo-Id".to_string(), item.photo_id.clone()),
         (
             "X-Filename".to_string(),
