@@ -260,8 +260,12 @@ pub async fn scan_and_register(
     );
 
     // ── Retroactively fill missing metadata for existing photos ──────────
-    let photos_needing_fix: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, file_path FROM photos WHERE user_id = ? AND (width = 0 OR height = 0 OR camera_model IS NULL OR photo_hash IS NULL)",
+    // Also re-check video dimensions: uploads prior to the ffprobe SAR fix
+    // may have stored coded pixel dimensions instead of display dimensions.
+    let photos_needing_fix: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, file_path, media_type FROM photos WHERE user_id = ? AND \
+         (width = 0 OR height = 0 OR camera_model IS NULL OR photo_hash IS NULL \
+          OR media_type = 'video')",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
@@ -273,7 +277,7 @@ pub async fn scan_and_register(
         let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
         let mut handles = Vec::with_capacity(photos_needing_fix.len());
 
-        for (pid, fpath) in photos_needing_fix {
+        for (pid, fpath, mtype) in photos_needing_fix {
             let abs = storage_root.join(&fpath);
             if !abs.exists() {
                 continue;
@@ -288,9 +292,19 @@ pub async fn scan_and_register(
                 let file_hash = compute_photo_hash_streaming(&abs).await;
 
                 if w > 0 || h > 0 || cam.is_some() || lat.is_some() || file_hash.is_some() {
+                    // For videos, always overwrite dimensions: earlier uploads
+                    // may have stored coded pixel dimensions (imagesize) instead
+                    // of display dimensions (ffprobe with SAR correction).
+                    let is_video = mtype == "video";
+                    let (bind_w, bind_h) = if is_video && w > 0 && h > 0 {
+                        (w, h)
+                    } else {
+                        (0, 0)  // sentinel: "only write if current is 0"
+                    };
                     sqlx::query(
-                        "UPDATE OR IGNORE photos SET width = CASE WHEN width = 0 THEN ? ELSE width END, \
-                         height = CASE WHEN height = 0 THEN ? ELSE height END, \
+                        "UPDATE OR IGNORE photos SET \
+                         width = CASE WHEN ? > 0 THEN ? WHEN width = 0 THEN ? ELSE width END, \
+                         height = CASE WHEN ? > 0 THEN ? WHEN height = 0 THEN ? ELSE height END, \
                          camera_model = COALESCE(camera_model, ?), \
                          latitude = COALESCE(latitude, ?), \
                          longitude = COALESCE(longitude, ?), \
@@ -298,7 +312,11 @@ pub async fn scan_and_register(
                          photo_hash = COALESCE(photo_hash, ?) \
                          WHERE id = ?",
                     )
-                    .bind(w)
+                    .bind(bind_w)  // video override flag
+                    .bind(w)      // video override value
+                    .bind(w)      // fallback for width = 0
+                    .bind(bind_h)
+                    .bind(h)
                     .bind(h)
                     .bind(&cam)
                     .bind(lat)

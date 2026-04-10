@@ -13,7 +13,7 @@ use crate::media::{is_supported_extension, mime_from_extension};
 use crate::sanitize;
 use crate::state::AppState;
 
-use super::metadata::extract_media_metadata_from_bytes_async;
+use super::metadata::{extract_media_metadata_async, extract_media_metadata_from_bytes_async};
 use super::thumbnail::generate_thumbnail_file;
 use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 
@@ -216,15 +216,17 @@ pub async fn upload_photo(
     };
     let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
-    // Extract metadata — when the file was converted, extract from BOTH the
-    // original upload (EXIF dates/GPS/camera) and the converted output
-    // (dimensions), since conversion strips EXIF from the output.
+    // Extract metadata — use the file-based extractor which includes ffprobe
+    // SAR/DAR correction for videos (imagesize::blob_size returns coded
+    // dimensions that ignore non-square pixels, leading to squished display).
+    // When the file was converted, also extract from the original upload bytes
+    // for EXIF dates/GPS/camera, since conversion strips EXIF from the output.
     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
         if let Some((orig_bytes, orig_filename)) = original_upload {
             let (_, _, orig_cam, orig_lat, orig_lon, orig_taken) =
                 extract_media_metadata_from_bytes_async(orig_bytes, orig_filename).await;
             let (conv_w, conv_h, conv_cam, conv_lat, conv_lon, conv_taken) =
-                extract_media_metadata_from_bytes_async(body.to_vec(), final_filename.clone()).await;
+                extract_media_metadata_async(file_path.clone()).await;
             (
                 conv_w,
                 conv_h,
@@ -234,7 +236,7 @@ pub async fn upload_photo(
                 orig_taken.or(conv_taken),
             )
         } else {
-            extract_media_metadata_from_bytes_async(body.to_vec(), final_filename.clone()).await
+            extract_media_metadata_async(file_path.clone()).await
         };
 
     let final_taken_at = exif_taken

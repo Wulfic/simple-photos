@@ -260,15 +260,17 @@ async fn convert_image(input: &str, output: &str) -> bool {
 }
 
 /// Video → MP4 (H.264 + AAC).  Quality-tuned for clarity at reasonable sizes.
-/// The `setsar=1` filter normalises non-square pixel aspect ratios so the
-/// output has square pixels and correct display dimensions.
+/// The `scale=iw*sar:ih,setsar=1` filter chain rescales non-square pixel
+/// videos to their correct display dimensions with square pixels.
+/// For videos already having square pixels (SAR=1:1), `iw*sar` equals `iw`
+/// so no rescaling occurs.
 async fn convert_video(input: &str, output: &str) -> bool {
     let status = tokio::process::Command::new("nice")
         .args([
             "-n", "19",
             "ffmpeg", "-y",
             "-i", input,
-            "-vf", "setsar=1",
+            "-vf", "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1",
             "-c:v", "libx264",
             "-preset", "medium",
             "-crf", "20",

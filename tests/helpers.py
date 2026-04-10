@@ -639,56 +639,48 @@ def _ffmpeg_available() -> bool:
 
 
 def generate_test_tiff_with_exif(exif_date: str = "2020:06:15 10:30:00") -> bytes:
-    """Generate a minimal valid TIFF image (2x2 red pixels) with EXIF DateTimeOriginal.
+    """Generate image bytes with EXIF DateTimeOriginal for conversion testing.
 
-    The exif_date should be in EXIF format: "YYYY:MM:DD HH:MM:SS".
+    Creates a valid JPEG with an embedded APP1 EXIF segment containing
+    DateTimeOriginal. The bytes are returned as-is; callers should upload
+    with a .tiff filename to trigger conversion. The Rust EXIF parser
+    detects container format by magic bytes (not extension) so it will
+    correctly read the EXIF DateTimeOriginal from these JPEG bytes.
     """
+    from PIL import Image
+    import io
     import struct
 
-    width, height = 2, 2
-    pixel_data = bytes([0xFF, 0x00, 0x00] * (width * height))
+    # Step 1: Create a small JPEG
+    img = Image.new("RGB", (4, 4), (255, 0, 0))
+    jpeg_buf = io.BytesIO()
+    img.save(jpeg_buf, format="JPEG", quality=95)
+    jpeg_data = jpeg_buf.getvalue()
 
-    # EXIF DateTimeOriginal string (null-terminated ASCII)
-    dto_str = exif_date.encode("ascii") + b"\x00"
+    # Step 2: Build an APP1 EXIF segment with DateTimeOriginal
+    dto_bytes = exif_date.encode("ascii") + b"\x00"
 
-    ifd0_count = 11  # 10 standard + ExifIFDPointer
-    ifd0_entries_start = 8 + 2  # header + count
-    next_ifd_ptr = ifd0_entries_start + ifd0_count * 12
-    bps_offset = next_ifd_ptr + 4
-    exif_ifd_offset = bps_offset + 6
+    # TIFF header (little-endian): magic + IFD0 at offset 8
+    tiff_hdr = b"II" + struct.pack("<HI", 42, 8)
 
-    exif_ifd_count = 1
-    exif_next_ifd = exif_ifd_offset + 2 + exif_ifd_count * 12
-    dto_str_offset = exif_next_ifd + 4
-    strip_offset = dto_str_offset + len(dto_str)
+    # IFD0: single entry pointing to Exif sub-IFD
+    exif_ifd_off = 8 + 2 + 12 + 4  # after tiff_hdr + count + entry + next_ifd
+    ifd0 = struct.pack("<H", 1)
+    ifd0 += struct.pack("<HHII", 0x8769, 4, 1, exif_ifd_off)
+    ifd0 += struct.pack("<I", 0)
 
-    def tag(tag_id, typ, count, value):
-        return struct.pack("<HHII", tag_id, typ, count, value)
-
-    # Main IFD (tags must be in ascending order)
-    ifd = struct.pack("<H", ifd0_count)
-    ifd += tag(0x0100, 3, 1, width)            # ImageWidth
-    ifd += tag(0x0101, 3, 1, height)           # ImageLength
-    ifd += tag(0x0102, 3, 3, bps_offset)       # BitsPerSample (offset)
-    ifd += tag(0x0103, 3, 1, 1)                # Compression = None
-    ifd += tag(0x0106, 3, 1, 2)                # PhotometricInterpretation = RGB
-    ifd += tag(0x0111, 4, 1, strip_offset)     # StripOffsets
-    ifd += tag(0x0115, 3, 1, 3)                # SamplesPerPixel
-    ifd += tag(0x0116, 4, 1, height)           # RowsPerStrip
-    ifd += tag(0x0117, 4, 1, len(pixel_data))  # StripByteCounts
-    ifd += tag(0x011C, 3, 1, 1)                # PlanarConfiguration = Chunky
-    ifd += tag(0x8769, 4, 1, exif_ifd_offset)  # ExifIFDPointer
-    ifd += struct.pack("<I", 0)                # Next IFD = 0
-
-    bps_data = struct.pack("<HHH", 8, 8, 8)
-
-    # EXIF Sub IFD
-    exif_ifd = struct.pack("<H", exif_ifd_count)
-    exif_ifd += tag(0x9003, 2, len(dto_str), dto_str_offset)  # DateTimeOriginal
+    # Exif sub-IFD: DateTimeOriginal (0x9003) as ASCII
+    dto_off = exif_ifd_off + 2 + 12 + 4
+    exif_ifd = struct.pack("<H", 1)
+    exif_ifd += struct.pack("<HHII", 0x9003, 2, len(dto_bytes), dto_off)
     exif_ifd += struct.pack("<I", 0)
 
-    header = b"II" + struct.pack("<HI", 42, 8)
-    return header + ifd + bps_data + exif_ifd + dto_str + pixel_data
+    tiff_body = tiff_hdr + ifd0 + exif_ifd + dto_bytes
+    app1_payload = b"Exif\x00\x00" + tiff_body
+    app1 = struct.pack(">HH", 0xFFE1, len(app1_payload) + 2) + app1_payload
+
+    # Step 3: Insert APP1 right after SOI marker
+    return jpeg_data[:2] + app1 + jpeg_data[2:]
 
 
 def generate_test_tiff() -> bytes:
