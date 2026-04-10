@@ -1,8 +1,9 @@
 //! Export endpoint handlers — trigger export, list jobs, list files, download.
 
+use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -172,7 +173,7 @@ pub async fn export_status(
                 .unwrap_or(false)
         })
         .map(|(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
-            download_url: format!("/api/export/files/{}/download", id),
+            download_url: format!("/export/files/{}/download", id),
             id,
             job_id,
             filename,
@@ -216,7 +217,7 @@ pub async fn list_export_files(
     let files: Vec<ExportFileResponse> = rows
         .into_iter()
         .map(|(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
-            download_url: format!("/api/export/files/{}/download", id),
+            download_url: format!("/export/files/{}/download", id),
             id,
             job_id,
             filename,
@@ -259,26 +260,28 @@ pub async fn download_export_file(
         return Err(AppError::NotFound);
     }
 
-    let data = tokio::fs::read(&full_path)
+    let meta = tokio::fs::metadata(&full_path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to read export file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to stat export file: {}", e)))?;
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "Content-Type",
-        HeaderValue::from_static("application/zip"),
-    );
-    headers.insert(
-        "Content-Disposition",
-        HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-            .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"export.zip\"")),
-    );
-    headers.insert(
-        "Content-Length",
-        HeaderValue::from_str(&data.len().to_string()).unwrap(),
-    );
+    let file = tokio::fs::File::open(&full_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to open export file: {}", e)))?;
 
-    Ok((StatusCode::OK, headers, data).into_response())
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, 256 * 1024);
+    let body = Body::from_stream(stream);
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/zip")
+        .header(
+            "Content-Disposition",
+            HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
+                .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"export.zip\"")),
+        )
+        .header("Content-Length", meta.len())
+        .body(body)
+        .map_err(|e| AppError::Internal(e.to_string()))?)
 }
 
 /// `DELETE /api/export/:job_id` — Cancel/delete an export job and its files.
