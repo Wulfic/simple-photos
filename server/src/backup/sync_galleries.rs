@@ -31,10 +31,16 @@ pub async fn sync_secure_galleries_to_backup(
 
     // Fetch all gallery items, joining photos to get encrypted_blob_id and
     // encrypted_thumb_blob_id for server-side clones (needed by the backup's
-    // list_gallery_items COALESCE query and thumbnail display)
+    // list_gallery_items COALESCE query and thumbnail display).
+    // Use COALESCE to fall back to the egi columns when the clone photos row
+    // doesn't exist (e.g. on a backup server running recovery push-sync —
+    // clone photos are excluded from sync_photos, so backup has no photos
+    // row for the clone, but the egi columns were populated by the primary's
+    // earlier gallery sync).
     let items: Vec<(String, String, String, String, Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
         "SELECT gi.id, gi.gallery_id, gi.blob_id, gi.added_at, gi.original_blob_id, \
-                p.encrypted_blob_id, p.encrypted_thumb_blob_id \
+                COALESCE(p.encrypted_blob_id, gi.encrypted_blob_id), \
+                COALESCE(p.encrypted_thumb_blob_id, gi.encrypted_thumb_blob_id) \
          FROM encrypted_gallery_items gi \
          LEFT JOIN photos p ON p.id = gi.blob_id",
     )

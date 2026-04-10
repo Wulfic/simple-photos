@@ -750,7 +750,10 @@ pub async fn backup_list_blobs(
                AND p.encrypted_blob_id NOT IN ( \
                    SELECT p2.encrypted_blob_id FROM photos p2 \
                    WHERE p2.encrypted_blob_id IS NOT NULL \
-                   AND p2.id IN (SELECT blob_id FROM encrypted_gallery_items))) \
+                   AND p2.id IN (SELECT blob_id FROM encrypted_gallery_items)) \
+               AND p.encrypted_blob_id NOT IN ( \
+                   SELECT egi.encrypted_blob_id FROM encrypted_gallery_items egi \
+                   WHERE egi.encrypted_blob_id IS NOT NULL)) \
            AND id NOT IN ( \
                SELECT p.encrypted_thumb_blob_id FROM photos p \
                WHERE p.encrypted_thumb_blob_id IS NOT NULL \
@@ -758,7 +761,10 @@ pub async fn backup_list_blobs(
                AND p.encrypted_thumb_blob_id NOT IN ( \
                    SELECT p2.encrypted_thumb_blob_id FROM photos p2 \
                    WHERE p2.encrypted_thumb_blob_id IS NOT NULL \
-                   AND p2.id IN (SELECT blob_id FROM encrypted_gallery_items))) \
+                   AND p2.id IN (SELECT blob_id FROM encrypted_gallery_items)) \
+               AND p.encrypted_thumb_blob_id NOT IN ( \
+                   SELECT egi.encrypted_thumb_blob_id FROM encrypted_gallery_items egi \
+                   WHERE egi.encrypted_thumb_blob_id IS NOT NULL)) \
            AND id NOT IN (SELECT encrypted_blob_id FROM encrypted_gallery_items WHERE encrypted_blob_id IS NOT NULL) \
            AND id NOT IN (SELECT encrypted_thumb_blob_id FROM encrypted_gallery_items WHERE encrypted_thumb_blob_id IS NOT NULL) \
          ORDER BY upload_time ASC",

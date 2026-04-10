@@ -13,6 +13,7 @@ import time
 from collections import Counter
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from helpers import (
     APIClient,
     generate_random_bytes,
@@ -31,6 +32,16 @@ from conftest import (
     ServerInstance,
     _find_free_port,
 )
+
+NONCE_LENGTH = 12
+
+
+def _aes_gcm_decrypt(key_hex, data):
+    """Decrypt AES-256-GCM ciphertext (nonce || ciphertext)."""
+    key = bytes.fromhex(key_hex)
+    nonce = data[:NONCE_LENGTH]
+    ciphertext = data[NONCE_LENGTH:]
+    return AESGCM(key).decrypt(nonce, ciphertext, None)
 
 
 def _trigger_and_wait(admin_client, server_id, timeout=90):
@@ -491,3 +502,233 @@ class TestRecoveryDataIntegrity:
         if isinstance(crop, str):
             crop = json.loads(crop)
         assert crop == expected_crop, f"Crop mismatch: {crop} != {expected_crop}"
+
+
+class TestRecoverySecureGallery:
+    """Regression: secure gallery items must be decryptable after recovery.
+
+    Bug: When restoring a primary from a backup, secure gallery photos showed
+    as "Queued" in regular gallery and "aes/gcm: invalid nonce" on decrypt.
+
+    Root cause: sync_secure_galleries_to_backup reads encrypted_blob_id from
+    the photos table via LEFT JOIN.  On the backup, clone photos rows don't
+    exist (excluded from sync_photos), so the JOIN returns NULL.  The gallery
+    metadata pushed to the recovering primary has NULL encrypted_blob_id —
+    list_gallery_items falls back to the plaintext clone blob_id, which is
+    not valid AES-GCM ciphertext.
+    """
+
+    @pytest.fixture
+    def recovery_with_gallery(self, server_binary, session_tmpdir, backup_server,
+                               backup_admin, primary_admin, user_client,
+                               backup_configured, backup_client):
+        """Upload photo, add to secure gallery, sync to backup, recover to
+        fresh server, return context for assertions."""
+        if server_binary is None:
+            pytest.skip("External servers: can't spin up fresh instance")
+
+        # 1. Upload server-side photo on primary
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        # 2. Create secure gallery and add photo
+        gallery = user_client.create_secure_gallery("Recovery Decrypt Test")
+        gid = gallery["gallery_id"]
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        result = user_client.add_secure_gallery_item(gid, pid, token)
+        clone_id = result["new_blob_id"]
+
+        # 3. Wait for encryption migration on primary
+        time.sleep(4)
+
+        # 4. Verify decryptable on primary before recovery
+        items_primary = user_client.list_secure_gallery_items(gid, token)
+        assert len(items_primary["items"]) == 1
+        item_blob_id = items_primary["items"][0]["blob_id"]
+        resp = user_client.download_blob(item_blob_id)
+        assert resp.status_code == 200
+        assert len(resp.content) >= NONCE_LENGTH + 16, (
+            "Primary gallery blob too short — encryption migration didn't run"
+        )
+        _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)  # Must not raise
+
+        # 5. Sync to backup
+        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+
+        # 6. Start a fresh primary and recover from backup
+        port = _find_free_port()
+        tmpdir = os.path.join(session_tmpdir, f"recovery_gallery_{int(time.time())}")
+        server = ServerInstance("recovery-gallery", port, tmpdir)
+        server.start(server_binary)
+
+        try:
+            client = APIClient(server.base_url)
+            client.setup_init(ADMIN_USERNAME, ADMIN_PASSWORD)
+            client.login(ADMIN_USERNAME, ADMIN_PASSWORD)
+            try:
+                client.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
+            except Exception:
+                pass
+
+            srv = client.admin_add_backup_server(
+                name="recovery-gallery-backup",
+                address=backup_server.base_url.replace("http://", ""),
+                api_key=backup_server.backup_api_key,
+            )
+            sid = srv["id"]
+
+            # Trigger recovery
+            r = client.post(f"/api/admin/backup/servers/{sid}/recover")
+            assert r.status_code in (200, 202), f"Recovery failed: {r.status_code} {r.text}"
+
+            # Wait for recovery to complete
+            import requests as _req
+            time.sleep(5)  # Give recovery a head start
+            deadline = time.time() + 120
+            recovered = False
+            relogged = False
+            while time.time() < deadline:
+                if not relogged:
+                    try:
+                        r = _req.post(
+                            f"{server.base_url}/api/auth/login",
+                            json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+                            headers={"X-Forwarded-For": "10.88.88.88"},
+                            timeout=5,
+                        )
+                        if r.status_code == 200:
+                            data = r.json()
+                            tok = data.get("access_token") or data.get("token")
+                            if tok:
+                                client.access_token = tok
+                                client.session.headers["Authorization"] = f"Bearer {tok}"
+                                relogged = True
+                                print(f"[RECOVERY-GALLERY] re-login OK")
+                    except Exception as e:
+                        print(f"[RECOVERY-GALLERY] login attempt: {e}")
+
+                try:
+                    logs = client.admin_get_sync_logs(sid)
+                    if logs:
+                        latest = logs[0] if isinstance(logs, list) else logs
+                        status = latest.get("status")
+                        print(f"[RECOVERY-GALLERY] log status={status}")
+                        if status in ("success", "completed"):
+                            recovered = True
+                            break
+                        if status == "error":
+                            server.dump_logs()
+                            pytest.fail(f"Recovery failed: {latest.get('error')}")
+                except Exception as e:
+                    print(f"[RECOVERY-GALLERY] poll exc: {str(e)[:100]}")
+                time.sleep(3)
+
+            if not recovered:
+                server.dump_logs()
+            assert recovered, "Recovery did not complete within timeout"
+
+            yield {
+                "server": server,
+                "admin_client": client,
+                "gallery_id": gid,
+                "clone_id": clone_id,
+                "username": user_client.username,
+            }
+        finally:
+            server.stop()
+
+    def test_secure_gallery_decryptable_after_recovery(self, recovery_with_gallery):
+        """After recovering a fresh primary from backup, secure gallery
+        items must be downloadable and decryptable with AES-GCM.
+
+        Regression: encrypted_blob_id was lost during recovery push-sync
+        because sync_galleries read it from the photos table (LEFT JOIN)
+        which has no clone rows on the backup.  list_gallery_items fell
+        back to the plaintext clone blob → 'aes/gcm: invalid nonce'.
+        """
+        ctx = recovery_with_gallery
+        base_url = ctx["server"].base_url
+        gid = ctx["gallery_id"]
+
+        # Login as the recovered user
+        user = APIClient(base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        # Unlock gallery and list items
+        token = user.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        items = user.list_secure_gallery_items(gid, token)
+        assert len(items["items"]) >= 1, (
+            "No secure gallery items found on recovered server"
+        )
+
+        item = items["items"][0]
+        blob_id = item["blob_id"]
+
+        # The blob_id should NOT be the plaintext clone
+        assert blob_id != ctx["clone_id"], (
+            f"list_gallery_items returned the plaintext clone {ctx['clone_id']} "
+            f"instead of the encrypted_blob_id on recovered server"
+        )
+
+        # Download the blob
+        resp = user.download_blob(blob_id)
+        assert resp.status_code == 200, (
+            f"Failed to download gallery blob {blob_id} on recovered server: "
+            f"HTTP {resp.status_code}"
+        )
+
+        blob_data = resp.content
+        assert len(blob_data) >= NONCE_LENGTH + 16, (
+            f"Gallery blob too short ({len(blob_data)} bytes) — encrypted "
+            f"blob was not transferred during recovery"
+        )
+
+        # Decrypt — this is exactly what the web client does.
+        # "aes/gcm: invalid nonce" means the data is not valid ciphertext.
+        try:
+            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+        except Exception as e:
+            ctx["server"].dump_logs()
+            pytest.fail(
+                f"REGRESSION: Gallery item blob on recovered server is not "
+                f"valid AES-GCM ciphertext: {e}.  The encrypted_blob_id was "
+                f"likely lost during recovery push-sync."
+            )
+
+        assert len(plaintext) > 0, "Decrypted payload is empty"
+
+    def test_secure_gallery_thumb_available_after_recovery(self, recovery_with_gallery):
+        """Encrypted thumbnail should also be available after recovery."""
+        ctx = recovery_with_gallery
+        base_url = ctx["server"].base_url
+        gid = ctx["gallery_id"]
+
+        user = APIClient(base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        token = user.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        items = user.list_secure_gallery_items(gid, token)
+        assert len(items["items"]) >= 1
+
+        item = items["items"][0]
+        thumb_id = item.get("encrypted_thumb_blob_id")
+        if not thumb_id:
+            pytest.skip("No encrypted_thumb_blob_id in gallery item")
+
+        resp = user.download_blob(thumb_id)
+        assert resp.status_code == 200, (
+            f"Encrypted thumbnail blob {thumb_id} not available on recovered "
+            f"server: HTTP {resp.status_code}"
+        )
+        assert len(resp.content) >= NONCE_LENGTH + 16, (
+            f"Thumbnail blob too short ({len(resp.content)} bytes)"
+        )
+
+        try:
+            _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)
+        except Exception as e:
+            ctx["server"].dump_logs()
+            pytest.fail(
+                f"Encrypted thumbnail on recovered server is not valid "
+                f"AES-GCM ciphertext: {e}"
+            )
