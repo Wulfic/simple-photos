@@ -678,10 +678,18 @@ pub async fn backup_sync_secure_galleries(
         }
     }
 
+    // Acquire scan_lock BEFORE committing so that a concurrent autoscan
+    // cannot re-register a purged file in the window between the DB commit
+    // (which removes the photos row) and the physical file deletion.
+    // background_auto_scan_task uses try_lock(), so it will simply skip
+    // this cycle rather than block.
+    let _scan_guard = state.scan_lock.lock().await;
+
     tx.commit().await?;
 
     // Delete physical files from disk so autoscan cannot re-register them.
-    // This runs after commit to ensure DB changes are durable first.
+    // The scan_lock is held, preventing any concurrent scan from seeing
+    // orphaned files between the DB purge and physical deletion.
     if !files_to_delete.is_empty() {
         let storage_root = (**state.storage_root.load()).clone();
         let mut deleted_files = 0usize;
@@ -710,6 +718,8 @@ pub async fn backup_sync_secure_galleries(
             );
         }
     }
+
+    drop(_scan_guard);
 
     if purged_photos > 0 || purged_blobs > 0 {
         tracing::info!(

@@ -421,8 +421,20 @@ pub async fn recovery_callback(
 
     let storage_root = (**state.storage_root.load()).clone();
     let pool_clone = state.pool.clone();
+    let jwt_secret = state.config.auth.jwt_secret.clone();
     tokio::spawn(async move {
         crate::backup::autoscan::run_auto_scan_public(&pool_clone, &storage_root).await;
+        // Trigger encryption migration unconditionally: the backup may have
+        // pushed photos whose encrypted_blob_id was still NULL (e.g. primary
+        // encrypted them but the update was never synced back before crash).
+        // Without this, the banner shows "encrypting N items" but migration
+        // never runs (autoscan found 0 new files, so it doesn't trigger).
+        crate::photos::server_migrate::auto_migrate_after_scan(
+            pool_clone.clone(),
+            storage_root,
+            jwt_secret,
+        )
+        .await;
     });
 
     Ok(StatusCode::OK)

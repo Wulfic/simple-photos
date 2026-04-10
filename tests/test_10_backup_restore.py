@@ -632,7 +632,11 @@ class TestRecoverySecureGallery:
                 "admin_client": client,
                 "gallery_id": gid,
                 "clone_id": clone_id,
+                "original_photo_id": pid,
                 "username": user_client.username,
+                "backup_server": backup_server,
+                "backup_admin": backup_admin,
+                "backup_client": backup_client,
             }
         finally:
             server.stop()
@@ -732,3 +736,70 @@ class TestRecoverySecureGallery:
                 f"Encrypted thumbnail on recovered server is not valid "
                 f"AES-GCM ciphertext: {e}"
             )
+
+    def test_backup_gallery_photo_hidden_after_recovery(self, recovery_with_gallery):
+        """After recovering a primary, the backup must NOT show the
+        secure-album photo in its regular gallery (encrypted-sync)."""
+        ctx = recovery_with_gallery
+        backup_url = ctx["backup_server"].base_url
+        original_pid = ctx["original_photo_id"]
+
+        # Login as the same user on the backup server
+        backup_user = APIClient(backup_url)
+        backup_user.login(ctx["username"], USER_PASSWORD)
+
+        # encrypted-sync must NOT return the gallery photo
+        sync_resp = backup_user.encrypted_sync()
+        photo_ids = [p["id"] for p in sync_resp.get("photos", [])]
+        assert original_pid not in photo_ids, (
+            f"REGRESSION: Original photo {original_pid} appeared in backup's "
+            f"encrypted-sync after recovery — should be hidden by secure gallery"
+        )
+
+    def test_backup_blobs_no_leak_after_recovery(self, recovery_with_gallery):
+        """After recovery, the backup's user-facing blob list must not
+        contain orphaned encrypted blobs from the gallery photo."""
+        ctx = recovery_with_gallery
+        backup_url = ctx["backup_server"].base_url
+
+        backup_user = APIClient(backup_url)
+        backup_user.login(ctx["username"], USER_PASSWORD)
+
+        # Collect all secure blob IDs that the client should filter out
+        secure_resp = backup_user.get("/api/galleries/secure/blob-ids")
+        secure_ids = set()
+        if secure_resp.status_code == 200:
+            secure_ids = set(secure_resp.json().get("ids", []))
+
+        # list_blobs must not return any ID that's also in secure_ids
+        blobs_resp = backup_user.list_blobs()
+        blob_ids = [b["id"] for b in blobs_resp.get("blobs", [])]
+        leaked = [bid for bid in blob_ids if bid in secure_ids]
+        assert not leaked, (
+            f"REGRESSION: Backup list_blobs contains secure gallery blob IDs: "
+            f"{leaked}"
+        )
+
+    def test_recovered_primary_no_stuck_migration(self, recovery_with_gallery):
+        """After recovery the recovered primary should have zero photos
+        with encrypted_blob_id IS NULL (no stuck 'encrypting' banner)."""
+        ctx = recovery_with_gallery
+        base_url = ctx["server"].base_url
+
+        # Give migration time to run (recovery_callback triggers it)
+        time.sleep(6)
+
+        user = APIClient(base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        # All photos in encrypted-sync should have encrypted_blob_id set
+        sync_resp = user.encrypted_sync()
+        unencrypted = [
+            p["id"] for p in sync_resp.get("photos", [])
+            if p.get("encrypted_blob_id") is None
+        ]
+        assert not unencrypted, (
+            f"REGRESSION: Recovered primary has {len(unencrypted)} photos "
+            f"without encrypted_blob_id — the encrypting banner would be "
+            f"stuck. IDs: {unencrypted[:5]}"
+        )
