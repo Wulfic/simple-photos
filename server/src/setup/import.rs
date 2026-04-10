@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::auth::middleware::AuthUser;
+use crate::conversion;
 use crate::error::AppError;
-use crate::media::{is_media_file, mime_from_extension};
+use crate::media::{is_importable_file, mime_from_extension};
 use crate::state::AppState;
 
 use super::admin::require_admin;
@@ -98,7 +99,7 @@ pub async fn import_scan(
             if let Ok(ft) = entry.file_type().await {
                 if ft.is_dir() {
                     queue.push(entry.path());
-                } else if ft.is_file() && is_media_file(&name) {
+                } else if ft.is_file() && is_importable_file(&name) {
                     let full_path = entry.path().display().to_string();
                     let file_meta = entry.metadata().await.ok();
                     let size = file_meta.as_ref().map(|m| m.len()).unwrap_or(0);
@@ -108,7 +109,12 @@ pub async fn import_scan(
                             dt.to_rfc3339()
                         })
                     });
-                    let mime = mime_from_extension(&name).to_string();
+                    // Use the conversion target's MIME if the file is convertible
+                    let mime = if let Some(ct) = conversion::conversion_target(&name) {
+                        ct.mime_type.to_string()
+                    } else {
+                        mime_from_extension(&name).to_string()
+                    };
 
                     total_size += size;
                     files.push(MediaFileEntry {
@@ -180,11 +186,15 @@ pub async fn import_file(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    if !is_media_file(&name) {
+    if !is_importable_file(&name) {
         return Err(AppError::BadRequest("Not a supported media file".into()));
     }
 
-    let mime = mime_from_extension(&name);
+    let mime = if let Some(ct) = conversion::conversion_target(&name) {
+        ct.mime_type
+    } else {
+        mime_from_extension(&name)
+    };
     let size = meta.len();
 
     let file = tokio::fs::File::open(&canonical)

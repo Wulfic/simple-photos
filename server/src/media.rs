@@ -2,8 +2,9 @@
 //!
 //! Used by both `photos` and `setup` modules to avoid duplication.
 //!
-//! Only browser-native formats are supported. Every accepted file type is
-//! directly renderable by `<img>`, `<video>`, or `<audio>` elements.
+//! Browser-native formats are supported directly.  Non-native formats that
+//! can be converted via FFmpeg (HEIC, MKV, TIFF, etc.) are also accepted
+//! and converted during import — see [`crate::conversion`].
 
 /// Valid media file extensions — browser-native formats only.
 pub const MEDIA_EXTENSIONS: &[&str] = &[
@@ -23,6 +24,13 @@ pub fn is_media_file(name: &str) -> bool {
     MEDIA_EXTENSIONS
         .iter()
         .any(|ext| lower.ends_with(&format!(".{}", ext)))
+}
+
+/// Returns `true` when the filename is either a native media format
+/// OR a convertible format (HEIC, MKV, TIFF, etc.) that the conversion
+/// pipeline can handle.
+pub fn is_importable_file(name: &str) -> bool {
+    is_media_file(name) || crate::conversion::is_convertible(name)
 }
 
 /// Returns `true` when the filename extension is a supported media format.

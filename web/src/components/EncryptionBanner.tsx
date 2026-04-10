@@ -37,6 +37,25 @@ export default function EncryptionBanner() {
 
   const poll = useCallback(async () => {
     try {
+      // While conversion is active, suppress the encryption banner.
+      // The ingest engine will trigger a final encryption pass after
+      // all conversions complete — only then should this banner appear.
+      try {
+        const convStatus = await api.admin.conversionStatus();
+        if (convStatus.active) {
+          // Conversion in progress — hide encryption banner, reset state
+          batchSizeRef.current = 0;
+          prevPendingRef.current = 0;
+          batchStartRef.current = 0;
+          setCounts(null);
+          setEta(null);
+          endTask("encryption");
+          return;
+        }
+      } catch {
+        // Non-admin users won't have access — that's fine, proceed normally
+      }
+
       type SyncRecord = Awaited<ReturnType<typeof api.photos.encryptedSync>>["photos"][number];
       const all: SyncRecord[] = [];
       let cursor: string | undefined;

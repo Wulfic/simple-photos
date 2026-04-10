@@ -1,9 +1,14 @@
-//! Automatic filesystem scanner that registers new media files into the database.
+//! Automatic filesystem scanner that registers new **native** media files
+//! into the database.
 //!
 //! Runs as a background task on a configurable interval and can also be
 //! triggered on-demand via `POST /api/admin/photos/auto-scan`.  Files are
 //! assigned to the first admin user; duplicates are handled gracefully with
 //! `INSERT OR IGNORE` to avoid race conditions with concurrent scans.
+//!
+//! Only browser-native formats are handled here.  After native files are
+//! imported and encrypted, the ingest engine ([`crate::ingest`]) runs a
+//! separate conversion pass for non-native formats.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,13 +69,19 @@ pub async fn background_auto_scan_task(
         );
     }
 
-    // After startup scan, trigger encryption for any unencrypted photos
-    if count > 0 {
+    // After startup scan, trigger encryption then conversion ingest engine.
+    // Sequencing: native encrypt FIRST → conversion → encrypt converted.
+    {
         let pool_clone = pool.clone();
         let root_clone = root.clone();
         let jwt_clone = jwt_secret.clone();
         tokio::spawn(async move {
-            crate::photos::server_migrate::auto_migrate_after_scan(pool_clone, root_clone, jwt_clone).await;
+            if count > 0 {
+                crate::photos::server_migrate::auto_migrate_after_scan(
+                    pool_clone.clone(), root_clone.clone(), jwt_clone.clone(),
+                ).await;
+            }
+            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_clone).await;
         });
     }
 
@@ -101,13 +112,18 @@ pub async fn background_auto_scan_task(
             );
         }
 
-        // Trigger encryption for any newly registered photos
-        if count > 0 {
+        // Trigger encryption then conversion ingest engine.
+        {
             let pool_clone = pool.clone();
             let root_clone = root.clone();
             let jwt_clone = jwt_secret.clone();
             tokio::spawn(async move {
-                crate::photos::server_migrate::auto_migrate_after_scan(pool_clone, root_clone, jwt_clone).await;
+                if count > 0 {
+                    crate::photos::server_migrate::auto_migrate_after_scan(
+                        pool_clone.clone(), root_clone.clone(), jwt_clone.clone(),
+                    ).await;
+                }
+                crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_clone).await;
             });
         }
     }
@@ -165,13 +181,18 @@ pub async fn trigger_auto_scan(
     )
     .await;
 
-    // Trigger encryption for any unencrypted photos (including newly discovered)
-    if count > 0 {
+    // Trigger encryption then conversion ingest engine.
+    {
         let pool_clone = pool.clone();
         let root_clone = storage_root.clone();
         let jwt_secret = state.config.auth.jwt_secret.clone();
         tokio::spawn(async move {
-            crate::photos::server_migrate::auto_migrate_after_scan(pool_clone, root_clone, jwt_secret).await;
+            if count > 0 {
+                crate::photos::server_migrate::auto_migrate_after_scan(
+                    pool_clone.clone(), root_clone.clone(), jwt_secret.clone(),
+                ).await;
+            }
+            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
         });
     }
 
@@ -242,7 +263,9 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     let mut existing_set = std::collections::HashSet::new();
     {
         let mut rows = sqlx::query_scalar::<_, String>(
-            "SELECT file_path FROM photos UNION SELECT file_path FROM trash_items WHERE file_path != ''"
+            "SELECT file_path FROM photos WHERE file_path != '' \
+             UNION SELECT source_path FROM photos WHERE source_path IS NOT NULL AND source_path != '' \
+             UNION SELECT file_path FROM trash_items WHERE file_path != ''"
         ).fetch(pool);
 
         while let Some(path) = rows.try_next().await.unwrap_or(None) {
@@ -317,8 +340,9 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                         })
                     });
 
+                    // Native format — determine MIME and media type directly.
                     let mime = mime_from_extension(&name).to_string();
-                    let media_type = if mime.starts_with("video/") {
+                    let media_type: &str = if mime.starts_with("video/") {
                         "video"
                     } else if mime.starts_with("audio/") {
                         "audio"
@@ -339,23 +363,16 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
                     // Extract dimensions, camera model, GPS, and date from file
-                    // (matches scan_and_register behavior so photos have full metadata)
                     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
                         extract_media_metadata_async(abs_path.clone()).await;
 
-                    // Use EXIF taken_at if available, otherwise fall back to file modified time.
-                    // Normalize to consistent YYYY-MM-DDTHH:MM:SS.mmmZ format.
                     let final_taken_at = exif_taken
                         .map(|t| crate::photos::utils::normalize_iso_timestamp(&t))
                         .or(modified);
 
-                    // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
                     let photo_hash = compute_photo_hash_streaming(&abs_path).await;
 
-                    // Skip files whose content hash matches a gallery-hidden
-                    // original.  This prevents autoscan from re-registering
-                    // secure gallery photos that persist on disk after a
-                    // primary reset + recovery.
+                    // Skip files whose content hash matches a gallery-hidden original.
                     if let Some(ref h) = photo_hash {
                         if gallery_hashes.contains(h) {
                             tracing::info!(
@@ -366,8 +383,6 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                         }
                     }
 
-                    // Use INSERT OR IGNORE to handle race conditions with concurrent
-                    // scans (e.g. explicit scan_and_register running simultaneously).
                     let insert_result = sqlx::query(
                         "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                          size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
@@ -394,7 +409,6 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
 
                     match insert_result {
                         Ok(result) if result.rows_affected() == 0 => {
-                            // Already registered by a concurrent scan — skip
                             tracing::debug!(file = %rel_path, "Already registered (concurrent scan), skipping");
                             continue;
                         }
@@ -409,7 +423,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                         Ok(_) => { /* inserted successfully */ }
                     }
 
-                    // Generate thumbnail (pure Rust via image crate — no external tools)
+                    // Generate thumbnail
                     {
                         let thumb_abs = storage_root.join(&thumb_rel);
                         if generate_thumbnail_file(&abs_path, &thumb_abs, &mime, None).await {

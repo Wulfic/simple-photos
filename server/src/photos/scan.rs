@@ -1,5 +1,11 @@
 //! Filesystem scanning — walks the storage directory tree, registers every
-//! unregistered media file, extracts EXIF metadata, and generates thumbnails.
+//! unregistered **native** media file, extracts EXIF metadata, and generates
+//! thumbnails.
+//!
+//! Only browser-native formats are handled here.  Non-native formats
+//! (HEIC, MKV, TIFF, etc.) are converted in a separate pass by the
+//! ingest engine ([`crate::ingest`]) which runs AFTER encryption of native
+//! files completes — this prevents the conversion/encryption race condition.
 //!
 //! Thumbnail generation logic lives in [`super::thumbnail`]; web-preview
 //! conversion lives in [`super::web_preview`].
@@ -30,7 +36,9 @@ const SCAN_PARALLELISM: usize = 4;
 /// For each new file: extracts EXIF metadata, generates a thumbnail, and
 /// computes a content hash for deduplication.
 ///
-/// Only browser-native formats are accepted — no conversion is performed.
+/// Only browser-native formats are registered here.  Non-native formats
+/// are handled by the ingest engine after encryption completes.
+///
 /// Uses `INSERT OR IGNORE` for graceful handling of concurrent scans.
 /// Original files are **never modified or deleted** by this endpoint.
 pub async fn scan_and_register(
@@ -49,10 +57,13 @@ pub async fn scan_and_register(
     // never hold the full Vec<String> + HashSet simultaneously in memory.
     // Include trash_items so that files deleted on the primary (which are
     // physically still on disk) are not re-imported into the gallery.
+    // Include source_path so that already-converted originals are not
+    // re-converted on subsequent scans.
     let mut existing_set = std::collections::HashSet::new();
     {
         let mut rows = sqlx::query_scalar::<_, String>(
             "SELECT file_path FROM photos WHERE file_path != '' \
+             UNION SELECT source_path FROM photos WHERE source_path IS NOT NULL AND source_path != '' \
              UNION SELECT file_path FROM trash_items WHERE file_path != ''"
         )
         .fetch(&state.pool);
@@ -62,7 +73,7 @@ pub async fn scan_and_register(
         }
     }
 
-    // ── Phase 1: Collect all unregistered media files (fast directory walk) ──
+    // ── Phase 1: Collect all unregistered native media files (fast directory walk) ──
     struct ScanCandidate {
         abs_path: PathBuf,
         rel_path: String,
@@ -103,6 +114,7 @@ pub async fn scan_and_register(
                         continue;
                     }
 
+                    // Native format — determine MIME and media type directly.
                     let mime = mime_from_extension(&name).to_string();
                     let media_type: &'static str = if mime.starts_with("video/") {
                         "video"
@@ -151,7 +163,7 @@ pub async fn scan_and_register(
     }
 
     tracing::info!(
-        "Scan phase 1: found {} unregistered media files",
+        "Scan phase 1: found {} unregistered native media files",
         candidates.len()
     );
 
@@ -170,6 +182,7 @@ pub async fn scan_and_register(
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await;
 
+            // Native format — register directly (no conversion needed).
             let photo_id = Uuid::new_v4().to_string();
             let now = utc_now_iso();
             // GIFs get an animated GIF thumbnail; everything else gets JPEG
@@ -223,7 +236,7 @@ pub async fn scan_and_register(
                 Ok(_) => {}
             }
 
-            // Generate thumbnail (pure Rust — no external tools)
+            // Generate thumbnail
             let thumb_abs = storage_root.join(&thumb_rel);
             if generate_thumbnail_file(&candidate.abs_path, &thumb_abs, &candidate.mime, None).await {
                 tracing::debug!(file = %candidate.rel_path, "Generated thumbnail");
@@ -362,13 +375,33 @@ pub async fn scan_and_register(
         tracing::info!("Generated {} missing thumbnails", tc);
     }
 
-    // Trigger encryption migration for any newly registered (unencrypted) photos
+    // Trigger encryption migration for any newly registered (unencrypted) photos,
+    // then run the conversion ingest engine for non-native files.
+    // Sequencing: native encrypt FIRST → conversion → encrypt converted.
     if new_count > 0 {
         let pool_clone = state.pool.clone();
         let root_clone = storage_root.clone();
         let jwt_secret = state.config.auth.jwt_secret.clone();
         tokio::spawn(async move {
-            crate::photos::server_migrate::auto_migrate_after_scan(pool_clone, root_clone, jwt_secret).await;
+            // Phase 1: Encrypt native files
+            crate::photos::server_migrate::auto_migrate_after_scan(
+                pool_clone.clone(), root_clone.clone(), jwt_secret.clone(),
+            ).await;
+            // Phase 2: Convert non-native files, register, then encrypt those
+            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
+        });
+    } else {
+        // Even if no native files were found, there may be convertible files.
+        // Still run auto_migrate to encrypt any stale unencrypted photos
+        // (e.g. from prior uploads) so the conversion wait loop doesn't block.
+        let pool_clone = state.pool.clone();
+        let root_clone = storage_root.clone();
+        let jwt_secret = state.config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::photos::server_migrate::auto_migrate_after_scan(
+                pool_clone.clone(), root_clone.clone(), jwt_secret.clone(),
+            ).await;
+            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
         });
     }
 

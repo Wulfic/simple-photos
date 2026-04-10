@@ -158,6 +158,10 @@ export const adminApi = {
       method: "POST",
     }),
 
+  /** Get conversion pipeline status */
+  conversionStatus: () =>
+    request<{ active: boolean; total: number; done: number }>("/admin/conversion-status"),
+
 
 
   // ── SSL / TLS ──────────────────────────────────────────────────────────

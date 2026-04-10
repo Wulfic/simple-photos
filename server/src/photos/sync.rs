@@ -60,7 +60,17 @@ pub async fn encrypted_sync(
 ) -> Result<Json<EncryptedSyncResponse>, AppError> {
     let limit = params.limit.unwrap_or(500).min(1000);
 
+    // Cursor format: "timestamp|id" for keyset pagination.
+    // Using (timestamp, id) as a composite key avoids skipping items that
+    // share the same timestamp (e.g. batch-converted files).
     let photos = if let Some(ref after) = params.after {
+        let (cursor_ts, cursor_id) = if let Some(idx) = after.rfind('|') {
+            (after[..idx].to_string(), after[idx + 1..].to_string())
+        } else {
+            // Legacy cursor (timestamp only) — use empty id so all items
+            // at the boundary timestamp are included via <=.
+            (after.clone(), String::new())
+        };
         sqlx::query_as::<_, EncryptedSyncRecord>(
             "SELECT id, filename, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
@@ -69,12 +79,15 @@ pub async fn encrypted_sync(
              WHERE user_id = ? \
              AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
              AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-             AND COALESCE(taken_at, created_at) < ? \
-             ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \
+             AND (COALESCE(taken_at, created_at) < ? \
+                  OR (COALESCE(taken_at, created_at) = ? AND id > ?)) \
+             ORDER BY COALESCE(taken_at, created_at) DESC, id ASC \
              LIMIT ?",
         )
         .bind(&auth.user_id)
-        .bind(after)
+        .bind(&cursor_ts)
+        .bind(&cursor_ts)
+        .bind(&cursor_id)
         .bind(limit + 1)
         .fetch_all(&state.read_pool)
         .await?
@@ -87,7 +100,7 @@ pub async fn encrypted_sync(
              WHERE user_id = ? \
              AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
              AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
-             ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC \
+             ORDER BY COALESCE(taken_at, created_at) DESC, id ASC \
              LIMIT ?",
         )
         .bind(&auth.user_id)
@@ -97,9 +110,10 @@ pub async fn encrypted_sync(
     };
 
     let next_cursor = if photos.len() as i64 > limit {
-        photos
-            .last()
-            .map(|p| p.taken_at.clone().unwrap_or_else(|| p.created_at.clone()))
+        photos.last().map(|p| {
+            let ts = p.taken_at.clone().unwrap_or_else(|| p.created_at.clone());
+            format!("{}|{}", ts, p.id)
+        })
     } else {
         None
     };

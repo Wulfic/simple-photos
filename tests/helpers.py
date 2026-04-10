@@ -469,6 +469,52 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    def admin_conversion_status(self) -> dict:
+        """GET /api/admin/conversion-status — poll conversion progress."""
+        r = self.get("/api/admin/conversion-status")
+        r.raise_for_status()
+        return r.json()
+
+    def wait_for_conversion(self, timeout: float = 60.0, poll_interval: float = 1.0):
+        """Wait for the background conversion ingest engine to finish.
+
+        After a scan, conversion happens asynchronously.  This helper polls
+        the conversion status endpoint until:
+        1. Conversion becomes active (or total > 0), then
+        2. Conversion finishes (active=false).
+
+        If conversion never starts within a grace period, we return anyway
+        (there may be nothing to convert).
+        """
+        import time
+
+        deadline = time.time() + timeout
+        seen_active = False
+        # Grace period: wait at least this long for conversion to start
+        grace_deadline = time.time() + 8.0
+
+        while time.time() < deadline:
+            try:
+                status = self.admin_conversion_status()
+                is_active = status.get("active", False)
+                has_work = status.get("total", 0) > 0
+
+                if is_active or has_work:
+                    seen_active = True
+
+                if seen_active and not is_active:
+                    # Conversion started and finished
+                    time.sleep(1.0)
+                    return
+
+                if not seen_active and time.time() > grace_deadline:
+                    # Conversion never started — nothing to convert
+                    return
+            except Exception:
+                pass
+            time.sleep(poll_interval)
+        # Timed out — return anyway, tests will catch assertion failures
+
     # ── Backup serve endpoints (X-API-Key auth) ─────────────────────
 
     def backup_list(self) -> list:
@@ -591,6 +637,150 @@ def random_password() -> str:
 
 def unique_filename(ext: str = "jpg") -> str:
     return f"test_{int(time.time() * 1000)}_{random.randint(1000, 9999)}.{ext}"
+
+
+# ── Conversion test media generators ────────────────────────────────
+
+def _ffmpeg_available() -> bool:
+    """Check if ffmpeg is installed."""
+    import subprocess
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def generate_test_tiff() -> bytes:
+    """Generate a minimal valid TIFF image (2×2 red pixels)."""
+    import struct
+    # Minimal little-endian TIFF with a single 2×2 RGB strip.
+    # IFD with required tags: ImageWidth, ImageLength, BitsPerSample,
+    # Compression (none), PhotometricInterpretation, StripOffsets,
+    # SamplesPerPixel, RowsPerStrip, StripByteCounts.
+    width, height = 2, 2
+    pixel_data = bytes([0xFF, 0x00, 0x00] * (width * height))  # Red pixels
+    strip_offset = 8 + 2 + (12 * 10) + 4 + 6  # header + IFD entries + next_ifd + bps_data
+    bps_offset = 8 + 2 + (12 * 10) + 4  # After IFD, before pixel data
+
+    def tag(tag_id, typ, count, value):
+        return struct.pack("<HHII", tag_id, typ, count, value)
+
+    ifd = struct.pack("<H", 10)  # 10 entries
+    ifd += tag(0x0100, 3, 1, width)           # ImageWidth
+    ifd += tag(0x0101, 3, 1, height)          # ImageLength
+    ifd += tag(0x0102, 3, 3, bps_offset)      # BitsPerSample (pointer)
+    ifd += tag(0x0103, 3, 1, 1)               # Compression = None
+    ifd += tag(0x0106, 3, 1, 2)               # PhotometricInterpretation = RGB
+    ifd += tag(0x0111, 4, 1, strip_offset)    # StripOffsets
+    ifd += tag(0x0115, 3, 1, 3)               # SamplesPerPixel
+    ifd += tag(0x0116, 4, 1, height)          # RowsPerStrip
+    ifd += tag(0x0117, 4, 1, len(pixel_data)) # StripByteCounts
+    ifd += tag(0x011C, 3, 1, 1)               # PlanarConfiguration = Chunky
+    ifd += struct.pack("<I", 0)               # Next IFD = 0 (none)
+    bps_data = struct.pack("<HHH", 8, 8, 8)  # 8 bits per sample × 3
+
+    header = b"II" + struct.pack("<HI", 42, 8)  # Little-endian TIFF, IFD at offset 8
+    return header + ifd + bps_data + pixel_data
+
+
+def generate_test_video_mkv(duration: float = 0.5) -> bytes:
+    """Generate a short test MKV video using ffmpeg."""
+    import subprocess, tempfile
+    path = tempfile.mktemp(suffix=".mkv")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            f"color=c=blue:s=64x64:d={duration}",
+            "-f", "lavfi", "-i", f"sine=f=440:d={duration}",
+            "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:a", "aac", "-b:a", "64k",
+            path,
+        ], capture_output=True, timeout=30, check=True)
+        with open(path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def generate_test_video_avi(duration: float = 0.5) -> bytes:
+    """Generate a short test AVI video using ffmpeg."""
+    import subprocess, tempfile
+    path = tempfile.mktemp(suffix=".avi")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            f"color=c=green:s=64x64:d={duration}",
+            "-c:v", "mpeg4", "-q:v", "5",
+            path,
+        ], capture_output=True, timeout=30, check=True)
+        with open(path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def generate_test_audio_aiff(duration: float = 0.5) -> bytes:
+    """Generate a short test AIFF audio file using ffmpeg."""
+    import subprocess, tempfile
+    path = tempfile.mktemp(suffix=".aiff")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            f"sine=f=440:d={duration}",
+            path,
+        ], capture_output=True, timeout=30, check=True)
+        with open(path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def generate_test_audio_m4a(duration: float = 0.5) -> bytes:
+    """Generate a short test M4A (AAC) audio file using ffmpeg."""
+    import subprocess, tempfile
+    path = tempfile.mktemp(suffix=".m4a")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            f"sine=f=880:d={duration}",
+            "-c:a", "aac", "-b:a", "64k",
+            path,
+        ], capture_output=True, timeout=30, check=True)
+        with open(path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def generate_test_heic() -> bytes:
+    """Generate a test HEIC image using ffmpeg (requires libx265).
+
+    Returns empty bytes if the system ffmpeg cannot encode HEIC.
+    """
+    import subprocess, tempfile
+    path = tempfile.mktemp(suffix=".heic")
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            "color=c=red:s=64x64",
+            "-frames:v", "1",
+            "-c:v", "libx265", "-tag:v", "hvc1",
+            path,
+        ], capture_output=True, timeout=30)
+        if result.returncode != 0:
+            return b""
+        with open(path, "rb") as f:
+            return f.read()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return b""
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
 
 
 # ── Wait helpers ─────────────────────────────────────────────────────

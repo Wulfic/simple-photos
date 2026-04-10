@@ -1,7 +1,7 @@
 //! Thumbnail generation for media files.
 //!
 //! Supports multiple formats with a priority-based fallback chain:
-//! - **Images** (non-GIF): Pure Rust `image` crate → 256×256 JPEG.
+//! - **Images** (non-GIF): Pure Rust `image` crate → 512×512 JPEG.
 //! - **GIFs**: FFmpeg → scaled animated GIF; falls back to static single-frame.
 //! - **Videos**: FFmpeg → real frame at ~10% of duration; falls back to placeholder.
 //! - **Audio / SVG**: Solid-color placeholder (no external tools needed).
@@ -56,7 +56,7 @@ pub async fn generate_thumbnail_file(
     generate_static_image_thumbnail(input_path, output_path).await
 }
 
-/// Generate a 256×256 JPEG thumbnail from a static image using the `image` crate.
+/// Generate a 512×512 JPEG thumbnail from a static image using the `image` crate.
 async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) -> bool {
     if let Some(parent) = output_path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
@@ -67,7 +67,7 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
 
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let img = image::open(&input).map_err(|e| format!("Failed to open image: {}", e))?;
-        let thumb = img.resize_to_fill(256, 256, image::imageops::FilterType::Triangle);
+        let thumb = img.resize_to_fill(512, 512, image::imageops::FilterType::Triangle);
         thumb
             .save_with_format(&output, image::ImageFormat::Jpeg)
             .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
@@ -88,7 +88,7 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
     }
 }
 
-/// Generate a 256×256 single-frame GIF thumbnail as a fallback when FFmpeg is
+/// Generate a 512×512 single-frame GIF thumbnail as a fallback when FFmpeg is
 /// unavailable.  Writes to the same `.thumb.gif` path the DB references.
 async fn generate_static_gif_thumbnail(input_path: &Path, output_path: &Path) -> bool {
     if let Some(parent) = output_path.parent() {
@@ -100,7 +100,7 @@ async fn generate_static_gif_thumbnail(input_path: &Path, output_path: &Path) ->
 
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let img = image::open(&input).map_err(|e| format!("Failed to open GIF: {}", e))?;
-        let thumb = img.resize_to_fill(256, 256, image::imageops::FilterType::Triangle);
+        let thumb = img.resize_to_fill(512, 512, image::imageops::FilterType::Triangle);
         thumb
             .save_with_format(&output, image::ImageFormat::Gif)
             .map_err(|e| format!("Failed to save GIF thumbnail: {}", e))?;
@@ -129,6 +129,8 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
     let duration_secs = probe_duration(input_path).await.unwrap_or(10.0);
     let seek_to = f64::min(f64::max(duration_secs * 0.1, 1.0), duration_secs);
 
+    // setsar=1 normalises non-square pixel aspect ratios before scaling
+    // so the thumbnail isn't stretched/squished for converted videos.
     let result = tokio::process::Command::new("ffmpeg")
         .args(["-y", "-ss", &format!("{:.2}", seek_to), "-i"])
         .arg(input_path)
@@ -136,7 +138,7 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
             "-frames:v",
             "1",
             "-vf",
-            "scale=256:256:force_original_aspect_ratio=increase,crop=256:256",
+            "setsar=1,scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
             "-q:v",
             "5",
         ])
@@ -180,7 +182,7 @@ async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) ->
         .arg(input_path)
         .args([
             "-vf",
-            "scale=256:256:force_original_aspect_ratio=increase,crop=256:256,fps=15",
+            "scale=512:512:force_original_aspect_ratio=increase,crop=512:512,fps=15",
             "-loop",
             "0",
         ])
@@ -221,9 +223,9 @@ pub async fn probe_duration(path: &Path) -> Option<f64> {
     s.trim().parse::<f64>().ok()
 }
 
-/// Generate a solid-color 256×256 JPEG placeholder thumbnail.
+/// Generate a solid-color 512×512 JPEG placeholder thumbnail.
 pub async fn generate_placeholder_thumbnail(output_path: &Path, color: [u8; 3]) -> bool {
-    let img = image::RgbImage::from_pixel(256, 256, image::Rgb(color));
+    let img = image::RgbImage::from_pixel(512, 512, image::Rgb(color));
     let mut buf = std::io::Cursor::new(Vec::new());
     if image::DynamicImage::ImageRgb8(img)
         .write_to(&mut buf, image::ImageFormat::Jpeg)

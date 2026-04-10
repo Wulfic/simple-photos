@@ -198,6 +198,8 @@ fn photo_routes() -> Router<AppState> {
         .route("/photos/{id}/render", post(crate::photos::render::render_photo))
         // Scan & register
         .route("/admin/photos/scan", post(crate::photos::scan::scan_and_register))
+        // Conversion progress
+        .route("/admin/conversion-status", get(crate::conversion::conversion_status))
         // Encryption key storage
         .route(
             "/admin/encryption/store-key",

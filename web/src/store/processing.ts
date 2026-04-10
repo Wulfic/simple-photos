@@ -11,6 +11,7 @@ import { create } from "zustand";
 const TASK_LABELS: Record<string, string> = {
   import: "Importing",
   encryption: "Encrypting",
+  conversion: "Converting",
   upload: "Uploading",
   recovery: "Recovering",
   backup: "Backing up",

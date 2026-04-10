@@ -18,6 +18,7 @@ import Search from "./pages/Search";
 import Diagnostics from "./pages/Diagnostics";
 import ExportDownloads from "./pages/ExportDownloads";
 import EncryptionBanner from "./components/EncryptionBanner";
+import ConversionBanner from "./components/ConversionBanner";
 
 /**
  * Layout route for authenticated pages.
@@ -84,6 +85,7 @@ function ProtectedLayout() {
 
   return (
     <>
+      <ConversionBanner />
       <EncryptionBanner />
       <Outlet />
     </>

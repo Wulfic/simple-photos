@@ -255,9 +255,86 @@ pub(crate) fn extract_media_metadata_from_bytes(
 /// Async wrapper around [`extract_media_metadata`] that offloads the blocking
 /// file I/O and EXIF parsing to a `spawn_blocking` thread.
 pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) -> MediaMetadata {
-    tokio::task::spawn_blocking(move || extract_media_metadata(&file_path))
+    let (mut w, mut h, cam, lat, lon, taken) =
+        tokio::task::spawn_blocking({
+            let p = file_path.clone();
+            move || extract_media_metadata(&p)
+        })
         .await
-        .unwrap_or_else(|_| (0, 0, None, None, None, None))
+        .unwrap_or_else(|_| (0, 0, None, None, None, None));
+
+    // For video files, `imagesize` returns coded pixel dimensions which
+    // ignore SAR/DAR.  Use ffprobe to get display dimensions so the gallery
+    // calculates aspect ratios correctly (avoids squished thumbnails).
+    let is_video = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "mp4" | "mkv" | "avi" | "mov" | "webm" | "m4v" | "wmv" | "flv" | "ts" | "mts"
+            )
+        })
+        .unwrap_or(false);
+
+    if is_video {
+        if let Some((pw, ph)) = probe_video_display_dimensions(&file_path).await {
+            w = pw;
+            h = ph;
+        }
+    }
+
+    (w, h, cam, lat, lon, taken)
+}
+
+/// Use ffprobe to get the display dimensions of a video, accounting for SAR/DAR.
+async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, i64)> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,sample_aspect_ratio",
+            "-of", "csv=p=0:s=,",
+        ])
+        .arg(path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .ok()?;
+
+    let s = String::from_utf8_lossy(&output.stdout);
+    let parts: Vec<&str> = s.trim().split(',').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let coded_w: f64 = parts[0].trim().parse().ok()?;
+    let coded_h: f64 = parts[1].trim().parse().ok()?;
+
+    // Parse SAR (e.g., "40:33", "1:1", or "N/A")
+    let sar = if parts.len() >= 3 {
+        let sar_str = parts[2].trim();
+        if let Some((num, den)) = sar_str.split_once(':') {
+            let n: f64 = num.parse().unwrap_or(1.0);
+            let d: f64 = den.parse().unwrap_or(1.0);
+            if d > 0.0 { n / d } else { 1.0 }
+        } else {
+            1.0
+        }
+    } else {
+        1.0
+    };
+
+    // Display width = coded width × SAR
+    let display_w = (coded_w * sar).round() as i64;
+    let display_h = coded_h as i64;
+
+    if display_w > 0 && display_h > 0 {
+        Some((display_w, display_h))
+    } else {
+        None
+    }
 }
 
 /// Async wrapper around [`extract_media_metadata_from_bytes`] that offloads

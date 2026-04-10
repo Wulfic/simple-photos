@@ -7,6 +7,7 @@ use axum::Json;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
+use crate::conversion;
 use crate::error::AppError;
 use crate::media::{is_supported_extension, mime_from_extension};
 use crate::sanitize;
@@ -40,20 +41,78 @@ pub async fn upload_photo(
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("{}.jpg", Uuid::new_v4()));
 
-    // Reject unsupported file formats early — only browser-native types accepted
-    if !is_supported_extension(&filename) {
+    // Reject unsupported file formats — accept native + convertible types
+    if !is_supported_extension(&filename) && !conversion::is_convertible(&filename) {
         return Err(AppError::BadRequest(format!(
-            "Unsupported file format: '{}'. Only browser-native formats are accepted \
-             (JPEG, PNG, GIF, WebP, AVIF, BMP, ICO, MP4, WebM, MP3, FLAC, OGG, WAV).",
+            "Unsupported file format: '{}'. Accepted: browser-native formats \
+             (JPEG, PNG, GIF, WebP, AVIF, BMP, ICO, MP4, WebM, MP3, FLAC, OGG, WAV) \
+             and convertible formats (HEIC, TIFF, RAW, MKV, AVI, MOV, WMA, AIFF, M4A, etc.).",
             filename.rsplit('.').next().unwrap_or("unknown")
         )));
     }
 
-    let mime_type = headers
-        .get("X-Mime-Type")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| mime_from_extension(&filename).to_string());
+    // ── Convert non-native formats to browser-native equivalents ────
+    let (body, filename, mime_type) = if let Some(target) = conversion::conversion_target(&filename) {
+        let tmp_dir = std::env::temp_dir().join("sp_upload_conv");
+        let conv_id = Uuid::new_v4();
+        let tmp_input = tmp_dir.join(format!("{}_in.{}", conv_id,
+            filename.rsplit('.').next().unwrap_or("bin")));
+        let tmp_output = tmp_dir.join(format!("{}_out.{}", conv_id, target.extension));
+
+        tokio::fs::create_dir_all(&tmp_dir)
+            .await
+            .map_err(|e| AppError::Internal(format!("Create conversion temp dir: {}", e)))?;
+
+        // Write uploaded bytes to temp file for ffmpeg
+        tokio::fs::write(&tmp_input, &body)
+            .await
+            .map_err(|e| AppError::Internal(format!("Write temp input: {}", e)))?;
+
+        let conv_result = conversion::convert_file(&tmp_input, &tmp_output, &target).await;
+
+        // Always clean up input
+        let _ = tokio::fs::remove_file(&tmp_input).await;
+
+        match conv_result {
+            Ok(()) => {
+                let converted_bytes = tokio::fs::read(&tmp_output)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Read converted file: {}", e)))?;
+                let _ = tokio::fs::remove_file(&tmp_output).await;
+
+                // Build new filename with converted extension
+                let stem = std::path::Path::new(&filename)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("converted");
+                let new_filename = format!("{}.{}", stem, target.extension);
+                let new_mime = target.mime_type.to_string();
+
+                tracing::info!(
+                    original = %filename,
+                    converted = %new_filename,
+                    "Converted upload to browser-native format"
+                );
+
+                (Bytes::from(converted_bytes), new_filename, new_mime)
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&tmp_output).await;
+                return Err(AppError::Internal(format!(
+                    "Media conversion failed for '{}': {}", filename, e
+                )));
+            }
+        }
+    } else {
+        let mime = headers
+            .get("X-Mime-Type")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| mime_from_extension(&filename).to_string());
+        (body, filename, mime)
+    };
+
+    let mime_type = mime_type;
 
     let media_type = if mime_type.starts_with("video/") {
         "video"
