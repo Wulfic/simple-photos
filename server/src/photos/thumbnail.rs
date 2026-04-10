@@ -1,10 +1,14 @@
 //! Thumbnail generation for media files.
 //!
 //! Supports multiple formats with a priority-based fallback chain:
-//! - **Images** (non-GIF): Pure Rust `image` crate → 512×512 JPEG.
+//! - **Images** (non-GIF): Pure Rust `image` crate → fit within 512px JPEG.
 //! - **GIFs**: FFmpeg → scaled animated GIF; falls back to static single-frame.
 //! - **Videos**: FFmpeg → real frame at ~10% of duration; falls back to placeholder.
 //! - **Audio / SVG**: Solid-color placeholder (no external tools needed).
+//!
+//! Thumbnails preserve the original aspect ratio (scaled to fit within 512px
+//! on the longest edge) so the justified grid can display them without
+//! excessive cropping.
 //!
 //! Extracted from `scan.rs` so that upload, backup, and migration code can
 //! reuse the same thumbnail pipeline without pulling in the scan handler.
@@ -56,7 +60,12 @@ pub async fn generate_thumbnail_file(
     generate_static_image_thumbnail(input_path, output_path).await
 }
 
-/// Generate a 512×512 JPEG thumbnail from a static image using the `image` crate.
+/// Generate a JPEG thumbnail from a static image using the `image` crate.
+///
+/// Preserves the original aspect ratio, scaling so the longest edge is at
+/// most 512 px.  This avoids the double-crop problem where a square
+/// thumbnail displayed in an aspect-ratio-preserving grid causes excessive
+/// zoom / cut-off.
 async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) -> bool {
     if let Some(parent) = output_path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
@@ -67,7 +76,7 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
 
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let img = image::open(&input).map_err(|e| format!("Failed to open image: {}", e))?;
-        let thumb = img.resize_to_fill(512, 512, image::imageops::FilterType::Triangle);
+        let thumb = img.resize(512, 512, image::imageops::FilterType::Triangle);
         thumb
             .save_with_format(&output, image::ImageFormat::Jpeg)
             .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
@@ -88,8 +97,9 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
     }
 }
 
-/// Generate a 512×512 single-frame GIF thumbnail as a fallback when FFmpeg is
-/// unavailable.  Writes to the same `.thumb.gif` path the DB references.
+/// Generate a single-frame GIF thumbnail as a fallback when FFmpeg is
+/// unavailable.  Preserves aspect ratio (fits within 512px).
+/// Writes to the same `.thumb.gif` path the DB references.
 async fn generate_static_gif_thumbnail(input_path: &Path, output_path: &Path) -> bool {
     if let Some(parent) = output_path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
@@ -100,7 +110,7 @@ async fn generate_static_gif_thumbnail(input_path: &Path, output_path: &Path) ->
 
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let img = image::open(&input).map_err(|e| format!("Failed to open GIF: {}", e))?;
-        let thumb = img.resize_to_fill(512, 512, image::imageops::FilterType::Triangle);
+        let thumb = img.resize(512, 512, image::imageops::FilterType::Triangle);
         thumb
             .save_with_format(&output, image::ImageFormat::Gif)
             .map_err(|e| format!("Failed to save GIF thumbnail: {}", e))?;
@@ -121,16 +131,25 @@ async fn generate_static_gif_thumbnail(input_path: &Path, output_path: &Path) ->
     }
 }
 
-/// Extract a real video frame using FFmpeg and save as 256×256 JPEG thumbnail.
+/// Extract a real video frame using FFmpeg and save as a JPEG thumbnail.
+///
+/// Preserves the original aspect ratio, scaling so the longest edge is at
+/// most 512 px.  This avoids the double-crop that occurred when a square
+/// thumbnail was displayed in the aspect-ratio-preserving justified grid.
 ///
 /// Seeks to 10% of the video duration (at least 1 second in) to avoid
-/// black intro frames. Falls back to a gray placeholder if FFmpeg fails.
+/// black intro frames.  For very short clips (≤ 1.5 s) it grabs the
+/// first frame instead.  Falls back to a gray placeholder if FFmpeg fails.
 async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) -> bool {
     let duration_secs = probe_duration(input_path).await.unwrap_or(10.0);
-    let seek_to = f64::min(f64::max(duration_secs * 0.1, 1.0), duration_secs);
+    let seek_to = if duration_secs <= 1.5 {
+        0.0
+    } else {
+        f64::min(f64::max(duration_secs * 0.1, 1.0), duration_secs - 0.5)
+    };
 
-    // setsar=1 normalises non-square pixel aspect ratios before scaling
-    // so the thumbnail isn't stretched/squished for converted videos.
+    // setsar=1 normalises non-square pixel aspect ratios before scaling.
+    // force_original_aspect_ratio=decrease fits within 512×512 without cropping.
     let result = tokio::process::Command::new("ffmpeg")
         .args(["-y", "-ss", &format!("{:.2}", seek_to), "-i"])
         .arg(input_path)
@@ -138,7 +157,7 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
             "-frames:v",
             "1",
             "-vf",
-            "setsar=1,scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
+            "setsar=1,scale=512:512:force_original_aspect_ratio=decrease",
             "-q:v",
             "5",
         ])
@@ -174,15 +193,15 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
 
 /// Generate a scaled animated GIF thumbnail using FFmpeg.
 ///
-/// Produces a 256×256 (cover-cropped) animated GIF at reduced frame rate
-/// to keep file size reasonable.
+/// Preserves the original aspect ratio (fits within 512px) at reduced
+/// frame rate to keep file size reasonable.
 async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) -> bool {
     let result = tokio::process::Command::new("ffmpeg")
         .args(["-y", "-i"])
         .arg(input_path)
         .args([
             "-vf",
-            "scale=512:512:force_original_aspect_ratio=increase,crop=512:512,fps=15",
+            "scale=512:512:force_original_aspect_ratio=decrease,fps=15",
             "-loop",
             "0",
         ])

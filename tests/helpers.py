@@ -558,48 +558,19 @@ class APIClient:
 # ── Test data generators ─────────────────────────────────────────────
 
 def generate_test_jpeg(width: int = 2, height: int = 2) -> bytes:
-    """Generate a minimal valid JPEG file for upload tests."""
-    # Minimal JPEG: SOI + APP0 + minimal scan data + EOI
-    # This is a valid JPEG that image parsers can read.
-    return bytes([
-        0xFF, 0xD8,  # SOI
-        0xFF, 0xE0,  # APP0 marker
-        0x00, 0x10,  # Length 16
-        0x4A, 0x46, 0x49, 0x46, 0x00,  # "JFIF\0"
-        0x01, 0x01,  # Version 1.1
-        0x00,        # Aspect ratio units: none
-        0x00, 0x01,  # X density: 1
-        0x00, 0x01,  # Y density: 1
-        0x00, 0x00,  # No thumbnail
-        0xFF, 0xDB,  # DQT marker
-        0x00, 0x43,  # Length 67
-        0x00,        # Table 0, 8-bit precision
-    ] + [0x01] * 64 + [  # 64 quantization values
-        0xFF, 0xC0,  # SOF0 marker
-        0x00, 0x0B,  # Length 11
-        0x08,        # 8-bit precision
-        0x00, height & 0xFF,  # Height
-        0x00, width & 0xFF,   # Width
-        0x01,        # 1 component
-        0x01,        # Component ID
-        0x11,        # Sampling factors
-        0x00,        # Quant table 0
-        0xFF, 0xC4,  # DHT marker
-        0x00, 0x1F,  # Length 31
-        0x00,        # DC table 0
-        0x00, 0x01, 0x05, 0x01, 0x01, 0x01, 0x01, 0x01,
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-        0x08, 0x09, 0x0A, 0x0B,
-        0xFF, 0xDA,  # SOS marker
-        0x00, 0x08,  # Length
-        0x01,        # 1 component
-        0x01,        # Component ID
-        0x00,        # DC/AC table selectors
-        0x00, 0x3F, 0x00,  # Spectral selection
-        0x7B, 0x40,  # Compressed data (minimal)
-        0xFF, 0xD9,  # EOI
-    ])
+    """Generate a valid JPEG file for upload tests using PIL.
+
+    The previous hand-crafted minimal JPEG was missing an AC Huffman table,
+    causing the Rust ``image`` crate to reject it during thumbnail generation
+    (falling back to a 512×512 placeholder and masking aspect-ratio bugs).
+    """
+    from PIL import Image as _PILImage
+    import io as _io
+
+    img = _PILImage.new("RGB", (width, height), color=(128, 64, 32))
+    buf = _io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
 
 
 def generate_test_png() -> bytes:

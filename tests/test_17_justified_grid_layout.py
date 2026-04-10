@@ -251,6 +251,102 @@ class TestThumbnailSizePreference:
         assert isinstance(photo["height"], int) and photo["height"] > 0
 
 
+class TestThumbnailAspectRatioPreservation:
+    """Verify that server-generated thumbnails preserve the original aspect
+    ratio instead of square-cropping.  Square thumbnails displayed in the
+    justified grid's AR-preserving containers cause a double-crop that
+    makes video previews appear excessively zoomed in."""
+
+    def test_landscape_photo_thumb_not_square(self, user_client):
+        """A landscape photo's thumbnail should be wider than tall."""
+        content = generate_test_jpeg(width=200, height=100)
+        name = _unique("thumb_ar_landscape")
+        data = user_client.upload_photo(name, content)
+        photo_id = data["photo_id"]
+
+        # The server triggers thumbnail generation on upload/scan.
+        # Fetch the thumbnail and check its dimensions via the image header.
+        import time
+        time.sleep(2)  # Allow server-side thumbnail generation
+
+        r = user_client.get_photo_thumb(photo_id)
+        if r.status_code == 200 and len(r.content) > 0:
+            from PIL import Image
+            import io
+            thumb = Image.open(io.BytesIO(r.content))
+            tw, th = thumb.size
+            thumb_ar = tw / th
+            # Original is 2:1 landscape. Thumbnail should be clearly landscape too.
+            assert thumb_ar > 1.2, (
+                f"Landscape photo thumbnail is nearly square ({tw}x{th}, AR={thumb_ar:.2f}). "
+                f"Expected AR > 1.2 to match original 2:1 aspect ratio."
+            )
+
+    def test_portrait_photo_thumb_not_square(self, user_client):
+        """A portrait photo's thumbnail should be taller than wide."""
+        content = generate_test_jpeg(width=100, height=200)
+        name = _unique("thumb_ar_portrait")
+        data = user_client.upload_photo(name, content)
+        photo_id = data["photo_id"]
+
+        import time
+        time.sleep(2)
+
+        r = user_client.get_photo_thumb(photo_id)
+        if r.status_code == 200 and len(r.content) > 0:
+            from PIL import Image
+            import io
+            thumb = Image.open(io.BytesIO(r.content))
+            tw, th = thumb.size
+            thumb_ar = tw / th
+            assert thumb_ar < 0.8, (
+                f"Portrait photo thumbnail is nearly square ({tw}x{th}, AR={thumb_ar:.2f}). "
+                f"Expected AR < 0.8 to match original 1:2 aspect ratio."
+            )
+
+    def test_video_thumb_preserves_aspect_ratio(self, user_client):
+        """A 16:9 video's thumbnail must be wide, not square-cropped.
+        This is the most visible regression: square video thumbnails
+        displayed in 16:9 grid cells cause extreme zoom / cut-off."""
+        import subprocess, tempfile, os, time
+
+        # Generate a widescreen (16:9) test video
+        path = tempfile.mktemp(suffix=".mp4")
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "lavfi", "-i",
+                "color=c=red:s=320x180:d=0.5",
+                "-c:v", "libx264", "-preset", "ultrafast",
+                path,
+            ], capture_output=True, timeout=30, check=True)
+            with open(path, "rb") as f:
+                video_content = f.read()
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+        name = _unique("thumb_ar_video") + ".mp4"
+        data = user_client.upload_photo(name, video_content, mime_type="video/mp4")
+        photo_id = data["photo_id"]
+
+        time.sleep(3)  # Videos may take longer to thumbnail
+
+        r = user_client.get_photo_thumb(photo_id)
+        if r.status_code == 200 and len(r.content) > 0:
+            from PIL import Image
+            import io
+            thumb = Image.open(io.BytesIO(r.content))
+            tw, th = thumb.size
+            thumb_ar = tw / th
+            # Original is 16:9 (~1.78). Thumbnail should be clearly widescreen.
+            assert thumb_ar > 1.4, (
+                f"Video thumbnail is too square ({tw}x{th}, AR={thumb_ar:.2f}). "
+                f"Expected widescreen AR > 1.4 to match original 16:9 video. "
+                f"Square thumbnails in the justified grid cause the "
+                f"'too zoomed in' preview bug."
+            )
+
+
 # ── Client-side grid layout algorithm regression tests ─────────────────────────
 # These tests replicate the JustifiedGrid computeRows algorithm and verify that
 # the layout produces correct item sizing — specifically catching the regression

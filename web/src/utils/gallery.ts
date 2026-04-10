@@ -8,10 +8,10 @@ import { createFallbackThumbnail } from "./media";
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Generate a cover-cropped JPEG thumbnail from an image file.
- * Draws the image scaled to fill a square canvas, center-cropped.
+ * Generate an aspect-ratio-preserving JPEG thumbnail from an image file.
+ * Scales so the longest edge fits within `size` pixels.
  * @param file - Source image file
- * @param size - Thumbnail dimension in pixels (square)
+ * @param size - Maximum dimension in pixels (longest edge)
  * @returns JPEG ArrayBuffer at 80% quality
  */
 export function generateImageThumbnail(file: File, size: number): Promise<ArrayBuffer> {
@@ -20,15 +20,15 @@ export function generateImageThumbnail(file: File, size: number): Promise<ArrayB
     const url = URL.createObjectURL(file);
     img.onload = () => {
       URL.revokeObjectURL(url);
+      // Fit within size x size, preserving aspect ratio
+      const scale = Math.min(size / img.width, size / img.height, 1);
+      const w = Math.round(img.width * scale) || 1;
+      const h = Math.round(img.height * scale) || 1;
       const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
+      canvas.width = w;
+      canvas.height = h;
       const ctx = canvas.getContext("2d")!;
-      // Cover-crop: fill the square
-      const scale = Math.max(size / img.width, size / img.height);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
       canvas.toBlob(
         (blob) => (blob ? blob.arrayBuffer().then(resolve) : reject(new Error("Canvas toBlob failed"))),
         "image/jpeg",
@@ -40,7 +40,8 @@ export function generateImageThumbnail(file: File, size: number): Promise<ArrayB
   });
 }
 
-/** Seek to 10 % of video duration and capture a frame. */
+/** Seek to 10 % of video duration and capture a frame.
+ *  Preserves the original aspect ratio (fits within size x size). */
 export function generateVideoThumbnail(file: File, size: number): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const video = document.createElement("video");
@@ -55,14 +56,15 @@ export function generateVideoThumbnail(file: File, size: number): Promise<ArrayB
 
     video.onseeked = () => {
       URL.revokeObjectURL(url);
+      // Fit within size x size, preserving aspect ratio
+      const scale = Math.min(size / video.videoWidth, size / video.videoHeight, 1);
+      const w = Math.round(video.videoWidth * scale) || 1;
+      const h = Math.round(video.videoHeight * scale) || 1;
       const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
+      canvas.width = w;
+      canvas.height = h;
       const ctx = canvas.getContext("2d")!;
-      const scale = Math.max(size / video.videoWidth, size / video.videoHeight);
-      const w = video.videoWidth * scale;
-      const h = video.videoHeight * scale;
-      ctx.drawImage(video, (size - w) / 2, (size - h) / 2, w, h);
+      ctx.drawImage(video, 0, 0, w, h);
       canvas.toBlob(
         (blob) => (blob ? blob.arrayBuffer().then(resolve) : reject(new Error("Canvas toBlob failed"))),
         "image/jpeg",
