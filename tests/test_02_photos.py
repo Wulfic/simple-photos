@@ -51,6 +51,41 @@ class TestPhotoUpload:
         # Should get the same photo (dedup by content hash)
         assert data1["photo_hash"] == data2["photo_hash"]
 
+    def test_upload_dedup_returns_same_id(self, user_client):
+        """Uploading identical content must return the SAME photo_id."""
+        content = generate_test_jpeg()
+        data1 = user_client.upload_photo("original.jpg", content)
+        data2 = user_client.upload_photo("copy.jpg", content)
+        assert data1["photo_id"] == data2["photo_id"], (
+            f"Expected dedup to return same photo_id but got "
+            f"{data1['photo_id']} vs {data2['photo_id']}"
+        )
+
+    def test_upload_dedup_no_extra_entries(self, user_client):
+        """After uploading the same content twice, only one entry
+        should appear in the photo list."""
+        content = generate_test_jpeg()
+        data1 = user_client.upload_photo("dedup_list_a.jpg", content)
+        user_client.upload_photo("dedup_list_b.jpg", content)
+        photos = user_client.list_photos()["photos"]
+        matches = [p for p in photos if p["id"] == data1["photo_id"]]
+        assert len(matches) == 1, (
+            f"Expected exactly 1 entry for deduplicated photo, got {len(matches)}"
+        )
+
+    def test_upload_dedup_no_extra_in_sync(self, user_client):
+        """Content hash should be unique in encrypted-sync response."""
+        content = generate_test_jpeg()
+        h = hashlib.sha256(content).hexdigest()[:12]
+        user_client.upload_photo("sync_dedup_a.jpg", content)
+        user_client.upload_photo("sync_dedup_b.jpg", content)
+        sync_photos = user_client.encrypted_sync().get("photos", [])
+        hash_matches = [p for p in sync_photos if p.get("photo_hash") == h]
+        assert len(hash_matches) <= 1, (
+            f"Encrypted-sync has {len(hash_matches)} photos with hash {h} — "
+            f"expected at most 1 (dedup)"
+        )
+
     def test_upload_empty_body_accepted(self, user_client):
         """Server accepts empty body — encrypted blobs have no server validation."""
         r = user_client.post(
@@ -297,7 +332,7 @@ class TestEncryptionBannerCounts:
         BATCH_2 = 3
 
         # ── Batch 1: upload and encrypt ──────────────────────────────
-        for _ in range(BATCH_1):
+        for i in range(BATCH_1):
             user_client.upload_photo(unique_filename())
 
         # Re-store the encryption key to trigger scan → encrypt cycle
@@ -314,7 +349,7 @@ class TestEncryptionBannerCounts:
         assert len(encrypted_b1) == BATCH_1
 
         # ── Batch 2: upload MORE photos (not yet encrypted) ──────────
-        for _ in range(BATCH_2):
+        for i in range(BATCH_2):
             user_client.upload_photo(unique_filename())
 
         # Fetch encrypted-sync BEFORE triggering another encrypt cycle
@@ -377,7 +412,7 @@ class TestEncryptionBannerCounts:
         and the banner counting is consistent regardless of approach."""
         COUNT = 5
 
-        for _ in range(COUNT):
+        for i in range(COUNT):
             user_client.upload_photo(unique_filename())
 
         photos = self._fetch_all_encrypted_sync(user_client)
@@ -400,7 +435,7 @@ class TestEncryptionBannerCounts:
         decrease toward 0 and never go negative."""
         COUNT = 3
 
-        for _ in range(COUNT):
+        for i in range(COUNT):
             user_client.upload_photo(unique_filename())
 
         # Trigger encryption

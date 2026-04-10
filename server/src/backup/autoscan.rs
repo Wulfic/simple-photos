@@ -255,6 +255,28 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
         storage_root
     );
 
+    // Build set of content hashes belonging to gallery-hidden originals.
+    // After recovery, the photos table doesn't have rows for these (excluded
+    // from sync_photos), but their content hashes are stored in the egi table.
+    // Any file on disk whose hash matches should NOT be registered — it belongs
+    // to a secure gallery item and must stay hidden.
+    let mut gallery_hashes = std::collections::HashSet::new();
+    {
+        let mut rows = sqlx::query_scalar::<_, String>(
+            "SELECT original_photo_hash FROM encrypted_gallery_items WHERE original_photo_hash IS NOT NULL"
+        ).fetch(pool);
+
+        while let Some(hash) = rows.try_next().await.unwrap_or(None) {
+            gallery_hashes.insert(hash);
+        }
+    }
+    if !gallery_hashes.is_empty() {
+        tracing::info!(
+            "[DIAG:AUTOSCAN] run_auto_scan: {} gallery-hidden hashes to exclude",
+            gallery_hashes.len()
+        );
+    }
+
     let mut new_count = 0i64;
     let mut queue = vec![storage_root.to_path_buf()];
 
@@ -329,6 +351,20 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
 
                     // Compute content-based hash using streaming I/O (avoids loading entire file into memory)
                     let photo_hash = compute_photo_hash_streaming(&abs_path).await;
+
+                    // Skip files whose content hash matches a gallery-hidden
+                    // original.  This prevents autoscan from re-registering
+                    // secure gallery photos that persist on disk after a
+                    // primary reset + recovery.
+                    if let Some(ref h) = photo_hash {
+                        if gallery_hashes.contains(h) {
+                            tracing::info!(
+                                "[DIAG:AUTOSCAN] Skipping {} — content hash {} matches gallery-hidden original",
+                                rel_path, h
+                            );
+                            continue;
+                        }
+                    }
 
                     // Use INSERT OR IGNORE to handle race conditions with concurrent
                     // scans (e.g. explicit scan_and_register running simultaneously).

@@ -985,3 +985,88 @@ class TestSyncFullIntegrity:
         assert len(final_trash) == len(after_trash), (
             f"Trash count changed on repeat: {len(after_trash)} -> {len(final_trash)}"
         )
+
+
+class TestSyncHashIntegrity:
+    """Verify hash-based dedup across sync boundaries."""
+
+    def test_synced_photo_preserves_hash(self, primary_admin, user_client,
+                                         backup_configured, backup_client):
+        """Photo hash computed on primary must match on backup after sync."""
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+        primary_hash = photo.get("photo_hash")
+        assert primary_hash, "Primary should return photo_hash on upload"
+
+        _trigger_and_wait(primary_admin, backup_configured)
+
+        bp = next((p for p in backup_client.backup_list() if p["id"] == pid), None)
+        assert bp is not None, f"Photo {pid} not on backup"
+        assert bp.get("photo_hash") == primary_hash, (
+            f"Hash mismatch: primary={primary_hash}, backup={bp.get('photo_hash')}"
+        )
+
+    def test_no_duplicate_hashes_on_backup(self, primary_admin, user_client,
+                                            backup_configured, backup_client):
+        """Photos uploaded in this test must each have a unique photo_hash
+        on backup — no content-level duplicates."""
+        uploaded_ids = set()
+        for i in range(3):
+            p = user_client.upload_photo(unique_filename())
+            uploaded_ids.add(p["photo_id"])
+
+        _trigger_and_wait(primary_admin, backup_configured)
+
+        photos = backup_client.backup_list()
+        our_photos = [p for p in photos if p["id"] in uploaded_ids]
+        hashes = [p["photo_hash"] for p in our_photos
+                  if p.get("photo_hash") is not None]
+        hash_counts = Counter(hashes)
+        dupes = {h: c for h, c in hash_counts.items() if c > 1}
+        assert not dupes, (
+            f"Duplicate photo_hash values on backup for our uploads: {dupes}"
+        )
+        assert len(hashes) == 3, (
+            f"Expected 3 unique hashes, got {len(hashes)}"
+        )
+
+    def test_synced_blob_arrives_on_backup(self, primary_admin, user_client,
+                                            backup_configured, backup_client):
+        """Blob uploaded with content_hash should sync to backup."""
+        import hashlib
+        original_content = b"sync-hash-integrity-check"
+        content_hash = hashlib.sha256(original_content).hexdigest()[:12]
+
+        blob = user_client.upload_blob("photo", generate_random_bytes(1024),
+                                       content_hash=content_hash)
+        bid = blob["blob_id"]
+
+        _trigger_and_wait(primary_admin, backup_configured)
+
+        bb = next((b for b in backup_client.backup_list_blobs()
+                   if b["id"] == bid), None)
+        assert bb is not None, f"Blob {bid} not on backup after sync"
+
+    def test_dedup_blob_syncs_once(self, primary_admin,
+                                    user_client,
+                                    backup_configured,
+                                    backup_client):
+        """Uploading two blobs with the same content_hash should only
+        produce one blob on primary (dedup), and thus one on backup."""
+        import hashlib
+        before = _backup_blob_ids(backup_client)
+
+        ch = hashlib.sha256(b"sync-dedup-test").hexdigest()[:12]
+        b1 = user_client.upload_blob("photo", generate_random_bytes(512),
+                                     content_hash=ch)
+        b2 = user_client.upload_blob("photo", generate_random_bytes(512),
+                                     content_hash=ch)
+        # Primary dedup should return same blob
+        assert b1["blob_id"] == b2["blob_id"], (
+            "Primary should have deduped these blobs"
+        )
+
+        _trigger_and_wait(primary_admin, backup_configured)
+
+        after = _backup_blob_ids(backup_client)
+        _assert_exact_new_items(before, after, {b1["blob_id"]}, "blobs")

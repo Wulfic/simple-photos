@@ -23,6 +23,7 @@ use crate::auth::middleware::AuthUser;
 use crate::blobs::storage as blob_storage;
 use crate::error::AppError;
 use crate::media::is_media_file;
+use crate::photos::utils::compute_photo_hash_streaming;
 use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
@@ -254,16 +255,31 @@ pub async fn import_takeout(
             })
         });
 
-        // Check for duplicate
-        let existing: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM photos WHERE user_id = ? AND filename = ? AND size_bytes = ? LIMIT 1",
-        )
-        .bind(&auth.user_id)
-        .bind(&filename)
-        .bind(size)
-        .fetch_optional(&state.pool)
-        .await
-        .unwrap_or(None);
+        // Check for duplicate by content hash (preferred) or filename+size fallback
+        let photo_hash = compute_photo_hash_streaming(media_path).await;
+
+        let existing: Option<String> = if let Some(ref ph) = photo_hash {
+            // Content-hash dedup: catches renamed duplicates of the same file
+            sqlx::query_scalar(
+                "SELECT id FROM photos WHERE user_id = ? AND photo_hash = ? LIMIT 1",
+            )
+            .bind(&auth.user_id)
+            .bind(ph)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None)
+        } else {
+            // Fallback: filename+size if hash couldn't be computed
+            sqlx::query_scalar(
+                "SELECT id FROM photos WHERE user_id = ? AND filename = ? AND size_bytes = ? LIMIT 1",
+            )
+            .bind(&auth.user_id)
+            .bind(&filename)
+            .bind(size)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None)
+        };
 
         let photo_id = if let Some(eid) = existing {
             // Already imported, just use the existing ID for metadata pairing
@@ -315,8 +331,8 @@ pub async fn import_takeout(
 
                 sqlx::query(
                     "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                     size_bytes, width, height, taken_at, latitude, longitude, thumb_path, created_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)",
+                     size_bytes, width, height, taken_at, latitude, longitude, thumb_path, created_at, photo_hash) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&photo_id)
                 .bind(&auth.user_id)
@@ -330,13 +346,14 @@ pub async fn import_takeout(
                 .bind(longitude)
                 .bind(&thumb_rel)
                 .bind(&now)
+                .bind(&photo_hash)
                 .execute(&state.pool)
                 .await?;
             } else {
                 sqlx::query(
                     "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                     size_bytes, width, height, taken_at, latitude, longitude, thumb_path, created_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)",
+                     size_bytes, width, height, taken_at, latitude, longitude, thumb_path, created_at, photo_hash) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&photo_id)
                 .bind(&auth.user_id)
@@ -350,6 +367,7 @@ pub async fn import_takeout(
                 .bind(longitude)
                 .bind(&thumb_rel)
                 .bind(&now)
+                .bind(&photo_hash)
                 .execute(&state.pool)
                 .await?;
             }

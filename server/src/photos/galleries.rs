@@ -352,15 +352,44 @@ pub async fn add_gallery_item(
 
     let item_id = Uuid::new_v4().to_string();
 
+    // Store the original photo's content hash so autoscan (run after recovery)
+    // can skip files whose content matches a gallery-hidden original — even if
+    // the file has been renamed or moved.
+    let original_photo_hash: Option<String> = if is_server_side {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT photo_hash FROM photos WHERE id = ? AND user_id = ?",
+        )
+        .bind(&req.blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+    } else {
+        // Client-encrypted blob — try content_hash from blobs table
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT content_hash FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(&req.blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+    };
+
     sqlx::query(
-        "INSERT OR IGNORE INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id) \
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id, original_photo_hash) \
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&item_id)
     .bind(&gallery_id)
     .bind(&new_blob_id)
     .bind(&now)
     .bind(&req.blob_id) // Track the original so it can be hidden from the main gallery
+    .bind(&original_photo_hash)
     .execute(&state.pool)
     .await?;
 

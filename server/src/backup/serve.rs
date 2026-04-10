@@ -407,6 +407,7 @@ pub async fn backup_sync_secure_galleries(
         let original_blob_id = i["original_blob_id"].as_str();
         let encrypted_blob_id = i["encrypted_blob_id"].as_str();
         let encrypted_thumb_blob_id = i["encrypted_thumb_blob_id"].as_str();
+        let original_photo_hash = i["original_photo_hash"].as_str();
 
         if id.is_empty() || gallery_id.is_empty() || blob_id.is_empty() {
             continue;
@@ -448,13 +449,14 @@ pub async fn backup_sync_secure_galleries(
         }
 
         sqlx::query(
-            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id, encrypted_blob_id, encrypted_thumb_blob_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) \
+            "INSERT INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id, encrypted_blob_id, encrypted_thumb_blob_id, original_photo_hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT(id) DO UPDATE SET \
                blob_id = excluded.blob_id, \
                original_blob_id = excluded.original_blob_id, \
                encrypted_blob_id = excluded.encrypted_blob_id, \
-               encrypted_thumb_blob_id = excluded.encrypted_thumb_blob_id",
+               encrypted_thumb_blob_id = excluded.encrypted_thumb_blob_id, \
+               original_photo_hash = excluded.original_photo_hash",
         )
         .bind(id)
         .bind(gallery_id)
@@ -463,6 +465,7 @@ pub async fn backup_sync_secure_galleries(
         .bind(original_blob_id)
         .bind(encrypted_blob_id)
         .bind(encrypted_thumb_blob_id)
+        .bind(original_photo_hash)
         .execute(&mut *tx)
         .await?;
     }

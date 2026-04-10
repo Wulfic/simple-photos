@@ -108,7 +108,11 @@ class APIClient:
                      mime_type: str = "image/jpeg") -> dict:
         """Upload a photo file via /api/photos/upload."""
         if content is None:
-            content = generate_test_jpeg()
+            import random
+            content = generate_test_jpeg(
+                width=random.randint(2, 255),
+                height=random.randint(2, 255),
+            )
         h = {
             **self._auth_headers(),
             "X-Filename": filename,

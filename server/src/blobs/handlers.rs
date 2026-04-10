@@ -179,6 +179,41 @@ pub async fn upload(
         }
     }
 
+    // ── Content-hash dedup ──────────────────────────────────────────────────
+    // If the caller provided X-Content-Hash (short hash of the *original*
+    // unencrypted data), check whether this user already has a blob with the
+    // same content_hash.  Return the existing blob instead of storing a
+    // duplicate, mirroring the photo upload dedup behaviour.
+    if let Some(ref ch) = content_hash {
+        let existing: Option<(String, String, i64)> = sqlx::query_as(
+            "SELECT id, upload_time, size_bytes FROM blobs \
+             WHERE user_id = ? AND content_hash = ? LIMIT 1",
+        )
+        .bind(&auth.user_id)
+        .bind(ch)
+        .fetch_optional(&state.read_pool)
+        .await?;
+
+        if let Some((eid, etime, esize)) = existing {
+            tracing::info!(
+                user_id = %auth.user_id,
+                existing_blob_id = %eid,
+                content_hash = %ch,
+                "Duplicate blob upload detected (content_hash match) — returning existing record"
+            );
+            // Clean up the file we just wrote — it's a duplicate
+            cleanup().await;
+            return Ok((
+                StatusCode::OK,
+                Json(BlobUploadResponse {
+                    blob_id: eid,
+                    upload_time: etime,
+                    size: esize,
+                }),
+            ));
+        }
+    }
+
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(

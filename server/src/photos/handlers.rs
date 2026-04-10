@@ -143,6 +143,38 @@ pub async fn register_photo(
         .await
         .unwrap_or_default();
 
+    // ── Hash-based dedup ────────────────────────────────────────────────────
+    // If a photo with the same content hash already exists for this user,
+    // return the existing record instead of inserting a duplicate.  This
+    // mirrors the upload endpoint's dedup behaviour.
+    if !photo_hash.is_empty() {
+        let existing: Option<(String, String)> = sqlx::query_as(
+            "SELECT id, file_path FROM photos \
+             WHERE user_id = ? AND photo_hash = ? LIMIT 1",
+        )
+        .bind(&auth.user_id)
+        .bind(&photo_hash)
+        .fetch_optional(&state.read_pool)
+        .await?;
+
+        if let Some((eid, _epath)) = existing {
+            tracing::info!(
+                user_id = %auth.user_id,
+                existing_photo_id = %eid,
+                photo_hash = %photo_hash,
+                "Duplicate registration detected (hash match) — returning existing record"
+            );
+            return Ok((
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "photo_id": eid,
+                    "photo_hash": photo_hash,
+                    "duplicate": true,
+                })),
+            ));
+        }
+    }
+
     // Generate thumbnail path (will be created by a separate endpoint/process)
     let thumb_filename = format!("{}.thumb.jpg", photo_id);
     let thumb_rel = format!(".thumbnails/{}", thumb_filename);

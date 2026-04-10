@@ -30,6 +30,80 @@ class TestBlobUpload:
         data = user_client.upload_blob("photo", content, content_hash=content_hash)
         assert "blob_id" in data
 
+    def test_upload_blob_dedup_by_content_hash(self, user_client):
+        """Uploading two different encrypted blobs with the same content_hash
+        should return the existing blob (dedup)."""
+        original_content = b"the-original-plaintext-photo-data"
+        content_hash = hashlib.sha256(original_content).hexdigest()[:12]
+
+        encrypted_v1 = generate_random_bytes(2048)
+        encrypted_v2 = generate_random_bytes(2048)
+
+        data1 = user_client.upload_blob("photo", encrypted_v1,
+                                        content_hash=content_hash)
+        data2 = user_client.upload_blob("photo", encrypted_v2,
+                                        content_hash=content_hash)
+
+        assert data1["blob_id"] == data2["blob_id"], (
+            f"Expected dedup: same content_hash should return same blob_id, "
+            f"got {data1['blob_id']} vs {data2['blob_id']}"
+        )
+
+    def test_upload_blob_dedup_no_extra_entries(self, user_client):
+        """After uploading two blobs with the same content_hash, only one
+        should appear in the blob list."""
+        original_content = b"dedup-count-test-original"
+        content_hash = hashlib.sha256(original_content).hexdigest()[:12]
+
+        data1 = user_client.upload_blob("photo", generate_random_bytes(512),
+                                        content_hash=content_hash)
+        user_client.upload_blob("photo", generate_random_bytes(512),
+                                content_hash=content_hash)
+
+        blobs = user_client.list_blobs()["blobs"]
+        matches = [b for b in blobs if b["id"] == data1["blob_id"]]
+        assert len(matches) == 1, (
+            f"Expected 1 blob entry for deduped content, got {len(matches)}"
+        )
+
+    def test_upload_blob_different_content_hash_not_deduped(self, user_client):
+        """Two blobs with different content_hash should NOT be deduped."""
+        ch1 = hashlib.sha256(b"content-A").hexdigest()[:12]
+        ch2 = hashlib.sha256(b"content-B").hexdigest()[:12]
+
+        data1 = user_client.upload_blob("photo", generate_random_bytes(512),
+                                        content_hash=ch1)
+        data2 = user_client.upload_blob("photo", generate_random_bytes(512),
+                                        content_hash=ch2)
+
+        assert data1["blob_id"] != data2["blob_id"], (
+            "Different content_hash should produce different blob_ids"
+        )
+
+    def test_upload_blob_no_content_hash_never_deduped(self, user_client):
+        """Without content_hash, identical encrypted bytes should produce
+        separate blobs (no dedup possible)."""
+        content = generate_random_bytes(1024)
+        data1 = user_client.upload_blob("photo", content)
+        data2 = user_client.upload_blob("photo", content)
+        assert data1["blob_id"] != data2["blob_id"], (
+            "Without content_hash, blobs should not be deduped"
+        )
+
+    def test_upload_blob_dedup_cross_user_isolation(self, user_client, second_user_client):
+        """Content_hash dedup must be per-user — same hash from different
+        users should produce separate blobs."""
+        original_content = b"cross-user-isolation-test"
+        content_hash = hashlib.sha256(original_content).hexdigest()[:12]
+
+        data1 = user_client.upload_blob("photo", generate_random_bytes(512),
+                                        content_hash=content_hash)
+        data2 = second_user_client.upload_blob("photo", generate_random_bytes(512),
+                                                content_hash=content_hash)
+        assert data1["blob_id"] != data2["blob_id"], (
+            "Dedup should be per-user — different users get different blobs"
+        )
+
     def test_upload_blob_hash_mismatch(self, user_client):
         """Client hash mismatch should be rejected."""
         content = generate_random_bytes(1024)

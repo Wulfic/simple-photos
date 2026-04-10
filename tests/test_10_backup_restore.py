@@ -7,6 +7,7 @@ No "assert >= 0" or "assert isinstance(list)" style shortcuts.
 """
 
 import json
+import hashlib
 import os
 import shutil
 import time
@@ -803,3 +804,838 @@ class TestRecoverySecureGallery:
             f"without encrypted_blob_id — the encrypting banner would be "
             f"stuck. IDs: {unencrypted[:5]}"
         )
+
+    def test_recovered_primary_gallery_items_not_in_regular_gallery(self, recovery_with_gallery):
+        """On the recovered primary, secure gallery items must NOT appear
+        in encrypted-sync or list_blobs (the regular gallery endpoints)."""
+        ctx = recovery_with_gallery
+        base_url = ctx["server"].base_url
+        original_pid = ctx["original_photo_id"]
+        clone_id = ctx["clone_id"]
+
+        user = APIClient(base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        # Get the set of IDs the client should filter from regular gallery
+        secure_resp = user.get("/api/galleries/secure/blob-ids")
+        assert secure_resp.status_code == 200, (
+            f"secure/blob-ids failed: {secure_resp.status_code}"
+        )
+        secure_ids = set(secure_resp.json().get("ids", []))
+
+        # encrypted-sync must not contain the original photo or clone
+        sync_resp = user.encrypted_sync()
+        sync_ids = {p["id"] for p in sync_resp.get("photos", [])}
+        assert original_pid not in sync_ids, (
+            f"REGRESSION: Original photo {original_pid} in encrypted-sync "
+            f"on recovered primary"
+        )
+        assert clone_id not in sync_ids, (
+            f"REGRESSION: Clone {clone_id} in encrypted-sync on recovered primary"
+        )
+
+        # No encrypted-sync photo should overlap with secure blob IDs
+        leaked_sync = sync_ids & secure_ids
+        assert not leaked_sync, (
+            f"REGRESSION: Recovered primary encrypted-sync contains secure "
+            f"gallery IDs: {leaked_sync}"
+        )
+
+        # list_blobs must not contain any secure gallery blob ID
+        blobs_resp = user.list_blobs()
+        blob_ids = {b["id"] for b in blobs_resp.get("blobs", [])}
+        leaked_blobs = blob_ids & secure_ids
+        assert not leaked_blobs, (
+            f"REGRESSION: Recovered primary list_blobs contains secure "
+            f"gallery IDs: {leaked_blobs}"
+        )
+
+
+class TestRecoveryPresyncedGallery:
+    """Regression: photo synced to backup BEFORE being added to a secure
+    gallery must not reappear in the regular gallery after recovery.
+
+    This tests the real-world scenario where a photo is backed up normally,
+    then later moved to a secure gallery. The retroactive purge should remove
+    the original from the backup, and during recovery the gallery photo must
+    not leak back into the regular gallery on the recovered primary.
+    """
+
+    @pytest.fixture
+    def recovery_presynced(self, server_binary, session_tmpdir, backup_server,
+                           backup_admin, primary_admin, user_client,
+                           backup_configured, backup_client):
+        """Upload photo, sync to backup (pre-sync), add to gallery, sync
+        again (retroactive purge), recover to fresh server."""
+        if server_binary is None:
+            pytest.skip("External servers: can't spin up fresh instance")
+
+        # 1. Upload photo on primary
+        photo_content = generate_test_jpeg(width=7, height=7)
+        photo = user_client.upload_photo(
+            unique_filename("presynced_gallery"), content=photo_content
+        )
+        pid = photo["photo_id"]
+
+        # 2. Wait for server-side encryption migration on primary
+        time.sleep(4)
+
+        # 3. Sync to backup — photo P is now a regular photo on the backup
+        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+
+        # Verify P is on the backup
+        backup_photos = [p["id"] for p in backup_client.backup_list()]
+        assert pid in backup_photos, (
+            f"Pre-sync failed: photo {pid} not found on backup"
+        )
+
+        # 4. Add photo to secure gallery on primary
+        gallery = user_client.create_secure_gallery("Presynced Recovery Test")
+        gid = gallery["gallery_id"]
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        result = user_client.add_secure_gallery_item(gid, pid, token)
+        clone_id = result["new_blob_id"]
+
+        # 5. Wait for encryption migration of the clone
+        time.sleep(4)
+
+        # 6. Sync again — this triggers retroactive purge on backup
+        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+
+        # Verify P is no longer in backup photos (retroactive purge)
+        backup_photos_after = [p["id"] for p in backup_client.backup_list()]
+        assert pid not in backup_photos_after, (
+            f"Retroactive purge failed: photo {pid} still in backup photos"
+        )
+
+        # 7. Recover to fresh primary
+        port = _find_free_port()
+        tmpdir = os.path.join(session_tmpdir, f"recovery_presynced_{int(time.time())}")
+        server = ServerInstance("recovery-presynced", port, tmpdir)
+        server.start(server_binary)
+
+        try:
+            client = APIClient(server.base_url)
+            client.setup_init(ADMIN_USERNAME, ADMIN_PASSWORD)
+            client.login(ADMIN_USERNAME, ADMIN_PASSWORD)
+            try:
+                client.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
+            except Exception:
+                pass
+
+            srv = client.admin_add_backup_server(
+                name="recovery-presynced-backup",
+                address=backup_server.base_url.replace("http://", ""),
+                api_key=backup_server.backup_api_key,
+            )
+            sid = srv["id"]
+
+            r = client.post(f"/api/admin/backup/servers/{sid}/recover")
+            assert r.status_code in (200, 202), f"Recovery failed: {r.status_code} {r.text}"
+
+            import requests as _req
+            time.sleep(5)
+            deadline = time.time() + 120
+            recovered = False
+            relogged = False
+            while time.time() < deadline:
+                if not relogged:
+                    try:
+                        r = _req.post(
+                            f"{server.base_url}/api/auth/login",
+                            json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+                            headers={"X-Forwarded-For": "10.88.88.88"},
+                            timeout=5,
+                        )
+                        if r.status_code == 200:
+                            data = r.json()
+                            tok = data.get("access_token") or data.get("token")
+                            if tok:
+                                client.access_token = tok
+                                client.session.headers["Authorization"] = f"Bearer {tok}"
+                                relogged = True
+                    except Exception:
+                        pass
+
+                try:
+                    logs = client.admin_get_sync_logs(sid)
+                    if logs:
+                        latest = logs[0] if isinstance(logs, list) else logs
+                        status = latest.get("status")
+                        if status in ("success", "completed"):
+                            recovered = True
+                            break
+                        if status == "error":
+                            server.dump_logs()
+                            pytest.fail(f"Recovery failed: {latest.get('error')}")
+                except Exception:
+                    pass
+                time.sleep(3)
+
+            if not recovered:
+                server.dump_logs()
+            assert recovered, "Recovery did not complete within timeout"
+
+            # Let migration run
+            time.sleep(6)
+
+            yield {
+                "server": server,
+                "admin_client": client,
+                "gallery_id": gid,
+                "clone_id": clone_id,
+                "original_photo_id": pid,
+                "username": user_client.username,
+                "backup_server": backup_server,
+                "backup_client": backup_client,
+            }
+        finally:
+            server.stop()
+
+    def test_presynced_photo_not_in_recovered_gallery(self, recovery_presynced):
+        """A photo that was synced to backup BEFORE being added to a
+        secure gallery must not appear in the recovered primary's
+        regular gallery (encrypted-sync)."""
+        ctx = recovery_presynced
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        original_pid = ctx["original_photo_id"]
+        clone_id = ctx["clone_id"]
+
+        sync_resp = user.encrypted_sync()
+        sync_ids = {p["id"] for p in sync_resp.get("photos", [])}
+
+        assert original_pid not in sync_ids, (
+            f"REGRESSION: Pre-synced original photo {original_pid} appeared in "
+            f"recovered primary's encrypted-sync (should be hidden by gallery)"
+        )
+        assert clone_id not in sync_ids, (
+            f"REGRESSION: Gallery clone {clone_id} appeared in recovered "
+            f"primary's encrypted-sync"
+        )
+
+    def test_presynced_gallery_blobs_not_leaked(self, recovery_presynced):
+        """Gallery-related encrypted blobs must not appear in the
+        recovered primary's regular blob listing."""
+        ctx = recovery_presynced
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        secure_resp = user.get("/api/galleries/secure/blob-ids")
+        assert secure_resp.status_code == 200
+        secure_ids = set(secure_resp.json().get("ids", []))
+
+        blobs_resp = user.list_blobs()
+        blob_ids = {b["id"] for b in blobs_resp.get("blobs", [])}
+        leaked = blob_ids & secure_ids
+        assert not leaked, (
+            f"REGRESSION: Recovered primary list_blobs contains secure "
+            f"gallery blob IDs after pre-synced recovery: {leaked}"
+        )
+
+    def test_presynced_gallery_decryptable_after_recovery(self, recovery_presynced):
+        """The gallery item must still be decryptable on the recovered
+        primary even when the photo was pre-synced before gallery addition."""
+        ctx = recovery_presynced
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+        gid = ctx["gallery_id"]
+
+        token = user.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        items = user.list_secure_gallery_items(gid, token)
+        assert len(items["items"]) >= 1, "No gallery items on recovered server"
+
+        item = items["items"][0]
+        blob_id = item["blob_id"]
+        assert blob_id != ctx["clone_id"], (
+            "list_gallery_items returned plaintext clone instead of encrypted blob"
+        )
+
+        resp = user.download_blob(blob_id)
+        assert resp.status_code == 200
+        assert len(resp.content) >= NONCE_LENGTH + 16
+
+        try:
+            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)
+        except Exception as e:
+            ctx["server"].dump_logs()
+            pytest.fail(f"Gallery blob not valid AES-GCM after pre-synced recovery: {e}")
+        assert len(plaintext) > 0
+
+    def test_presynced_backup_photo_still_hidden(self, recovery_presynced):
+        """After recovery, the backup must still hide the pre-synced
+        photo from its regular gallery."""
+        ctx = recovery_presynced
+        original_pid = ctx["original_photo_id"]
+
+        backup_user = APIClient(ctx["backup_server"].base_url)
+        backup_user.login(ctx["username"], USER_PASSWORD)
+
+        sync_resp = backup_user.encrypted_sync()
+        sync_ids = [p["id"] for p in sync_resp.get("photos", [])]
+        assert original_pid not in sync_ids, (
+            f"REGRESSION: Pre-synced photo {original_pid} visible in backup's "
+            f"encrypted-sync after recovery"
+        )
+
+    def test_recovered_primary_gallery_items_not_in_regular_gallery(self, recovery_with_gallery):
+        """On the recovered primary, secure gallery items must NOT appear
+        in encrypted-sync or list_blobs (the regular gallery endpoints)."""
+        ctx = recovery_with_gallery
+        base_url = ctx["server"].base_url
+        original_pid = ctx["original_photo_id"]
+        clone_id = ctx["clone_id"]
+
+        user = APIClient(base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        # Get the set of IDs the client should filter from regular gallery
+        secure_resp = user.get("/api/galleries/secure/blob-ids")
+        assert secure_resp.status_code == 200, (
+            f"secure/blob-ids failed: {secure_resp.status_code}"
+        )
+        secure_ids = set(secure_resp.json().get("ids", []))
+
+        # encrypted-sync must not contain the original photo or clone
+        sync_resp = user.encrypted_sync()
+        sync_ids = {p["id"] for p in sync_resp.get("photos", [])}
+        assert original_pid not in sync_ids, (
+            f"REGRESSION: Original photo {original_pid} in encrypted-sync "
+            f"on recovered primary"
+        )
+        assert clone_id not in sync_ids, (
+            f"REGRESSION: Clone {clone_id} in encrypted-sync on recovered primary"
+        )
+
+        # No encrypted-sync photo should overlap with secure blob IDs
+        leaked_sync = sync_ids & secure_ids
+        assert not leaked_sync, (
+            f"REGRESSION: Recovered primary encrypted-sync contains secure "
+            f"gallery IDs: {leaked_sync}"
+        )
+
+        # list_blobs must not contain any secure gallery blob ID
+        blobs_resp = user.list_blobs()
+        blob_ids = {b["id"] for b in blobs_resp.get("blobs", [])}
+        leaked_blobs = blob_ids & secure_ids
+        assert not leaked_blobs, (
+            f"REGRESSION: Recovered primary list_blobs contains secure "
+            f"gallery IDs: {leaked_blobs}"
+        )
+
+
+class TestRecoveryPresyncedGallery:
+    """Regression: photo synced to backup BEFORE being added to a secure
+    gallery must not reappear in the regular gallery after recovery.
+
+    This tests the real-world scenario where a photo is backed up normally,
+    then later moved to a secure gallery. The retroactive purge should remove
+    the original from the backup, and during recovery the gallery photo must
+    not leak back into the regular gallery on the recovered primary.
+    """
+
+    @pytest.fixture
+    def recovery_presynced(self, server_binary, session_tmpdir, backup_server,
+                           backup_admin, primary_admin, user_client,
+                           backup_configured, backup_client):
+        """Upload photo, sync to backup (pre-sync), add to gallery, sync
+        again (retroactive purge), recover to fresh server."""
+        if server_binary is None:
+            pytest.skip("External servers: can't spin up fresh instance")
+
+        # 1. Upload photo on primary
+        photo_content = generate_test_jpeg(width=7, height=7)
+        photo = user_client.upload_photo(
+            unique_filename(), content=photo_content
+        )
+        pid = photo["photo_id"]
+
+        # 2. Wait for server-side encryption migration on primary
+        time.sleep(4)
+
+        # 3. Sync to backup — photo P is now a regular photo on the backup
+        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+
+        # Verify P is on the backup
+        backup_photos = [p["id"] for p in backup_client.backup_list()]
+        assert pid in backup_photos, (
+            f"Pre-sync failed: photo {pid} not found on backup"
+        )
+
+        # 4. Add photo to secure gallery on primary
+        gallery = user_client.create_secure_gallery("Presynced Recovery Test")
+        gid = gallery["gallery_id"]
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        result = user_client.add_secure_gallery_item(gid, pid, token)
+        clone_id = result["new_blob_id"]
+
+        # 5. Wait for encryption migration of the clone
+        time.sleep(4)
+
+        # 6. Sync again — this triggers retroactive purge on backup
+        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+
+        # Verify P is no longer in backup photos (retroactive purge)
+        backup_photos_after = [p["id"] for p in backup_client.backup_list()]
+        assert pid not in backup_photos_after, (
+            f"Retroactive purge failed: photo {pid} still in backup photos"
+        )
+
+        # 7. Recover to fresh primary
+        port = _find_free_port()
+        tmpdir = os.path.join(session_tmpdir, f"recovery_presynced_{int(time.time())}")
+        server = ServerInstance("recovery-presynced", port, tmpdir)
+        server.start(server_binary)
+
+        try:
+            client = APIClient(server.base_url)
+            client.setup_init(ADMIN_USERNAME, ADMIN_PASSWORD)
+            client.login(ADMIN_USERNAME, ADMIN_PASSWORD)
+            try:
+                client.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
+            except Exception:
+                pass
+
+            srv = client.admin_add_backup_server(
+                name="recovery-presynced-backup",
+                address=backup_server.base_url.replace("http://", ""),
+                api_key=backup_server.backup_api_key,
+            )
+            sid = srv["id"]
+
+            r = client.post(f"/api/admin/backup/servers/{sid}/recover")
+            assert r.status_code in (200, 202), f"Recovery failed: {r.status_code} {r.text}"
+
+            import requests as _req
+            time.sleep(5)
+            deadline = time.time() + 120
+            recovered = False
+            relogged = False
+            while time.time() < deadline:
+                if not relogged:
+                    try:
+                        r = _req.post(
+                            f"{server.base_url}/api/auth/login",
+                            json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+                            headers={"X-Forwarded-For": "10.88.88.88"},
+                            timeout=5,
+                        )
+                        if r.status_code == 200:
+                            data = r.json()
+                            tok = data.get("access_token") or data.get("token")
+                            if tok:
+                                client.access_token = tok
+                                client.session.headers["Authorization"] = f"Bearer {tok}"
+                                relogged = True
+                    except Exception:
+                        pass
+
+                try:
+                    logs = client.admin_get_sync_logs(sid)
+                    if logs:
+                        latest = logs[0] if isinstance(logs, list) else logs
+                        status = latest.get("status")
+                        if status in ("success", "completed"):
+                            recovered = True
+                            break
+                        if status == "error":
+                            server.dump_logs()
+                            pytest.fail(f"Recovery failed: {latest.get('error')}")
+                except Exception:
+                    pass
+                time.sleep(3)
+
+            if not recovered:
+                server.dump_logs()
+            assert recovered, "Recovery did not complete within timeout"
+
+            # Let migration run
+            time.sleep(6)
+
+            yield {
+                "server": server,
+                "admin_client": client,
+                "gallery_id": gid,
+                "clone_id": clone_id,
+                "original_photo_id": pid,
+                "username": user_client.username,
+                "backup_server": backup_server,
+                "backup_client": backup_client,
+            }
+        finally:
+            server.stop()
+
+    def test_presynced_photo_not_in_recovered_gallery(self, recovery_presynced):
+        """A photo that was synced to backup BEFORE being added to a
+        secure gallery must not appear in the recovered primary's
+        regular gallery (encrypted-sync)."""
+        ctx = recovery_presynced
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        original_pid = ctx["original_photo_id"]
+        clone_id = ctx["clone_id"]
+
+        sync_resp = user.encrypted_sync()
+        sync_ids = {p["id"] for p in sync_resp.get("photos", [])}
+
+        assert original_pid not in sync_ids, (
+            f"REGRESSION: Pre-synced original photo {original_pid} appeared in "
+            f"recovered primary's encrypted-sync (should be hidden by gallery)"
+        )
+        assert clone_id not in sync_ids, (
+            f"REGRESSION: Gallery clone {clone_id} appeared in recovered "
+            f"primary's encrypted-sync"
+        )
+
+    def test_presynced_gallery_blobs_not_leaked(self, recovery_presynced):
+        """Gallery-related encrypted blobs must not appear in the
+        recovered primary's regular blob listing."""
+        ctx = recovery_presynced
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+
+        secure_resp = user.get("/api/galleries/secure/blob-ids")
+        assert secure_resp.status_code == 200
+        secure_ids = set(secure_resp.json().get("ids", []))
+
+        blobs_resp = user.list_blobs()
+        blob_ids = {b["id"] for b in blobs_resp.get("blobs", [])}
+        leaked = blob_ids & secure_ids
+        assert not leaked, (
+            f"REGRESSION: Recovered primary list_blobs contains secure "
+            f"gallery blob IDs after pre-synced recovery: {leaked}"
+        )
+
+    def test_presynced_gallery_decryptable_after_recovery(self, recovery_presynced):
+        """The gallery item must still be decryptable on the recovered
+        primary even when the photo was pre-synced before gallery addition."""
+        ctx = recovery_presynced
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], USER_PASSWORD)
+        gid = ctx["gallery_id"]
+
+        token = user.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        items = user.list_secure_gallery_items(gid, token)
+        assert len(items["items"]) >= 1, "No gallery items on recovered server"
+
+        item = items["items"][0]
+        blob_id = item["blob_id"]
+        assert blob_id != ctx["clone_id"], (
+            "list_gallery_items returned plaintext clone instead of encrypted blob"
+        )
+
+        resp = user.download_blob(blob_id)
+        assert resp.status_code == 200
+        assert len(resp.content) >= NONCE_LENGTH + 16
+
+        try:
+            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)
+        except Exception as e:
+            ctx["server"].dump_logs()
+            pytest.fail(f"Gallery blob not valid AES-GCM after pre-synced recovery: {e}")
+        assert len(plaintext) > 0
+
+    def test_presynced_backup_photo_still_hidden(self, recovery_presynced):
+        """After recovery, the backup must still hide the pre-synced
+        photo from its regular gallery."""
+        ctx = recovery_presynced
+        original_pid = ctx["original_photo_id"]
+
+        backup_user = APIClient(ctx["backup_server"].base_url)
+        backup_user.login(ctx["username"], USER_PASSWORD)
+
+        sync_resp = backup_user.encrypted_sync()
+        sync_ids = [p["id"] for p in sync_resp.get("photos", [])]
+        assert original_pid not in sync_ids, (
+            f"REGRESSION: Pre-synced photo {original_pid} visible in backup's "
+            f"encrypted-sync after recovery"
+        )
+
+
+class TestRecoveryAutoscanGalleryLeak:
+    """Regression (Bug 22): when original photo files persist on disk
+    through a primary reset, recovery autoscan must NOT re-register them
+    as new gallery-visible photos.
+
+    Real-world scenario:
+      1. Primary has external storage with photo files
+      2. Photo P added to secure gallery -> clone C created, P hidden via egi
+      3. Backup syncs gallery metadata but NOT the original photo row
+         (sync_photos excludes egi-hidden originals)
+      4. Primary DB wiped (reset-primary.sh), original files survive on disk
+      5. Recovery from backup restores egi metadata -> recovery_callback autoscan
+      6. BUG: autoscan finds P on disk, P not in photos/trash -> registers P
+         with new UUID P' -> P' not in egi -> appears in regular gallery
+      7. Result: same photo visible in BOTH secure album AND regular gallery
+
+    Fix: store original_photo_hash in egi; autoscan skips files whose
+    content hash matches any egi.original_photo_hash.
+    """
+
+    @pytest.fixture
+    def recovery_with_persistent_files(self, server_binary, session_tmpdir,
+                                        backup_server, backup_admin,
+                                        primary_admin,
+                                        backup_configured, backup_client,
+                                        primary_server):
+        """Upload photo as ADMIN, add to gallery, sync to backup, spin up
+        fresh recovery server WITH the original photo file on disk, recover,
+        return context for assertions.
+
+        Uses the admin user because in the real-world scenario (single-user
+        setup), autoscan assigns new photos to the first admin user — so
+        the autoscanned duplicate must land in the SAME user's gallery."""
+        if server_binary is None:
+            pytest.skip("External servers: can't spin up fresh instance")
+
+        # 1. Upload a photo with known content so we can replicate the file
+        #    Use admin so autoscan duplicates land in the same user's view.
+        photo_content = generate_test_jpeg(width=11, height=11)
+        photo = primary_admin.upload_photo(
+            unique_filename(), content=photo_content
+        )
+        pid = photo["photo_id"]
+
+        # Compute the content hash the same way the server does (SHA-256, first 6 bytes hex)
+        content_hash = hashlib.sha256(photo_content).hexdigest()[:12]
+
+        # 2. Create secure gallery and add photo
+        gallery = primary_admin.create_secure_gallery("Persistent File Recovery Test")
+        gid = gallery["gallery_id"]
+        token = primary_admin.unlock_secure_gallery(ADMIN_PASSWORD)["gallery_token"]
+        result = primary_admin.add_secure_gallery_item(gid, pid, token)
+        clone_id = result["new_blob_id"]
+
+        # 3. Wait for encryption migration
+        time.sleep(4)
+
+        # Verify photo is hidden from regular gallery on primary
+        sync_resp = primary_admin.encrypted_sync()
+        sync_ids = {p["id"] for p in sync_resp.get("photos", [])}
+        assert pid not in sync_ids, (
+            f"Setup failed: original photo {pid} still in encrypted-sync "
+            f"on primary (should be hidden by gallery)"
+        )
+
+        # 4. Sync to backup
+        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+
+        # 5. Spin up a fresh recovery server
+        port = _find_free_port()
+        tmpdir = os.path.join(session_tmpdir, f"recovery_persistent_{int(time.time())}")
+        server = ServerInstance("recovery-persistent", port, tmpdir)
+
+        # 6. CRITICAL: place the original photo file into the recovery server's
+        # storage root BEFORE starting the server.  This simulates what happens
+        # in the real world when reset-primary.sh wipes the DB but preserves
+        # the original photo files in external storage.
+        #
+        # We put it in a subfolder (like the user's real external storage)
+        # so autoscan's directory walker discovers it.
+        external_dir = os.path.join(server.storage_root, "external_photos")
+        os.makedirs(external_dir, exist_ok=True)
+        persistent_file = os.path.join(external_dir, "persistent_test.jpg")
+        with open(persistent_file, "wb") as f:
+            f.write(photo_content)
+
+        # Also place a second copy with a different name (simulates rename)
+        renamed_file = os.path.join(external_dir, "renamed_copy.jpg")
+        with open(renamed_file, "wb") as f:
+            f.write(photo_content)
+
+        server.start(server_binary)
+
+        try:
+            client = APIClient(server.base_url)
+            client.setup_init(ADMIN_USERNAME, ADMIN_PASSWORD)
+            client.login(ADMIN_USERNAME, ADMIN_PASSWORD)
+            try:
+                client.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
+            except Exception:
+                pass
+
+            srv = client.admin_add_backup_server(
+                name="recovery-persistent-backup",
+                address=backup_server.base_url.replace("http://", ""),
+                api_key=backup_server.backup_api_key,
+            )
+            sid = srv["id"]
+
+            # Trigger recovery
+            r = client.post(f"/api/admin/backup/servers/{sid}/recover")
+            assert r.status_code in (200, 202), f"Recovery failed: {r.status_code} {r.text}"
+
+            # Wait for recovery to complete
+            import requests as _req
+            time.sleep(5)
+            deadline = time.time() + 120
+            recovered = False
+            relogged = False
+            while time.time() < deadline:
+                if not relogged:
+                    try:
+                        r = _req.post(
+                            f"{server.base_url}/api/auth/login",
+                            json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+                            headers={"X-Forwarded-For": "10.88.88.88"},
+                            timeout=5,
+                        )
+                        if r.status_code == 200:
+                            data = r.json()
+                            tok = data.get("access_token") or data.get("token")
+                            if tok:
+                                client.access_token = tok
+                                client.session.headers["Authorization"] = f"Bearer {tok}"
+                                relogged = True
+                    except Exception:
+                        pass
+
+                try:
+                    logs = client.admin_get_sync_logs(sid)
+                    if logs:
+                        latest = logs[0] if isinstance(logs, list) else logs
+                        status = latest.get("status")
+                        if status in ("success", "completed"):
+                            recovered = True
+                            break
+                        if status == "error":
+                            server.dump_logs()
+                            pytest.fail(f"Recovery failed: {latest.get('error')}")
+                except Exception:
+                    pass
+                time.sleep(3)
+
+            if not recovered:
+                server.dump_logs()
+            assert recovered, "Recovery did not complete within timeout"
+
+            # Give autoscan + migration time to run
+            time.sleep(6)
+
+            yield {
+                "server": server,
+                "admin_client": client,
+                "gallery_id": gid,
+                "clone_id": clone_id,
+                "original_photo_id": pid,
+                "content_hash": content_hash,
+                "username": ADMIN_USERNAME,
+                "password": ADMIN_PASSWORD,
+                "backup_server": backup_server,
+                "backup_client": backup_client,
+            }
+        finally:
+            server.stop()
+
+    def test_persistent_file_not_in_regular_gallery(self, recovery_with_persistent_files):
+        """A photo file that persists on disk after primary reset must NOT
+        appear in the recovered server's regular gallery if its content
+        hash matches a secure gallery original.
+
+        This is the core regression test for Bug 22: photos appearing in
+        both the secure album and the regular gallery after recovery.
+        """
+        ctx = recovery_with_persistent_files
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], ctx["password"])
+
+        # Get all photos visible in regular gallery
+        sync_resp = user.encrypted_sync()
+        sync_photos = sync_resp.get("photos", [])
+        sync_ids = {p["id"] for p in sync_photos}
+
+        # The original photo (from the primary) should not appear under its
+        # old ID (it was excluded from backup sync_photos).
+        assert ctx["original_photo_id"] not in sync_ids, (
+            f"REGRESSION: Original photo {ctx['original_photo_id']} appeared "
+            f"in recovered primary's encrypted-sync"
+        )
+
+        # More importantly: no NEW photo should appear that matches the content
+        # of the gallery-hidden original.  Autoscan would have registered it
+        # with a brand-new UUID.
+        #
+        # Check every photo in encrypted-sync: download and verify none match
+        # the original content hash.
+        for photo in sync_photos:
+            resp = user.get_photo_file(photo["id"])
+            if resp.status_code == 200:
+                photo_hash = hashlib.sha256(resp.content).hexdigest()[:12]
+                assert photo_hash != ctx["content_hash"], (
+                    f"REGRESSION (Bug 22): Autoscan re-registered a file "
+                    f"whose content hash ({photo_hash}) matches the secure "
+                    f"gallery original. Photo {photo['id']} should NOT be in "
+                    f"encrypted-sync -- its content belongs to a gallery-hidden "
+                    f"original. This means the file persisted on disk after "
+                    f"reset and autoscan re-registered it with a new UUID."
+                )
+
+    def test_persistent_renamed_file_not_in_regular_gallery(self, recovery_with_persistent_files):
+        """Even if the persistent file was renamed, hash-based detection
+        must prevent it from appearing in the regular gallery."""
+        ctx = recovery_with_persistent_files
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], ctx["password"])
+
+        sync_resp = user.encrypted_sync()
+        sync_photos = sync_resp.get("photos", [])
+
+        matching_photos = []
+        for photo in sync_photos:
+            resp = user.get_photo_file(photo["id"])
+            if resp.status_code == 200:
+                photo_hash = hashlib.sha256(resp.content).hexdigest()[:12]
+                if photo_hash == ctx["content_hash"]:
+                    matching_photos.append(photo["id"])
+
+        assert len(matching_photos) == 0, (
+            f"REGRESSION (Bug 22): {len(matching_photos)} photo(s) in "
+            f"encrypted-sync match the content hash of the gallery-hidden "
+            f"original (IDs: {matching_photos}). Hash-based detection should "
+            f"block registration of renamed copies too."
+        )
+
+    def test_gallery_still_accessible_after_recovery_with_persistent_files(
+            self, recovery_with_persistent_files):
+        """The secure gallery metadata must still be present and the gallery
+        must be unlockable even when persistent files are present on disk."""
+        ctx = recovery_with_persistent_files
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], ctx["password"])
+        gid = ctx["gallery_id"]
+
+        token = user.unlock_secure_gallery(ctx["password"])["gallery_token"]
+        items = user.list_secure_gallery_items(gid, token)
+        assert len(items["items"]) >= 1, (
+            "No secure gallery items found on recovered server"
+        )
+
+        item = items["items"][0]
+        blob_id = item["blob_id"]
+        assert blob_id != ctx["clone_id"], (
+            "list_gallery_items returned plaintext clone instead of encrypted blob"
+        )
+
+    def test_no_duplicate_entries_after_recovery_with_persistent_files(
+            self, recovery_with_persistent_files):
+        """There should be no duplicate photo entries (by content hash)
+        visible in any endpoint after recovery with persistent files."""
+        ctx = recovery_with_persistent_files
+        user = APIClient(ctx["server"].base_url)
+        user.login(ctx["username"], ctx["password"])
+
+        # Check that no two photos in encrypted-sync share a content hash
+        sync_resp = user.encrypted_sync()
+        hashes_seen = {}
+        for photo in sync_resp.get("photos", []):
+            resp = user.get_photo_file(photo["id"])
+            if resp.status_code == 200:
+                h = hashlib.sha256(resp.content).hexdigest()[:12]
+                if h in hashes_seen:
+                    pytest.fail(
+                        f"Duplicate content hash {h} in encrypted-sync: "
+                        f"photo {photo['id']} and {hashes_seen[h]}"
+                    )
+                hashes_seen[h] = photo["id"]
