@@ -52,6 +52,7 @@ export default function Gallery() {
   const [backupPhotos, setBackupPhotos] = useState<BackupPhotoRecord[] | null>(null);
   const [backupLoading, setBackupLoading] = useState(false);
   const [backupError, setBackupError] = useState("");
+  const [backupLightboxIdx, setBackupLightboxIdx] = useState<number | null>(null);
 
   // Load backup photos whenever the view switches to backup mode or the
   // active server changes.
@@ -320,11 +321,13 @@ export default function Gallery() {
                   {group.photos.map((photo) => {
                     const thumbUrl = `/api/admin/backup/servers/${activeBackupServerId}/photos/${photo.id}/thumb?token=${encodeURIComponent(accessToken ?? "")}`;
                     const isVideo = photo.media_type === "video";
+                    const globalIdx = backupPhotos!.indexOf(photo);
                     return (
                       <div
                         key={photo.id}
-                        className="relative aspect-square bg-gray-200 dark:bg-gray-700 overflow-hidden rounded"
+                        className="relative aspect-square bg-gray-200 dark:bg-gray-700 overflow-hidden rounded cursor-pointer"
                         title={photo.filename}
+                        onClick={() => setBackupLightboxIdx(globalIdx)}
                       >
                         <img
                           src={thumbUrl}
@@ -346,6 +349,61 @@ export default function Gallery() {
                 </div>
               </div>
             ))}
+
+            {/* Backup photo lightbox */}
+            {backupLightboxIdx !== null && backupPhotos && backupPhotos[backupLightboxIdx] && (() => {
+              const photo = backupPhotos[backupLightboxIdx];
+              const lightboxThumbUrl = `/api/admin/backup/servers/${activeBackupServerId}/photos/${photo.id}/thumb?token=${encodeURIComponent(accessToken ?? "")}`;
+              return (
+                <div
+                  className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+                  onClick={() => setBackupLightboxIdx(null)}
+                >
+                  {/* Close button */}
+                  <button
+                    className="absolute top-4 right-4 text-white hover:text-gray-300 z-10"
+                    onClick={() => setBackupLightboxIdx(null)}
+                  >
+                    <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                  {/* Prev button */}
+                  {backupLightboxIdx > 0 && (
+                    <button
+                      className="absolute left-4 top-1/2 -translate-y-1/2 text-white hover:text-gray-300 z-10"
+                      onClick={(e) => { e.stopPropagation(); setBackupLightboxIdx(backupLightboxIdx - 1); }}
+                    >
+                      <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+                  )}
+                  {/* Next button */}
+                  {backupLightboxIdx < backupPhotos.length - 1 && (
+                    <button
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-white hover:text-gray-300 z-10"
+                      onClick={(e) => { e.stopPropagation(); setBackupLightboxIdx(backupLightboxIdx + 1); }}
+                    >
+                      <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  )}
+                  {/* Photo */}
+                  <img
+                    src={lightboxThumbUrl}
+                    alt={photo.filename}
+                    className="max-w-full max-h-full object-contain"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  {/* Filename */}
+                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white text-sm bg-black/60 px-3 py-1 rounded">
+                    {photo.filename}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         ) : (
         /* ── PRIMARY / ENCRYPTED GALLERY VIEW ──────────────────────────── */

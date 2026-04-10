@@ -31,6 +31,8 @@ interface ViewerLocationState {
   currentIndex?: number;
   /** When viewing from an album, the album ID (enables "Remove" instead of "Delete") */
   albumId?: string;
+  /** When true, the photo was opened from a secure gallery — hide all mutating UI */
+  secureGallery?: boolean;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -46,6 +48,7 @@ export default function Viewer() {
   const photoIds = navState.photoIds;
   const currentIndex = navState.currentIndex ?? 0;
   const albumId = navState.albumId;
+  const secureGallery = navState.secureGallery ?? false;
   const hasPrev = !!photoIds && currentIndex > 0;
   const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
 
@@ -167,7 +170,7 @@ export default function Viewer() {
     setSlideKey((k) => k + 1);
     navigate(`/photo/${nextId}`, {
       replace: true,
-      state: { photoIds, currentIndex: index } satisfies ViewerLocationState,
+      state: { photoIds, currentIndex: index, albumId, secureGallery } satisfies ViewerLocationState,
     });
   }, [photoIds, navigate, currentIndex]);
 
@@ -268,10 +271,10 @@ export default function Viewer() {
         mediaType={mediaType}
         mediaUrl={mediaUrl}
         isFavorite={isFavorite}
-        isBackupServer={isBackupServer}
+        isBackupServer={isBackupServer || secureGallery}
         isRenderingVideo={isRenderingVideo}
         albumId={albumId}
-        onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate("/gallery"); }}
+        onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate(secureGallery ? "/secure-gallery" : "/gallery"); }}
         onToggleEdit={() => { if (editMode) setEditMode(false); else enterEditMode(mediaType); }}
         onToggleFavorite={onToggleFavorite}
         onDownload={handleDownload}

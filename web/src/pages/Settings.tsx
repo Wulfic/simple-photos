@@ -210,7 +210,7 @@ export default function Settings() {
           </p>
 
           {/* Export controls */}
-          <div className="flex items-center gap-3 mb-4">
+          <div className="flex flex-wrap items-center gap-3 mb-4">
             <select
               value={exportSizeLimit}
               onChange={(e) => setExportSizeLimit(Number(e.target.value))}
@@ -223,16 +223,6 @@ export default function Settings() {
             </select>
 
             <button
-              onClick={startExport}
-              disabled={exportLoading || exportJob?.status === "pending" || exportJob?.status === "running"}
-              className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {exportJob?.status === "pending" || exportJob?.status === "running"
-                ? "Exporting…"
-                : "Export Library"}
-            </button>
-
-            <button
               onClick={() => navigate("/export-downloads")}
               disabled={exportFiles.length === 0}
               className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm transition-colors ${
@@ -242,6 +232,16 @@ export default function Settings() {
               }`}
             >
               Downloads{exportFiles.length > 0 ? ` (${exportFiles.length})` : ""}
+            </button>
+
+            <button
+              onClick={startExport}
+              disabled={exportLoading || exportJob?.status === "pending" || exportJob?.status === "running"}
+              className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exportJob?.status === "pending" || exportJob?.status === "running"
+                ? "Exporting…"
+                : "Export Library"}
             </button>
           </div>
 

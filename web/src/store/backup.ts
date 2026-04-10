@@ -10,6 +10,7 @@
  * elements (upload, edit, delete, album creation, etc.) on backup servers.
  */
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 export type ViewMode = "main" | "backup";
 
@@ -52,38 +53,49 @@ interface BackupViewState {
   hasBackupServer: () => boolean;
 }
 
-export const useBackupStore = create<BackupViewState>((set, get) => ({
-  viewMode: "main",
-  backupServers: [],
-  activeBackupServerId: null,
-  loaded: false,
-  recovering: false,
-  isBackupServer: false,
-  isBackupServerLoaded: false,
+export const useBackupStore = create<BackupViewState>()(
+  persist(
+    (set, get) => ({
+      viewMode: "main",
+      backupServers: [],
+      activeBackupServerId: null,
+      loaded: false,
+      recovering: false,
+      isBackupServer: false,
+      isBackupServerLoaded: false,
 
-  setViewMode: (mode) => set({ viewMode: mode }),
+      setViewMode: (mode) => set({ viewMode: mode }),
 
-  toggleViewMode: () =>
-    set((s) => ({
-      viewMode: s.viewMode === "main" ? "backup" : "main",
-    })),
+      toggleViewMode: () =>
+        set((s) => ({
+          viewMode: s.viewMode === "main" ? "backup" : "main",
+        })),
 
-  setBackupServers: (servers) =>
-    set({
-      backupServers: servers,
-      // Auto-select the first enabled server if none selected
-      activeBackupServerId:
-        get().activeBackupServerId ??
-        servers.find((s) => s.enabled)?.id ??
-        servers[0]?.id ??
-        null,
+      setBackupServers: (servers) =>
+        set({
+          backupServers: servers,
+          // Auto-select the first enabled server if none selected
+          activeBackupServerId:
+            get().activeBackupServerId ??
+            servers.find((s) => s.enabled)?.id ??
+            servers[0]?.id ??
+            null,
+        }),
+
+      setActiveBackupServerId: (id) => set({ activeBackupServerId: id }),
+      setLoaded: (loaded) => set({ loaded }),
+      setRecovering: (recovering) => set({ recovering }),
+      setIsBackupServer: (val) => set({ isBackupServer: val }),
+      setIsBackupServerLoaded: (val) => set({ isBackupServerLoaded: val }),
+
+      hasBackupServer: () => get().backupServers.length > 0,
     }),
-
-  setActiveBackupServerId: (id) => set({ activeBackupServerId: id }),
-  setLoaded: (loaded) => set({ loaded }),
-  setRecovering: (recovering) => set({ recovering }),
-  setIsBackupServer: (val) => set({ isBackupServer: val }),
-  setIsBackupServerLoaded: (val) => set({ isBackupServerLoaded: val }),
-
-  hasBackupServer: () => get().backupServers.length > 0,
-}));
+    {
+      name: "backup-view-state",
+      partialize: (state) => ({
+        viewMode: state.viewMode,
+        activeBackupServerId: state.activeBackupServerId,
+      }),
+    },
+  ),
+);

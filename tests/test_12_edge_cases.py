@@ -345,3 +345,106 @@ class TestSyncAfterComplexOperations:
         primary_admin.admin_trigger_sync(backup_configured)
         result = wait_for_sync(primary_admin, backup_configured)
         assert result.get("status") != "error"
+
+
+class TestBackupViewReadOnly:
+    """Verify backup photos listed via the admin proxy cannot be
+    mutated through the primary server's normal endpoints.
+
+    When a user browses photos via the Active Server dropdown, the
+    frontend lists photos from the backup proxy
+    (GET /api/admin/backup/servers/:id/photos). Those photo IDs belong
+    to the *backup* database — they should NOT be mutable through the
+    primary server's user-facing endpoints.
+    """
+
+    def test_proxy_photo_ids_not_favoritable_on_primary(
+        self, primary_admin, user_client, backup_configured, backup_client
+    ):
+        """Attempting to favorite a backup-only photo ID on the primary must fail."""
+        from helpers import wait_for_sync
+
+        # Upload a photo and sync so at least one photo exists on backup
+        user_client.upload_photo(unique_filename())
+        primary_admin.admin_trigger_sync(backup_configured)
+        wait_for_sync(primary_admin, backup_configured)
+
+        photos = primary_admin.admin_get_backup_photos(backup_configured)
+        assert len(photos) > 0, "Need at least one backup photo"
+
+        backup_photo_id = photos[0]["id"]
+
+        # Try to favorite the backup photo via primary's user endpoint
+        r = user_client.put(f"/api/photos/{backup_photo_id}/favorite")
+        # Should fail (404 or 403) because the photo ID doesn't exist on primary
+        assert r.status_code in (400, 403, 404, 500), (
+            f"Primary server allowed favoriting backup-only photo ID "
+            f"{backup_photo_id}: HTTP {r.status_code}"
+        )
+
+    def test_proxy_photo_ids_not_deletable_on_primary(
+        self, primary_admin, user_client, backup_configured, backup_client
+    ):
+        """Attempting to delete a backup-only photo ID on the primary must fail."""
+        from helpers import wait_for_sync
+
+        user_client.upload_photo(unique_filename())
+        primary_admin.admin_trigger_sync(backup_configured)
+        wait_for_sync(primary_admin, backup_configured)
+
+        photos = primary_admin.admin_get_backup_photos(backup_configured)
+        assert len(photos) > 0
+
+        backup_photo_id = photos[0]["id"]
+
+        # Try to trash the backup photo blob via primary
+        r = user_client.post(f"/api/blobs/{backup_photo_id}/trash", json_data={
+            "filename": "test.jpg",
+            "mime_type": "image/jpeg",
+        })
+        assert r.status_code in (400, 403, 404, 500), (
+            f"Primary server allowed trashing backup-only photo ID "
+            f"{backup_photo_id}: HTTP {r.status_code}"
+        )
+
+    def test_proxy_photo_ids_not_editable_on_primary(
+        self, primary_admin, user_client, backup_configured, backup_client
+    ):
+        """Attempting to crop a backup-only photo ID on the primary must fail."""
+        from helpers import wait_for_sync
+
+        user_client.upload_photo(unique_filename())
+        primary_admin.admin_trigger_sync(backup_configured)
+        wait_for_sync(primary_admin, backup_configured)
+
+        photos = primary_admin.admin_get_backup_photos(backup_configured)
+        assert len(photos) > 0
+
+        backup_photo_id = photos[0]["id"]
+
+        # Try to set crop on the backup photo via primary
+        r = user_client.put(
+            f"/api/photos/{backup_photo_id}/crop",
+            json_data={"crop_metadata": '{"x":0,"y":0}'},
+        )
+        assert r.status_code in (400, 403, 404, 500), (
+            f"Primary server allowed cropping backup-only photo ID "
+            f"{backup_photo_id}: HTTP {r.status_code}"
+        )
+
+    def test_backup_proxy_thumb_accessible(
+        self, primary_admin, backup_configured, backup_client
+    ):
+        """Backup thumbnails must be accessible through the proxy endpoint."""
+        photos = primary_admin.admin_get_backup_photos(backup_configured)
+        if not photos:
+            pytest.skip("No backup photos to test thumbnail proxy")
+
+        photo_id = photos[0]["id"]
+        r = primary_admin.get(
+            f"/api/admin/backup/servers/{backup_configured}/photos/{photo_id}/thumb"
+        )
+        assert r.status_code == 200, (
+            f"Expected thumbnail, got HTTP {r.status_code}"
+        )
+        assert len(r.content) > 0, "Thumbnail response was empty"
