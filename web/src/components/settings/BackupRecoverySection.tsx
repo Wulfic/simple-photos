@@ -30,7 +30,8 @@ export default function BackupRecoverySection({
   const { startTask, endTask } = useProcessingStore();
 
   // ── Recovery state ─────────────────────────────────────────────────────
-  const [showRecoverWarning, setShowRecoverWarning] = useState(false);
+  const [showRecoverConfirm, setShowRecoverConfirm] = useState(false);
+  const [selectedRecoveryServerId, setSelectedRecoveryServerId] = useState<string>("");
 
   // ── Manual backup server form state ────────────────────────────────────
   const [showAddBackupServer, setShowAddBackupServer] = useState(false);
@@ -64,14 +65,13 @@ export default function BackupRecoverySection({
   }, [backupServers]);
 
   async function handleRecover() {
-    if (backupServers.length === 0) return;
-    setShowRecoverWarning(false);
+    if (!selectedRecoveryServerId) return;
+    setShowRecoverConfirm(false);
     setRecovering(true);
     startTask("recovery");
     setError("");
     try {
-      const target = backupServers.find((s) => s.enabled) ?? backupServers[0];
-      const res = await api.backup.recover(target.id);
+      const res = await api.backup.recover(selectedRecoveryServerId);
       setSuccess(res.message);
     } catch (err: unknown) {
       setError(getErrorMessage(err));
@@ -189,56 +189,84 @@ export default function BackupRecoverySection({
           </div>
 
         </div>
-      ) : !showRecoverWarning ? (
-        <button
-          onClick={() => {
-            setShowRecoverWarning(true);
-            setError("");
-            setSuccess("");
-          }}
-          disabled={recovering}
-          className="bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 disabled:opacity-50 text-sm"
-        >
-          {recovering ? (
-            <span className="flex items-center gap-2">
-              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Recovering…
-            </span>
-          ) : (
-            "Recover from Backup Server"
-          )}
-        </button>
       ) : (
-        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
-          <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">
-            ⚠️ Confirm Recovery
-          </h4>
-          <p className="text-sm text-amber-700 dark:text-amber-400 mb-1">
-            This will download <strong>all photos</strong> from the backup server
-            {" "}<strong>"{backupServers.find((s) => s.enabled)?.name ?? backupServers[0]?.name}"</strong> to
-            this server.
-          </p>
-          <ul className="text-sm text-amber-700 dark:text-amber-400 list-disc list-inside mb-3 space-y-0.5">
-            <li>Photos with the same filename will be <strong>skipped</strong> (not overwritten).</li>
-            <li>This process runs in the background and may take a while for large libraries.</li>
-            <li>The backup server must be reachable and have its API key configured.</li>
-          </ul>
-          <div className="flex gap-2">
-            <button
-              onClick={handleRecover}
+        <>
+          <div className="flex items-center gap-3 flex-wrap">
+            <select
+              value={selectedRecoveryServerId}
+              onChange={(e) => setSelectedRecoveryServerId(e.target.value)}
               disabled={recovering}
-              className="bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 disabled:opacity-50 text-sm"
+              className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 min-w-[200px]"
+              data-testid="recovery-server-select"
             >
-              {recovering ? "Starting…" : "Confirm Recovery"}
-            </button>
+              <option value="">Select a backup server…</option>
+              {backupServers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.address})
+                </option>
+              ))}
+            </select>
             <button
-              onClick={() => setShowRecoverWarning(false)}
-              className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+              onClick={() => {
+                setShowRecoverConfirm(true);
+                setError("");
+                setSuccess("");
+              }}
+              disabled={recovering || !selectedRecoveryServerId}
+              className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+              data-testid="recovery-button"
             >
-              Cancel
+              {recovering ? (
+                <span className="flex items-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Recovering…
+                </span>
+              ) : (
+                "Recover"
+              )}
             </button>
           </div>
-        </div>
+
+          {/* Confirmation modal */}
+          {showRecoverConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" data-testid="recovery-confirm-modal">
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+                <h3 className="text-lg font-semibold text-red-600 dark:text-red-400 mb-3">
+                  ⚠️ Confirm Recovery
+                </h3>
+                <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
+                  This will recover data from backup server{" "}
+                  <strong>"{backupServers.find((s) => s.id === selectedRecoveryServerId)?.name}"</strong>.
+                </p>
+                <p className="text-sm text-red-600 dark:text-red-400 font-medium mb-3">
+                  This action will overwrite your current data and cannot be undone.
+                </p>
+                <ul className="text-sm text-gray-600 dark:text-gray-400 list-disc list-inside mb-4 space-y-0.5">
+                  <li>All photos from the backup will be imported.</li>
+                  <li>This process runs in the background and may take a while.</li>
+                  <li>The backup server must be reachable with a valid API key.</li>
+                </ul>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setShowRecoverConfirm(false)}
+                    className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                    data-testid="recovery-cancel-button"
+                  >
+                    No, Cancel
+                  </button>
+                  <button
+                    onClick={handleRecover}
+                    disabled={recovering}
+                    className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+                    data-testid="recovery-confirm-button"
+                  >
+                    {recovering ? "Starting…" : "Yes, Recover"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* ── Add / Scan ─────────────────────────────────────────── */}
