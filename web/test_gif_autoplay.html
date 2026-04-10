@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GIF Autoplay-on-Scroll Test</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee; }
+  h1 { text-align: center; padding: 16px; font-size: 18px; }
+  .instructions { text-align: center; padding: 0 16px 16px; color: #aaa; font-size: 14px; }
+  .spacer { height: 110vh; display: flex; align-items: center; justify-content: center;
+    font-size: 24px; color: #555; border-bottom: 1px dashed #333; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 4px; padding: 4px; }
+  .tile { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden;
+    background: #2a2a3e; border: 2px solid transparent; transition: border-color 0.15s; }
+  .tile.playing { border-color: #0f0; }
+  .tile.paused  { border-color: #f00; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; }
+  .badge { position: absolute; bottom: 4px; right: 4px; background: rgba(0,0,0,0.6);
+    color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+  .state-label { position: absolute; top: 4px; left: 4px; font-size: 10px; font-weight: bold;
+    padding: 2px 6px; border-radius: 4px; }
+  .state-label.playing { background: #0f0; color: #000; }
+  .state-label.paused  { background: #f00; color: #fff; }
+  #log { position: fixed; bottom: 0; left: 0; right: 0; max-height: 160px;
+    overflow-y: auto; background: #111; border-top: 1px solid #333;
+    font-family: monospace; font-size: 12px; padding: 8px; z-index: 10; }
+  #log .pass { color: #0f0; }
+  #log .fail { color: #f44; }
+  #log .info { color: #8cf; }
+  #results { position: fixed; top: 8px; right: 8px; background: #222; border: 1px solid #444;
+    padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 20; }
+  #results.pass { border-color: #0f0; }
+  #results.fail { border-color: #f44; }
+</style>
+</head>
+<body>
+
+<h1>GIF Autoplay-on-Scroll Test</h1>
+<p class="instructions">
+  Scroll down to see GIF tiles. Green border = playing (in view), Red border = paused (out of view).<br>
+  Automated assertions run on scroll. Check the log at the bottom for results.
+</p>
+<div id="results">Tests: pending</div>
+<div id="log"></div>
+
+<!-- Spacer so GIF tiles start off-screen -->
+<div class="spacer">↓ Scroll down to reach GIF tiles ↓</div>
+
+<div class="grid" id="gallery"></div>
+
+<!-- Another spacer after the grid -->
+<div class="spacer">↑ Scroll up to see GIF tiles again ↑</div>
+
+<script>
+// ── Tiny 2-frame animated GIF (10x10, red/blue alternating) ──────────────
+// Encoded as base64; decodes to a valid animated GIF for testing.
+const ANIMATED_GIF_B64 =
+  "R0lGODlhCgAKAPAAAP8AAP///yH/C05FVFNDQVBFMi4wAwEAAAAh+QQJCgACACwAAAAA" +
+  "CgAKAAACB4SPqcvtDwUAIfkECQoAAgAsAAAAAAoACgAAAgmEj6nL7Q8KBQA7";
+
+function b64ToBlob(b64, mime) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+// ── extractStaticFrame — same logic as gallery.ts ────────────────────────
+function extractStaticFrame(animatedUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { reject(new Error("No 2d context")); return; }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(
+        (blob) => blob ? resolve(URL.createObjectURL(blob)) : reject(new Error("toBlob failed")),
+        "image/jpeg", 0.85
+      );
+    };
+    img.onerror = () => reject(new Error("GIF load failed"));
+    img.src = animatedUrl;
+  });
+}
+
+// ── Logging ──────────────────────────────────────────────────────────────
+const logEl = document.getElementById("log");
+const resultsEl = document.getElementById("results");
+let passed = 0, failed = 0;
+
+function log(msg, cls = "info") {
+  const d = document.createElement("div");
+  d.className = cls;
+  d.textContent = `[${new Date().toISOString().slice(11,23)}] ${msg}`;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function assert(cond, msg) {
+  if (cond) { log(`✓ ${msg}`, "pass"); passed++; }
+  else      { log(`✗ ${msg}`, "fail"); failed++; }
+  resultsEl.textContent = `Tests: ${passed} passed, ${failed} failed`;
+  resultsEl.className = failed > 0 ? "fail" : "pass";
+}
+
+// ── Build gallery tiles ──────────────────────────────────────────────────
+const gallery = document.getElementById("gallery");
+const TILE_COUNT = 12;
+const tiles = [];
+
+for (let i = 0; i < TILE_COUNT; i++) {
+  const isGif = i % 3 === 0; // every 3rd tile is a GIF
+  const tile = document.createElement("div");
+  tile.className = "tile";
+  tile.dataset.index = i;
+  tile.dataset.isGif = isGif;
+  tile.dataset.state = "idle"; // idle -> playing | paused
+
+  const img = document.createElement("img");
+  img.alt = isGif ? `GIF tile ${i}` : `Photo tile ${i}`;
+
+  const badge = document.createElement("div");
+  badge.className = "badge";
+  badge.textContent = isGif ? "GIF" : "Photo";
+
+  const stateLabel = document.createElement("div");
+  stateLabel.className = "state-label";
+  stateLabel.textContent = "—";
+
+  tile.appendChild(img);
+  tile.appendChild(badge);
+  tile.appendChild(stateLabel);
+  gallery.appendChild(tile);
+
+  const tileData = { el: tile, img, stateLabel, isGif, animatedUrl: null, staticUrl: null, visible: false, inView: false };
+  tiles.push(tileData);
+
+  if (!isGif) {
+    // Non-GIF: plain colored placeholder
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = `hsl(${i * 30}, 60%, 40%)`;
+    ctx.fillRect(0, 0, 64, 64);
+    canvas.toBlob((blob) => { img.src = URL.createObjectURL(blob); }, "image/jpeg");
+  }
+}
+
+// ── IntersectionObserver — mirrors MediaTile logic ───────────────────────
+const observer = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    const idx = parseInt(entry.target.dataset.index);
+    const td = tiles[idx];
+    if (!td.isGif) {
+      // Non-GIF: one-shot lazy load (already loaded above)
+      if (entry.isIntersecting) {
+        td.visible = true;
+        observer.unobserve(entry.target);
+      }
+      continue;
+    }
+    // GIF tile: track in/out
+    if (entry.isIntersecting) td.visible = true;
+    td.inView = entry.isIntersecting;
+    updateGifTile(td);
+  }
+}, { rootMargin: "200px" });
+
+tiles.forEach((td) => observer.observe(td.el));
+
+async function updateGifTile(td) {
+  if (!td.visible) return;
+  // Create URLs once
+  if (!td.animatedUrl) {
+    const blob = b64ToBlob(ANIMATED_GIF_B64, "image/gif");
+    td.animatedUrl = URL.createObjectURL(blob);
+    try {
+      td.staticUrl = await extractStaticFrame(td.animatedUrl);
+    } catch (e) {
+      log(`Static frame extraction failed for tile ${td.el.dataset.index}: ${e.message}`, "fail");
+    }
+  }
+  if (td.inView) {
+    td.img.src = td.animatedUrl;
+    td.el.classList.add("playing");
+    td.el.classList.remove("paused");
+    td.stateLabel.textContent = "▶ PLAYING";
+    td.stateLabel.className = "state-label playing";
+    td.el.dataset.state = "playing";
+  } else {
+    td.img.src = td.staticUrl ?? td.animatedUrl;
+    td.el.classList.add("paused");
+    td.el.classList.remove("playing");
+    td.stateLabel.textContent = "⏸ PAUSED";
+    td.stateLabel.className = "state-label paused";
+    td.el.dataset.state = "paused";
+  }
+}
+
+// ── Automated Assertions ─────────────────────────────────────────────────
+// Run assertions after a delay to let IntersectionObserver settle
+let assertionRun = false;
+
+function runInitialAssertions() {
+  if (assertionRun) return;
+  assertionRun = true;
+  log("— Initial state (GIF tiles should be off-screen) —");
+  const gifTiles = tiles.filter(t => t.isGif);
+  const allIdle = gifTiles.every(t => t.el.dataset.state === "idle" || t.el.dataset.state === "paused");
+  assert(allIdle, "GIF tiles start idle/paused when off-screen");
+  assert(!gifTiles[0].inView, "First GIF tile is not in view initially");
+}
+
+function runInViewAssertions() {
+  log("— In-view check —");
+  const gifTiles = tiles.filter(t => t.isGif);
+  const visibleGifs = gifTiles.filter(t => t.inView);
+  if (visibleGifs.length > 0) {
+    const allPlaying = visibleGifs.every(t => t.el.dataset.state === "playing");
+    assert(allPlaying, `${visibleGifs.length} visible GIF tile(s) are playing`);
+    visibleGifs.forEach(t => {
+      assert(t.img.src === t.animatedUrl, `Tile ${t.el.dataset.index} src is animated URL`);
+    });
+  }
+  const hiddenGifs = gifTiles.filter(t => !t.inView && t.visible);
+  if (hiddenGifs.length > 0) {
+    const allPaused = hiddenGifs.every(t => t.el.dataset.state === "paused");
+    assert(allPaused, `${hiddenGifs.length} hidden GIF tile(s) are paused`);
+    hiddenGifs.forEach(t => {
+      if (t.staticUrl) {
+        assert(t.img.src === t.staticUrl, `Tile ${t.el.dataset.index} src is static URL when hidden`);
+      }
+    });
+  }
+}
+
+// Run initial assertions after observer settles
+setTimeout(runInitialAssertions, 500);
+
+// Run in-view assertions on scroll
+let scrollTimer = null;
+window.addEventListener("scroll", () => {
+  clearTimeout(scrollTimer);
+  scrollTimer = setTimeout(() => {
+    runInViewAssertions();
+  }, 300);
+});
+
+// Also run after extractStaticFrame has had time to complete
+setTimeout(() => {
+  log("— Static frame extraction check —");
+  const gifTiles = tiles.filter(t => t.isGif);
+  const withStatic = gifTiles.filter(t => t.staticUrl);
+  assert(withStatic.length > 0, `extractStaticFrame produced ${withStatic.length} static URL(s)`);
+  withStatic.forEach(t => {
+    assert(t.staticUrl !== t.animatedUrl, `Tile ${t.el.dataset.index} static URL differs from animated`);
+    assert(t.staticUrl.startsWith("blob:"), `Tile ${t.el.dataset.index} static URL is a blob URL`);
+  });
+}, 2000);
+
+log("Test page loaded. Scroll down to interact with GIF tiles.", "info");
+</script>
+</body>
+</html>

@@ -13,7 +13,7 @@ import { db, type CachedPhoto } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
-import { useThumbnailSizeStore } from "../store/thumbnailSize";
+import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
@@ -41,7 +41,6 @@ interface GalleryItem {
  */
 export default function SecureGallery() {
   const navigate = useNavigate();
-  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
   const isBackupServer = useIsBackupServer();
 
   // Auth gate state
@@ -519,10 +518,12 @@ export default function SecureGallery() {
               )}
             </div>
           ) : !showAddPhotos ? (
-            <div className={gridClasses}>
-              {items.map((item, idx) => (
+            <JustifiedGrid
+              items={items}
+              getAspectRatio={() => 1}
+              getKey={(item) => item.id}
+              renderItem={(item, idx) => (
                 <ItemTile
-                  key={item.id}
                   item={item}
                   onClick={() =>
                     navigate(`/photo/${item.blob_id}`, {
@@ -534,8 +535,8 @@ export default function SecureGallery() {
                     })
                   }
                 />
-              ))}
-            </div>
+              )}
+            />
           ) : null}
         </main>
       </div>

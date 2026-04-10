@@ -6,6 +6,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { BASE, downloadRaw } from "../api/core";
 import type { ExportFile, ExportJob } from "../api/export";
 import AppHeader from "../components/AppHeader";
 import { getErrorMessage } from "../utils/formatters";
@@ -55,6 +56,29 @@ export default function ExportDownloads() {
       }
     } finally {
       setLoading(false);
+    }
+  }
+
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  async function handleDownload(file: ExportFile) {
+    if (downloading) return;
+    setDownloading(file.id);
+    try {
+      const buf = await downloadRaw(`${BASE}${file.download_url}`);
+      const blob = new Blob([buf], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to download file."));
+    } finally {
+      setDownloading(null);
     }
   }
 
@@ -146,13 +170,13 @@ export default function ExportDownloads() {
                       {formatBytes(file.size_bytes)} — {timeRemaining(file.expires_at)}
                     </p>
                   </div>
-                  <a
-                    href={`/api${file.download_url}`}
-                    download={file.filename}
-                    className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700 text-sm flex-shrink-0"
+                  <button
+                    onClick={() => handleDownload(file)}
+                    disabled={downloading === file.id}
+                    className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700 text-sm flex-shrink-0 disabled:opacity-50"
                   >
-                    Download
-                  </a>
+                    {downloading === file.id ? "Downloading…" : "Download"}
+                  </button>
                 </div>
               ))}
             </div>

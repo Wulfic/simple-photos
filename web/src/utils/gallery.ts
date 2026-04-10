@@ -107,6 +107,29 @@ export function thumbnailSrc(data: ArrayBuffer, mimeType?: string): string {
   return URL.createObjectURL(new Blob([data], { type: mimeType || "image/jpeg" }));
 }
 
+/** Draw the first frame of an animated GIF to a canvas and return
+ *  a static JPEG object URL for the paused thumbnail. */
+export function extractStaticFrame(animatedUrl: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { reject(new Error("No 2d context")); return; }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(
+        (blob) => blob ? resolve(URL.createObjectURL(blob)) : reject(new Error("toBlob failed")),
+        "image/jpeg",
+        0.85
+      );
+    };
+    img.onerror = () => reject(new Error("GIF load failed"));
+    img.src = animatedUrl;
+  });
+}
+
 /** Get the natural width/height of an image file. */
 export function getImageDimensions(file: File): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {

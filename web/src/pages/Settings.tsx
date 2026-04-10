@@ -320,8 +320,8 @@ export default function Settings() {
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400">
               {thumbnailSize === "large"
-                ? "Large — 2 photos per row for bigger previews."
-                : "Normal — 3 photos per row (default)."}
+                ? "Large — taller rows for bigger photo previews."
+                : "Normal — compact rows showing more photos (default)."}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">

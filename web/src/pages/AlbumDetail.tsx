@@ -15,7 +15,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import AlbumTile from "../components/AlbumTile";
 import AddPhotosPanel from "../components/AddPhotosPanel";
-import { useThumbnailSizeStore } from "../store/thumbnailSize";
+import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
@@ -68,7 +68,6 @@ export default function AlbumDetail() {
 function SmartAlbumView({ albumId }: { albumId: string }) {
   const navigate = useNavigate();
   const def = SMART_ALBUM_DEFS[albumId];
-  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
   const [loading, setLoading] = useState(true);
   const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
 
@@ -122,10 +121,12 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
             <p className="text-gray-500 dark:text-gray-400">No {def.label.toLowerCase()} found</p>
           </div>
         ) : (
-          <div className={gridClasses}>
-            {filteredEncrypted.map((photo, idx) => (
+          <JustifiedGrid
+            items={filteredEncrypted}
+            getAspectRatio={(p) => (p.width && p.height) ? p.width / p.height : 1}
+            getKey={(p) => p.blobId}
+            renderItem={(photo, idx) => (
               <AlbumTile
-                key={photo.blobId}
                 photo={photo}
                 isSelectionMode={false}
                 isSelected={false}
@@ -140,8 +141,8 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
                 onLongPress={() => {}}
                 onRemove={() => {}}
               />
-            ))}
-          </div>
+            )}
+          />
         )}
       </main>
     </div>
@@ -152,7 +153,6 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
 
 function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   const navigate = useNavigate();
-  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
   const isBackupServer = useIsBackupServer();
   const [error, setError] = useState("");
   const [showAddPhotos, setShowAddPhotos] = useState(false);
@@ -489,40 +489,42 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           </button>
         </div>
       )}
-      <div className={gridClasses}>
-        {albumPhotos.length === 0 && (
-          <div className="col-span-full text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400 mb-2">This album is empty</p>
-            <p className="text-gray-400 text-sm">
-              Click "Add Photos" to add media from your gallery
-            </p>
-          </div>
-        )}
-
-        {albumPhotos.map((photo, idx) => (
-          <AlbumTile
-            key={photo.blobId}
-            photo={photo}
-            isSelectionMode={isSelectionMode}
-            isSelected={selectedIds.has(photo.blobId)}
-            onClick={() => {
-              if (isSelectionMode) {
-                toggleSelect(photo.blobId);
-              } else {
-                navigate(`/photo/${photo.blobId}`, {
-                  state: {
-                    photoIds: albumPhotos.map((p) => p.blobId),
-                    currentIndex: idx,
-                    albumId,
-                  },
-                });
-              }
-            }}
-            onLongPress={() => enterSelectionMode(photo.blobId)}
-            onRemove={() => removePhoto(photo.blobId)}
-          />
-        ))}
-      </div>
+      {albumPhotos.length === 0 ? (
+        <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+          <p className="text-gray-500 dark:text-gray-400 mb-2">This album is empty</p>
+          <p className="text-gray-400 text-sm">
+            Click "Add Photos" to add media from your gallery
+          </p>
+        </div>
+      ) : (
+        <JustifiedGrid
+          items={albumPhotos}
+          getAspectRatio={(p) => (p.width && p.height) ? p.width / p.height : 1}
+          getKey={(p) => p.blobId}
+          renderItem={(photo, idx) => (
+            <AlbumTile
+              photo={photo}
+              isSelectionMode={isSelectionMode}
+              isSelected={selectedIds.has(photo.blobId)}
+              onClick={() => {
+                if (isSelectionMode) {
+                  toggleSelect(photo.blobId);
+                } else {
+                  navigate(`/photo/${photo.blobId}`, {
+                    state: {
+                      photoIds: albumPhotos.map((p) => p.blobId),
+                      currentIndex: idx,
+                      albumId,
+                    },
+                  });
+                }
+              }}
+              onLongPress={() => enterSelectionMode(photo.blobId)}
+              onRemove={() => removePhoto(photo.blobId)}
+            />
+          )}
+        />
+      )}
       </main>
     </div>
   );

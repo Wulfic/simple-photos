@@ -1,10 +1,10 @@
 /** Gallery thumbnail tile for encrypted-mode photos. Creates object URLs
  *  from decrypted IndexedDB thumbnail data, lazy-loaded via IntersectionObserver.
- *  GIF thumbnails are displayed with their native animation. */
+ *  GIF thumbnails animate only while the tile is in the viewport. */
 import { useState, useEffect, useRef } from "react";
 import type { CachedPhoto } from "../../db";
 import useLongPress from "../../hooks/useLongPress";
-import { thumbnailSrc, formatDuration } from "../../utils/gallery";
+import { thumbnailSrc, formatDuration, extractStaticFrame } from "../../utils/gallery";
 
 import { getThumbnailStyle } from "../../utils/thumbnailCss";
 
@@ -26,17 +26,26 @@ export interface MediaTileProps {
 }
 
 export default function MediaTile({ photo, onClick, onLongPress, selectionMode, isSelected }: MediaTileProps) {
+  const isAnimatedGif = photo.mediaType === "gif" && thumbMime(photo) === "image/gif";
   const [src, setSrc] = useState<string | null>(null);
   const [visible, setVisible] = useState(false);
+  const [inView, setInView] = useState(false);
   const tileRef = useRef<HTMLDivElement>(null);
+  const gifAnimatedUrl = useRef<string | null>(null);
+  const gifStaticUrl = useRef<string | null>(null);
+  const inViewRef = useRef(false);
 
-  // Lazy-load: only create the object URL when the tile is in the viewport
+  // Viewport tracking: one-shot for non-GIF, persistent for animated GIFs
   useEffect(() => {
     const el = tileRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
+        if (isAnimatedGif) {
+          if (entry.isIntersecting) setVisible(true);
+          setInView(entry.isIntersecting);
+          inViewRef.current = entry.isIntersecting;
+        } else if (entry.isIntersecting) {
           setVisible(true);
           observer.disconnect();
         }
@@ -45,24 +54,45 @@ export default function MediaTile({ photo, onClick, onLongPress, selectionMode, 
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [isAnimatedGif]);
 
+  // Non-animated: create object URL when first visible
   useEffect(() => {
-    if (!visible) return;
-    
+    if (isAnimatedGif || !visible) return;
     if (photo.thumbnailData) {
       const url = thumbnailSrc(photo.thumbnailData, thumbMime(photo));
       setSrc(url);
       return () => URL.revokeObjectURL(url);
     }
-  }, [visible, photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
+  }, [isAnimatedGif, visible, photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
+
+  // Animated GIF: create animated + static URLs once, swap based on viewport
+  useEffect(() => {
+    if (!isAnimatedGif || !visible || !photo.thumbnailData) return;
+    if (!gifAnimatedUrl.current) {
+      gifAnimatedUrl.current = thumbnailSrc(photo.thumbnailData, "image/gif");
+      extractStaticFrame(gifAnimatedUrl.current)
+        .then((url) => {
+          gifStaticUrl.current = url;
+          if (!inViewRef.current) setSrc(url);
+        })
+        .catch(() => { /* fall back to always animated */ });
+    }
+    setSrc(inView ? gifAnimatedUrl.current : (gifStaticUrl.current ?? gifAnimatedUrl.current));
+  }, [isAnimatedGif, visible, inView, photo.thumbnailData]);
+
+  // Cleanup GIF URLs on unmount
+  useEffect(() => () => {
+    if (gifAnimatedUrl.current) URL.revokeObjectURL(gifAnimatedUrl.current);
+    if (gifStaticUrl.current) URL.revokeObjectURL(gifStaticUrl.current);
+  }, []);
 
   const longPress = useLongPress(() => onLongPress?.(), 500);
 
   return (
     <div
       ref={tileRef}
-      className={`relative aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${isSelected ? "ring-2 ring-blue-500" : ""}`}
+      className={`relative w-full h-full bg-gray-100 dark:bg-gray-700 overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${isSelected ? "ring-2 ring-blue-500" : ""}`}
       onClick={(e) => { if (longPress.wasLongPress()) { e.preventDefault(); return; } onClick(); }}
       onTouchStart={longPress.onTouchStart}
       onTouchEnd={longPress.onTouchEnd}

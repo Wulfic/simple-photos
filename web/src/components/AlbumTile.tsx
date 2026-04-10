@@ -89,7 +89,7 @@ export default function AlbumTile({ photo, isSelectionMode, isSelected, onClick,
 
   return (
     <div
-      className={`relative aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer group ${
+      className={`relative w-full h-full bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer group ${
         isSelected ? "ring-2 ring-blue-500" : ""
       }`}
       onPointerDown={handlePointerDown}

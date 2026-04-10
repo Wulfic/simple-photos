@@ -9,7 +9,7 @@ import { db, type CachedTrashItem } from "../db";
 import AppHeader from "../components/AppHeader";
 import { formatBytes, getErrorMessage } from "../utils/formatters";
 import AppIcon from "../components/AppIcon";
-import { useThumbnailSizeStore } from "../store/thumbnailSize";
+import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -68,7 +68,6 @@ function timeSince(isoDate: string): string {
 
 export default function Trash() {
   const { accessToken } = useAuthStore();
-  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
   const isBackupServer = useIsBackupServer();
   const [items, setItems] = useState<TrashItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -389,8 +388,11 @@ export default function Trash() {
 
         {/* ── Photo Grid ────────────────────────────────────────────── */}
         {!loading && items.length > 0 && (
-          <div className={gridClasses}>
-            {items.map((item) => {
+          <JustifiedGrid
+            items={items}
+            getAspectRatio={(item) => (item.width && item.height) ? item.width / item.height : 1}
+            getKey={(item) => item.id}
+            renderItem={(item) => {
               const isSelected = selectedIds.has(item.id);
               const thumbUrl = item._localThumbUrl
                 ? item._localThumbUrl
@@ -400,8 +402,7 @@ export default function Trash() {
 
               return (
                 <div
-                  key={item.id}
-                  className={`group relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
+                  className={`group relative w-full h-full overflow-hidden cursor-pointer border-2 transition-all ${
                     isSelected
                       ? "border-blue-500 ring-2 ring-blue-500/30"
                       : "border-transparent hover:border-gray-300 dark:hover:border-gray-600"
@@ -454,8 +455,8 @@ export default function Trash() {
 
                 </div>
               );
-            })}
-          </div>
+            }}
+          />
         )}
       </main>
 

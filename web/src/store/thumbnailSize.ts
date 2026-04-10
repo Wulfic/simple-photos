@@ -7,15 +7,17 @@ interface ThumbnailSizeState {
   thumbnailSize: ThumbnailSize;
   setThumbnailSize: (size: ThumbnailSize) => void;
   toggle: () => void;
-  /** Returns Tailwind grid classes for the current thumbnail size */
+  /** Returns Tailwind grid classes (used as fallback for non-justified grids). */
   gridClasses: () => string;
+  /** Target row height in pixels for the justified flex-row grid layout. */
+  targetRowHeight: () => number;
 }
 
 /**
  * Zustand store for thumbnail size preference, persisted to localStorage.
  *
- * - "normal" → 3 columns on mobile (current default)
- * - "large"  → 2 columns on mobile (bigger thumbnails)
+ * - "normal" → ~180 px row height (more photos visible per screen)
+ * - "large"  → ~280 px row height (bigger previews, fewer per screen)
  */
 export const useThumbnailSizeStore = create<ThumbnailSizeState>((set, get) => ({
   thumbnailSize:
@@ -38,5 +40,9 @@ export const useThumbnailSizeStore = create<ThumbnailSizeState>((set, get) => ({
     return get().thumbnailSize === "large"
       ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2"
       : "grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2";
+  },
+
+  targetRowHeight: () => {
+    return get().thumbnailSize === "large" ? 280 : 180;
   },
 }));

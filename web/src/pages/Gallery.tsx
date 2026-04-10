@@ -15,9 +15,9 @@ import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import MediaTile from "../components/gallery/MediaTile";
+import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { useGalleryData } from "../hooks/useGalleryData";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
-import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { useBackupStore } from "../store/backup";
 import { useAuthStore } from "../store/auth";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
@@ -92,8 +92,6 @@ export default function Gallery() {
   const {
     uploading, uploadProgress, inputRef, handleDrop, handleFileInput,
   } = useGalleryUpload({ loadEncryptedPhotos, setError });
-
-  const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   // ── Multi-select state (mobile long-press) ─────────────────────────────
   const [selectionMode, setSelectionMode] = useState(false);
@@ -317,15 +315,17 @@ export default function Gallery() {
                     {group.photos.length}
                   </span>
                 </div>
-                <div className={gridClasses}>
-                  {group.photos.map((photo) => {
+                <JustifiedGrid
+                  items={group.photos}
+                  getAspectRatio={(p) => (p.width && p.height) ? p.width / p.height : 1}
+                  getKey={(p) => p.id}
+                  renderItem={(photo) => {
                     const thumbUrl = `/api/admin/backup/servers/${activeBackupServerId}/photos/${photo.id}/thumb?token=${encodeURIComponent(accessToken ?? "")}`;
                     const isVideo = photo.media_type === "video";
                     const globalIdx = backupPhotos!.indexOf(photo);
                     return (
                       <div
-                        key={photo.id}
-                        className="relative aspect-square bg-gray-200 dark:bg-gray-700 overflow-hidden rounded cursor-pointer"
+                        className="relative w-full h-full bg-gray-200 dark:bg-gray-700 overflow-hidden cursor-pointer"
                         title={photo.filename}
                         onClick={() => setBackupLightboxIdx(globalIdx)}
                       >
@@ -345,8 +345,8 @@ export default function Gallery() {
                         )}
                       </div>
                     );
-                  })}
-                </div>
+                  }}
+                />
               </div>
             ))}
 
@@ -442,12 +442,14 @@ export default function Gallery() {
                   {group.photos.length}
                 </span>
               </div>
-              <div className={gridClasses}>
-                {group.photos.map((photo, localIdx) => {
+              <JustifiedGrid
+                items={group.photos}
+                getAspectRatio={(p) => (p.width && p.height) ? p.width / p.height : 1}
+                getKey={(p) => p.blobId}
+                renderItem={(photo, localIdx) => {
                   const globalIdx = groupStartIdx + localIdx;
                   return (
                     <MediaTile
-                      key={photo.blobId}
                       photo={photo}
                       selectionMode={selectionMode}
                       isSelected={selectedIds.has(photo.blobId)}
@@ -462,8 +464,8 @@ export default function Gallery() {
                       }}
                     />
                   );
-                })}
-              </div>
+                }}
+              />
             </div>
           );
         })}
