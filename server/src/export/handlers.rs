@@ -256,7 +256,7 @@ pub async fn download_export_file(
     let storage_root = state.storage_root.load();
     let full_path = storage_root.join(&file_path);
 
-    if !full_path.exists() {
+    if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
         return Err(AppError::NotFound);
     }
 
@@ -315,7 +315,7 @@ pub async fn delete_export(
     let storage_root = state.storage_root.load();
     for (path,) in &file_paths {
         let full_path = storage_root.join(path);
-        if full_path.exists() {
+        if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
             let _ = tokio::fs::remove_file(&full_path).await;
         }
     }

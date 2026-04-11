@@ -38,7 +38,7 @@ pub async fn android_apk(State(state): State<AppState>) -> Result<Response, AppE
     ];
 
     for path in &candidates {
-        if path.exists() {
+        if tokio::fs::try_exists(path).await.unwrap_or(false) {
             let data = tokio::fs::read(path)
                 .await
                 .map_err(|e| AppError::Internal(format!("Failed to read APK file: {}", e)))?;

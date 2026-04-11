@@ -78,16 +78,23 @@ pub async fn render_photo(
     AxumPath(photo_id): AxumPath<String>,
     Json(req): Json<RenderRequest>,
 ) -> Result<Response, AppError> {
-    // ── Ensure ffmpeg is available ────────────────────────────────────────────
-    let probe = Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .await
-        .ok();
-    if probe.map_or(true, |o| !o.status.success()) {
-        return Err(AppError::Internal(
-            "ffmpeg is not installed on this server; install it and restart".into(),
-        ));
+    // ── Ensure ffmpeg is available (cached after first check) ───────────────
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+    use std::sync::OnceLock;
+    static FFMPEG_CHECKED: OnceLock<AtomicBool> = OnceLock::new();
+    let checked = FFMPEG_CHECKED.get_or_init(|| AtomicBool::new(false));
+    if !checked.load(AtomicOrdering::Relaxed) {
+        let probe = Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .await
+            .ok();
+        if probe.map_or(true, |o| !o.status.success()) {
+            return Err(AppError::Internal(
+                "ffmpeg is not installed on this server; install it and restart".into(),
+            ));
+        }
+        checked.store(true, AtomicOrdering::Relaxed);
     }
 
     // ── Fetch photo row, enforcing ownership ─────────────────────────────────
@@ -115,7 +122,7 @@ pub async fn render_photo(
 
     // ── Resolve source file ───────────────────────────────────────────────────
     let source_path = state.config.storage.root.join(&photo.file_path);
-    if !source_path.exists() {
+    if !tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
         tracing::error!(
             "[render] source file not found: {}",
             source_path.display()
@@ -173,7 +180,7 @@ pub async fn render_photo(
 
     let cache_path = cache_dir.join(format!("{}-{}.{}", photo.id, crop_hash, ext));
 
-    if cache_path.exists() {
+    if tokio::fs::try_exists(&cache_path).await.unwrap_or(false) {
         tracing::info!("[render] cache hit: {:?}", cache_path);
         let data = tokio::fs::read(&cache_path)
             .await

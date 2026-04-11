@@ -279,7 +279,7 @@ pub async fn scan_and_register(
 
         for (pid, fpath, mtype) in photos_needing_fix {
             let abs = storage_root.join(&fpath);
-            if !abs.exists() {
+            if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
                 continue;
             }
             let sem = sem.clone();
@@ -362,12 +362,12 @@ pub async fn scan_and_register(
 
         for (_pid, fpath, tpath, mime) in &thumbs_to_gen {
             let abs = storage_root.join(fpath);
-            if !abs.exists() {
+            if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
                 continue;
             }
 
             let thumb_abs = storage_root.join(tpath);
-            if thumb_abs.exists() {
+            if tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
                 continue; // already has a thumbnail
             }
 

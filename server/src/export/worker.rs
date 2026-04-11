@@ -120,42 +120,33 @@ async fn do_export(
         "blobs": manifest_entries,
     }))?;
 
-    let mut part_number = 1u32;
-    let mut current_zip_size: i64 = 0;
-    let mut current_zip = new_zip_writer(&export_dir, part_number)?;
+    // Collect blob data from disk (async I/O) and then hand off to
+    // spawn_blocking for the CPU-bound + synchronous ZIP compression.
+    // This prevents the zip writer from starving the tokio runtime —
+    // previously, synchronous write_all / Deflate calls blocked async
+    // worker threads, causing concurrent blob downloads (viewer
+    // scrolling) to hang.
 
-    // Write manifest into the first zip
-    let manifest_bytes = manifest_json.as_bytes();
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).compression_level(Some(1));
+    // Phase 1: Read all blobs from disk using async I/O.
+    struct BlobEntry {
+        blob_id: String,
+        blob_type: String,
+        size_bytes: i64,
+        data: Vec<u8>,
+        meta_data: Option<Vec<u8>>,
+    }
 
-    current_zip.start_file("manifest.json", options)?;
-    current_zip.write_all(manifest_bytes)?;
-    current_zip_size += manifest_bytes.len() as i64;
-
+    let mut entries: Vec<BlobEntry> = Vec::with_capacity(blobs.len());
     for (blob_id, blob_type, storage_path, size_bytes, _client_hash, _upload_time) in &blobs {
         let blob_path = storage_root.join(storage_path);
 
         // Skip files that don't exist on disk
-        if !blob_path.exists() {
+        if !tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
             tracing::warn!(job_id = %job_id, blob_id = %blob_id, "Blob file missing, skipping");
             continue;
         }
 
-        // Check if adding this blob would exceed the size limit
-        // Use a conservative estimate (zip overhead ~100 bytes per file)
-        if current_zip_size + size_bytes + 100 > size_limit && current_zip_size > 0 {
-            // Finalize current zip and start a new one
-            let file = current_zip.finish()?;
-            file.sync_all()?;
-            drop(file);
-            register_zip_file(pool, job_id, &export_dir, part_number).await?;
-
-            part_number += 1;
-            current_zip = new_zip_writer(&export_dir, part_number)?;
-            current_zip_size = 0;
-        }
-
-        // Read blob file
+        // Read blob file (async)
         let data = match tokio::fs::read(&blob_path).await {
             Ok(d) => d,
             Err(e) => {
@@ -164,31 +155,88 @@ async fn do_export(
             }
         };
 
-        // Add to zip: blobs/{blob_type}/{blob_id}.bin
-        let zip_entry_name = format!("blobs/{}/{}.bin", blob_type, blob_id);
-        current_zip.start_file(&zip_entry_name, options)?;
-        current_zip.write_all(&data)?;
-        current_zip_size += data.len() as i64;
-
-        // If there's metadata for this blob, include it
-        if let Some(meta_rel_path) = metadata_map.get(blob_id) {
+        // Read metadata if available (async)
+        let meta_data = if let Some(meta_rel_path) = metadata_map.get(blob_id) {
             let meta_path = storage_root.join(meta_rel_path);
-            if meta_path.exists() {
-                if let Ok(meta_data) = tokio::fs::read(&meta_path).await {
-                    let meta_zip_name = format!("metadata/{}.json", blob_id);
-                    current_zip.start_file(&meta_zip_name, options)?;
-                    current_zip.write_all(&meta_data)?;
-                    current_zip_size += meta_data.len() as i64;
-                }
-            }
-        }
+            tokio::fs::read(&meta_path).await.ok()
+        } else {
+            None
+        };
+
+        entries.push(BlobEntry {
+            blob_id: blob_id.clone(),
+            blob_type: blob_type.clone(),
+            size_bytes: *size_bytes,
+            data,
+            meta_data,
+        });
     }
 
-    // Finalize the last zip
-    let file = current_zip.finish()?;
-    file.sync_all()?;
-    drop(file);
-    register_zip_file(pool, job_id, &export_dir, part_number).await?;
+    // Phase 2: Write all ZIP archives on a blocking thread so the async
+    // runtime stays responsive for concurrent HTTP requests.
+    let export_dir_clone = export_dir.clone();
+    let manifest_clone = manifest_json.clone();
+    let size_limit_clone = size_limit;
+
+    let part_counts = tokio::task::spawn_blocking(move || -> Result<Vec<u32>, anyhow::Error> {
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(1));
+
+        let mut part_number = 1u32;
+        let mut current_zip_size: i64 = 0;
+        let mut current_zip = new_zip_writer(&export_dir_clone, part_number)?;
+        let mut finished_parts: Vec<u32> = Vec::new();
+
+        // Write manifest into the first zip
+        let manifest_bytes = manifest_clone.as_bytes();
+        current_zip.start_file("manifest.json", options)?;
+        current_zip.write_all(manifest_bytes)?;
+        current_zip_size += manifest_bytes.len() as i64;
+
+        for entry in &entries {
+            // Check if adding this blob would exceed the size limit
+            if current_zip_size + entry.size_bytes + 100 > size_limit_clone
+                && current_zip_size > 0
+            {
+                let file = current_zip.finish()?;
+                file.sync_all()?;
+                drop(file);
+                finished_parts.push(part_number);
+
+                part_number += 1;
+                current_zip = new_zip_writer(&export_dir_clone, part_number)?;
+                current_zip_size = 0;
+            }
+
+            let zip_entry_name = format!("blobs/{}/{}.bin", entry.blob_type, entry.blob_id);
+            current_zip.start_file(&zip_entry_name, options)?;
+            current_zip.write_all(&entry.data)?;
+            current_zip_size += entry.data.len() as i64;
+
+            if let Some(ref meta_data) = entry.meta_data {
+                let meta_zip_name = format!("metadata/{}.json", entry.blob_id);
+                current_zip.start_file(&meta_zip_name, options)?;
+                current_zip.write_all(meta_data)?;
+                current_zip_size += meta_data.len() as i64;
+            }
+        }
+
+        // Finalize the last zip
+        let file = current_zip.finish()?;
+        file.sync_all()?;
+        drop(file);
+        finished_parts.push(part_number);
+
+        Ok(finished_parts)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("ZIP compression task panicked: {e}"))??;
+
+    // Phase 3: Register all zip parts in the database (async).
+    for part in part_counts {
+        register_zip_file(pool, job_id, &export_dir, part).await?;
+    }
 
     Ok(())
 }

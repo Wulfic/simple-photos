@@ -245,7 +245,7 @@ fn spawn_export_cleanup(pool: SqlitePool, storage_root_swap: Arc<arc_swap::ArcSw
             for (file_id, file_path, job_id) in &expired {
                 // Delete file from disk
                 let full_path = storage_root.join(file_path);
-                if full_path.exists() {
+                if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
                     if let Err(e) = tokio::fs::remove_file(&full_path).await {
                         tracing::warn!(file_id = %file_id, error = %e, "Failed to delete expired export file");
                     }
@@ -279,7 +279,7 @@ fn spawn_export_cleanup(pool: SqlitePool, storage_root_swap: Arc<arc_swap::ArcSw
                 if remaining.map(|(c,)| c).unwrap_or(0) == 0 {
                     // Remove export directory
                     let export_dir = storage_root.join("exports").join(job_id);
-                    if export_dir.exists() {
+                    if tokio::fs::try_exists(&export_dir).await.unwrap_or(false) {
                         let _ = tokio::fs::remove_dir_all(&export_dir).await;
                     }
                     // Delete the job record

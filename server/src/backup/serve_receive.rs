@@ -322,19 +322,23 @@ pub async fn backup_receive(
         // sync-deletions ran first), try the conventional thumbnail path on
         // disk.  The thumbnail file may still exist even though the DB row
         // is gone.
-        let existing_thumb_path = existing_thumb_path.or_else(|| {
-            let candidates = [
-                format!(".thumbnails/{}.thumb.jpg", gallery_id),
-                format!(".thumbnails/{}.thumb.gif", gallery_id),
-            ];
-            for candidate in &candidates {
-                let abs = storage_root.join(candidate);
-                if abs.exists() {
-                    return Some(candidate.clone());
+        let existing_thumb_path = {
+            let mut result = existing_thumb_path;
+            if result.is_none() {
+                let candidates = [
+                    format!(".thumbnails/{}.thumb.jpg", gallery_id),
+                    format!(".thumbnails/{}.thumb.gif", gallery_id),
+                ];
+                for candidate in &candidates {
+                    let abs = storage_root.join(candidate);
+                    if tokio::fs::try_exists(&abs).await.unwrap_or(false) {
+                        result = Some(candidate.clone());
+                        break;
+                    }
                 }
             }
-            None
-        });
+            result
+        };
 
         // Delete by UUID, encrypted_blob_id, and file_path.  The UUID covers
         // the normal case; encrypted_blob_id covers encrypted items (photo_id
