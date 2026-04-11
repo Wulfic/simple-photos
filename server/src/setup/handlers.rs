@@ -29,6 +29,8 @@ pub struct SetupStatusResponse {
     pub registration_open: bool,
     /// Server version
     pub version: String,
+    /// Operating mode: "primary" or "backup"
+    pub mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,10 +61,17 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<SetupStatusRes
         .fetch_one(&state.pool)
         .await?;
 
+    let mode: String =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+            .fetch_optional(&state.pool)
+            .await?
+            .unwrap_or_else(|| "primary".to_string());
+
     Ok(Json(SetupStatusResponse {
         setup_complete: user_count > 0,
         registration_open: state.config.auth.allow_registration,
         version: crate::VERSION.to_string(),
+        mode,
     }))
 }
 

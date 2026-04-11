@@ -151,7 +151,10 @@ object ServerDiscovery {
                 val body = conn.inputStream.bufferedReader().readText()
                 conn.disconnect()
                 val json = JSONObject(body)
-                server.copy(setupComplete = json.optBoolean("setup_complete", false))
+                server.copy(
+                    setupComplete = json.optBoolean("setup_complete", false),
+                    mode = json.optString("mode", server.mode)
+                )
             } else {
                 conn.disconnect()
                 server
