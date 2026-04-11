@@ -99,7 +99,6 @@ pub fn conversion_target(filename: &str) -> Option<ConversionTarget> {
         | "jp2" | "j2k" | "jpx"                            // JPEG 2000
         | "jxl"                                             // JPEG XL
         | "jfif" | "jpe"                                    // JPEG variants
-        | "svg"                                             // SVG (rasterise)
         | "cur"                                             // Windows cursor
         => Some(ConversionTarget {
             extension: "jpg",

@@ -1,21 +1,15 @@
 /** Gallery thumbnail tile for encrypted-mode photos. Creates object URLs
  *  from decrypted IndexedDB thumbnail data, lazy-loaded via IntersectionObserver.
- *  GIF thumbnails animate only while the tile is in the viewport. */
+ *  GIF tiles whose thumbnail is already animated (mime=image/gif) display the
+ *  thumbnail directly; large GIFs with a static JPEG thumbnail load the full
+ *  encrypted blob when scrolled into view. */
 import { useState, useEffect, useRef } from "react";
 import type { CachedPhoto } from "../../db";
 import useLongPress from "../../hooks/useLongPress";
-import { thumbnailSrc, formatDuration, extractStaticFrame } from "../../utils/gallery";
+import { thumbnailSrc, formatDuration } from "../../utils/gallery";
+import { loadFullGif } from "../../utils/gifLoader";
 
 import { getThumbnailStyle } from "../../utils/thumbnailCss";
-
-/** Resolve the correct MIME type for a photo's thumbnail data.
- *  Prefers the explicit thumbnailMimeType field, falls back to
- *  "image/gif" for GIF media type, or "image/jpeg" otherwise. */
-function thumbMime(photo: CachedPhoto): string {
-  if (photo.thumbnailMimeType) return photo.thumbnailMimeType;
-  if (photo.mediaType === "gif") return "image/gif";
-  return "image/jpeg";
-}
 
 export interface MediaTileProps {
   photo: CachedPhoto;
@@ -26,65 +20,88 @@ export interface MediaTileProps {
 }
 
 export default function MediaTile({ photo, onClick, onLongPress, selectionMode, isSelected }: MediaTileProps) {
-  const isAnimatedGif = photo.mediaType === "gif" && thumbMime(photo) === "image/gif";
+  const isGif = photo.mediaType === "gif";
+  // Only consider a thumbnail animated when the MIME type is explicitly "image/gif"
+  // (not the fallback). Old GIFs may have JPEG thumbnails with no stored MIME type.
+  const hasAnimatedThumb = isGif && photo.thumbnailMimeType === "image/gif";
+  // GIFs without an explicitly animated thumbnail need the full blob for animation.
+  const needsFullLoad = isGif && !hasAnimatedThumb;
+
   const [src, setSrc] = useState<string | null>(null);
   const [visible, setVisible] = useState(false);
   const [inView, setInView] = useState(false);
   const tileRef = useRef<HTMLDivElement>(null);
-  const gifAnimatedUrl = useRef<string | null>(null);
-  const gifStaticUrl = useRef<string | null>(null);
-  const inViewRef = useRef(false);
+  // Stable blob URL for the thumbnail — keyed by blobId to avoid recreating on
+  // every Dexie re-query (which returns new ArrayBuffer references each time).
+  // Recreating would set a new img src, restarting the GIF animation from frame 1.
+  const thumbUrlRef = useRef<string | null>(null);
+  const thumbCreatedForRef = useRef<string | undefined>(undefined);
+  const fullGifUrl = useRef<string | null>(null);
 
-  // Viewport tracking: one-shot for non-GIF, persistent for animated GIFs
+  // Viewport tracking: persistent for GIFs that need full-blob loading (in/out swap),
+  // one-shot for everything else.
   useEffect(() => {
     const el = tileRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (isAnimatedGif) {
-          if (entry.isIntersecting) setVisible(true);
-          setInView(entry.isIntersecting);
-          inViewRef.current = entry.isIntersecting;
-        } else if (entry.isIntersecting) {
-          setVisible(true);
-          observer.disconnect();
-        }
+        if (entry.isIntersecting) setVisible(true);
+        if (needsFullLoad) setInView(entry.isIntersecting);
+        else if (entry.isIntersecting) observer.disconnect();
       },
       { rootMargin: "200px" }
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [isAnimatedGif]);
+  }, [needsFullLoad]);
 
-  // Non-animated: create object URL when first visible
+  // Create and cache the thumbnail blob URL.
+  // Keyed by photo.blobId so it is only created ONCE per photo — subsequent
+  // Dexie re-renders that return a new ArrayBuffer reference with identical bytes
+  // do NOT recreate the URL, preventing the GIF from restarting on every sync cycle.
   useEffect(() => {
-    if (isAnimatedGif || !visible) return;
-    if (photo.thumbnailData) {
-      const url = thumbnailSrc(photo.thumbnailData, thumbMime(photo));
-      setSrc(url);
-      return () => URL.revokeObjectURL(url);
+    if (!photo.thumbnailData) return;
+    if (thumbUrlRef.current && thumbCreatedForRef.current === photo.blobId) {
+      // Same photo, URL already valid — show it if we've become visible
+      if (visible && !fullGifUrl.current) setSrc(thumbUrlRef.current);
+      return;
     }
-  }, [isAnimatedGif, visible, photo.thumbnailData, photo.thumbnailMimeType, photo.mediaType]);
+    // New photo (or first load) — revoke old URL and create fresh one
+    if (thumbUrlRef.current) URL.revokeObjectURL(thumbUrlRef.current);
+    const mime = photo.thumbnailMimeType || "image/jpeg";
+    thumbUrlRef.current = thumbnailSrc(photo.thumbnailData, mime);
+    thumbCreatedForRef.current = photo.blobId;
+    if (visible && !fullGifUrl.current) setSrc(thumbUrlRef.current);
+  }, [visible, photo.thumbnailData, photo.blobId, photo.thumbnailMimeType]);
 
-  // Animated GIF: create animated + static URLs once, swap based on viewport
+  // Large GIFs: fetch full animated blob when in view.
   useEffect(() => {
-    if (!isAnimatedGif || !visible || !photo.thumbnailData) return;
-    if (!gifAnimatedUrl.current) {
-      gifAnimatedUrl.current = thumbnailSrc(photo.thumbnailData, "image/gif");
-      extractStaticFrame(gifAnimatedUrl.current)
-        .then((url) => {
-          gifStaticUrl.current = url;
-          if (!inViewRef.current) setSrc(url);
-        })
-        .catch(() => { /* fall back to always animated */ });
-    }
-    setSrc(inView ? gifAnimatedUrl.current : (gifStaticUrl.current ?? gifAnimatedUrl.current));
-  }, [isAnimatedGif, visible, inView, photo.thumbnailData]);
+    if (!needsFullLoad || !inView || fullGifUrl.current) return;
+    let cancelled = false;
+    const id = photo.storageBlobId ?? photo.blobId;
+    loadFullGif(id, photo.serverSide ? photo.serverPhotoId : undefined).then((url) => {
+      if (!cancelled && url) {
+        fullGifUrl.current = url;
+        setSrc(url);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [needsFullLoad, inView, photo.storageBlobId, photo.blobId, photo.serverSide, photo.serverPhotoId]);
 
-  // Cleanup GIF URLs on unmount
+  // Large GIFs: swap between full animated file (in view) and thumbnail (out of view).
+  useEffect(() => {
+    if (!needsFullLoad || !fullGifUrl.current) return;
+    if (inView) {
+      setSrc(fullGifUrl.current);
+    } else if (thumbUrlRef.current) {
+      setSrc(thumbUrlRef.current);
+    }
+  }, [needsFullLoad, inView]);
+
+  // Cleanup on unmount
   useEffect(() => () => {
-    if (gifAnimatedUrl.current) URL.revokeObjectURL(gifAnimatedUrl.current);
-    if (gifStaticUrl.current) URL.revokeObjectURL(gifStaticUrl.current);
+    if (thumbUrlRef.current) URL.revokeObjectURL(thumbUrlRef.current);
+    if (fullGifUrl.current) URL.revokeObjectURL(fullGifUrl.current);
   }, []);
 
   const longPress = useLongPress(() => onLongPress?.(), 500);
@@ -101,7 +118,17 @@ export default function MediaTile({ photo, onClick, onLongPress, selectionMode, 
     >
       {src ? (
         <>
-          <img src={src} alt={photo.filename} className="w-full h-full object-cover" loading="lazy" style={getThumbnailStyle(photo.cropData)} />
+          {/* GIFs use object-cover (fills tile, no letterbox bars) without crop transforms.
+              JustifiedGrid already sizes the tile to match the GIF's aspect ratio so
+              object-cover doesn't crop. Never apply getThumbnailStyle to GIFs — the crop
+              scale/translate transform would zoom in and clip the animation. */}
+          <img
+            src={src}
+            alt={photo.filename}
+            className="w-full h-full object-cover"
+            loading="lazy"
+            style={isGif ? undefined : getThumbnailStyle(photo.cropData)}
+          />
           {/* Filename overlay — only for audio files */}
           {photo.mediaType === "audio" && (
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-1 pb-0.5 pt-3 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">

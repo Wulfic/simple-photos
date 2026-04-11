@@ -607,6 +607,28 @@ def generate_test_png() -> bytes:
     return sig + ihdr + idat + iend
 
 
+def generate_test_gif(width: int = 20, height: int = 20, frames: int = 3) -> bytes:
+    """Generate a minimal animated GIF for upload tests using PIL."""
+    from PIL import Image as _PILImage
+    import io as _io
+
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    img_frames = [
+        _PILImage.new("RGB", (width, height), color=colors[i % len(colors)])
+        for i in range(frames)
+    ]
+    buf = _io.BytesIO()
+    img_frames[0].save(
+        buf,
+        format="GIF",
+        save_all=True,
+        append_images=img_frames[1:],
+        loop=0,
+        duration=100,
+    )
+    return buf.getvalue()
+
+
 def generate_random_bytes(size: int = 1024) -> bytes:
     """Generate random bytes for blob uploads."""
     return os.urandom(size)

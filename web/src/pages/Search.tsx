@@ -7,7 +7,6 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db } from "../db";
-import { extractStaticFrame } from "../utils/gallery";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
@@ -339,26 +338,18 @@ function SearchResultTile({
   result: SearchResult;
   onClick: () => void;
 }) {
-  const isAnimatedGif = result.media_type === "gif";
+  const isGif = result.media_type === "gif";
   const [visible, setVisible] = useState(false);
-  const [inView, setInView] = useState(false);
   const [thumbSrc, setThumbSrc] = useState<string | null>(null);
   const tileRef = useRef<HTMLDivElement>(null);
-  const gifAnimatedUrl = useRef<string | null>(null);
-  const gifStaticUrl = useRef<string | null>(null);
-  const inViewRef = useRef(false);
 
-  // Viewport tracking: persistent for animated GIFs, one-shot otherwise
+  // One-shot viewport observer for all tiles — thumbnail IS the animated GIF for GIFs.
   useEffect(() => {
     const el = tileRef.current;
     if (!el) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (isAnimatedGif) {
-          if (entry.isIntersecting) setVisible(true);
-          setInView(entry.isIntersecting);
-          inViewRef.current = entry.isIntersecting;
-        } else if (entry.isIntersecting) {
+        if (entry.isIntersecting) {
           setVisible(true);
           observer.disconnect();
         }
@@ -367,11 +358,14 @@ function SearchResultTile({
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [isAnimatedGif]);
+  }, []);
 
-  // Non-GIF: fetch thumbnail from server when first visible
+  // Fetch and display thumbnail when visible.
+  // For GIFs: the server thumbnail endpoint returns an animated GIF, and
+  // _localThumbUrl (encrypted gallery) points to the full animated blob.
+  // Either way the thumbnail itself plays the animation — no extra load needed.
   useEffect(() => {
-    if (isAnimatedGif || !visible) return;
+    if (!visible) return;
     if (result._localThumbUrl) {
       setThumbSrc(result._localThumbUrl);
       return;
@@ -397,58 +391,7 @@ function SearchResultTile({
     return () => {
       cancelled = true;
     };
-  }, [isAnimatedGif, visible, result.id, result._localThumbUrl]);
-
-  // GIF: fetch thumbnail once visible, extract static frame
-  useEffect(() => {
-    if (!isAnimatedGif || !visible || gifAnimatedUrl.current) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        let url: string;
-        if (result._localThumbUrl) {
-          url = result._localThumbUrl;
-        } else {
-          const { accessToken } = useAuthStore.getState();
-          const headers: Record<string, string> = {
-            "X-Requested-With": "SimplePhotos",
-          };
-          if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-          const res = await fetch(api.photos.thumbUrl(result.id), { headers });
-          if (!res.ok || cancelled) return;
-          const blob = await res.blob();
-          if (cancelled) return;
-          url = URL.createObjectURL(blob);
-        }
-        if (cancelled) return;
-        gifAnimatedUrl.current = url;
-        setThumbSrc(url);
-        extractStaticFrame(url)
-          .then((staticUrl) => {
-            if (!cancelled) {
-              gifStaticUrl.current = staticUrl;
-              if (!inViewRef.current) setThumbSrc(staticUrl);
-            }
-          })
-          .catch(() => { /* fall back to always animated */ });
-      } catch {
-        // Thumbnail load failed
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isAnimatedGif, visible, result.id, result._localThumbUrl]);
-
-  // GIF: swap src when viewport changes
-  useEffect(() => {
-    if (!isAnimatedGif || !gifAnimatedUrl.current) return;
-    setThumbSrc(inView ? gifAnimatedUrl.current : (gifStaticUrl.current ?? gifAnimatedUrl.current));
-  }, [isAnimatedGif, inView]);
-
-  // Cleanup GIF URLs on unmount
-  useEffect(() => () => {
-    if (gifAnimatedUrl.current) URL.revokeObjectURL(gifAnimatedUrl.current);
-    if (gifStaticUrl.current) URL.revokeObjectURL(gifStaticUrl.current);
-  }, []);
+  }, [visible, result.id, result._localThumbUrl]);
 
   return (
     <div

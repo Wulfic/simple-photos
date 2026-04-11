@@ -338,13 +338,10 @@ export default function Viewer() {
             ref={viewImgRef}
             src={mediaUrl}
             alt={filename}
-            className={`object-contain transition-transform duration-150 ${
-              mimeType === "image/svg+xml" ? "w-full h-full" : "max-w-full max-h-full"
-            }`}
+            className="object-contain transition-transform duration-150 max-w-full max-h-full"
             onLoad={computeCropZoom}
             style={{
               imageRendering: mediaType === "gif" ? "auto" : undefined,
-              ...(mimeType === "image/svg+xml" ? { backgroundColor: "white" } : {}),
               ...(cropData && zoomScale <= 1 ? cropZoomStyle : {}),
               ...(zoomScale > 1 ? {
                 transform: `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)`,
@@ -374,7 +371,6 @@ export default function Viewer() {
               draggable={false}
               style={{
                 filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
-                ...(mimeType === "image/svg+xml" ? { backgroundColor: "white" } : {}),
                 ...(rot !== 0 ? {
                   transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(cropImageRef.current, cropContainerRef.current)})` : ""}`,
                 } : {}),

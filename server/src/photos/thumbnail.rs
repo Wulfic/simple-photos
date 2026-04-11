@@ -4,7 +4,7 @@
 //! - **Images** (non-GIF): Pure Rust `image` crate → fit within 512px JPEG.
 //! - **GIFs**: FFmpeg → scaled animated GIF; falls back to static single-frame.
 //! - **Videos**: FFmpeg → real frame at ~10% of duration; falls back to placeholder.
-//! - **Audio / SVG**: Solid-color placeholder (no external tools needed).
+//! - **Audio**: Solid-color placeholder (no external tools needed).
 //!
 //! Thumbnails preserve the original aspect ratio (scaled to fit within 512px
 //! on the longest edge) so the justified grid can display them without
@@ -35,11 +35,6 @@ pub async fn generate_thumbnail_file(
     // Audio → black 256×256 placeholder with no external tools
     if mime.starts_with("audio/") {
         return generate_placeholder_thumbnail(output_path, [0, 0, 0]).await;
-    }
-
-    // SVG → placeholder (would need resvg for proper rasterisation)
-    if mime == "image/svg+xml" {
-        return generate_placeholder_thumbnail(output_path, [40, 40, 40]).await;
     }
 
     // Video → FFmpeg frame extraction, fallback to placeholder

@@ -14,7 +14,6 @@ pub fn needs_web_preview(filename: &str) -> Option<&'static str> {
         // Images that browsers cannot display natively
         "heic" | "heif" | "tiff" | "tif" | "hdr" | "cr2" | "cur" | "cursor" | "dng" | "nef"
         | "arw" | "raw" => Some("jpg"),
-        "svg" => Some("jpg"),
         "ico" => Some("png"),
         // Audio that browsers cannot play natively
         "wma" | "aiff" | "aif" => Some("mp3"),
@@ -44,36 +43,6 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
 
     let input_str = input_path.to_str().unwrap_or("");
     let output_str = output_path.to_str().unwrap_or("");
-
-    // SVG files need ImageMagick for reliable rasterisation
-    let is_svg = input_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("svg"))
-        .unwrap_or(false);
-    if is_svg && preview_ext == "jpg" {
-        let magick_ok = tokio::process::Command::new("convert")
-            .args([
-                &format!("{}[0]", input_str),
-                "-background",
-                "white",
-                "-flatten",
-                "-resize",
-                "1920x1080>",
-                "-quality",
-                "92",
-                output_str,
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
-        if matches!(magick_ok, Ok(s) if s.success()) {
-            return true;
-        }
-        return false;
-    }
 
     let ffmpeg_ok = match preview_ext {
         "jpg" => {

@@ -9,6 +9,7 @@ import pytest
 from helpers import (
     APIClient,
     generate_test_jpeg,
+    generate_test_gif,
     generate_test_png,
     generate_random_bytes,
     unique_filename,
@@ -95,6 +96,41 @@ class TestPhotoUpload:
                      "Content-Type": "application/octet-stream"},
         )
         assert r.status_code == 201
+
+
+class TestGifUpload:
+    """GIF upload and media_type detection."""
+
+    def test_upload_gif_accepted(self, user_client):
+        """Server accepts GIF uploads."""
+        content = generate_test_gif()
+        data = user_client.upload_photo("test_animated.gif", content, mime_type="image/gif")
+        assert "photo_id" in data
+        assert data["filename"] == "test_animated.gif"
+
+    def test_upload_gif_media_type(self, user_client):
+        """GIF uploads are identified as media_type 'gif' in photo listing."""
+        content = generate_test_gif()
+        data = user_client.upload_photo(unique_filename("gif"), content, mime_type="image/gif")
+        photo_id = data["photo_id"]
+        photos = user_client.list_photos()["photos"]
+        match = next((p for p in photos if p["id"] == photo_id), None)
+        assert match is not None
+        assert match["mime_type"] == "image/gif"
+
+    def test_upload_gif_thumbnail_accessible(self, user_client):
+        """GIF thumbnail endpoint eventually returns 200 (may need async generation)."""
+        import time as _time
+        content = generate_test_gif()
+        data = user_client.upload_photo(unique_filename("gif"), content, mime_type="image/gif")
+        photo_id = data["photo_id"]
+        deadline = _time.time() + 30
+        while _time.time() < deadline:
+            r = user_client.get(f"/api/photos/{photo_id}/thumbnail")
+            if r.status_code == 200:
+                break
+            _time.sleep(0.5)
+        assert r.status_code == 200
 
 
 class TestPhotoList:

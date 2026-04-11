@@ -49,7 +49,6 @@ pub fn mime_from_extension(name: &str) -> &'static str {
         "webp" => "image/webp",
         "avif" => "image/avif",
         "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
         "ico" => "image/x-icon",
         "mp4" => "video/mp4",
         "webm" => "video/webm",
