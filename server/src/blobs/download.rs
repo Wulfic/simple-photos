@@ -90,8 +90,9 @@ pub async fn download(
         }
     }
 
-    /// 64 KB stream buffer for blob file serving.
-    const BLOB_BUF: usize = 64 * 1024;
+    /// 256 KB stream buffer for blob file serving — larger than the default
+    /// 64 KB to reduce syscalls and context switches on large video blobs.
+    const BLOB_BUF: usize = 256 * 1024;
 
     // ── Parse Range header ─────────────────────────────────────────────────
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
@@ -120,6 +121,9 @@ pub async fn download(
                     "Content-Type",
                     HeaderValue::from_static("application/octet-stream"),
                 )
+                // Bypass the global CompressionLayer — encrypted blob bytes are
+                // random and incompressible; attempting gzip/brotli wastes CPU.
+                .header("Content-Encoding", HeaderValue::from_static("identity"))
                 .header("Content-Length", HeaderValue::from(length))
                 .header(
                     "Content-Range",
@@ -172,6 +176,9 @@ pub async fn download(
             "Content-Type",
             HeaderValue::from_static("application/octet-stream"),
         )
+        // Bypass the global CompressionLayer — encrypted blob bytes are
+        // random and incompressible; attempting gzip/brotli wastes CPU.
+        .header("Content-Encoding", HeaderValue::from_static("identity"))
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header("Accept-Ranges", HeaderValue::from_static("bytes"))
         // Blobs are immutable (content-addressed by UUID) — cache aggressively
@@ -265,7 +272,7 @@ pub async fn download_thumb(
         }
     }
 
-    let stream = tokio_util::io::ReaderStream::with_capacity(file, 64 * 1024);
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, 256 * 1024);
     let body = Body::from_stream(stream);
 
     Ok(Response::builder()
@@ -274,6 +281,8 @@ pub async fn download_thumb(
             "Content-Type",
             HeaderValue::from_static("application/octet-stream"),
         )
+        // Bypass the global CompressionLayer for encrypted thumbnail blobs.
+        .header("Content-Encoding", HeaderValue::from_static("identity"))
         .header("Content-Length", HeaderValue::from(size_bytes))
         .header(
             "Cache-Control",

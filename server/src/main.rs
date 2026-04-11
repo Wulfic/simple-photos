@@ -166,8 +166,9 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         // ── HTTP response compression (gzip + brotli) ────────────────────
         // Compresses JSON API responses, HTML, and other text-based content.
-        // Binary blob/photo/video downloads are already opaque encrypted bytes
-        // or JPEG/MP4 (incompressible), so compression is a no-op on those.
+        // Binary blob endpoints explicitly set `Content-Encoding: identity`
+        // to bypass this layer — encrypted bytes are incompressible and the
+        // compression attempt itself is CPU-expensive.
         // Placed outermost so it wraps all responses after other middleware.
         .layer(CompressionLayer::new().gzip(true).br(true))
         .with_state(state);
