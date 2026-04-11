@@ -64,6 +64,10 @@ class APIClient:
         h = {**self._auth_headers(), **(headers or {})}
         return self.session.delete(self._url(path), json=json_data, headers=h, **kwargs)
 
+    def patch(self, path: str, json_data=None, headers=None, **kwargs) -> requests.Response:
+        h = {**self._auth_headers(), **(headers or {})}
+        return self.session.patch(self._url(path), json=json_data, headers=h, **kwargs)
+
     # ── Auth helpers ─────────────────────────────────────────────────
 
     def setup_init(self, username: str, password: str) -> dict:

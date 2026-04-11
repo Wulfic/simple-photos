@@ -3,7 +3,7 @@
 //! Each helper builds a [`Router`] fragment for one domain. [`api_routes()`]
 //! merges them all under the `/api` prefix consumed by `main.rs`.
 
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
 use crate::state::AppState;
@@ -179,6 +179,7 @@ fn photo_routes() -> Router<AppState> {
             put(crate::photos::handlers::toggle_favorite),
         )
         .route("/photos/{id}/crop", put(crate::photos::handlers::set_crop))
+        .route("/photos/dimensions", patch(crate::photos::handlers::batch_update_dimensions))
         // Photo soft-delete to trash
         .route("/photos/{id}", delete(crate::trash::operations::soft_delete_photo))
         // Edit copies

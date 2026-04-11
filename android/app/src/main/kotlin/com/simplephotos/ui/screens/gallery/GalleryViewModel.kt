@@ -443,9 +443,34 @@ class GalleryViewModel @Inject constructor(
 
                     val localId = java.util.UUID.randomUUID().toString()
                     val filename = uri.lastPathSegment ?: "import_$localId"
+
+                    // Extract correct display dimensions with EXIF orientation
+                    var imgWidth = 0
+                    var imgHeight = 0
+                    if (mediaType == "photo" || mediaType == "gif") {
+                        try {
+                            val boundsOpts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, boundsOpts)
+                            imgWidth = boundsOpts.outWidth
+                            imgHeight = boundsOpts.outHeight
+                            val exifDims = androidx.exifinterface.media.ExifInterface(java.io.ByteArrayInputStream(data))
+                            val orientDims = exifDims.getAttributeInt(
+                                androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+                                androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL
+                            )
+                            val needsSwap = orientDims == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90
+                                    || orientDims == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270
+                                    || orientDims == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSPOSE
+                                    || orientDims == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSVERSE
+                            if (needsSwap && imgWidth > 0 && imgHeight > 0) {
+                                val tmp = imgWidth; imgWidth = imgHeight; imgHeight = tmp
+                            }
+                        } catch (_: Exception) {}
+                    }
+
                     val photo = PhotoEntity(
                         localId = localId, filename = filename, takenAt = System.currentTimeMillis(),
-                        mimeType = mimeType, mediaType = mediaType, width = 0, height = 0,
+                        mimeType = mimeType, mediaType = mediaType, width = imgWidth, height = imgHeight,
                         localPath = uri.toString(), syncStatus = SyncStatus.PENDING,
                         photoHash = contentHash
                     )

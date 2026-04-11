@@ -14,6 +14,8 @@ import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -58,6 +60,7 @@ class BackupWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "BackupWorker"
         private const val MAX_ATTEMPTS = 5
+        private val EXIF_DIM_REPAIR_DONE = booleanPreferencesKey("exif_dim_repair_done")
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -72,6 +75,9 @@ class BackupWorker @AssistedInject constructor(
             // Step 1: Scan MediaStore for new photos and videos
             diag.info(TAG, "Scanning MediaStore for new media")
             syncRepository.scanForNewMedia()
+
+            // Step 1.5: One-time EXIF dimension repair for previously uploaded photos
+            repairExifDimensions(diag)
 
             // Step 2: Recover stuck uploads — photos left at UPLOADING from a crash
             // are reset to PENDING so they get retried.
@@ -224,15 +230,37 @@ class BackupWorker @AssistedInject constructor(
                         db.photoDao().updateThumbnailPath(photo.localId, thumbPath)
                     }
 
+                    // Correct width/height for EXIF orientation before uploading.
+                    // MediaStore returns raw pixel dimensions; portrait photos
+                    // need width/height swapped for 90°/270° rotation.
+                    val correctedPhoto = if (photo.mediaType == "photo" || photo.mediaType == null) {
+                        try {
+                            val exif = androidx.exifinterface.media.ExifInterface(photoData.inputStream())
+                            val orient = exif.getAttributeInt(
+                                androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+                                androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL
+                            )
+                            val needsSwap = orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90
+                                    || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270
+                                    || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSPOSE
+                                    || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSVERSE
+                            if (needsSwap && photo.width > 0 && photo.height > 0 && photo.width != photo.height) {
+                                photo.copy(width = photo.height, height = photo.width).also {
+                                    db.photoDao().update(it)
+                                }
+                            } else photo
+                        } catch (_: Exception) { photo }
+                    } else photo
+
                     // Upload (encrypted mode bundles thumbnail inside the
                     // encrypted payload, so we must have a thumbnail to proceed)
                     if (thumbnailData != null) {
                         diag.info(TAG, "Uploading photo (encrypted)", mapOf(
-                            "localId" to photo.localId,
-                            "filename" to photo.filename,
+                            "localId" to correctedPhoto.localId,
+                            "filename" to correctedPhoto.filename,
                             "sizeBytes" to photoData.size.toString()
                         ))
-                        photoRepository.uploadPhoto(photo, photoData, thumbnailData)
+                        photoRepository.uploadPhoto(correctedPhoto, photoData, thumbnailData)
                         uploadedHashes.add(contentHash)
                         diag.info(TAG, "Upload succeeded", mapOf(
                             "localId" to photo.localId,
@@ -342,5 +370,85 @@ class BackupWorker @AssistedInject constructor(
         bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
         bitmap.recycle()
         return stream.toByteArray()
+    }
+
+    /**
+     * One-time repair: scan all SYNCED photos in the local DB, read EXIF
+     * orientation from the original file, and correct width/height if the
+     * raw pixel dimensions were stored instead of display dimensions.
+     * Sends corrected dimensions to the server in a batch update.
+     */
+    private suspend fun repairExifDimensions(diag: DiagnosticLogger) {
+        val prefs = dataStore.data.first()
+        val alreadyDone = prefs[EXIF_DIM_REPAIR_DONE] ?: false
+        if (alreadyDone) return
+
+        diag.info(TAG, "Starting one-time EXIF dimension repair")
+
+        val synced = db.photoDao().getByStatus(SyncStatus.SYNCED)
+        val photosToFix = synced.filter {
+            it.localPath != null && it.serverBlobId != null
+                    && (it.mediaType == "photo" || it.mediaType == null)
+                    && it.width > 0 && it.height > 0
+        }
+
+        if (photosToFix.isEmpty()) {
+            diag.info(TAG, "EXIF dimension repair: no photos to check")
+            dataStore.edit { it[EXIF_DIM_REPAIR_DONE] = true }
+            return
+        }
+
+        val serverUpdates = mutableListOf<com.simplephotos.data.remote.dto.DimensionUpdateItem>()
+
+        for (photo in photosToFix) {
+            try {
+                val uri = android.net.Uri.parse(photo.localPath)
+                val inputStream = applicationContext.contentResolver.openInputStream(uri) ?: continue
+                val bytes = inputStream.use { it.readBytes() }
+
+                val exif = ExifInterface(java.io.ByteArrayInputStream(bytes))
+                val orient = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+                val needsSwap = orient == ExifInterface.ORIENTATION_ROTATE_90
+                        || orient == ExifInterface.ORIENTATION_ROTATE_270
+                        || orient == ExifInterface.ORIENTATION_TRANSPOSE
+                        || orient == ExifInterface.ORIENTATION_TRANSVERSE
+
+                if (needsSwap && photo.width != photo.height) {
+                    // Width/height are currently raw pixels; swap to display dimensions
+                    val corrected = photo.copy(width = photo.height, height = photo.width)
+                    db.photoDao().update(corrected)
+                    serverUpdates.add(
+                        com.simplephotos.data.remote.dto.DimensionUpdateItem(
+                            blobId = photo.serverBlobId,
+                            width = corrected.width,
+                            height = corrected.height
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "EXIF dim repair: failed for ${photo.filename}: ${e.message}")
+            }
+        }
+
+        // Batch-send to server
+        if (serverUpdates.isNotEmpty()) {
+            try {
+                val resp = api.batchUpdateDimensions(
+                    com.simplephotos.data.remote.dto.BatchDimensionUpdateRequest(serverUpdates)
+                )
+                diag.info(TAG, "EXIF dimension repair: fixed ${serverUpdates.size} locally, ${resp.updated} on server")
+            } catch (e: Exception) {
+                diag.warn(TAG, "EXIF dimension repair: server update failed: ${e.message}")
+                // Don't mark as done so it retries next time
+                return
+            }
+        } else {
+            diag.info(TAG, "EXIF dimension repair: all dimensions already correct")
+        }
+
+        dataStore.edit { it[EXIF_DIM_REPAIR_DONE] = true }
     }
 }

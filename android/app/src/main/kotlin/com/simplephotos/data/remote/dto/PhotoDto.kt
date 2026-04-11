@@ -220,3 +220,20 @@ data class SslStatusResponse(
     @SerializedName("key_path") val keyPath: String? = null,
     val message: String? = null
 )
+
+// ── Batch dimension update ───────────────────────────────────────────────────
+
+data class DimensionUpdateItem(
+    @SerializedName("photo_id") val photoId: String? = null,
+    @SerializedName("blob_id") val blobId: String? = null,
+    val width: Int,
+    val height: Int
+)
+
+data class BatchDimensionUpdateRequest(
+    val updates: List<DimensionUpdateItem>
+)
+
+data class BatchDimensionUpdateResponse(
+    val updated: Int
+)

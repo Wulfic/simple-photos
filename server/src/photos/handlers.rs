@@ -339,3 +339,62 @@ pub async fn set_crop(
         "crop_metadata": req.crop_metadata,
     })))
 }
+
+// ── Batch dimension update ────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct DimensionUpdate {
+    pub photo_id: Option<String>,
+    pub blob_id: Option<String>,
+    pub width: i64,
+    pub height: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchDimensionUpdateRequest {
+    pub updates: Vec<DimensionUpdate>,
+}
+
+/// PATCH /api/photos/dimensions
+/// Batch-update width/height for photos owned by the authenticated user.
+/// Each item can identify the photo by `photo_id` or `blob_id` (encrypted_blob_id).
+pub async fn batch_update_dimensions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<BatchDimensionUpdateRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut updated = 0u64;
+    for item in &req.updates {
+        if item.width <= 0 || item.height <= 0 {
+            continue;
+        }
+        let rows = if let Some(ref pid) = item.photo_id {
+            sqlx::query(
+                "UPDATE photos SET width = ?, height = ? WHERE id = ? AND user_id = ?",
+            )
+            .bind(item.width)
+            .bind(item.height)
+            .bind(pid)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?
+            .rows_affected()
+        } else if let Some(ref bid) = item.blob_id {
+            sqlx::query(
+                "UPDATE photos SET width = ?, height = ? WHERE encrypted_blob_id = ? AND user_id = ?",
+            )
+            .bind(item.width)
+            .bind(item.height)
+            .bind(bid)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?
+            .rows_affected()
+        } else {
+            0
+        };
+        updated += rows;
+    }
+
+    Ok(Json(serde_json::json!({ "updated": updated })))
+}

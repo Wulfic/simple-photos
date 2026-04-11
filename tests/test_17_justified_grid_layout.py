@@ -592,3 +592,33 @@ class TestGridLayoutAlgorithm:
                         f"Incomplete-row item: displayed AR {displayed_ar:.2f} "
                         f"vs original {original_ar:.2f} — preview cutoff detected"
                     )
+
+
+class TestBatchDimensionUpdate:
+    """Verify PATCH /api/photos/dimensions corrects stored dimensions."""
+
+    def test_batch_update_by_photo_id(self, user_client):
+        """Batch update dimensions by photo_id."""
+        content = generate_test_jpeg(width=300, height=200)
+        name = _unique("dim_patch")
+        data = user_client.upload_photo(name, content)
+        pid = data["photo_id"]
+
+        # Verify original
+        photos = user_client.list_photos()["photos"]
+        photo = next(p for p in photos if p["id"] == pid)
+        assert photo["width"] == 300
+        assert photo["height"] == 200
+
+        # Patch to portrait dims (as if EXIF rotation correction)
+        r = user_client.patch("/api/photos/dimensions", json_data={
+            "updates": [{"photo_id": pid, "width": 200, "height": 300}]
+        })
+        assert r.status_code == 200
+        assert r.json()["updated"] == 1
+
+        # Verify corrected
+        photos = user_client.list_photos()["photos"]
+        photo = next(p for p in photos if p["id"] == pid)
+        assert photo["width"] == 200
+        assert photo["height"] == 300

@@ -117,6 +117,7 @@ class SyncRepository @Inject constructor(
             MediaStore.Images.Media.HEIGHT,
             MediaStore.Images.Media.DATE_TAKEN,
             MediaStore.Images.Media.BUCKET_ID,
+            MediaStore.Images.Media.ORIENTATION,
         )
 
         val bucketPlaceholders = enabledBucketIds.joinToString(",") { "?" }
@@ -144,6 +145,7 @@ class SyncRepository @Inject constructor(
             val widthCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
             val heightCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
             val dateCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+            val orientCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.ORIENTATION)
 
             var newCount = 0
             var skipCount = 0
@@ -159,9 +161,15 @@ class SyncRepository @Inject constructor(
 
                 val filename = c.getString(nameCol) ?: "unknown.jpg"
                 val mimeType = c.getString(mimeCol) ?: "image/jpeg"
-                val width = c.getInt(widthCol)
-                val height = c.getInt(heightCol)
+                var width = c.getInt(widthCol)
+                var height = c.getInt(heightCol)
                 val dateTaken = c.getLong(dateCol)
+                val orientation = c.getInt(orientCol)
+
+                // MediaStore returns raw pixel dimensions; swap for 90°/270° EXIF rotation
+                if ((orientation == 90 || orientation == 270) && width > 0 && height > 0) {
+                    val tmp = width; width = height; height = tmp
+                }
 
                 val mediaType = if (mimeType == "image/gif") "gif" else "photo"
 

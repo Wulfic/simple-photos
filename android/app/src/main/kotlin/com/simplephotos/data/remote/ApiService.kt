@@ -216,6 +216,10 @@ interface ApiService {
     @PUT("api/photos/{id}/crop")
     suspend fun setCrop(@Path("id") photoId: String, @Body request: SetCropRequest): CropResponse
 
+    // ── Batch dimension update ────────────────────────────────────────────
+    @PATCH("api/photos/dimensions")
+    suspend fun batchUpdateDimensions(@Body request: BatchDimensionUpdateRequest): BatchDimensionUpdateResponse
+
     // ── Duplicate (Save Copy) ─────────────────────────────────────────────
     @POST("api/photos/{id}/duplicate")
     suspend fun duplicatePhoto(

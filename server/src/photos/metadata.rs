@@ -387,7 +387,7 @@ pub async fn repair_orientation_dimensions(
 ) {
     // Check if already done
     let done: bool = sqlx::query_scalar(
-        "SELECT value = 'true' FROM server_settings WHERE key = 'orientation_dim_fix'",
+        "SELECT value = 'true' FROM server_settings WHERE key = 'orientation_dim_fix_v2'",
     )
     .fetch_optional(pool)
     .await
@@ -454,7 +454,7 @@ pub async fn repair_orientation_dimensions(
 
     // Mark as done so this doesn't re-run
     let _ = sqlx::query(
-        "INSERT INTO server_settings (key, value) VALUES ('orientation_dim_fix', 'true') \
+        "INSERT INTO server_settings (key, value) VALUES ('orientation_dim_fix_v2', 'true') \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .execute(pool)
