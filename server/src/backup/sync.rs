@@ -122,7 +122,7 @@ pub async fn trigger_sync(
         // `guard` is moved into this future — the concurrency lock is held
         // for the entire duration of run_sync and released on drop.
         let _guard = guard;
-        run_sync(&pool, &storage_root, &server, &api_key, &log_id_clone).await;
+        run_sync(&pool, &storage_root, &server, &api_key, &log_id_clone, false).await;
     });
 
     audit::log(
@@ -198,7 +198,7 @@ pub async fn handle_request_sync(
 
     tokio::spawn(async move {
         let _guard = guard;
-        run_sync(&pool, &storage_root, &server, &api_key, &log_id_clone).await;
+        run_sync(&pool, &storage_root, &server, &api_key, &log_id_clone, false).await;
     });
 
     tracing::info!(
@@ -407,7 +407,7 @@ pub async fn background_sync_task(pool: sqlx::SqlitePool, storage_root: std::pat
                     .ok()
                     .flatten();
 
-            run_sync(&pool, &storage_root, server, &api_key, &log_id).await;
+            run_sync(&pool, &storage_root, server, &api_key, &log_id, false).await;
 
             audit::log_background(
                 &pool,

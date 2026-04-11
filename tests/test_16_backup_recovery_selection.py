@@ -15,6 +15,7 @@ import time
 from collections import Counter
 
 import pytest
+import requests as _requests
 from helpers import (
     APIClient,
     generate_test_jpeg,
@@ -30,8 +31,34 @@ from conftest import (
 
 
 def _trigger_and_wait(admin_client, server_id, timeout=90):
-    admin_client.admin_trigger_sync(server_id)
-    return wait_for_sync(admin_client, server_id, timeout=timeout)
+    """Trigger a sync and wait for completion.
+
+    Retries the trigger with up to `timeout` seconds total if a sync or
+    recovery is already in progress (400 "already in progress"), since prior
+    tests may have started an async recovery that still holds the sync lock.
+    """
+    deadline = time.time() + timeout
+    triggered = False
+    while time.time() < deadline:
+        try:
+            admin_client.admin_trigger_sync(server_id)
+            triggered = True
+            break
+        except _requests.exceptions.HTTPError as exc:
+            resp = getattr(exc, "response", None)
+            if resp is not None and resp.status_code == 400 and (
+                "already in progress" in resp.text or "in progress" in resp.text
+            ):
+                time.sleep(3)
+            else:
+                raise
+    if not triggered:
+        raise TimeoutError(
+            f"Could not start sync for {server_id} within {timeout}s "
+            "(another sync/recovery kept the lock)"
+        )
+    remaining = max(5, deadline - time.time())
+    return wait_for_sync(admin_client, server_id, timeout=remaining)
 
 
 def _assert_no_duplicates(id_list, label):
@@ -121,7 +148,7 @@ class TestRecoveryRoundTrip:
         photo_ids = []
         for i in range(2):
             content = generate_test_jpeg(width=50 + i, height=50 + i)
-            p = user_client.upload_photo(unique_filename(f"recsel_{i}"), content=content)
+            p = user_client.upload_photo(unique_filename(), content=content)
             photo_ids.append(p["photo_id"])
 
         assert len(photo_ids) == 2, f"Expected 2 uploads, got {len(photo_ids)}"

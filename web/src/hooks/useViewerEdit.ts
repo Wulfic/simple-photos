@@ -76,10 +76,10 @@ export default function useViewerEdit(
 
     const container = viewerContainerRef.current;
     const vid = videoRef.current;
+    const containerW = container.clientWidth;
+    const containerH = container.clientHeight;
     let elW: number, elH: number;
     if (vid && vid === el && vid.videoWidth > 0 && vid.videoHeight > 0) {
-      const containerW = container.clientWidth;
-      const containerH = container.clientHeight;
       const aspect = vid.videoWidth / vid.videoHeight;
       if (aspect > containerW / containerH) {
         elW = containerW; elH = containerW / aspect;
@@ -87,11 +87,19 @@ export default function useViewerEdit(
         elH = containerH; elW = containerH * aspect;
       }
     } else {
-      elW = el.clientWidth;
-      elH = el.clientHeight;
+      const imgEl = el as HTMLImageElement;
+      if (imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+        const aspect = imgEl.naturalWidth / imgEl.naturalHeight;
+        if (aspect > containerW / containerH) {
+          elW = containerW; elH = containerW / aspect;
+        } else {
+          elH = containerH; elW = containerH * aspect;
+        }
+      } else {
+        elW = el.clientWidth;
+        elH = el.clientHeight;
+      }
     }
-    const containerW = container.clientWidth;
-    const containerH = container.clientHeight;
     if (elW === 0 || elH === 0 || containerW === 0 || containerH === 0) return;
 
     const rot = ((cropData.rotate ?? 0) % 360 + 360) % 360;
@@ -106,9 +114,17 @@ export default function useViewerEdit(
     const cx = cropData.x + cropData.width / 2;
     const cy = cropData.y + cropData.height / 2;
 
+    // Map crop center from content-normalized coords to element-% coords,
+    // accounting for letterbox offsets introduced by object-contain on a
+    // w-full h-full element whose aspect ratio differs from the container.
+    const contentX = (containerW - elW) / 2;
+    const contentY = (containerH - elH) / 2;
+    const cxEl = (contentX + cx * elW) / containerW;
+    const cyEl = (contentY + cy * elH) / containerH;
+
     setCropZoomStyle({
-      transform: `translate(${(0.5 - cx) * 100}%, ${(0.5 - cy) * 100}%) scale(${scale})${rot ? ` rotate(${rot}deg)` : ""}`,
-      transformOrigin: `${cx * 100}% ${cy * 100}%`,
+      transform: `translate(${(0.5 - cxEl) * 100}%, ${(0.5 - cyEl) * 100}%) scale(${scale})${rot ? ` rotate(${rot}deg)` : ""}`,
+      transformOrigin: `${cxEl * 100}% ${cyEl * 100}%`,
       filter: cropData.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
     });
   }, [cropData, editMode]);

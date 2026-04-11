@@ -338,7 +338,7 @@ export default function Viewer() {
             ref={viewImgRef}
             src={mediaUrl}
             alt={filename}
-            className="object-contain transition-transform duration-150 max-w-full max-h-full"
+            className="w-full h-full object-contain transition-transform duration-150"
             onLoad={computeCropZoom}
             style={{
               imageRendering: mediaType === "gif" ? "auto" : undefined,
@@ -412,8 +412,9 @@ export default function Viewer() {
                 ref={videoRef}
                 src={mediaUrl}
                 playsInline autoPlay
-                className="max-w-full max-h-full"
+                className="w-full h-full"
                 style={{
+                  objectFit: 'contain' as const,
                   background: "black",
                   // Apply brightness only when NOT using cropZoomStyle (which includes its own filter)
                   ...(!hasCropZoom && cropData?.brightness ? { filter: `brightness(${1 + (cropData.brightness ?? 0) / 100})` } : {}),

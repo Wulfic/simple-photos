@@ -286,7 +286,7 @@ def backup_admin(backup_server) -> APIClient:
 
 
 @pytest.fixture(scope="session")
-def backup_configured(primary_admin, primary_server, backup_server) -> str:
+def backup_configured(primary_admin, primary_server, backup_server, backup_admin) -> str:
     """Register the backup server on the primary and return its server_id."""
     # Check if already registered
     servers = primary_admin.admin_list_backup_servers()

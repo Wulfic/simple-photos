@@ -79,7 +79,7 @@ pub async fn recover_from_backup(
             .flatten();
 
     let guard = try_acquire_sync(&server_id).ok_or_else(|| {
-        AppError::BadRequest("A sync or recovery is already in progress for this server".into())
+        AppError::Conflict("A sync or recovery is already in progress for this server".into())
     })?;
 
     // Generate a temporary API key so this primary can accept incoming pushes
@@ -339,8 +339,9 @@ pub async fn push_sync_to_target(
 
     tokio::spawn(async move {
         // Run the full sync engine targeting the recovering primary.
-        // is_recovery=true ensures audio files are included.
-        run_sync(&pool, &storage_root, &temp_server, &target_api_key, &log_id_clone).await;
+        // is_recovery=true skips the deletion phases that would otherwise
+        // remove users/photos that exist on the primary but not on the backup.
+        run_sync(&pool, &storage_root, &temp_server, &target_api_key, &log_id_clone, true).await;
 
         // Notify the primary of completion via callback
         if let Some(ref url) = callback_url {

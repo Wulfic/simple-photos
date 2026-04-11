@@ -75,12 +75,24 @@ impl SyncCounters {
 /// **Phase 4:** Sync metadata tables — edit_copies, photo_metadata, shared albums (full-state JSON).
 /// **Phase 5:** Delta-transfer trash items.
 ///
+/// When `is_recovery` is `true` the sync engine is running on a backup server
+/// that is pushing its data *to* a recovering primary.  In that direction the
+/// two "cleanup" phases must be skipped:
+///
+/// * **Phase 0a** (`purge_deleted_photos_from_backup`): would delete photos
+///   from the recovering primary that the backup happens not to have, silently
+///   dropping data the primary had before the disaster.
+/// * **Phase 0b** (`sync_user_deletions_to_backup`): would delete any user on
+///   the primary that is absent from the backup.  In the typical case the
+///   primary has an `admin` account that was never pushed to the backup, so
+///   this phase would wipe that account and invalidate every live session.
 pub async fn run_sync(
     pool: &sqlx::SqlitePool,
     storage_root: &std::path::Path,
     server: &BackupServer,
     api_key: &Option<String>,
     log_id: &str,
+    is_recovery: bool,
 ) {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
@@ -129,13 +141,25 @@ pub async fn run_sync(
         fetch_remote_ids(ctx.client, &ctx.base_url, "/backup/list-blobs", ctx.api_key).await;
 
     // ── Phase 0a: purge photos deleted on the primary ────────────────────
-    purge_deleted_photos_from_backup(&ctx, &remote_photo_ids).await;
+    // Skipped during recovery: the backup is pushing *to* the primary, so
+    // photos present on the primary but absent from the backup must not be
+    // deleted — they are data the primary held before the disaster.
+    if !is_recovery {
+        purge_deleted_photos_from_backup(&ctx, &remote_photo_ids).await;
+    }
 
     // ── Phase 0: sync user accounts ──────────────────────────────────────
     sync_users_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key).await;
 
     // ── Phase 0b: sync user deletions ────────────────────────────────────
-    sync_user_deletions_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key, &ctx.server.name).await;
+    // Skipped during recovery: the backup only knows about accounts that
+    // were synced from the primary *before* the disaster.  Any accounts
+    // the primary created afterward (including the current admin session)
+    // would be incorrectly treated as "deleted" and wiped, invalidating
+    // all live JWTs.
+    if !is_recovery {
+        sync_user_deletions_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key, &ctx.server.name).await;
+    }
 
     // ── Phase 1 & 2: transfer photos and trash ───────────────────────────
     let mut counters = SyncCounters::new();
