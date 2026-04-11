@@ -6,7 +6,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import { BASE, downloadRaw } from "../api/core";
+import { downloadRaw } from "../api/core";
 import type { ExportFile, ExportJob } from "../api/export";
 import AppHeader from "../components/AppHeader";
 import { getErrorMessage } from "../utils/formatters";
@@ -65,7 +65,7 @@ export default function ExportDownloads() {
     if (downloading) return;
     setDownloading(file.id);
     try {
-      const buf = await downloadRaw(`${BASE}${file.download_url}`);
+      const buf = await downloadRaw(file.download_url);
       const blob = new Blob([buf], { type: "application/zip" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
