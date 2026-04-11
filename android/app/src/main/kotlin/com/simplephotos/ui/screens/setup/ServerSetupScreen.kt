@@ -73,6 +73,7 @@ class ServerSetupViewModel @Inject constructor(
             discoveredServers = emptyList()
             try {
                 discoveredServers = ServerDiscovery.discover(appContext)
+                    .filter { it.mode == "primary" }
             } catch (e: Exception) {
                 error = "Scan failed: ${e.message}"
             } finally {

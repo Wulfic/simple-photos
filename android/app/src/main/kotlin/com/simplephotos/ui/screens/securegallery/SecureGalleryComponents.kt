@@ -3,6 +3,7 @@
 package com.simplephotos.ui.screens.securegallery
 
 import android.graphics.BitmapFactory
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -12,6 +13,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items as lazyItems
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -369,16 +372,28 @@ internal fun GalleryDetailView(
     allPhotos: List<PhotoEntity>,
     error: String?,
     onBack: () -> Unit,
-    onPhotoClick: (String) -> Unit,
     onAddPhotos: (List<String>) -> Unit,
     viewModel: SecureGalleryViewModel
 ) {
     var showAddPhotos by remember { mutableStateOf(false) }
     var selectedBlobIds by remember { mutableStateOf(emptySet<String>()) }
+    // Internal viewer state — show secure items only, not the main gallery
+    var viewerIndex by remember { mutableStateOf<Int?>(null) }
 
     val albumBlobIds = remember(items) { items.map { it.blobId }.toSet() }
     val availablePhotos = remember(allPhotos, albumBlobIds) {
         allPhotos.filter { it.serverBlobId != null && it.serverBlobId !in albumBlobIds }
+    }
+
+    // Full-screen viewer for secure items only
+    if (viewerIndex != null) {
+        SecurePhotoViewer(
+            items = items,
+            initialIndex = viewerIndex!!,
+            viewModel = viewModel,
+            onBack = { viewerIndex = null }
+        )
+        return
     }
 
     Scaffold(
@@ -544,7 +559,10 @@ internal fun GalleryDetailView(
                         items(items, key = { it.id }) { item ->
                             SecureItemTile(
                                 item = item,
-                                onClick = { onPhotoClick(item.blobId) },
+                                onClick = {
+                                    val idx = items.indexOfFirst { it.blobId == item.blobId }
+                                    viewerIndex = idx.coerceAtLeast(0)
+                                },
                                 viewModel = viewModel
                             )
                         }
@@ -655,6 +673,82 @@ internal fun PhotoThumbnail(photo: PhotoEntity) {
                     textAlign = TextAlign.Center
                 )
             }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Secure Photo Viewer — full-screen pager for encrypted items only
+// ─────────────────────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun SecurePhotoViewer(
+    items: List<SecureGalleryItem>,
+    initialIndex: Int,
+    viewModel: SecureGalleryViewModel,
+    onBack: () -> Unit
+) {
+    val pagerState = rememberPagerState(
+        initialPage = initialIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
+        pageCount = { items.size }
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            val item = items[page]
+            var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
+            var loading by remember(item.blobId) { mutableStateOf(true) }
+
+            LaunchedEffect(item.blobId) {
+                loading = true
+                try {
+                    val data = viewModel.downloadAndDecrypt(item.blobId)
+                    bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+                } catch (_: Exception) {
+                    bitmap = null
+                } finally {
+                    loading = false
+                }
+            }
+
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                when {
+                    loading -> CircularProgressIndicator(color = Color.White)
+                    bitmap != null -> Image(
+                        bitmap = bitmap!!.asImageBitmap(),
+                        contentDescription = "Secure photo",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                    else -> Text("Failed to decrypt", color = Color.White)
+                }
+            }
+        }
+
+        // Back button overlay
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier
+                .statusBarsPadding()
+                .padding(8.dp)
+                .align(Alignment.TopStart)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = Color.White
+            )
         }
     }
 }

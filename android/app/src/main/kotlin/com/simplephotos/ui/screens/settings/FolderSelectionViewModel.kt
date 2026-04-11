@@ -169,6 +169,9 @@ class FolderSelectionViewModel @Inject constructor(
     /**
      * Persist any folder toggle changes to the DB and trigger sync for
      * newly-enabled folders. Called when the user navigates away.
+     *
+     * Uses NonCancellable to ensure the coroutine completes even when
+     * the ViewModel scope is cancelled as the screen is popped.
      */
     fun applyPendingChanges() {
         val newlyEnabled = enabledBucketIds - originalEnabledBucketIds
@@ -176,7 +179,7 @@ class FolderSelectionViewModel @Inject constructor(
         if (newlyEnabled.isEmpty() && newlyDisabled.isEmpty()) return
 
         saving = true
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.NonCancellable) {
             try {
                 // Persist all changes to the DB
                 for (folder in deviceFolders) {

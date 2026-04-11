@@ -13,7 +13,6 @@ import androidx.security.crypto.MasterKey
 @Composable
 fun SecureGalleryScreen(
     onBack: () -> Unit,
-    onPhotoClick: (String) -> Unit,
     viewModel: SecureGalleryViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
@@ -105,7 +104,6 @@ fun SecureGalleryScreen(
             allPhotos = viewModel.allPhotos,
             error = viewModel.error,
             onBack = { viewModel.deselectGallery() },
-            onPhotoClick = onPhotoClick,
             onAddPhotos = { viewModel.addPhotosToGallery(it) },
             viewModel = viewModel
         )

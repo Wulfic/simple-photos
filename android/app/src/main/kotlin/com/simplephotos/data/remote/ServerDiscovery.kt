@@ -35,7 +35,8 @@ data class DiscoveredServer(
     val url: String,
     val version: String,
     val host: String,
-    val port: Int
+    val port: Int,
+    val mode: String = "primary"
 )
 
 /**
@@ -151,13 +152,15 @@ object ServerDiscovery {
                 if (json.optString("service") == "simple-photos") {
                     val actualPort = json.optInt("port", DISCOVERY_PORT)
                     val version = json.optString("version", "unknown")
+                    val mode = json.optString("mode", "primary")
                     val serverUrl = "http://$host:$actualPort"
-                    Log.d(TAG, "Found server at $serverUrl via discovery port (v$version)")
+                    Log.d(TAG, "Found server at $serverUrl via discovery port (v$version, mode=$mode)")
                     return DiscoveredServer(
                         url = serverUrl,
                         version = version,
                         host = host,
-                        port = actualPort
+                        port = actualPort,
+                        mode = mode
                     )
                 }
             } else {
@@ -197,12 +200,14 @@ object ServerDiscovery {
                         conn.disconnect()
                         val json = JSONObject(body)
                         if (json.optString("service") == "simple-photos") {
-                            Log.d(TAG, "Found server at $serverUrl (v${json.optString("version", "?")})")
+                            val mode = json.optString("mode", "primary")
+                            Log.d(TAG, "Found server at $serverUrl (v${json.optString("version", "?")}, mode=$mode)")
                             return DiscoveredServer(
                                 url = serverUrl,
                                 version = json.optString("version", "unknown"),
                                 host = host,
-                                port = port
+                                port = port,
+                                mode = mode
                             )
                         }
                     } else {

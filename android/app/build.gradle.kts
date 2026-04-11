@@ -16,6 +16,7 @@ android {
         targetSdk = 34
         versionCode = 69
         versionName = "0.6.9"
+        testInstrumentationRunner = "com.simplephotos.HiltTestRunner"
     }
 
     buildTypes {
@@ -114,4 +115,17 @@ dependencies {
 
     // Core
     implementation(libs.core.ktx)
+
+    // Local unit tests
+    testImplementation("junit:junit:4.13.2")
+
+    // Testing
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
+    androidTestImplementation(libs.test.runner)
+    androidTestImplementation(libs.test.rules)
+    androidTestImplementation(libs.test.ext.junit)
+    androidTestImplementation(libs.hilt.android.testing)
+    kspAndroidTest(libs.hilt.compiler)
 }

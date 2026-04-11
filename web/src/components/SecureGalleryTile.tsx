@@ -20,6 +20,7 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
     [item.blob_id]
   );
   const [encThumbSrc, setEncThumbSrc] = useState<string | null>(null);
+  const [serverThumbSrc, setServerThumbSrc] = useState<string | null>(null);
 
   useEffect(() => {
     console.log(
@@ -59,6 +60,18 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
     })();
     return () => { cancelled = true; };
   }, [cachedPhoto?.thumbnailData, cachedPhoto?.serverSide, cachedPhoto?.serverPhotoId, item.encrypted_thumb_blob_id]);
+
+  // Server-side fallback: if no IDB cache and no encrypted thumb, try the
+  // server API directly (the server may have a photos row for the cloned blob).
+  useEffect(() => {
+    if (cachedPhoto?.thumbnailData) return;
+    if (cachedPhoto?.serverSide && cachedPhoto?.serverPhotoId) return;
+    if (encThumbSrc) return;
+    if (item.encrypted_thumb_blob_id) return; // encrypted thumb path will be tried instead
+    const token = useAuthStore.getState().accessToken;
+    if (!token) return;
+    setServerThumbSrc(`/api/photos/${item.blob_id}/thumbnail?token=${token}`);
+  }, [cachedPhoto, encThumbSrc, item.blob_id, item.encrypted_thumb_blob_id]);
 
   // Clean up object URL on unmount
   useEffect(() => {
@@ -102,6 +115,24 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
           alt="Encrypted thumbnail"
           className="w-full h-full object-cover"
           loading="lazy"
+        />
+      </div>
+    );
+  }
+
+  // Direct server thumbnail fallback (clone has a photos row on the server)
+  if (serverThumbSrc) {
+    return (
+      <div
+        className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
+        onClick={onClick}
+      >
+        <img
+          src={serverThumbSrc}
+          alt="Thumbnail"
+          className="w-full h-full object-cover"
+          loading="lazy"
+          onError={() => setServerThumbSrc(null)}
         />
       </div>
     );

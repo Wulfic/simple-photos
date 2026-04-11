@@ -483,92 +483,11 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Privacy & Encryption (admin) ────────────────────────────
-            if (viewModel.isAdmin) {
-                SettingsCard(title = "Privacy & Encryption", iconPainter = painterResource(R.drawable.ic_lock)) {
-                    Text(
-                        "Photos are encrypted on the server. File contents cannot be read without your key.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("End-to-End Encryption")
-                        Text(
-                            "Active",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFF22C55E)
-                        )
-                    }
-                }
-            }
 
-            // ── Backup Recovery (admin) ──────────────────────────────────
-            if (viewModel.isAdmin && viewModel.backupServersLoaded && viewModel.backupServers.isNotEmpty()) {
-                SettingsCard(title = "Backup Recovery", icon = Icons.Default.Restore) {
-                    Text(
-                        "Recover photos from a backup server instance.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    viewModel.backupServers.forEach { server ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(server.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                Text(server.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            OutlinedButton(
-                                onClick = { viewModel.recoverFromBackup(server.id) },
-                                enabled = !viewModel.recovering
-                            ) {
-                                if (viewModel.recovering) {
-                                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(4.dp))
-                                }
-                                Text("Recover")
-                            }
-                        }
-                    }
-                }
-            }
 
-            // ── Audio Backup (admin) ─────────────────────────────────────
-            if (viewModel.isAdmin) {
-                SettingsCard(title = "Audio Backup", icon = Icons.Default.MusicNote) {
-                    Text(
-                        "When enabled, audio files on the device will also be backed up to the server.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Audio Backup")
-                        if (viewModel.audioBackupLoading || viewModel.togglingAudioBackup) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Switch(
-                                checked = viewModel.audioBackupEnabled,
-                                onCheckedChange = { viewModel.toggleAudioBackup() }
-                            )
-                        }
-                    }
-                }
-            }
+
+
+
 
             // ── SSL/TLS (admin) ──────────────────────────────────────────
             if (viewModel.isAdmin) {

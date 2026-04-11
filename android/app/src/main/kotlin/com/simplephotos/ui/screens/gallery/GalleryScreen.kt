@@ -14,10 +14,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.shape.CircleShape
@@ -38,6 +34,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.datastore.core.DataStore
@@ -256,47 +253,82 @@ fun GalleryScreen(
                         }
                     }
                 } else {
-                    // Day-grouped photo grid
-                    // "large" = fewer columns (bigger thumbnails), "normal" = more columns
-                    val gridMinSize = if (viewModel.thumbnailSize == "large") 160.dp else 100.dp
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(gridMinSize),
-                        contentPadding = PaddingValues(2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
+                    // Day-grouped justified photo grid — aspect-ratio-preserving layout
+                    val targetRowHeight = if (viewModel.thumbnailSize == "large") 240.dp else 180.dp
+
+                    // Build a map: photo localId → header info for the first photo in each day
+                    val headerMap = remember(gridItems) {
+                        val map = mutableMapOf<String, GalleryGridItem.Header>()
+                        var lastHeader: GalleryGridItem.Header? = null
+                        var isFirstInGroup = false
                         for (item in gridItems) {
                             when (item) {
                                 is GalleryGridItem.Header -> {
-                                    item(
-                                        span = { GridItemSpan(maxLineSpan) },
-                                        key = "header_${item.dateLabel}"
-                                    ) {
-                                        DayHeader(
-                                            dateLabel = item.dateLabel,
-                                            isSelectionMode = viewModel.isSelectionMode,
-                                            allSelected = item.photoIds.all { it in viewModel.selectedIds },
-                                            onSelectDay = { viewModel.selectDay(item.photoIds) }
-                                        )
-                                    }
+                                    lastHeader = item
+                                    isFirstInGroup = true
                                 }
                                 is GalleryGridItem.Photo -> {
-                                    item(key = item.photo.localId) {
-                                        MediaTile(
-                                            photo = item.photo,
-                                            serverBaseUrl = viewModel.serverBaseUrl,
-                                            isSelectionMode = viewModel.isSelectionMode,
-                                            isSelected = item.photo.localId in viewModel.selectedIds,
-                                            onTap = {
-                                                if (viewModel.isSelectionMode) viewModel.toggleSelect(item.photo.localId)
-                                                else onPhotoClick(item.photo.localId)
-                                            },
-                                            onLongPress = { viewModel.enterSelectionMode(item.photo.localId) }
-                                        )
+                                    if (isFirstInGroup && lastHeader != null) {
+                                        map[item.photo.localId] = lastHeader!!
+                                        isFirstInGroup = false
                                     }
                                 }
                             }
                         }
+                        map
+                    }
+
+                    // Flat photo list for the grid
+                    val photoItems = remember(visiblePhotos) {
+                        visiblePhotos
+                            .sortedWith(compareByDescending<PhotoEntity> { it.takenAt }.thenBy { it.filename })
+                    }
+
+                    // Compute which photo indices start a new day group
+                    val dayBreakIndices = remember(photoItems, headerMap) {
+                        val breaks = mutableSetOf<Int>()
+                        for ((idx, photo) in photoItems.withIndex()) {
+                            if (photo.localId in headerMap) breaks.add(idx)
+                        }
+                        breaks
+                    }
+
+                    com.simplephotos.ui.components.JustifiedGrid(
+                        items = photoItems,
+                        getAspectRatio = { p ->
+                            if (p.width > 0 && p.height > 0) p.width.toFloat() / p.height.toFloat()
+                            else 1f
+                        },
+                        getKey = { it.localId },
+                        targetRowHeight = targetRowHeight,
+                        gap = 2.dp,
+                        breakBefore = dayBreakIndices,
+                        headerBefore = { itemIndex ->
+                            val photo = photoItems[itemIndex]
+                            val header = headerMap[photo.localId]
+                            if (header != null) {
+                                DayHeader(
+                                    dateLabel = header.dateLabel,
+                                    isSelectionMode = viewModel.isSelectionMode,
+                                    allSelected = header.photoIds.all { it in viewModel.selectedIds },
+                                    onSelectDay = { viewModel.selectDay(header.photoIds) }
+                                )
+                            }
+                        }
+                    ) { item, widthDp, heightDp ->
+                        MediaTile(
+                            photo = item,
+                            serverBaseUrl = viewModel.serverBaseUrl,
+                            isSelectionMode = viewModel.isSelectionMode,
+                            isSelected = item.localId in viewModel.selectedIds,
+                            onTap = {
+                                if (viewModel.isSelectionMode) viewModel.toggleSelect(item.localId)
+                                else onPhotoClick(item.localId)
+                            },
+                            onLongPress = { viewModel.enterSelectionMode(item.localId) },
+                            widthDp = widthDp,
+                            heightDp = heightDp
+                        )
                     }
                 }
             }
@@ -468,11 +500,13 @@ private fun MediaTile(
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onTap: () -> Unit,
-    onLongPress: () -> Unit
+    onLongPress: () -> Unit,
+    widthDp: Dp = 100.dp,
+    heightDp: Dp = 100.dp
 ) {
     Box(
         modifier = Modifier
-            .aspectRatio(1f)
+            .size(widthDp, heightDp)
             .clip(MaterialTheme.shapes.small)
             .combinedClickable(
                 onClick = onTap,
@@ -480,6 +514,9 @@ private fun MediaTile(
             )
     ) {
         val imageModel: Any? = when {
+            // GIFs: prefer local file so Coil's GifDecoder can animate them
+            // (thumbnailPath is a static JPEG first-frame)
+            photo.mediaType == "gif" && photo.localPath != null -> photo.localPath
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> photo.localPath
             else -> null

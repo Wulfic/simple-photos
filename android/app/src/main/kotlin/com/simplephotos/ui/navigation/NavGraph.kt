@@ -165,8 +165,7 @@ fun NavGraph() {
         }
         composable(Screen.SecureGallery.route) {
             SecureGalleryScreen(
-                onBack = { navController.popBackStack() },
-                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) }
+                onBack = { navController.popBackStack() }
             )
         }
         composable(Screen.SharedAlbums.route) {
