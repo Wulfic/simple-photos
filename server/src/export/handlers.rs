@@ -119,9 +119,10 @@ pub async fn start_export(
     let user_id = auth.user_id.clone();
     let jid = job_id.clone();
     let size_limit = body.size_limit;
+    let jwt_secret = state.config.auth.jwt_secret.clone();
 
     tokio::spawn(async move {
-        super::worker::run_export(pool, read_pool, storage_root, user_id, jid, size_limit).await;
+        super::worker::run_export(pool, read_pool, storage_root, user_id, jid, size_limit, jwt_secret).await;
     });
 
     Ok(Json(ExportJobResponse {

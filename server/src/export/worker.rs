@@ -1,8 +1,9 @@
 //! Background worker that packages a user's media library into zip archives.
 //!
 //! Called from the handler via `tokio::spawn`. Reads all blobs and metadata
-//! for the user, writes them into one or more zip files (split at the
-//! configured size_limit), and records each file in `export_files`.
+//! for the user, decrypts them, writes them into one or more zip files
+//! (split at the configured size_limit), and records each file in
+//! `export_files`.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -12,7 +13,7 @@ use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 
-/// Run the export job: read all blobs + metadata for the user, produce zips.
+/// Run the export job: read all blobs + metadata for the user, decrypt, produce zips.
 pub async fn run_export(
     pool: SqlitePool,
     read_pool: SqlitePool,
@@ -20,6 +21,7 @@ pub async fn run_export(
     user_id: String,
     job_id: String,
     size_limit: i64,
+    jwt_secret: String,
 ) {
     // Mark job as running
     if let Err(e) = sqlx::query("UPDATE export_jobs SET status = 'running' WHERE id = ?")
@@ -31,7 +33,7 @@ pub async fn run_export(
         return;
     }
 
-    match do_export(&pool, &read_pool, &storage_root, &user_id, &job_id, size_limit).await {
+    match do_export(&pool, &read_pool, &storage_root, &user_id, &job_id, size_limit, &jwt_secret).await {
         Ok(()) => {
             let now = chrono::Utc::now().to_rfc3339();
             let _ = sqlx::query(
@@ -66,10 +68,20 @@ async fn do_export(
     user_id: &str,
     job_id: &str,
     size_limit: i64,
+    jwt_secret: &str,
 ) -> Result<(), anyhow::Error> {
     // Ensure export directory exists
     let export_dir = storage_root.join("exports").join(job_id);
     tokio::fs::create_dir_all(&export_dir).await?;
+
+    // Load the encryption key so we can decrypt blobs for the export.
+    let encryption_key = crate::crypto::load_wrapped_key(read_pool, jwt_secret)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to load encryption key: {e}"))?
+        .ok_or_else(|| anyhow::anyhow!(
+            "No encryption key stored on this server. \
+             Cannot produce a decrypted export."
+        ))?;
 
     // Fetch all blobs for this user (id, blob_type, storage_path, size_bytes, client_hash, upload_time)
     let blobs: Vec<(String, String, String, i64, Option<String>, String)> = sqlx::query_as(
@@ -80,18 +92,21 @@ async fn do_export(
     .fetch_all(read_pool)
     .await?;
 
-    // Fetch metadata file paths for this user
-    let metadata_files: Vec<(String, String)> = sqlx::query_as(
-        "SELECT pm.blob_id, pm.metadata_path FROM photo_metadata pm \
-         WHERE pm.user_id = ? AND pm.metadata_path IS NOT NULL",
+    // Build a map from blob_id → original filename (from the photos table).
+    // The photo blob_id is stored in `encrypted_blob_id` and thumbnails in
+    // `encrypted_thumb_blob_id`.
+    let filename_rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT encrypted_blob_id, filename, mime_type FROM photos WHERE user_id = ?",
     )
     .bind(user_id)
     .fetch_all(read_pool)
     .await
     .unwrap_or_default();
 
-    let metadata_map: std::collections::HashMap<String, String> =
-        metadata_files.into_iter().collect();
+    let filename_map: std::collections::HashMap<String, (String, String)> = filename_rows
+        .into_iter()
+        .map(|(blob_id, filename, mime)| (blob_id, (filename, mime)))
+        .collect();
 
     if blobs.is_empty() {
         // Nothing to export — complete with 0 files
@@ -127,17 +142,22 @@ async fn do_export(
     // worker threads, causing concurrent blob downloads (viewer
     // scrolling) to hang.
 
-    // Phase 1: Read all blobs from disk using async I/O.
+    // Phase 1: Read all blobs from disk using async I/O, then decrypt.
     struct BlobEntry {
         blob_id: String,
         blob_type: String,
+        /// Decrypted data size (used for zip splitting).
         size_bytes: i64,
+        /// Decrypted file data.
         data: Vec<u8>,
-        meta_data: Option<Vec<u8>>,
+        /// Original filename if known (from photos table).
+        original_filename: Option<String>,
     }
 
     let mut entries: Vec<BlobEntry> = Vec::with_capacity(blobs.len());
-    for (blob_id, blob_type, storage_path, size_bytes, _client_hash, _upload_time) in &blobs {
+    let mut decrypt_failures = 0u32;
+
+    for (blob_id, blob_type, storage_path, _size_bytes, _client_hash, _upload_time) in &blobs {
         let blob_path = storage_root.join(storage_path);
 
         // Skip files that don't exist on disk
@@ -146,8 +166,8 @@ async fn do_export(
             continue;
         }
 
-        // Read blob file (async)
-        let data = match tokio::fs::read(&blob_path).await {
+        // Read encrypted blob file (async)
+        let encrypted_data = match tokio::fs::read(&blob_path).await {
             Ok(d) => d,
             Err(e) => {
                 tracing::warn!(job_id = %job_id, blob_id = %blob_id, error = %e, "Failed to read blob, skipping");
@@ -155,21 +175,37 @@ async fn do_export(
             }
         };
 
-        // Read metadata if available (async)
-        let meta_data = if let Some(meta_rel_path) = metadata_map.get(blob_id) {
-            let meta_path = storage_root.join(meta_rel_path);
-            tokio::fs::read(&meta_path).await.ok()
-        } else {
-            None
+        // Decrypt blob data
+        let data = match crate::crypto::decrypt(&encryption_key, &encrypted_data) {
+            Ok(d) => d,
+            Err(e) => {
+                decrypt_failures += 1;
+                tracing::warn!(
+                    job_id = %job_id, blob_id = %blob_id, error = %e,
+                    "Failed to decrypt blob, skipping"
+                );
+                continue;
+            }
         };
+
+        // Look up original filename
+        let original_filename = filename_map.get(blob_id).map(|(name, _)| name.clone());
 
         entries.push(BlobEntry {
             blob_id: blob_id.clone(),
             blob_type: blob_type.clone(),
-            size_bytes: *size_bytes,
+            size_bytes: data.len() as i64,
             data,
-            meta_data,
+            original_filename,
         });
+    }
+
+    if decrypt_failures > 0 {
+        tracing::warn!(
+            job_id = %job_id,
+            decrypt_failures,
+            "Some blobs could not be decrypted and were skipped"
+        );
     }
 
     // Phase 2: Write all ZIP archives on a blocking thread so the async
@@ -209,17 +245,30 @@ async fn do_export(
                 current_zip_size = 0;
             }
 
-            let zip_entry_name = format!("blobs/{}/{}.bin", entry.blob_type, entry.blob_id);
+            // Use original filename when available, otherwise fall back to
+            // blob_id with an appropriate extension.
+            let filename = if let Some(ref orig) = entry.original_filename {
+                orig.clone()
+            } else {
+                let ext = match entry.blob_type.as_str() {
+                    "photo" => "jpg",
+                    "thumbnail" => "jpg",
+                    "video" => "mp4",
+                    _ => "bin",
+                };
+                format!("{}.{}", entry.blob_id, ext)
+            };
+
+            // Organise into sub-folders by type. Thumbnails go into a
+            // separate folder so they don't clutter the main photos.
+            let zip_entry_name = match entry.blob_type.as_str() {
+                "thumbnail" => format!("thumbnails/{}", filename),
+                _ => format!("photos/{}", filename),
+            };
+
             current_zip.start_file(&zip_entry_name, options)?;
             current_zip.write_all(&entry.data)?;
             current_zip_size += entry.data.len() as i64;
-
-            if let Some(ref meta_data) = entry.meta_data {
-                let meta_zip_name = format!("metadata/{}.json", entry.blob_id);
-                current_zip.start_file(&meta_zip_name, options)?;
-                current_zip.write_all(meta_data)?;
-                current_zip_size += meta_data.len() as i64;
-            }
         }
 
         // Finalize the last zip
