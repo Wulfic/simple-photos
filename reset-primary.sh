@@ -36,6 +36,31 @@ else
     echo "WARNING: $WEB_DIR not found — skipping web build"
 fi
 
+# ── Build Android APK ────────────────────────────────────────────────────────
+echo "Building Android APK..."
+ANDROID_DIR="$SCRIPT_DIR/android"
+DOWNLOADS_DIR="$SCRIPT_DIR/downloads"
+if [[ -d "$ANDROID_DIR" ]]; then
+    mkdir -p "$DOWNLOADS_DIR"
+    BUILD_CMD="cd '$ANDROID_DIR' && ./gradlew assembleDebug"
+    if [[ "$RUN_USER" != "$(id -un)" ]]; then
+        sudo -u "$RUN_USER" bash -c "$BUILD_CMD" \
+            || { echo "WARNING: Android APK build failed — continuing without APK"; }
+    else
+        (eval "$BUILD_CMD") \
+            || { echo "WARNING: Android APK build failed — continuing without APK"; }
+    fi
+    APK_SRC="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
+    if [[ -f "$APK_SRC" ]]; then
+        cp "$APK_SRC" "$DOWNLOADS_DIR/simple-photos.apk"
+        echo "Android APK copied to $DOWNLOADS_DIR/simple-photos.apk"
+    else
+        echo "WARNING: APK not found at $APK_SRC after build"
+    fi
+else
+    echo "WARNING: $ANDROID_DIR not found — skipping Android build"
+fi
+
 # ── Build server binary ─────────────────────────────────────────────────────
 echo "Building server binary..."
 if [[ "$RUN_USER" != "$(id -un)" ]]; then
