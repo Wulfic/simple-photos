@@ -46,6 +46,10 @@ export default function usePhotoPreload(
       const dbEntry = await db.photos.get(blobId);
       const fetchId = dbEntry?.storageBlobId || blobId;
 
+      // Skip preloading video/audio — they're too large to fetch speculatively
+      // and would monopolize bandwidth, blocking adjacent photo loads.
+      if (dbEntry?.mediaType === "video" || dbEntry?.mediaType === "audio") return;
+
       // Check IndexedDB full-photo cache first (keyed by fetchId for dedup)
       const idbCached = await db.fullPhotos?.get(fetchId);
       if (idbCached?.data) {

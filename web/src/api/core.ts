@@ -183,7 +183,7 @@ export async function tryRefresh(): Promise<boolean> {
  * Used for non-JSON endpoints (photo files, thumbnails, blobs) where the
  * standard `request()` helper can't be used because it parses JSON.
  */
-export async function downloadRaw(url: string): Promise<ArrayBuffer> {
+export async function downloadRaw(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
   const { accessToken } = useAuthStore.getState();
   const headers: Record<string, string> = {
     "X-Requested-With": "SimplePhotos",
@@ -192,14 +192,14 @@ export async function downloadRaw(url: string): Promise<ArrayBuffer> {
     headers["Authorization"] = `Bearer ${accessToken}`;
   }
 
-  const res = await fetch(url, { headers });
+  const res = await fetch(url, { headers, signal });
 
   if (res.status === 401) {
     const refreshed = await tryRefresh();
     if (refreshed) {
       const newToken = useAuthStore.getState().accessToken;
       headers["Authorization"] = `Bearer ${newToken}`;
-      const retry = await fetch(url, { headers });
+      const retry = await fetch(url, { headers, signal });
       if (!retry.ok) {
         console.error(`[API] Download ${url} failed after refresh: ${retry.status}`);
         throw new Error(`Download failed: HTTP ${retry.status}`);

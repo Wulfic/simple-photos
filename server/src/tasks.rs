@@ -52,6 +52,7 @@ pub fn spawn_all(
     );
     spawn_export_cleanup(pool.clone(), storage_root_swap.clone());
     spawn_storage_health_monitor(storage_root_swap.clone(), storage_available.clone());
+    spawn_dimension_repair(pool.clone(), config.storage.root.clone());
 }
 
 // ── Individual task spawners ─────────────────────────────────────────
@@ -384,4 +385,12 @@ async fn probe_storage(probe_path: &std::path::Path) -> bool {
             false
         }
     }
+}
+
+/// One-time startup task: re-read EXIF orientation for all photos and fix
+/// width/height where orientations 5-8 had the dimensions un-swapped.
+fn spawn_dimension_repair(pool: SqlitePool, storage_root: PathBuf) {
+    tokio::spawn(async move {
+        crate::photos::metadata::repair_orientation_dimensions(&pool, &storage_root).await;
+    });
 }

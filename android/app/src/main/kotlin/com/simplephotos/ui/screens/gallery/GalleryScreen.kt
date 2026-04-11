@@ -513,12 +513,14 @@ private fun MediaTile(
                 onLongClick = onLongPress
             )
     ) {
+        val isGif = photo.mediaType == "gif"
         val imageModel: Any? = when {
             // GIFs: prefer local file so Coil's GifDecoder can animate them
-            // (thumbnailPath is a static JPEG first-frame)
-            photo.mediaType == "gif" && photo.localPath != null -> photo.localPath
+            // (thumbnailPath is a static JPEG first-frame that won't animate).
+            // Parse content:// URIs so Coil resolves them via ContentResolver.
+            isGif && photo.localPath != null -> Uri.parse(photo.localPath)
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
-            photo.localPath != null -> photo.localPath
+            photo.localPath != null -> Uri.parse(photo.localPath)
             else -> null
         }
 
@@ -527,7 +529,11 @@ private fun MediaTile(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(imageModel)
                     .crossfade(true)
-                    .size(256)
+                    .apply {
+                        // GIFs: don't constrain size — Coil's GifDecoder needs
+                        // the full data to produce an animated Drawable.
+                        if (!isGif) size(256)
+                    }
                     .build(),
                 contentDescription = photo.filename,
                 contentScale = ContentScale.Crop,

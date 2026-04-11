@@ -54,8 +54,8 @@ export const blobsApi = {
     }>(`/blobs${qs ? `?${qs}` : ""}`);
   },
 
-  download: async (blobId: string): Promise<ArrayBuffer> => {
-    return downloadRaw(`${BASE}/blobs/${blobId}`);
+  download: async (blobId: string, signal?: AbortSignal): Promise<ArrayBuffer> => {
+    return downloadRaw(`${BASE}/blobs/${blobId}`, signal);
   },
 
   delete: (blobId: string) =>

@@ -129,6 +129,21 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                     }
                 }
             }
+
+            // EXIF Orientation values 5–8 indicate the image is rotated 90°
+            // or 270°, so the displayed width/height are swapped relative to
+            // the raw pixel dimensions reported by imagesize.
+            if width > 0 && height > 0 {
+                if let Some(orient_field) =
+                    exif_reader.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+                {
+                    if let Some(orient) = orient_field.value.get_uint(0) {
+                        if orient >= 5 && orient <= 8 {
+                            std::mem::swap(&mut width, &mut height);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -244,6 +259,19 @@ pub(crate) fn extract_media_metadata_from_bytes(
                 }
             }
         }
+
+        // EXIF Orientation values 5–8 indicate 90°/270° rotation — swap
+        if width > 0 && height > 0 {
+            if let Some(orient_field) =
+                exif_reader.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+            {
+                if let Some(orient) = orient_field.value.get_uint(0) {
+                    if orient >= 5 && orient <= 8 {
+                        std::mem::swap(&mut width, &mut height);
+                    }
+                }
+            }
+        }
     }
 
     let _ = filename; // suppress unused warning
@@ -346,4 +374,89 @@ pub(crate) async fn extract_media_metadata_from_bytes_async(
     tokio::task::spawn_blocking(move || extract_media_metadata_from_bytes(&data, &filename))
         .await
         .unwrap_or_else(|_| (0, 0, None, None, None, None))
+}
+
+/// One-time startup repair: re-read EXIF orientation for every photo that has
+/// a file on disk and fix width/height where orientations 5-8 caused the raw
+/// pixel dimensions to be stored instead of the display dimensions.
+///
+/// Guarded by a `server_settings` flag so it runs at most once per database.
+pub async fn repair_orientation_dimensions(
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+) {
+    // Check if already done
+    let done: bool = sqlx::query_scalar(
+        "SELECT value = 'true' FROM server_settings WHERE key = 'orientation_dim_fix'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false);
+
+    if done {
+        return;
+    }
+
+    tracing::info!("[DIM-REPAIR] Starting one-time EXIF orientation dimension repair");
+
+    let rows: Vec<(String, String, i64, i64)> = match sqlx::query_as(
+        "SELECT id, file_path, width, height FROM photos \
+         WHERE file_path != '' AND width > 0 AND height > 0 \
+         AND media_type IN ('photo', 'gif')",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("[DIM-REPAIR] Failed to query photos: {}", e);
+            return;
+        }
+    };
+
+    tracing::info!("[DIM-REPAIR] Checking {} photos for orientation fix", rows.len());
+
+    let mut fixed = 0u64;
+    for (photo_id, file_path, db_w, db_h) in &rows {
+        let abs_path = storage_root.join(file_path);
+        if !abs_path.exists() {
+            continue;
+        }
+
+        let path_clone = abs_path.clone();
+        let (new_w, new_h, _, _, _, _) =
+            extract_media_metadata_async(path_clone).await;
+
+        if new_w > 0 && new_h > 0 && (new_w != *db_w || new_h != *db_h) {
+            if let Err(e) = sqlx::query(
+                "UPDATE photos SET width = ?, height = ? WHERE id = ?",
+            )
+            .bind(new_w)
+            .bind(new_h)
+            .bind(photo_id)
+            .execute(pool)
+            .await
+            {
+                tracing::warn!("[DIM-REPAIR] Failed to update {}: {}", photo_id, e);
+            } else {
+                fixed += 1;
+                tracing::debug!(
+                    "[DIM-REPAIR] Fixed {}: {}x{} -> {}x{}",
+                    file_path, db_w, db_h, new_w, new_h
+                );
+            }
+        }
+    }
+
+    tracing::info!("[DIM-REPAIR] Complete: fixed {} of {} photos", fixed, rows.len());
+
+    // Mark as done so this doesn't re-run
+    let _ = sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('orientation_dim_fix', 'true') \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .execute(pool)
+    .await;
 }

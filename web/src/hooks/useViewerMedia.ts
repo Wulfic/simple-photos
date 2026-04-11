@@ -44,9 +44,17 @@ export default function useViewerMedia(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [videoError, setVideoError] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   /** Load media — check IndexedDB cache first, then download + decrypt. */
   const loadEncryptedMedia = useCallback(async (blobId: string) => {
+    // Abort any in-flight download before starting a new one
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError("");
     try {
@@ -81,9 +89,12 @@ export default function useViewerMedia(
 
       // Cache miss — download, decrypt, display
       console.log(`[DIAG:VIEWER] Downloading blob ${blobId}...`);
-      const encrypted = await api.blobs.download(blobId);
+      const encrypted = await api.blobs.download(blobId, controller.signal);
+      // Check if aborted during download
+      if (controller.signal.aborted) return;
       console.log(`[DIAG:VIEWER] Downloaded ${encrypted.byteLength} bytes, decrypting...`);
       const decrypted = await decrypt(encrypted);
+      if (controller.signal.aborted) return;
       console.log(`[DIAG:VIEWER] Decrypted ${decrypted.byteLength} bytes, parsing JSON...`);
       const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
       console.log(`[DIAG:VIEWER] Payload: mime_type=${payload.mime_type}, media_type=${payload.media_type}, filename=${payload.filename}, data_length=${payload.data?.length ?? 0}`);
@@ -145,9 +156,13 @@ export default function useViewerMedia(
       // Revoke the preview now that full media is ready
       setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
     } catch (err: unknown) {
+      // Silently ignore aborted downloads (user navigated away)
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Failed to load media");
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   }, [preloadCache]);
 

@@ -36,7 +36,8 @@ data class DiscoveredServer(
     val version: String,
     val host: String,
     val port: Int,
-    val mode: String = "primary"
+    val mode: String = "primary",
+    val setupComplete: Boolean = false
 )
 
 /**
@@ -97,7 +98,13 @@ object ServerDiscovery {
 
         if (discoveryResults.isNotEmpty()) {
             Log.d(TAG, "Discovery port found ${discoveryResults.size} servers")
-            return@withContext discoveryResults.distinctBy { it.url }
+            // Enrich each server with setup status
+            val enriched = coroutineScope {
+                discoveryResults.distinctBy { it.url }.map { server ->
+                    async { checkSetupStatus(server) }
+                }.awaitAll()
+            }
+            return@withContext enriched
         }
 
         // ── Phase 2: Fallback — legacy multi-port scan ───────────────────
@@ -121,7 +128,37 @@ object ServerDiscovery {
         }
 
         Log.d(TAG, "Discovery complete. Found ${fallbackResults.size} servers (fallback)")
-        fallbackResults.distinctBy { it.url }
+        // Enrich each server with setup status
+        val enriched = coroutineScope {
+            fallbackResults.distinctBy { it.url }.map { server ->
+                async { checkSetupStatus(server) }
+            }.awaitAll()
+        }
+        enriched
+    }
+
+    /**
+     * Check /api/setup/status on a discovered server to determine if it's configured.
+     * Returns a copy with setupComplete populated.
+     */
+    private fun checkSetupStatus(server: DiscoveredServer): DiscoveredServer {
+        return try {
+            val conn = URL("${server.url}/api/setup/status").openConnection() as HttpURLConnection
+            conn.connectTimeout = CONNECT_TIMEOUT_MS
+            conn.readTimeout = READ_TIMEOUT_MS
+            conn.requestMethod = "GET"
+            if (conn.responseCode == 200) {
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                val json = JSONObject(body)
+                server.copy(setupComplete = json.optBoolean("setup_complete", false))
+            } else {
+                conn.disconnect()
+                server
+            }
+        } catch (_: Exception) {
+            server
+        }
     }
 
     /**
