@@ -7,34 +7,38 @@ blob/photo count goes DOWN (original hidden) and no duplicates appear.
 """
 
 import time
-from collections import Counter
 
 import pytest
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from helpers import APIClient, generate_random_bytes, generate_test_jpeg, unique_filename
-
-# Password to use for secure gallery unlock (must match user's account password)
+from helpers import (
+    APIClient,
+    generate_random_bytes,
+    generate_test_jpeg,
+    unique_filename,
+    assert_no_duplicates,
+    aes_gcm_decrypt,
+    wait_for_encryption,
+    trigger_and_wait,
+    login_on_server,
+    web_gallery_items,
+    secure_blob_id_set,
+)
 from conftest import USER_PASSWORD, TEST_ENCRYPTION_KEY
+
+NONCE_LENGTH = 12  # AES-256-GCM uses 96-bit nonces
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
-def _blob_ids(client) -> list[str]:
+def _blob_ids(client):
     """Return all blob IDs from the regular blob listing (duplicates preserved)."""
     blobs = client.list_blobs(limit=500)
     return [b["id"] for b in blobs.get("blobs", [])]
 
 
-def _photo_ids(client) -> list[str]:
+def _photo_ids(client):
     """Return all photo IDs from the regular photo listing."""
     photos = client.list_photos(limit=500)
     return [p["id"] for p in photos.get("photos", [])]
-
-
-def _assert_no_duplicates(ids, label):
-    counts = Counter(ids)
-    dupes = {k: v for k, v in counts.items() if v > 1}
-    assert not dupes, f"DUPLICATE {label}: {dupes}"
 
 
 class TestSecureGalleryCRUD:
@@ -167,7 +171,7 @@ class TestSecureGalleryBlobIsolation:
 
         # Main gallery: original AND clone must both be hidden
         after_blobs = _blob_ids(user_client)
-        _assert_no_duplicates(after_blobs, "blobs in main gallery after secure add")
+        assert_no_duplicates(after_blobs, "blobs in main gallery after secure add")
         assert original_id not in after_blobs, (
             f"Original blob {original_id} should be HIDDEN from main gallery after secure add"
         )
@@ -196,7 +200,7 @@ class TestSecureGalleryBlobIsolation:
         user_client.add_secure_gallery_item(gallery["gallery_id"], b2["blob_id"], token)
 
         after_blobs = _blob_ids(user_client)
-        _assert_no_duplicates(after_blobs, "blobs")
+        assert_no_duplicates(after_blobs, "blobs")
         assert len(after_blobs) == before_count - 1, (
             f"Expected {before_count - 1} blobs (one hidden), got {len(after_blobs)}"
         )
@@ -226,7 +230,7 @@ class TestSecureGalleryBlobIsolation:
 
         # Photos listing should hide original and clone
         after_photos = _photo_ids(user_client)
-        _assert_no_duplicates(after_photos, "photos in main gallery")
+        assert_no_duplicates(after_photos, "photos in main gallery")
         assert pid not in after_photos, (
             f"Original photo {pid} should be HIDDEN from gallery"
         )
@@ -252,7 +256,7 @@ class TestSecureGalleryBlobIsolation:
 
         after = user_client.encrypted_sync()
         after_ids = [p["id"] for p in after.get("photos", [])]
-        _assert_no_duplicates(after_ids, "encrypted-sync photos")
+        assert_no_duplicates(after_ids, "encrypted-sync photos")
         assert pid not in after_ids, (
             f"Photo {pid} should be hidden from encrypted-sync after secure add"
         )
@@ -301,7 +305,7 @@ class TestSecureGalleryBlobIsolation:
             blobs.append(b["blob_id"])
 
         before = _blob_ids(user_client)
-        _assert_no_duplicates(before, "blobs before")
+        assert_no_duplicates(before, "blobs before")
         for bid in blobs:
             assert bid in before
 
@@ -310,7 +314,7 @@ class TestSecureGalleryBlobIsolation:
         user_client.add_secure_gallery_item(gallery["gallery_id"], blobs[2], token)
 
         after = _blob_ids(user_client)
-        _assert_no_duplicates(after, "blobs after")
+        assert_no_duplicates(after, "blobs after")
         assert blobs[2] not in after, "Secured blob should be hidden"
         for i in [0, 1, 3, 4]:
             assert blobs[i] in after, f"Blob {i} should still be visible"
@@ -355,7 +359,7 @@ class TestSecureGalleryMultiGallery:
         user_client.add_secure_gallery_item(g2["gallery_id"], b2["blob_id"], token)
 
         after = _blob_ids(user_client)
-        _assert_no_duplicates(after, "blobs with multi-gallery")
+        assert_no_duplicates(after, "blobs with multi-gallery")
         assert b1["blob_id"] not in after
         assert b2["blob_id"] not in after
         assert b3["blob_id"] in after
@@ -470,7 +474,7 @@ class TestSecureGalleryEncryptedBlobLeak:
         # Combine: the web client's gallery is encrypted_sync UNION list_blobs.
         # Both must be empty for a user with only one photo that was secured.
         all_visible = sync_ids + leaked
-        _assert_no_duplicates(all_visible, "combined gallery (sync + blobs)")
+        assert_no_duplicates(all_visible, "combined gallery (sync + blobs)")
         assert len(all_visible) == 0, (
             f"BUG: {len(all_visible)} items visible in main gallery after "
             f"securing the only photo.  sync={sync_ids}, blobs={leaked}"
@@ -511,28 +515,6 @@ class TestSecureGalleryEncryptedBlobLeak:
             )
 
 
-# ── AES-GCM decryption helper ────────────────────────────────────────
-
-NONCE_LENGTH = 12  # AES-256-GCM uses 96-bit nonces
-
-def _aes_gcm_decrypt(key_hex: str, data: bytes) -> bytes:
-    """Decrypt AES-256-GCM data in the server wire format:
-    [12-byte nonce][ciphertext + 16-byte auth tag]."""
-    key = bytes.fromhex(key_hex)
-    assert len(key) == 32, f"Key must be 32 bytes, got {len(key)}"
-    if len(data) < NONCE_LENGTH + 16:
-        raise ValueError(
-            f"aes/gcm: invalid nonce length — data too short "
-            f"({len(data)} bytes, minimum {NONCE_LENGTH + 16})"
-        )
-    nonce = data[:NONCE_LENGTH]
-    ciphertext = data[NONCE_LENGTH:]
-    try:
-        return AESGCM(key).decrypt(nonce, ciphertext, None)
-    except Exception as e:
-        raise ValueError(f"AES/GCM invalid ghash tag — decryption failed: {e}")
-
-
 class TestSecureGalleryDecryption:
     """Regression tests for decryption errors when viewing secure gallery items.
 
@@ -544,17 +526,6 @@ class TestSecureGalleryDecryption:
     the backup.  Client gets a placeholder blob (0 bytes) and decryption fails
     with "aes/gcm: invalid nonce length".
     """
-
-    def _wait_for_encryption_migration(self, user_client, photo_id, max_wait=15):
-        """Poll encrypted-sync until the photo gets an encrypted_blob_id."""
-        start = time.time()
-        while time.time() - start < max_wait:
-            sync = user_client.encrypted_sync()
-            for p in sync.get("photos", []):
-                if p.get("id") == photo_id and p.get("encrypted_blob_id"):
-                    return p["encrypted_blob_id"]
-            time.sleep(0.5)
-        return None
 
     def test_gallery_item_blob_is_decryptable_primary(self, user_client):
         """PRIMARY BUG: Server-side photo in secure gallery → download the
@@ -608,7 +579,7 @@ class TestSecureGalleryDecryption:
 
         # Decrypt — this is exactly what the web client does
         try:
-            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+            plaintext = aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
         except ValueError as e:
             pytest.fail(
                 f"Gallery item blob {item_blob_id} is NOT valid AES-GCM "
@@ -704,7 +675,7 @@ class TestSecureGalleryDecryption:
 
         # Decrypt
         try:
-            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+            plaintext = aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
         except ValueError as e:
             pytest.fail(
                 f"Gallery item blob on backup is NOT valid AES-GCM "
@@ -779,7 +750,7 @@ class TestSecureGalleryDecryption:
         )
 
         try:
-            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+            plaintext = aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
         except ValueError as e:
             pytest.fail(
                 f"Thumbnail blob {thumb_blob_id} is not valid AES-GCM: {e}"
@@ -846,7 +817,7 @@ class TestSecureGalleryDecryption:
         )
 
         try:
-            _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+            aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
         except ValueError as e:
             pytest.fail(f"Backup thumbnail blob not valid AES-GCM: {e}")
 
@@ -1164,7 +1135,7 @@ class TestSecureGalleryDecryption:
 
         # Trigger migration and wait for encryption
         primary_admin.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
-        enc_blob_id = self._wait_for_encryption_migration(user_client, pid, max_wait=30)
+        enc_blob_id = wait_for_encryption(user_client, pid, max_wait=30)
         assert enc_blob_id, f"GIF {pid} not encrypted within timeout"
 
         # Sync to backup
@@ -1231,7 +1202,7 @@ class TestSecureGalleryDecryption:
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
         primary_admin.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
-        enc_blob_id = self._wait_for_encryption_migration(user_client, pid, max_wait=30)
+        enc_blob_id = wait_for_encryption(user_client, pid, max_wait=30)
         assert enc_blob_id, f"Photo {pid} not encrypted"
 
         # First sync: photo goes to backup (pre-synced)

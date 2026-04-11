@@ -34,6 +34,7 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const { startTask, endTask } = useProcessingStore();
 
   const handleUpload = useCallback(async (files: FileList) => {
@@ -148,9 +149,61 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     });
   }
 
-  function handleDrop(e: React.DragEvent) {
+  /** Recursively collect all File objects from a DataTransferItem entry. */
+  function collectFilesFromEntry(entry: FileSystemEntry): Promise<File[]> {
+    return new Promise((resolve) => {
+      if (entry.isFile) {
+        (entry as FileSystemFileEntry).file(
+          (f) => resolve([f]),
+          () => resolve([]),
+        );
+      } else if (entry.isDirectory) {
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        const allFiles: File[] = [];
+        const readBatch = () => {
+          reader.readEntries(async (entries) => {
+            if (entries.length === 0) {
+              resolve(allFiles);
+              return;
+            }
+            for (const child of entries) {
+              const files = await collectFilesFromEntry(child);
+              allFiles.push(...files);
+            }
+            // readEntries may not return all in one call — keep reading
+            readBatch();
+          }, () => resolve(allFiles));
+        };
+        readBatch();
+      } else {
+        resolve([]);
+      }
+    });
+  }
+
+  async function handleDrop(e: React.DragEvent) {
     e.preventDefault();
-    if (e.dataTransfer.files.length > 0) handleUpload(e.dataTransfer.files);
+    // Use webkitGetAsEntry to support folder drops
+    if (e.dataTransfer.items) {
+      const allFiles: File[] = [];
+      const entries: FileSystemEntry[] = [];
+      for (let i = 0; i < e.dataTransfer.items.length; i++) {
+        const entry = e.dataTransfer.items[i].webkitGetAsEntry?.();
+        if (entry) entries.push(entry);
+      }
+      for (const entry of entries) {
+        const files = await collectFilesFromEntry(entry);
+        allFiles.push(...files);
+      }
+      if (allFiles.length > 0) {
+        // Create a synthetic FileList-like structure
+        const dt = new DataTransfer();
+        for (const f of allFiles) dt.items.add(f);
+        handleUpload(dt.files);
+      }
+    } else if (e.dataTransfer.files.length > 0) {
+      handleUpload(e.dataTransfer.files);
+    }
   }
 
   function handleFileInput(e: React.ChangeEvent<HTMLInputElement>) {
@@ -159,12 +212,19 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     if (inputRef.current) inputRef.current.value = "";
   }
 
+  function handleFolderInput(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files && e.target.files.length > 0) handleUpload(e.target.files);
+    if (folderInputRef.current) folderInputRef.current.value = "";
+  }
+
   return {
     uploading,
     uploadProgress,
     inputRef,
+    folderInputRef,
     handleUpload,
     handleDrop,
     handleFileInput,
+    handleFolderInput,
   };
 }

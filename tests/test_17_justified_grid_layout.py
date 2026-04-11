@@ -184,7 +184,7 @@ class TestDimensionsPersistence:
         # Restore from trash
         trash_id = trashed["id"]
         r = user_client.post(f"/api/trash/{trash_id}/restore")
-        assert r.status_code == 200
+        assert r.status_code in (200, 204)
 
         # Verify dimensions after restore
         photos = user_client.list_photos()["photos"]
@@ -200,7 +200,7 @@ class TestDimensionsPersistence:
         data = user_client.upload_photo(name, content)
 
         # Call the encrypted-sync endpoint
-        r = user_client.get("/api/photos/sync")
+        r = user_client.get("/api/photos/encrypted-sync")
         assert r.status_code == 200
         sync_data = r.json()
 

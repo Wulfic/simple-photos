@@ -24,6 +24,7 @@ from helpers import (
     random_username,
     wait_for_sync,
     wait_for_server,
+    trigger_and_wait,
 )
 from conftest import (
     ADMIN_USERNAME,
@@ -34,12 +35,6 @@ from conftest import (
     ServerInstance,
     _find_free_port,
 )
-
-
-def _trigger_and_wait(admin_client, server_id, timeout=90):
-    """Trigger a sync and wait for it to complete."""
-    admin_client.admin_trigger_sync(server_id)
-    return wait_for_sync(admin_client, server_id, timeout=timeout)
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -163,7 +158,7 @@ class TestBackupDatePreservation:
     ):
         """After syncing to backup, photo dates should be identical."""
         # Trigger sync
-        _trigger_and_wait(admin_client, backup_configured)
+        trigger_and_wait(admin_client, backup_configured)
 
         # Wait a moment for backup to settle
         time.sleep(2)
@@ -236,7 +231,7 @@ class TestRecoveryDatePreservation:
         """After recovering from backup to a fresh server, photo dates
         and ordering should be identical to the original primary."""
         # Ensure sync is complete first
-        _trigger_and_wait(admin_client, backup_configured)
+        trigger_and_wait(admin_client, backup_configured)
         time.sleep(2)
 
         # Record original dates and ordering from primary

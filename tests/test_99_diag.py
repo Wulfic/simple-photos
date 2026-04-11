@@ -6,99 +6,21 @@ exactly as useGalleryData.ts does. Checks BOTH primary and backup.
 
 import time
 import pytest
-from collections import Counter
-from helpers import APIClient, generate_test_jpeg, generate_random_bytes, unique_filename
+from helpers import (
+    APIClient,
+    generate_test_jpeg,
+    generate_random_bytes,
+    unique_filename,
+    wait_for_encryption,
+    web_gallery_items,
+    secure_blob_id_set,
+)
 from conftest import USER_PASSWORD, TEST_ENCRYPTION_KEY
-
-
-def _web_gallery_items(client, label=""):
-    """Simulate what the web client's useGalleryData builds.
-
-    Returns (sync_photos, blob_items, combined_visible, synced_blob_ids)
-    where combined_visible is the set of IDB-key items that would show
-    in the gallery before secureBlobIds filtering.
-    """
-    # Phase 1: encrypted-sync (all pages)
-    sync_photos = []
-    cursor = None
-    while True:
-        params = {"limit": 500}
-        if cursor:
-            params["after"] = cursor
-        res = client.encrypted_sync(**params)
-        sync_photos.extend(res.get("photos", []))
-        cursor = res.get("next_cursor")
-        if not cursor:
-            break
-
-    # Phase 2: list_blobs for all media types
-    blob_items = []
-    for btype in ("photo", "gif", "video", "audio"):
-        page_cursor = None
-        while True:
-            params = {"blob_type": btype, "limit": 200}
-            if page_cursor:
-                params["after"] = page_cursor
-            res = client.list_blobs(**params)
-            blobs = res.get("blobs", [])
-            blob_items.extend(blobs)
-            page_cursor = res.get("next_cursor")
-            if not page_cursor:
-                break
-
-    # Phase 3+4 merge: synced encrypted_blob_ids used for dedup
-    synced_blob_ids = {
-        p["encrypted_blob_id"]
-        for p in sync_photos
-        if p.get("encrypted_blob_id")
-    }
-    # "unsynced" blobs = those not already represented by a sync record
-    unsynced_blobs = [b for b in blob_items if b["id"] not in synced_blob_ids]
-
-    # Combined visible items (before secureBlobIds):
-    # Phase 3: one entry per sync photo (keyed by photo.id)
-    # Phase 4: one entry per unsynced blob (keyed by blob.id)
-    combined = {}
-    for p in sync_photos:
-        if not p.get("encrypted_blob_id"):
-            continue  # skip unencrypted (migration pending)
-        combined[p["id"]] = {"source": "encrypted-sync", "type": "photo", "photo": p}
-    for b in unsynced_blobs:
-        combined[b["id"]] = {"source": "list_blobs", "type": b.get("blob_type", "?"), "blob": b}
-
-    if label:
-        print(f"\n[{label}] encrypted-sync: {len(sync_photos)} photos")
-        print(f"[{label}] list_blobs: {len(blob_items)} blobs (all types)")
-        print(f"[{label}] synced_blob_ids: {synced_blob_ids}")
-        print(f"[{label}] unsynced_blobs: {len(unsynced_blobs)}")
-        print(f"[{label}] combined visible: {len(combined)}")
-        for k, v in combined.items():
-            print(f"  {k} via {v['source']} ({v['type']})")
-
-    return sync_photos, blob_items, combined, synced_blob_ids
-
-
-def _secure_blob_id_set(client):
-    """Return the set of blob IDs from secureBlobIds endpoint."""
-    data = client.get_secure_gallery_blob_ids()
-    return set(data.get("blob_ids", []))
 
 
 def _trigger_migration(admin_client):
     """Re-store the encryption key to trigger scan + migration for new photos."""
     admin_client.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
-
-
-def _wait_for_encryption(client, photo_id, max_wait=30):
-    """Poll encrypted-sync until the photo has encrypted_blob_id set."""
-    start = time.time()
-    while time.time() - start < max_wait:
-        res = client.encrypted_sync(limit=500)
-        for p in res.get("photos", []):
-            if p["id"] == photo_id and p.get("encrypted_blob_id"):
-                return p["encrypted_blob_id"]
-        time.sleep(1)
-    return None
 
 
 class TestDuplicateDiag:
@@ -117,11 +39,11 @@ class TestDuplicateDiag:
         _trigger_migration(primary_admin)
 
         # Wait for encryption migration to complete
-        enc_blob_id = _wait_for_encryption(user_client, pid)
+        enc_blob_id = wait_for_encryption(user_client, pid)
         assert enc_blob_id, f"Photo {pid} was not encrypted within timeout"
 
         # Baseline: 1 item visible
-        _, _, before, _ = _web_gallery_items(user_client, "BEFORE")
+        _, _, before, _ = web_gallery_items(user_client, "BEFORE")
         assert pid in before, f"Photo {pid} should be visible before gallery add"
         before_count = len(before)
 
@@ -134,7 +56,7 @@ class TestDuplicateDiag:
         time.sleep(5)
 
         # After: photo should be gone, no duplicates
-        _, _, after, _ = _web_gallery_items(user_client, "AFTER")
+        _, _, after, _ = web_gallery_items(user_client, "AFTER")
         assert pid not in after, f"Original photo {pid} still visible after gallery add"
 
         # Overall count should have decreased by 1
@@ -144,7 +66,7 @@ class TestDuplicateDiag:
         )
 
         # Also verify secureBlobIds covers everything
-        secure_ids = _secure_blob_id_set(user_client)
+        secure_ids = secure_blob_id_set(user_client)
         assert pid in secure_ids, f"secureBlobIds missing original {pid}"
 
     def test_client_blob_no_duplicate_after_gallery_add(self, user_client):
@@ -155,7 +77,7 @@ class TestDuplicateDiag:
         bid = blob["blob_id"]
 
         # Baseline
-        _, _, before, _ = _web_gallery_items(user_client, "BEFORE-BLOB")
+        _, _, before, _ = web_gallery_items(user_client, "BEFORE-BLOB")
         assert bid in before, f"Blob {bid} should be visible before gallery add"
         before_count = len(before)
 
@@ -165,7 +87,7 @@ class TestDuplicateDiag:
         user_client.add_secure_gallery_item(gallery["gallery_id"], bid, token)
 
         # After: blob should be gone, no duplicates
-        _, _, after, _ = _web_gallery_items(user_client, "AFTER-BLOB")
+        _, _, after, _ = web_gallery_items(user_client, "AFTER-BLOB")
         assert bid not in after, f"Original blob {bid} still visible after gallery add"
 
         assert len(after) == before_count - 1, (
@@ -173,7 +95,7 @@ class TestDuplicateDiag:
             f"Visible after: {list(after.keys())}"
         )
 
-        secure_ids = _secure_blob_id_set(user_client)
+        secure_ids = secure_blob_id_set(user_client)
         assert bid in secure_ids, f"secureBlobIds missing original blob {bid}"
 
     def test_backup_no_duplicate_after_gallery_sync(
@@ -186,7 +108,7 @@ class TestDuplicateDiag:
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
         _trigger_migration(primary_admin)
-        enc_blob_id = _wait_for_encryption(user_client, pid)
+        enc_blob_id = wait_for_encryption(user_client, pid)
         assert enc_blob_id, f"Photo {pid} not encrypted"
 
         # Add to gallery
@@ -203,7 +125,7 @@ class TestDuplicateDiag:
         backup_user = APIClient(backup_server.base_url)
         backup_user.login(user_client.username, USER_PASSWORD)
 
-        sync_photos, blob_items, combined, synced_blob_ids = _web_gallery_items(
+        sync_photos, blob_items, combined, synced_blob_ids = web_gallery_items(
             backup_user, "BACKUP"
         )
 
@@ -231,7 +153,7 @@ class TestDuplicateDiag:
                 )
 
         # secureBlobIds must cover everything
-        secure_ids = _secure_blob_id_set(backup_user)
+        secure_ids = secure_blob_id_set(backup_user)
         for item in item_list:
             enc_blob = item.get("encrypted_blob_id")
             if enc_blob:
@@ -255,7 +177,7 @@ class TestDuplicateDiag:
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
         _trigger_migration(primary_admin)
-        enc_blob_id = _wait_for_encryption(user_client, pid)
+        enc_blob_id = wait_for_encryption(user_client, pid)
         assert enc_blob_id, f"Photo {pid} not encrypted"
 
         # First sync: photo and encrypted blob go to backup
@@ -265,7 +187,7 @@ class TestDuplicateDiag:
         # Verify photo visible on backup before gallery add
         backup_user = APIClient(backup_server.base_url)
         backup_user.login(user_client.username, USER_PASSWORD)
-        _, _, before, _ = _web_gallery_items(backup_user, "BACKUP-BEFORE")
+        _, _, before, _ = web_gallery_items(backup_user, "BACKUP-BEFORE")
         # Photo should be visible (via encrypted-sync or list_blobs)
         visible_ids = set(before.keys())
         assert pid in visible_ids or any(
@@ -286,7 +208,7 @@ class TestDuplicateDiag:
         time.sleep(8)
 
         # Check backup: photo must be GONE, no duplicates
-        _, _, after, _ = _web_gallery_items(backup_user, "BACKUP-AFTER")
+        _, _, after, _ = web_gallery_items(backup_user, "BACKUP-AFTER")
         assert pid not in after, (
             f"Pre-synced photo {pid} still visible on backup after gallery add"
         )
@@ -321,7 +243,7 @@ class TestDuplicateDiag:
         # Check backup: photo arrived unencrypted
         backup_user = APIClient(backup_server.base_url)
         backup_user.login(user_client.username, USER_PASSWORD)
-        _, _, mid, _ = _web_gallery_items(backup_user, "BACKUP-MID(unencrypted)")
+        _, _, mid, _ = web_gallery_items(backup_user, "BACKUP-MID(unencrypted)")
         # Photo might be invisible in combined (no encrypted_blob_id → skipped)
         # but it SHOULD be in encrypted-sync as an unencrypted photo
         sync_res = backup_user.encrypted_sync(limit=500)
@@ -330,7 +252,7 @@ class TestDuplicateDiag:
 
         # Now trigger migration on PRIMARY
         _trigger_migration(primary_admin)
-        enc_blob_id = _wait_for_encryption(user_client, pid)
+        enc_blob_id = wait_for_encryption(user_client, pid)
         assert enc_blob_id, f"Photo {pid} not encrypted on primary"
         print(f"[CHECK] Primary encrypted_blob_id: {enc_blob_id}")
 
@@ -345,7 +267,7 @@ class TestDuplicateDiag:
         time.sleep(10)
 
         # Check backup: NO items should be visible in regular gallery
-        sync_photos, blob_items, after, synced_blob_ids = _web_gallery_items(
+        sync_photos, blob_items, after, synced_blob_ids = web_gallery_items(
             backup_user, "BACKUP-AFTER-ORPHAN"
         )
 
@@ -394,7 +316,7 @@ class TestDuplicateDiag:
 
         # Trigger migration and wait
         _trigger_migration(primary_admin)
-        enc_blob_id = _wait_for_encryption(user_client, pid)
+        enc_blob_id = wait_for_encryption(user_client, pid)
         assert enc_blob_id, f"GIF {pid} not encrypted"
         print(f"[GIF] Primary encrypted_blob_id: {enc_blob_id}")
 
@@ -405,7 +327,7 @@ class TestDuplicateDiag:
         # Verify GIF visible on backup
         backup_user = APIClient(backup_server.base_url)
         backup_user.login(user_client.username, USER_PASSWORD)
-        _, _, before_backup, _ = _web_gallery_items(backup_user, "BACKUP-GIF-BEFORE")
+        _, _, before_backup, _ = web_gallery_items(backup_user, "BACKUP-GIF-BEFORE")
         print(f"[GIF] Items visible on backup before gallery: {list(before_backup.keys())}")
 
         # Add GIF to secure gallery on primary
@@ -419,7 +341,7 @@ class TestDuplicateDiag:
         time.sleep(10)
 
         # Check backup: NO GIF should be visible
-        _, blob_items, after_backup, _ = _web_gallery_items(backup_user, "BACKUP-GIF-AFTER")
+        _, blob_items, after_backup, _ = web_gallery_items(backup_user, "BACKUP-GIF-AFTER")
 
         # Specifically check list_blobs("gif") — this is where the user sees the leak
         gif_blobs = [b for b in blob_items if b.get("blob_type") == "gif"]
@@ -462,13 +384,13 @@ class TestDuplicateDiag:
         # Check backup mid-state
         backup_user = APIClient(backup_server.base_url)
         backup_user.login(user_client.username, USER_PASSWORD)
-        _, mid_blobs, mid_combined, _ = _web_gallery_items(backup_user, "BACKUP-GIF-MID")
+        _, mid_blobs, mid_combined, _ = web_gallery_items(backup_user, "BACKUP-GIF-MID")
         mid_gif_blobs = [b for b in mid_blobs if b.get("blob_type") == "gif"]
         print(f"[GIF-ORPHAN] GIF blobs on backup mid-sync: {[b['id'] for b in mid_gif_blobs]}")
 
         # Now encrypt on primary
         _trigger_migration(primary_admin)
-        enc_blob_id = _wait_for_encryption(user_client, pid)
+        enc_blob_id = wait_for_encryption(user_client, pid)
         assert enc_blob_id, f"GIF {pid} not encrypted on primary"
         print(f"[GIF-ORPHAN] Primary encrypted_blob_id: {enc_blob_id}")
 
@@ -483,7 +405,7 @@ class TestDuplicateDiag:
         time.sleep(10)
 
         # Final check: NO GIF should leak
-        _, final_blobs, final_combined, _ = _web_gallery_items(backup_user, "BACKUP-GIF-FINAL")
+        _, final_blobs, final_combined, _ = web_gallery_items(backup_user, "BACKUP-GIF-FINAL")
         final_gif_blobs = [b for b in final_blobs if b.get("blob_type") == "gif"]
         assert len(final_gif_blobs) == 0, (
             f"Orphaned GIF blob(s) leaked into list_blobs(gif) on backup: "
@@ -534,7 +456,7 @@ class TestDuplicateDiag:
         pid = photo["photo_id"]
 
         _trigger_migration(primary_admin)
-        enc_blob_id = _wait_for_encryption(user_client, pid)
+        enc_blob_id = wait_for_encryption(user_client, pid)
         assert enc_blob_id, f"GIF {pid} not encrypted"
         print(f"\n[DUP-ROOT] GIF photo: {pid}")
         print(f"[DUP-ROOT] Primary encrypted_blob_id: {enc_blob_id}")
@@ -546,7 +468,7 @@ class TestDuplicateDiag:
         # Check backup
         backup_user = APIClient(backup_server.base_url)
         backup_user.login(user_client.username, USER_PASSWORD)
-        sync_photos, blob_items, combined, synced_blob_ids = _web_gallery_items(
+        sync_photos, blob_items, combined, synced_blob_ids = web_gallery_items(
             backup_user, "BACKUP-DUP-ROOT"
         )
 
@@ -597,7 +519,7 @@ class TestDuplicateDiag:
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
         _trigger_migration(primary_admin)
-        enc_blob_id = _wait_for_encryption(user_client, pid)
+        enc_blob_id = wait_for_encryption(user_client, pid)
         assert enc_blob_id, f"Photo {pid} not encrypted"
         print(f"\n[FLASH] Photo: {pid}, encrypted_blob_id: {enc_blob_id}")
 
@@ -608,7 +530,7 @@ class TestDuplicateDiag:
         # Verify photo is visible on backup in encrypted-sync
         backup_user = APIClient(backup_server.base_url)
         backup_user.login(user_client.username, USER_PASSWORD)
-        _, _, before, _ = _web_gallery_items(backup_user, "FLASH-BEFORE")
+        _, _, before, _ = web_gallery_items(backup_user, "FLASH-BEFORE")
         assert pid in before, f"Photo {pid} should be visible on backup before gallery add"
 
         # Add to secure gallery on primary
@@ -652,7 +574,7 @@ class TestDuplicateDiag:
         # Check: is the photo visible in encrypted-sync on backup?
         # With old ordering (no egi yet), this photo WOULD appear.
         # The photo row still exists on backup (retroactive purge hasn't run).
-        _, _, mid_state, _ = _web_gallery_items(backup_user, "FLASH-MID(dangerous)")
+        _, _, mid_state, _ = web_gallery_items(backup_user, "FLASH-MID(dangerous)")
 
         # Record whether the flash bug is present
         has_flash = pid in mid_state
@@ -667,7 +589,7 @@ class TestDuplicateDiag:
         time.sleep(10)
 
         # After full sync: photo MUST be gone
-        _, _, after, _ = _web_gallery_items(backup_user, "FLASH-AFTER")
+        _, _, after, _ = web_gallery_items(backup_user, "FLASH-AFTER")
         assert pid not in after, (
             f"Photo {pid} still visible on backup after full sync! "
             f"Source: {after[pid]['source']}. "

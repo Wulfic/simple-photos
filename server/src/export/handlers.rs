@@ -173,7 +173,7 @@ pub async fn export_status(
                 .unwrap_or(false)
         })
         .map(|(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
-            download_url: format!("/export/files/{}/download", id),
+            download_url: format!("/api/export/files/{}/download", id),
             id,
             job_id,
             filename,
@@ -217,7 +217,7 @@ pub async fn list_export_files(
     let files: Vec<ExportFileResponse> = rows
         .into_iter()
         .map(|(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
-            download_url: format!("/export/files/{}/download", id),
+            download_url: format!("/api/export/files/{}/download", id),
             id,
             job_id,
             filename,

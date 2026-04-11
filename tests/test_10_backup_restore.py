@@ -14,7 +14,6 @@ import time
 from collections import Counter
 
 import pytest
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from helpers import (
     APIClient,
     generate_random_bytes,
@@ -23,6 +22,10 @@ from helpers import (
     random_username,
     wait_for_sync,
     wait_for_server,
+    trigger_and_wait,
+    assert_no_duplicates,
+    aes_gcm_decrypt,
+    login_on_server,
 )
 from conftest import (
     ADMIN_USERNAME,
@@ -34,27 +37,7 @@ from conftest import (
     _find_free_port,
 )
 
-NONCE_LENGTH = 12
-
-
-def _aes_gcm_decrypt(key_hex, data):
-    """Decrypt AES-256-GCM ciphertext (nonce || ciphertext)."""
-    key = bytes.fromhex(key_hex)
-    nonce = data[:NONCE_LENGTH]
-    ciphertext = data[NONCE_LENGTH:]
-    return AESGCM(key).decrypt(nonce, ciphertext, None)
-
-
-def _trigger_and_wait(admin_client, server_id, timeout=90):
-    admin_client.admin_trigger_sync(server_id)
-    return wait_for_sync(admin_client, server_id, timeout=timeout)
-
-
-def _assert_no_duplicates(id_list, label):
-    counts = Counter(id_list)
-    dupes = {k: v for k, v in counts.items() if v > 1}
-    assert not dupes, f"DUPLICATE {label}: {dupes}"
-
+NONCE_LENGTH = 12  # AES-256-GCM uses 96-bit nonces
 
 class TestBackupServerPairing:
     """Server pairing and setup as backup."""
@@ -68,6 +51,15 @@ class TestBackupServerPairing:
         assert "servers" in servers
         sids = [s["id"] for s in servers["servers"]]
         assert backup_configured in sids
+
+    def test_server_list_has_required_fields(self, primary_admin, backup_configured):
+        """Each server entry must have fields needed for the dropdown display."""
+        result = primary_admin.admin_list_backup_servers()
+        for s in result["servers"]:
+            assert "id" in s, f"Server missing 'id': {s}"
+            assert "name" in s, f"Server missing 'name': {s}"
+            assert "address" in s, f"Server missing 'address': {s}"
+            assert "enabled" in s, f"Server missing 'enabled': {s}"
 
     def test_backup_server_diagnostics(self, primary_admin, backup_configured):
         r = primary_admin.get(f"/api/admin/backup/servers/{backup_configured}/diagnostics")
@@ -130,12 +122,12 @@ class TestRecoverySetup:
         trash_id = trash_resp["trash_id"]
 
         # 10. Sync
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Pre-recovery sync failed: {result}"
 
         # 11. Verify photos: exactly 3 new, no duplicates
         after_photos = [p["id"] for p in backup_client.backup_list()]
-        _assert_no_duplicates(after_photos, "photos")
+        assert_no_duplicates(after_photos, "photos")
         for pid in photo_ids:
             assert pid in after_photos, f"Photo {pid} missing from backup"
             assert after_photos.count(pid) == 1, f"Photo {pid} duplicated"
@@ -149,7 +141,7 @@ class TestRecoverySetup:
         # blobs from previously synced photos, so we only check that
         # excluded items are absent (not exact total counts).
         after_blobs = [b["id"] for b in backup_client.backup_list_blobs()]
-        _assert_no_duplicates(after_blobs, "blobs")
+        assert_no_duplicates(after_blobs, "blobs")
         assert blob_ids[0] not in after_blobs, (
             f"BUG: Secure gallery original {blob_ids[0]} synced to backup"
         )
@@ -165,7 +157,7 @@ class TestRecoverySetup:
 
         # 13. Verify trash: exactly 1 new trash item
         after_trash = [t["id"] for t in backup_client.backup_list_trash()]
-        _assert_no_duplicates(after_trash, "trash")
+        assert_no_duplicates(after_trash, "trash")
         assert trash_id in after_trash
         assert after_trash.count(trash_id) == 1, f"Trash {trash_id} duplicated"
         assert len(after_trash) == len(before_trash) + 1, (
@@ -189,13 +181,30 @@ class TestRecoveryFromBackup:
         r = primary_admin.post(f"/api/admin/backup/servers/{backup_configured}/recover")
         assert r.status_code in (200, 202, 409), f"Unexpected: {r.status_code} {r.text}"
 
+    def test_recover_from_nonexistent_server_fails(self, primary_admin):
+        """Recovery from a bogus server ID must return 404."""
+        r = primary_admin.post(
+            "/api/admin/backup/servers/00000000-0000-0000-0000-000000000000/recover"
+        )
+        assert r.status_code in (404, 400), (
+            f"Expected 404 for nonexistent server, got {r.status_code} {r.text}"
+        )
+
+    def test_recover_requires_admin(self, primary_server, backup_configured):
+        """Non-admin users cannot trigger recovery."""
+        anon = APIClient(primary_server.base_url)
+        r = anon.post(f"/api/admin/backup/servers/{backup_configured}/recover")
+        assert r.status_code in (401, 403), (
+            f"Expected 401/403 for unauthenticated recovery, got {r.status_code}"
+        )
+
     def test_browse_backup_photos_exact(self, primary_admin, backup_configured, backup_client):
         """Browse photos on backup — must return non-empty list with no duplicates."""
         photos = primary_admin.admin_get_backup_photos(backup_configured)
         assert isinstance(photos, list)
         assert len(photos) > 0, "Backup has zero photos — data was not synced"
         ids = [p.get("id", p.get("photo_id")) for p in photos]
-        _assert_no_duplicates(ids, "backup browse photos")
+        assert_no_duplicates(ids, "backup browse photos")
 
 
 class TestRecoveryFreshServer:
@@ -382,7 +391,7 @@ class TestRecoveryFreshServer:
                         f"Expected {expected_photo_count}, "
                         f"got {len(recovered_photo_ids)}"
                     )
-                    _assert_no_duplicates(
+                    assert_no_duplicates(
                         [p["id"] for p in recovered_photos],
                         "recovered photos",
                     )
@@ -411,7 +420,7 @@ class TestRecoveryDataIntegrity:
         photo = user_client.upload_photo(fname, content)
         pid = photo["photo_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         bp = next((p for p in backup_client.backup_list() if p["id"] == pid), None)
         assert bp is not None, f"Photo {pid} not on backup"
@@ -428,7 +437,7 @@ class TestRecoveryDataIntegrity:
         blob = user_client.upload_blob("photo", content)
         bid = blob["blob_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         bb = next((b for b in backup_client.backup_list_blobs() if b["id"] == bid), None)
         assert bb is not None, f"Blob {bid} missing from backup"
@@ -443,14 +452,14 @@ class TestRecoveryDataIntegrity:
         blob = user_client.upload_blob("photo", content)
         bid = blob["blob_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         trash_resp = user_client.soft_delete_blob(
             bid, filename="trash_roundtrip.jpg", size_bytes=len(content),
         )
         tid = trash_resp["trash_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         items = backup_client.backup_list_trash()
         item = next((t for t in items if t["id"] == tid), None)
@@ -466,10 +475,10 @@ class TestRecoveryDataIntegrity:
         created = primary_admin.admin_create_user(username, "RoundTrip123!")
         uid = created["user_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         users = backup_client.backup_list_users()
-        _assert_no_duplicates([u["id"] for u in users], "users")
+        assert_no_duplicates([u["id"] for u in users], "users")
         bu = next((u for u in users if u["id"] == uid), None)
         assert bu is not None, f"User {uid} not on backup"
         assert bu["username"] == username
@@ -481,7 +490,7 @@ class TestRecoveryDataIntegrity:
         pid = photo["photo_id"]
         user_client.favorite_photo(pid)
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         bp = next((p for p in backup_client.backup_list() if p["id"] == pid), None)
         assert bp is not None
@@ -495,7 +504,7 @@ class TestRecoveryDataIntegrity:
         expected_crop = {"x": 100, "y": 200, "w": 50, "h": 50}
         user_client.crop_photo(pid, json.dumps(expected_crop))
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         bp = next((p for p in backup_client.backup_list() if p["id"] == pid), None)
         assert bp is not None
@@ -551,10 +560,10 @@ class TestRecoverySecureGallery:
         assert len(resp.content) >= NONCE_LENGTH + 16, (
             "Primary gallery blob too short — encryption migration didn't run"
         )
-        _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)  # Must not raise
+        aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)  # Must not raise
 
         # 5. Sync to backup
-        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        trigger_and_wait(primary_admin, backup_configured, timeout=120)
 
         # 6. Start a fresh primary and recover from backup
         port = _find_free_port()
@@ -691,7 +700,7 @@ class TestRecoverySecureGallery:
         # Decrypt — this is exactly what the web client does.
         # "aes/gcm: invalid nonce" means the data is not valid ciphertext.
         try:
-            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+            plaintext = aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
         except Exception as e:
             ctx["server"].dump_logs()
             pytest.fail(
@@ -730,7 +739,7 @@ class TestRecoverySecureGallery:
         )
 
         try:
-            _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)
+            aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)
         except Exception as e:
             ctx["server"].dump_logs()
             pytest.fail(
@@ -881,7 +890,7 @@ class TestRecoveryPresyncedGallery:
         time.sleep(4)
 
         # 3. Sync to backup — photo P is now a regular photo on the backup
-        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        trigger_and_wait(primary_admin, backup_configured, timeout=120)
 
         # Verify P is on the backup
         backup_photos = [p["id"] for p in backup_client.backup_list()]
@@ -900,7 +909,7 @@ class TestRecoveryPresyncedGallery:
         time.sleep(4)
 
         # 6. Sync again — this triggers retroactive purge on backup
-        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        trigger_and_wait(primary_admin, backup_configured, timeout=120)
 
         # Verify P is no longer in backup photos (retroactive purge)
         backup_photos_after = [p["id"] for p in backup_client.backup_list()]
@@ -1057,7 +1066,7 @@ class TestRecoveryPresyncedGallery:
         assert len(resp.content) >= NONCE_LENGTH + 16
 
         try:
-            plaintext = _aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)
+            plaintext = aes_gcm_decrypt(TEST_ENCRYPTION_KEY, resp.content)
         except Exception as e:
             ctx["server"].dump_logs()
             pytest.fail(f"Gallery blob not valid AES-GCM after pre-synced recovery: {e}")
@@ -1146,7 +1155,7 @@ class TestRecoveryAutoscanGalleryLeak:
         )
 
         # 4. Sync to backup
-        _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        trigger_and_wait(primary_admin, backup_configured, timeout=120)
 
         # 5. Spin up a fresh recovery server
         port = _find_free_port()

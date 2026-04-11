@@ -19,50 +19,22 @@ from helpers import (
     random_username,
     unique_filename,
     wait_for_sync,
+    trigger_and_wait,
+    assert_no_duplicates,
+    backup_photo_ids,
+    backup_blob_ids,
+    backup_trash_ids,
+    backup_user_ids,
 )
 from conftest import USER_PASSWORD
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
-def _trigger_and_wait(admin_client, server_id, timeout=90):
-    """Trigger a sync and wait for completion."""
-    admin_client.admin_trigger_sync(server_id)
-    return wait_for_sync(admin_client, server_id, timeout=timeout)
-
-
-def _backup_photo_ids(backup_client) -> list[str]:
-    """Return ALL photo IDs on backup (raw list, duplicates preserved)."""
-    return [p["id"] for p in backup_client.backup_list()]
-
-
-def _backup_blob_ids(backup_client) -> list[str]:
-    """Return ALL blob IDs on backup (raw list, duplicates preserved)."""
-    return [b["id"] for b in backup_client.backup_list_blobs()]
-
-
-def _backup_trash_ids(backup_client) -> list[str]:
-    """Return ALL trash item IDs on backup (raw list, duplicates preserved)."""
-    return [t["id"] for t in backup_client.backup_list_trash()]
-
-
-def _backup_user_ids(backup_client) -> list[str]:
-    """Return ALL user IDs on backup."""
-    return [u["id"] for u in backup_client.backup_list_users()]
-
-
-def _assert_no_duplicates(id_list: list[str], label: str):
-    """Assert that no ID appears more than once."""
-    counts = Counter(id_list)
-    dupes = {k: v for k, v in counts.items() if v > 1}
-    assert not dupes, f"DUPLICATE {label} on backup: {dupes}"
-
-
-def _assert_exact_new_items(before_ids: list[str], after_ids: list[str],
-                            expected_new: set[str], label: str):
+def _assert_exact_new_items(before_ids, after_ids, expected_new, label):
     """Assert that *exactly* the expected new IDs appeared, no more, no fewer,
     and no duplicates exist."""
-    _assert_no_duplicates(after_ids, label)
+    assert_no_duplicates(after_ids, label)
     before_set = set(before_ids)
     after_set = set(after_ids)
     actually_new = after_set - before_set
@@ -91,15 +63,15 @@ class TestSyncUsers:
 
     def test_sync_creates_user_on_backup(self, primary_admin, backup_configured, backup_client):
         """New user on primary should appear exactly once on backup after sync."""
-        before = _backup_user_ids(backup_client)
+        before = backup_user_ids(backup_client)
         username = random_username("syncuser_")
         created = primary_admin.admin_create_user(username, "SyncUser123!")
         uid = created["user_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        after = _backup_user_ids(backup_client)
-        _assert_no_duplicates(after, "users")
+        after = backup_user_ids(backup_client)
+        assert_no_duplicates(after, "users")
         assert uid in after, f"User {uid} not found on backup"
         assert after.count(uid) == 1, f"User {uid} duplicated on backup"
 
@@ -109,13 +81,13 @@ class TestSyncUsers:
 
     def test_sync_user_idempotent(self, primary_admin, backup_configured, backup_client):
         """Syncing twice should not duplicate users."""
-        _trigger_and_wait(primary_admin, backup_configured)
-        snap1 = _backup_user_ids(backup_client)
-        _assert_no_duplicates(snap1, "users after sync 1")
+        trigger_and_wait(primary_admin, backup_configured)
+        snap1 = backup_user_ids(backup_client)
+        assert_no_duplicates(snap1, "users after sync 1")
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        snap2 = _backup_user_ids(backup_client)
-        _assert_no_duplicates(snap2, "users after sync 2")
+        trigger_and_wait(primary_admin, backup_configured)
+        snap2 = backup_user_ids(backup_client)
+        assert_no_duplicates(snap2, "users after sync 2")
         assert sorted(snap1) == sorted(snap2), (
             f"User list changed on repeat sync.\n"
             f"  Before: {sorted(snap1)}\n"
@@ -128,14 +100,14 @@ class TestSyncUsers:
         created = primary_admin.admin_create_user(username, "DelUser123!")
         uid = created["user_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        assert uid in _backup_user_ids(backup_client)
+        trigger_and_wait(primary_admin, backup_configured)
+        assert uid in backup_user_ids(backup_client)
 
         primary_admin.admin_delete_user(uid)
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        after = _backup_user_ids(backup_client)
-        _assert_no_duplicates(after, "users")
+        after = backup_user_ids(backup_client)
+        assert_no_duplicates(after, "users")
         assert uid not in after, f"Deleted user {uid} still on backup"
 
 
@@ -145,29 +117,29 @@ class TestSyncPhotos:
     def test_sync_single_photo(self, primary_admin, user_client,
                                backup_configured, backup_client):
         """One uploaded photo should appear exactly once on backup."""
-        before = _backup_photo_ids(backup_client)
+        before = backup_photo_ids(backup_client)
 
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        after = _backup_photo_ids(backup_client)
+        after = backup_photo_ids(backup_client)
         _assert_exact_new_items(before, after, {pid}, "photos")
 
     def test_sync_multiple_photos_exact_count(self, primary_admin, user_client,
                                               backup_configured, backup_client):
         """Upload N photos -> exactly N new entries on backup, no duplicates."""
-        before = _backup_photo_ids(backup_client)
+        before = backup_photo_ids(backup_client)
         n = 5
         pids = set()
         for _ in range(n):
             p = user_client.upload_photo(unique_filename())
             pids.add(p["photo_id"])
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        after = _backup_photo_ids(backup_client)
+        after = backup_photo_ids(backup_client)
         _assert_exact_new_items(before, after, pids, "photos")
 
     def test_sync_photo_metadata_values(self, primary_admin, user_client,
@@ -180,7 +152,7 @@ class TestSyncPhotos:
         user_client.favorite_photo(pid)
         user_client.crop_photo(pid, '{"x":42,"y":7}')
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         bp = next((p for p in backup_client.backup_list() if p["id"] == pid), None)
         assert bp is not None, f"Photo {pid} not on backup"
@@ -194,19 +166,19 @@ class TestSyncPhotos:
     def test_sync_photo_idempotent_no_duplicates(self, primary_admin, user_client,
                                                   backup_configured, backup_client):
         """Sync same photo twice -> still exactly one copy on backup."""
-        before = _backup_photo_ids(backup_client)
+        before = backup_photo_ids(backup_client)
 
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        mid = _backup_photo_ids(backup_client)
+        trigger_and_wait(primary_admin, backup_configured)
+        mid = backup_photo_ids(backup_client)
         assert mid.count(pid) == 1
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        after = _backup_photo_ids(backup_client)
+        trigger_and_wait(primary_admin, backup_configured)
+        after = backup_photo_ids(backup_client)
         assert after.count(pid) == 1, f"Photo {pid} duplicated: count={after.count(pid)}"
-        _assert_no_duplicates(after, "photos")
+        assert_no_duplicates(after, "photos")
         assert len(mid) == len(after), (
             f"Photo count changed on idempotent sync: {len(mid)} -> {len(after)}"
         )
@@ -215,19 +187,19 @@ class TestSyncPhotos:
                                        backup_configured, backup_client):
         """5 consecutive syncs with no new data should keep counts constant."""
         user_client.upload_photo(unique_filename())
-        _trigger_and_wait(primary_admin, backup_configured)
-        baseline_photos = len(_backup_photo_ids(backup_client))
-        baseline_blobs = len(_backup_blob_ids(backup_client))
-        baseline_trash = len(_backup_trash_ids(backup_client))
+        trigger_and_wait(primary_admin, backup_configured)
+        baseline_photos = len(backup_photo_ids(backup_client))
+        baseline_blobs = len(backup_blob_ids(backup_client))
+        baseline_trash = len(backup_trash_ids(backup_client))
 
         for i in range(5):
-            _trigger_and_wait(primary_admin, backup_configured)
-            photos = _backup_photo_ids(backup_client)
-            blobs = _backup_blob_ids(backup_client)
-            trash = _backup_trash_ids(backup_client)
-            _assert_no_duplicates(photos, f"photos (repeat {i+1})")
-            _assert_no_duplicates(blobs, f"blobs (repeat {i+1})")
-            _assert_no_duplicates(trash, f"trash (repeat {i+1})")
+            trigger_and_wait(primary_admin, backup_configured)
+            photos = backup_photo_ids(backup_client)
+            blobs = backup_blob_ids(backup_client)
+            trash = backup_trash_ids(backup_client)
+            assert_no_duplicates(photos, f"photos (repeat {i+1})")
+            assert_no_duplicates(blobs, f"blobs (repeat {i+1})")
+            assert_no_duplicates(trash, f"trash (repeat {i+1})")
             assert len(photos) == baseline_photos, (
                 f"Photo count grew on repeat sync {i+1}: "
                 f"{baseline_photos} -> {len(photos)}"
@@ -248,48 +220,48 @@ class TestSyncBlobs:
     def test_sync_single_blob(self, primary_admin, user_client,
                               backup_configured, backup_client):
         """One blob should appear exactly once on backup."""
-        before = _backup_blob_ids(backup_client)
+        before = backup_blob_ids(backup_client)
 
         content = generate_random_bytes(2048)
         blob = user_client.upload_blob("photo", content)
         bid = blob["blob_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        after = _backup_blob_ids(backup_client)
+        after = backup_blob_ids(backup_client)
         _assert_exact_new_items(before, after, {bid}, "blobs")
 
     def test_sync_multiple_blobs_exact_count(self, primary_admin, user_client,
                                              backup_configured, backup_client):
         """Upload N blobs -> exactly N new on backup."""
-        before = _backup_blob_ids(backup_client)
+        before = backup_blob_ids(backup_client)
         n = 4
         bids = set()
         for _ in range(n):
             b = user_client.upload_blob("photo", generate_random_bytes(512))
             bids.add(b["blob_id"])
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        after = _backup_blob_ids(backup_client)
+        after = backup_blob_ids(backup_client)
         _assert_exact_new_items(before, after, bids, "blobs")
 
     def test_sync_blob_idempotent(self, primary_admin, user_client,
                                   backup_configured, backup_client):
         """Sync same blob twice -> no duplication."""
-        before = _backup_blob_ids(backup_client)
+        before = backup_blob_ids(backup_client)
 
         blob = user_client.upload_blob("photo", generate_random_bytes(1024))
         bid = blob["blob_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        mid = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(mid, "blobs after sync 1")
+        trigger_and_wait(primary_admin, backup_configured)
+        mid = backup_blob_ids(backup_client)
+        assert_no_duplicates(mid, "blobs after sync 1")
         assert mid.count(bid) == 1
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        after = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(after, "blobs after sync 2")
+        trigger_and_wait(primary_admin, backup_configured)
+        after = backup_blob_ids(backup_client)
+        assert_no_duplicates(after, "blobs after sync 2")
         assert after.count(bid) == 1
         assert len(mid) == len(after), (
             f"Blob count changed: {len(mid)} -> {len(after)}"
@@ -302,7 +274,7 @@ class TestSyncBlobs:
         blob = user_client.upload_blob("photo", content)
         bid = blob["blob_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         bb = next((b for b in backup_client.backup_list_blobs() if b["id"] == bid), None)
         assert bb is not None
@@ -317,15 +289,15 @@ class TestSyncTrash:
     def test_sync_trash_item(self, primary_admin, user_client,
                              backup_configured, backup_client):
         """Soft-deleted blob -> trash item appears exactly once on backup."""
-        before_trash = _backup_trash_ids(backup_client)
+        before_trash = backup_trash_ids(backup_client)
 
         content = generate_random_bytes(1024)
         blob = user_client.upload_blob("photo", content)
         bid = blob["blob_id"]
 
         # Sync blob first
-        _trigger_and_wait(primary_admin, backup_configured)
-        assert bid in _backup_blob_ids(backup_client)
+        trigger_and_wait(primary_admin, backup_configured)
+        assert bid in backup_blob_ids(backup_client)
 
         # Soft-delete
         trash_resp = user_client.soft_delete_blob(
@@ -334,10 +306,10 @@ class TestSyncTrash:
         tid = trash_resp["trash_id"]
 
         # Sync deletion
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        after_trash = _backup_trash_ids(backup_client)
-        _assert_no_duplicates(after_trash, "trash")
+        after_trash = backup_trash_ids(backup_client)
+        assert_no_duplicates(after_trash, "trash")
         assert tid in after_trash, f"Trash {tid} not on backup"
         assert after_trash.count(tid) == 1
 
@@ -350,13 +322,13 @@ class TestSyncTrash:
             blob["blob_id"], filename="trash_idem.jpg", size_bytes=len(content),
         )
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        snap1 = _backup_trash_ids(backup_client)
-        _assert_no_duplicates(snap1, "trash after sync 1")
+        trigger_and_wait(primary_admin, backup_configured)
+        snap1 = backup_trash_ids(backup_client)
+        assert_no_duplicates(snap1, "trash after sync 1")
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        snap2 = _backup_trash_ids(backup_client)
-        _assert_no_duplicates(snap2, "trash after sync 2")
+        trigger_and_wait(primary_admin, backup_configured)
+        snap2 = backup_trash_ids(backup_client)
+        assert_no_duplicates(snap2, "trash after sync 2")
         assert len(snap1) == len(snap2), (
             f"Trash count changed: {len(snap1)} -> {len(snap2)}"
         )
@@ -372,7 +344,7 @@ class TestSyncTrash:
         )
         tid = trash_resp["trash_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         items = backup_client.backup_list_trash()
         item = next((t for t in items if t["id"] == tid), None)
@@ -393,17 +365,17 @@ class TestSyncDeletions:
         blob = user_client.upload_blob("photo", content)
         bid = blob["blob_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        assert bid in _backup_blob_ids(backup_client)
+        trigger_and_wait(primary_admin, backup_configured)
+        assert bid in backup_blob_ids(backup_client)
 
         trash_resp = user_client.soft_delete_blob(
             bid, filename="sync_del.jpg", size_bytes=len(content),
         )
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        trash = _backup_trash_ids(backup_client)
-        _assert_no_duplicates(trash, "trash")
+        trash = backup_trash_ids(backup_client)
+        assert_no_duplicates(trash, "trash")
         assert trash_resp["trash_id"] in trash
 
 
@@ -424,8 +396,8 @@ class TestSyncSecureGalleries:
                                                         backup_configured, backup_client):
         """Upload blob → add to secure gallery → sync → NEITHER original nor
         clone should appear on backup.  This is the CORE duplication bug test."""
-        before_blobs = _backup_blob_ids(backup_client)
-        before_photos = _backup_photo_ids(backup_client)
+        before_blobs = backup_blob_ids(backup_client)
+        before_photos = backup_photo_ids(backup_client)
 
         # Upload a blob and immediately add to secure gallery
         content = generate_random_bytes(512)
@@ -449,12 +421,12 @@ class TestSyncSecureGalleries:
         )
 
         # Sync
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error", f"Sync failed: {result}"
 
         # Backup must NOT have the hidden items
-        after_blobs = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(after_blobs, "blobs after secure gallery sync")
+        after_blobs = backup_blob_ids(backup_client)
+        assert_no_duplicates(after_blobs, "blobs after secure gallery sync")
         assert original_id not in after_blobs, (
             f"BUG: Original blob {original_id} was synced to backup despite being in secure gallery"
         )
@@ -471,7 +443,7 @@ class TestSyncSecureGalleries:
                                                         backup_configured, backup_client):
         """Upload a server-side photo → add to secure gallery → sync →
         photo (and its clone row) must NOT appear on backup."""
-        before_photos = _backup_photo_ids(backup_client)
+        before_photos = backup_photo_ids(backup_client)
 
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
@@ -490,12 +462,12 @@ class TestSyncSecureGalleries:
         )
 
         # Sync
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error", f"Sync failed: {result}"
 
         # Backup must NOT have hidden photo or its clone
-        after_photos = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(after_photos, "photos after secure gallery sync")
+        after_photos = backup_photo_ids(backup_client)
+        assert_no_duplicates(after_photos, "photos after secure gallery sync")
         assert pid not in after_photos, (
             f"BUG: Photo {pid} was synced to backup despite being in secure gallery"
         )
@@ -510,7 +482,7 @@ class TestSyncSecureGalleries:
     def test_secure_gallery_multiple_items_none_synced(self, primary_admin, user_client,
                                                         backup_configured, backup_client):
         """Add 3 blobs to secure gallery → sync → ZERO new blobs on backup."""
-        before_blobs = _backup_blob_ids(backup_client)
+        before_blobs = backup_blob_ids(backup_client)
 
         original_ids = set()
         clone_ids = set()
@@ -525,11 +497,11 @@ class TestSyncSecureGalleries:
             )
             clone_ids.add(add_result["new_blob_id"])
 
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error", f"Sync failed: {result}"
 
-        after_blobs = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(after_blobs, "blobs after multi-item gallery sync")
+        after_blobs = backup_blob_ids(backup_client)
+        assert_no_duplicates(after_blobs, "blobs after multi-item gallery sync")
 
         # None of the 6 IDs (3 originals + 3 clones) should be on backup
         all_hidden = original_ids | clone_ids
@@ -545,7 +517,7 @@ class TestSyncSecureGalleries:
     def test_mixed_secure_and_regular_blobs_sync_correctly(self, primary_admin, user_client,
                                                             backup_configured, backup_client):
         """Upload 3 blobs: secure 1, leave 2 regular → sync → only 2 regular on backup."""
-        before_blobs = _backup_blob_ids(backup_client)
+        before_blobs = backup_blob_ids(backup_client)
 
         b1 = user_client.upload_blob("photo", generate_random_bytes(512))
         b2 = user_client.upload_blob("photo", generate_random_bytes(768))
@@ -559,11 +531,11 @@ class TestSyncSecureGalleries:
         )
         clone_id = add_result["new_blob_id"]
 
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error", f"Sync failed: {result}"
 
-        after_blobs = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(after_blobs, "blobs after mixed sync")
+        after_blobs = backup_blob_ids(backup_client)
+        assert_no_duplicates(after_blobs, "blobs after mixed sync")
 
         # Only b1 and b3 should be new on backup
         _assert_exact_new_items(before_blobs, after_blobs, {b1["blob_id"], b3["blob_id"]}, "blobs")
@@ -583,17 +555,17 @@ class TestSyncSecureGalleries:
         token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
         user_client.add_secure_gallery_item(gallery["gallery_id"], blob["blob_id"], token)
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        snap1_blobs = _backup_blob_ids(backup_client)
-        snap1_photos = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(snap1_blobs, "blobs after sync 1")
-        _assert_no_duplicates(snap1_photos, "photos after sync 1")
+        trigger_and_wait(primary_admin, backup_configured)
+        snap1_blobs = backup_blob_ids(backup_client)
+        snap1_photos = backup_photo_ids(backup_client)
+        assert_no_duplicates(snap1_blobs, "blobs after sync 1")
+        assert_no_duplicates(snap1_photos, "photos after sync 1")
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        snap2_blobs = _backup_blob_ids(backup_client)
-        snap2_photos = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(snap2_blobs, "blobs after sync 2")
-        _assert_no_duplicates(snap2_photos, "photos after sync 2")
+        trigger_and_wait(primary_admin, backup_configured)
+        snap2_blobs = backup_blob_ids(backup_client)
+        snap2_photos = backup_photo_ids(backup_client)
+        assert_no_duplicates(snap2_blobs, "blobs after sync 2")
+        assert_no_duplicates(snap2_photos, "photos after sync 2")
 
         assert len(snap1_blobs) == len(snap2_blobs), (
             f"Blob count changed on repeat gallery sync: {len(snap1_blobs)} -> {len(snap2_blobs)}"
@@ -610,16 +582,16 @@ class TestSyncSecureGalleries:
         token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
         user_client.add_secure_gallery_item(gallery["gallery_id"], blob["blob_id"], token)
 
-        _trigger_and_wait(primary_admin, backup_configured)
-        baseline_blobs = len(_backup_blob_ids(backup_client))
-        baseline_photos = len(_backup_photo_ids(backup_client))
+        trigger_and_wait(primary_admin, backup_configured)
+        baseline_blobs = len(backup_blob_ids(backup_client))
+        baseline_photos = len(backup_photo_ids(backup_client))
 
         for i in range(5):
-            _trigger_and_wait(primary_admin, backup_configured)
-            blobs = _backup_blob_ids(backup_client)
-            photos = _backup_photo_ids(backup_client)
-            _assert_no_duplicates(blobs, f"blobs (repeat {i+1})")
-            _assert_no_duplicates(photos, f"photos (repeat {i+1})")
+            trigger_and_wait(primary_admin, backup_configured)
+            blobs = backup_blob_ids(backup_client)
+            photos = backup_photo_ids(backup_client)
+            assert_no_duplicates(blobs, f"blobs (repeat {i+1})")
+            assert_no_duplicates(photos, f"photos (repeat {i+1})")
             assert len(blobs) == baseline_blobs, (
                 f"Blob count grew on repeat sync {i+1}: {baseline_blobs} -> {len(blobs)}"
             )
@@ -631,19 +603,19 @@ class TestSyncSecureGalleries:
                                               backup_configured, backup_client):
         """Deleting a secure gallery + syncing should not increase counts."""
         gallery = user_client.create_secure_gallery("SyncDelGallery")
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        before_photos = _backup_photo_ids(backup_client)
-        before_blobs = _backup_blob_ids(backup_client)
+        before_photos = backup_photo_ids(backup_client)
+        before_blobs = backup_blob_ids(backup_client)
 
         user_client.delete_secure_gallery(gallery["gallery_id"])
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error"
 
-        after_photos = _backup_photo_ids(backup_client)
-        after_blobs = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(after_photos, "photos after gallery deletion")
-        _assert_no_duplicates(after_blobs, "blobs after gallery deletion")
+        after_photos = backup_photo_ids(backup_client)
+        after_blobs = backup_blob_ids(backup_client)
+        assert_no_duplicates(after_photos, "photos after gallery deletion")
+        assert_no_duplicates(after_blobs, "blobs after gallery deletion")
         assert len(after_photos) <= len(before_photos), (
             f"Photo count GREW after gallery deletion: {len(before_photos)} -> {len(after_photos)}"
         )
@@ -659,16 +631,16 @@ class TestSyncSecureGalleries:
         This tests the critical order-dependent scenario: the item was already
         on the backup before it was hidden.  The sync engine must not only
         skip sending it again, but actively purge the stale copy."""
-        before_photos = _backup_photo_ids(backup_client)
+        before_photos = backup_photo_ids(backup_client)
 
         # Upload and sync — photo lands on backup
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        mid_photos = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(mid_photos, "photos after initial sync")
+        mid_photos = backup_photo_ids(backup_client)
+        assert_no_duplicates(mid_photos, "photos after initial sync")
         assert pid in mid_photos, f"Photo {pid} should be on backup after first sync"
 
         # Now add to secure gallery (hides it on primary)
@@ -686,11 +658,11 @@ class TestSyncSecureGalleries:
         )
 
         # Sync again → photo MUST be removed from backup
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error", f"Sync failed: {result}"
 
-        after_photos = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(after_photos, "photos after retroactive hide")
+        after_photos = backup_photo_ids(backup_client)
+        assert_no_duplicates(after_photos, "photos after retroactive hide")
         assert pid not in after_photos, (
             f"BUG: Photo {pid} still on backup after being added to secure gallery. "
             f"Sync should retroactively remove previously-synced items when they become hidden."
@@ -710,17 +682,17 @@ class TestSyncSecureGalleries:
         must be REMOVED from backup on the next sync (retroactive purge).
 
         Same principle as the photo test, but for client-encrypted blobs."""
-        before_blobs = _backup_blob_ids(backup_client)
+        before_blobs = backup_blob_ids(backup_client)
 
         # Upload blob and sync — blob lands on backup
         content = generate_random_bytes(1024)
         blob = user_client.upload_blob("photo", content)
         bid = blob["blob_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        mid_blobs = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(mid_blobs, "blobs after initial sync")
+        mid_blobs = backup_blob_ids(backup_client)
+        assert_no_duplicates(mid_blobs, "blobs after initial sync")
         assert bid in mid_blobs, f"Blob {bid} should be on backup after first sync"
 
         # Now add to secure gallery (hides it)
@@ -732,11 +704,11 @@ class TestSyncSecureGalleries:
         clone_id = add_result["new_blob_id"]
 
         # Sync again → blob MUST be removed from backup
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error", f"Sync failed: {result}"
 
-        after_blobs = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(after_blobs, "blobs after retroactive hide")
+        after_blobs = backup_blob_ids(backup_client)
+        assert_no_duplicates(after_blobs, "blobs after retroactive hide")
         assert bid not in after_blobs, (
             f"BUG: Blob {bid} still on backup after being added to secure gallery. "
             f"Sync should retroactively remove previously-synced blobs when they become hidden."
@@ -754,7 +726,7 @@ class TestSyncSecureGalleries:
                                                     backup_configured, backup_client):
         """Mix of pre-synced and new items added to gallery: all must be
         absent from backup after sync, and regular items unaffected."""
-        before_blobs = _backup_blob_ids(backup_client)
+        before_blobs = backup_blob_ids(backup_client)
 
         # Upload 3 blobs
         b1 = user_client.upload_blob("photo", generate_random_bytes(512))
@@ -762,8 +734,8 @@ class TestSyncSecureGalleries:
         b3 = user_client.upload_blob("photo", generate_random_bytes(1024))
 
         # Sync all 3 to backup
-        _trigger_and_wait(primary_admin, backup_configured)
-        mid_blobs = _backup_blob_ids(backup_client)
+        trigger_and_wait(primary_admin, backup_configured)
+        mid_blobs = backup_blob_ids(backup_client)
         for b in (b1, b2, b3):
             assert b["blob_id"] in mid_blobs
 
@@ -781,11 +753,11 @@ class TestSyncSecureGalleries:
         )
 
         # Sync
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error"
 
-        after_blobs = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(after_blobs, "blobs after mixed retroactive purge")
+        after_blobs = backup_blob_ids(backup_client)
+        assert_no_duplicates(after_blobs, "blobs after mixed retroactive purge")
 
         # b1 should be REMOVED (retroactive purge)
         assert b1["blob_id"] not in after_blobs, (
@@ -806,7 +778,7 @@ class TestSyncMetadata:
 
     def test_sync_edit_copies_no_duplicates(self, primary_admin, user_client,
                                             backup_configured, backup_client):
-        before = _backup_photo_ids(backup_client)
+        before = backup_photo_ids(backup_client)
 
         photo = user_client.upload_photo(unique_filename())
         user_client.create_edit_copy(
@@ -814,42 +786,42 @@ class TestSyncMetadata:
             edit_metadata=json.dumps({"brightness": 1.5}),
         )
 
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error"
 
-        after = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(after, "photos after edit copy sync")
+        after = backup_photo_ids(backup_client)
+        assert_no_duplicates(after, "photos after edit copy sync")
 
     def test_sync_shared_album_no_duplicates(self, primary_admin, user_client,
                                              backup_configured, backup_client):
-        before = _backup_photo_ids(backup_client)
+        before = backup_photo_ids(backup_client)
 
         album = user_client.create_shared_album("SyncAlbum")
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
         user_client.add_album_photo(album["id"], pid)
 
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error"
 
-        after = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(after, "photos after album sync")
+        after = backup_photo_ids(backup_client)
+        assert_no_duplicates(after, "photos after album sync")
         assert after.count(pid) == 1
 
     def test_sync_tags_no_duplicates(self, primary_admin, user_client,
                                      backup_configured, backup_client):
-        before_photos = _backup_photo_ids(backup_client)
+        before_photos = backup_photo_ids(backup_client)
 
         photo = user_client.upload_photo(unique_filename())
         pid = photo["photo_id"]
         user_client.add_tag(pid, "synced_tag")
         user_client.add_tag(pid, "second_tag")
 
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error"
 
-        after_photos = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(after_photos, "photos after tag sync")
+        after_photos = backup_photo_ids(backup_client)
+        assert_no_duplicates(after_photos, "photos after tag sync")
         assert after_photos.count(pid) == 1
 
 
@@ -857,7 +829,7 @@ class TestSyncLogs:
     """Sync logging and status."""
 
     def test_sync_creates_log(self, primary_admin, backup_configured):
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
         logs = primary_admin.admin_get_sync_logs(backup_configured)
         assert len(logs) >= 1
         latest = logs[0]
@@ -866,7 +838,7 @@ class TestSyncLogs:
 
     def test_sync_reports_counts(self, primary_admin, user_client, backup_configured):
         user_client.upload_photo(unique_filename())
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert "photos_synced" in result or "status" in result
 
 
@@ -893,12 +865,12 @@ class TestSyncFullIntegrity:
         appear on the backup.  Only regular (non-hidden) items should sync."""
         # Flush any accumulated encrypted blobs from earlier tests so the
         # before-snapshot is clean.
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         # Snapshot before
-        before_photos = _backup_photo_ids(backup_client)
-        before_blobs = _backup_blob_ids(backup_client)
-        before_trash = _backup_trash_ids(backup_client)
+        before_photos = backup_photo_ids(backup_client)
+        before_blobs = backup_blob_ids(backup_client)
+        before_trash = backup_trash_ids(backup_client)
 
         # Create photos (regular — should sync)
         photo_ids = set()
@@ -932,12 +904,12 @@ class TestSyncFullIntegrity:
         trash_id = trash_resp["trash_id"]
 
         # Sync
-        result = _trigger_and_wait(primary_admin, backup_configured)
+        result = trigger_and_wait(primary_admin, backup_configured)
         assert result.get("status") != "error", f"Sync failed: {result}"
 
         # Verify photos — exactly 3 new
-        after_photos = _backup_photo_ids(backup_client)
-        _assert_no_duplicates(after_photos, "photos")
+        after_photos = backup_photo_ids(backup_client)
+        assert_no_duplicates(after_photos, "photos")
         _assert_exact_new_items(before_photos, after_photos, photo_ids, "photos")
 
         # Verify blobs:
@@ -948,8 +920,8 @@ class TestSyncFullIntegrity:
         # Note: the backup's auto_migrate may create encrypted blobs from
         # previously synced photos, so we check expected/excluded items
         # individually rather than exact total counts.
-        after_blobs = _backup_blob_ids(backup_client)
-        _assert_no_duplicates(after_blobs, "blobs")
+        after_blobs = backup_blob_ids(backup_client)
+        assert_no_duplicates(after_blobs, "blobs")
         expected_blobs = blob_ids - {target_blob} - {trash_blob}  # only the 1 regular blob
         after_set = set(after_blobs)
         before_set = set(before_blobs)
@@ -964,18 +936,18 @@ class TestSyncFullIntegrity:
         )
 
         # Verify trash
-        after_trash = _backup_trash_ids(backup_client)
-        _assert_no_duplicates(after_trash, "trash")
+        after_trash = backup_trash_ids(backup_client)
+        assert_no_duplicates(after_trash, "trash")
         assert trash_id in after_trash
 
         # Verify idempotent — second sync should not change anything
-        _trigger_and_wait(primary_admin, backup_configured)
-        final_photos = _backup_photo_ids(backup_client)
-        final_blobs = _backup_blob_ids(backup_client)
-        final_trash = _backup_trash_ids(backup_client)
-        _assert_no_duplicates(final_photos, "photos (repeat)")
-        _assert_no_duplicates(final_blobs, "blobs (repeat)")
-        _assert_no_duplicates(final_trash, "trash (repeat)")
+        trigger_and_wait(primary_admin, backup_configured)
+        final_photos = backup_photo_ids(backup_client)
+        final_blobs = backup_blob_ids(backup_client)
+        final_trash = backup_trash_ids(backup_client)
+        assert_no_duplicates(final_photos, "photos (repeat)")
+        assert_no_duplicates(final_blobs, "blobs (repeat)")
+        assert_no_duplicates(final_trash, "trash (repeat)")
         assert len(final_photos) == len(after_photos), (
             f"Photo count changed on repeat: {len(after_photos)} -> {len(final_photos)}"
         )
@@ -998,7 +970,7 @@ class TestSyncHashIntegrity:
         primary_hash = photo.get("photo_hash")
         assert primary_hash, "Primary should return photo_hash on upload"
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         bp = next((p for p in backup_client.backup_list() if p["id"] == pid), None)
         assert bp is not None, f"Photo {pid} not on backup"
@@ -1015,7 +987,7 @@ class TestSyncHashIntegrity:
             p = user_client.upload_photo(unique_filename())
             uploaded_ids.add(p["photo_id"])
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         photos = backup_client.backup_list()
         our_photos = [p for p in photos if p["id"] in uploaded_ids]
@@ -1041,7 +1013,7 @@ class TestSyncHashIntegrity:
                                        content_hash=content_hash)
         bid = blob["blob_id"]
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
         bb = next((b for b in backup_client.backup_list_blobs()
                    if b["id"] == bid), None)
@@ -1054,7 +1026,7 @@ class TestSyncHashIntegrity:
         """Uploading two blobs with the same content_hash should only
         produce one blob on primary (dedup), and thus one on backup."""
         import hashlib
-        before = _backup_blob_ids(backup_client)
+        before = backup_blob_ids(backup_client)
 
         ch = hashlib.sha256(b"sync-dedup-test").hexdigest()[:12]
         b1 = user_client.upload_blob("photo", generate_random_bytes(512),
@@ -1066,7 +1038,62 @@ class TestSyncHashIntegrity:
             "Primary should have deduped these blobs"
         )
 
-        _trigger_and_wait(primary_admin, backup_configured)
+        trigger_and_wait(primary_admin, backup_configured)
 
-        after = _backup_blob_ids(backup_client)
+        after = backup_blob_ids(backup_client)
         _assert_exact_new_items(before, after, {b1["blob_id"]}, "blobs")
+
+
+class TestSyncAfterComplexOperations:
+    """Sync engine handles complex state correctly (moved from test_12)."""
+
+    def test_sync_after_rapid_create_delete(self, primary_admin, user_client,
+                                            backup_configured, backup_client):
+        """Create many blobs, trash some, then sync."""
+        created = []
+        deleted = []
+        for i in range(5):
+            b = user_client.upload_blob("photo")
+            created.append(b["blob_id"])
+
+        # Trash first two
+        for bid in created[:2]:
+            user_client.soft_delete_blob(bid, filename="rapid_del.jpg")
+            deleted.append(bid)
+
+        # Sync
+        trigger_and_wait(primary_admin, backup_configured)
+
+        # Verify: only non-deleted should be on backup
+        backup_blobs = backup_client.backup_list_blobs()
+        backup_ids = {b["id"] for b in backup_blobs}
+
+        for bid in created[2:]:
+            assert bid in backup_ids, f"Surviving blob {bid} missing from backup"
+        for bid in deleted:
+            assert bid not in backup_ids, f"Deleted blob {bid} still on backup"
+
+    def test_sync_with_secure_gallery_items(self, primary_admin, user_client,
+                                            backup_configured):
+        """Secure gallery items should sync without errors."""
+        gallery = user_client.create_secure_gallery("Sync Edge Gallery")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+
+        # Add multiple items
+        for _ in range(3):
+            blob = user_client.upload_blob("photo")
+            user_client.add_secure_gallery_item(gallery["gallery_id"], blob["blob_id"], token)
+
+        trigger_and_wait(primary_admin, backup_configured)
+
+    def test_sync_with_shared_album_members_and_photos(self, primary_admin, user_client,
+                                                       backup_configured):
+        """Complex shared album state should sync correctly."""
+        album = user_client.create_shared_album("Complex Sync Album")
+
+        # Add photos
+        for _ in range(3):
+            p = user_client.upload_photo(unique_filename())
+            user_client.add_album_photo(album["id"], p["photo_id"])
+
+        trigger_and_wait(primary_admin, backup_configured)

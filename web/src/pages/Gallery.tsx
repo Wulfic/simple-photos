@@ -90,12 +90,13 @@ export default function Gallery() {
 
   // ── Upload ──────────────────────────────────────────────────────────────
   const {
-    uploading, uploadProgress, inputRef, handleDrop, handleFileInput,
+    uploading, uploadProgress, inputRef, folderInputRef, handleDrop, handleFileInput, handleFolderInput,
   } = useGalleryUpload({ loadEncryptedPhotos, setError });
 
   // ── Multi-select state (mobile long-press) ─────────────────────────────
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showUploadMenu, setShowUploadMenu] = useState(false);
 
   function enterSelectionMode(id: string) {
     setSelectionMode(true);
@@ -252,24 +253,58 @@ export default function Gallery() {
 
         {/* Floating upload button — hidden when viewing a backup server or when this IS a backup server */}
         {!isBackupView && !isBackupServer && (
-        <label
-          className="fixed bottom-6 right-6 z-50 w-14 h-14 flex items-center justify-center rounded-2xl shadow-lg cursor-pointer select-none transition-colors"
-          style={{ backgroundColor: "#A8C7FA" }}
-          title="Upload photos"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="#1C1B1F" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            accept={ACCEPTED_MIME_TYPES}
-            className="hidden"
-            onChange={handleFileInput}
-            disabled={uploading}
-          />
-        </label>
+        <div className="fixed bottom-6 right-6 z-50">
+          {/* Upload menu popover */}
+          {showUploadMenu && (
+            <>
+              {/* Backdrop to close menu on outside click */}
+              <div className="fixed inset-0 z-40" onClick={() => setShowUploadMenu(false)} />
+              <div className="absolute bottom-16 right-0 z-50 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]">
+                <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors">
+                  <svg className="w-5 h-5 text-gray-600 dark:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14" />
+                    <rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Select files</span>
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    multiple
+                    accept={ACCEPTED_MIME_TYPES}
+                    className="hidden"
+                    onChange={(e) => { setShowUploadMenu(false); handleFileInput(e); }}
+                    disabled={uploading}
+                  />
+                </label>
+                <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors">
+                  <svg className="w-5 h-5 text-gray-600 dark:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Select folder</span>
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => { setShowUploadMenu(false); handleFolderInput(e); }}
+                    disabled={uploading}
+                    {...({ webkitdirectory: "", directory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
+                  />
+                </label>
+              </div>
+            </>
+          )}
+          {/* FAB button */}
+          <button
+            className="w-14 h-14 flex items-center justify-center rounded-2xl shadow-lg cursor-pointer select-none transition-colors"
+            style={{ backgroundColor: "#A8C7FA" }}
+            title="Upload photos"
+            onClick={() => setShowUploadMenu((v) => !v)}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="#1C1B1F" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+          </button>
+        </div>
         )}
 
         {/* ── BACKUP SERVER VIEW ────────────────────────────────────────── */}

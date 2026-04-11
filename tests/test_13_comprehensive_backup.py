@@ -42,6 +42,9 @@ from helpers import (
     random_username,
     wait_for_sync,
     wait_for_server,
+    trigger_and_wait,
+    assert_no_duplicates,
+    login_on_server,
 )
 from conftest import (
     ADMIN_USERNAME,
@@ -59,19 +62,6 @@ from conftest import (
 _state = {}
 
 
-def _trigger_and_wait(admin_client, server_id, timeout=120):
-    """Trigger sync and block until complete."""
-    admin_client.admin_trigger_sync(server_id)
-    return wait_for_sync(admin_client, server_id, timeout=timeout)
-
-
-def _assert_no_duplicates(id_list, label):
-    """Fail if any ID appears more than once."""
-    counts = Counter(id_list)
-    dupes = {k: v for k, v in counts.items() if v > 1}
-    assert not dupes, f"DUPLICATE {label}: {dupes}"
-
-
 def _dump_server_logs(server, label=""):
     """Dump last portion of server log for debugging."""
     try:
@@ -86,17 +76,6 @@ def _dump_server_logs(server, label=""):
             print(f"{'='*60}\n")
     except Exception as e:
         print(f"[WARN] Could not dump logs for {label}: {e}")
-
-
-def _login_on_backup(backup_server, username, password):
-    """Login as a synced user on the backup server. Returns APIClient or None."""
-    client = APIClient(backup_server.base_url)
-    try:
-        client.login(username, password)
-        return client
-    except Exception as e:
-        print(f"[WARN] Could not login as {username} on backup: {e}")
-        return None
 
 
 # =====================================================================
@@ -390,7 +369,7 @@ class TestMegaBackupSync:
     def test_sync_to_backup(self, primary_admin, backup_configured,
                             primary_server, backup_server):
         """Trigger sync, wait for success, dump logs on failure."""
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         if result.get("status") == "error":
             _dump_server_logs(primary_server, "primary (sync error)")
             _dump_server_logs(backup_server, "backup (sync error)")
@@ -408,7 +387,7 @@ class TestMegaBackupSync:
         """
         photos = backup_client.backup_list()
         photo_ids = [p["id"] for p in photos]
-        _assert_no_duplicates(photo_ids, "backup API photos")
+        assert_no_duplicates(photo_ids, "backup API photos")
 
         # ── Gallery items must not appear in backup list ─────────────
         p5 = _state["photo_ids_a"][4]
@@ -510,7 +489,7 @@ class TestMegaBackupSync:
         """
         blobs = backup_client.backup_list_blobs()
         blob_ids = [b["id"] for b in blobs]
-        _assert_no_duplicates(blob_ids, "backup API blobs")
+        assert_no_duplicates(blob_ids, "backup API blobs")
 
         b1 = _state["blob_ids_a"][0]
         b2 = _state["blob_ids_a"][1]
@@ -551,7 +530,7 @@ class TestMegaBackupSync:
         """Backup API has before + 1 trash item (b2)."""
         trash = backup_client.backup_list_trash()
         trash_ids = [t["id"] for t in trash]
-        _assert_no_duplicates(trash_ids, "backup API trash")
+        assert_no_duplicates(trash_ids, "backup API trash")
 
         assert _state["trash_id"] in trash_ids, (
             f"Trash {_state['trash_id']} missing from backup API"
@@ -578,7 +557,7 @@ class TestMegaBackupSync:
     def test_backup_api_users_count(self, backup_client):
         """Backup API has exactly as many users as primary."""
         users = backup_client.backup_list_users()
-        _assert_no_duplicates([u["id"] for u in users], "backup API users")
+        assert_no_duplicates([u["id"] for u in users], "backup API users")
         usernames = [u["username"] for u in users]
 
         assert _state["user_a_name"] in usernames, "User A not on backup API"
@@ -594,8 +573,8 @@ class TestMegaBackupSync:
 
     def test_backup_user_a_can_login(self, backup_server):
         """Synced User A can login on backup server (credentials synced)."""
-        client = _login_on_backup(
-            backup_server, _state["user_a_name"], USER_PASSWORD,
+        client = login_on_server(
+            backup_server.base_url, _state["user_a_name"], USER_PASSWORD,
         )
         assert client is not None, (
             f"User A '{_state['user_a_name']}' cannot login on backup server"
@@ -604,8 +583,8 @@ class TestMegaBackupSync:
 
     def test_backup_user_b_can_login(self, backup_server):
         """Synced User B can login on backup server (credentials synced)."""
-        client = _login_on_backup(
-            backup_server, _state["user_b_name"], USER_PASSWORD,
+        client = login_on_server(
+            backup_server.base_url, _state["user_b_name"], USER_PASSWORD,
         )
         assert client is not None, (
             f"User B '{_state['user_b_name']}' cannot login on backup server"
@@ -622,7 +601,7 @@ class TestMegaBackupSync:
         photos = client.list_photos(limit=500)
         photo_list = photos.get("photos", [])
         photo_ids = [p["id"] for p in photo_list]
-        _assert_no_duplicates(photo_ids, "backup User A photos (user-facing)")
+        assert_no_duplicates(photo_ids, "backup User A photos (user-facing)")
 
         # p5 is gallery-hidden, so expected = p1-p4 + dup_p6
         expected_ids = set(
@@ -686,7 +665,7 @@ class TestMegaBackupSync:
         blobs = client.list_blobs(limit=500)
         blob_list = blobs.get("blobs", [])
         blob_ids = [b["id"] for b in blob_list]
-        _assert_no_duplicates(blob_ids, "backup User A blobs (user-facing)")
+        assert_no_duplicates(blob_ids, "backup User A blobs (user-facing)")
 
         b1 = _state["blob_ids_a"][0]
         b2 = _state["blob_ids_a"][1]
@@ -896,7 +875,7 @@ class TestMegaBackupSync:
         photos = client.list_photos(limit=500)
         photo_list = photos.get("photos", [])
         photo_ids = [p["id"] for p in photo_list]
-        _assert_no_duplicates(photo_ids, "backup User B photos (user-facing)")
+        assert_no_duplicates(photo_ids, "backup User B photos (user-facing)")
 
         for pid in _state["photo_ids_b"]:
             assert pid in photo_ids, (
@@ -1039,11 +1018,11 @@ class TestMegaMultiSyncRegression:
         fav_pid = photo["photo_id"]
 
         # 2. First sync — photo lands on backup WITHOUT favorite flag
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Sync (fav-1) failed: {result}"
 
         # Confirm photo arrived and is NOT favorited yet
-        ba = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        ba = login_on_server(backup_server.base_url, _state["user_a_name"], USER_PASSWORD)
         assert ba, "User A cannot login on backup"
         photos_after_1 = ba.list_photos(limit=500).get("photos", [])
         p = next((x for x in photos_after_1 if x["id"] == fav_pid), None)
@@ -1068,11 +1047,11 @@ class TestMegaMultiSyncRegression:
         assert local_p["is_favorite"] in (True, 1), "Local favorite failed"
 
         # 4. Re-sync
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Sync (fav-2) failed: {result}"
 
         # 5. Verify favourite propagated to backup (user-facing)
-        ba2 = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        ba2 = login_on_server(backup_server.base_url, _state["user_a_name"], USER_PASSWORD)
         assert ba2, "User A cannot login on backup for post-fav check"
         photos_after_2 = ba2.list_photos(limit=500).get("photos", [])
         p2 = next((x for x in photos_after_2 if x["id"] == fav_pid), None)
@@ -1108,7 +1087,7 @@ class TestMegaMultiSyncRegression:
         trash_bid = blob["blob_id"]
 
         # 2. First sync — blob lands on backup
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Sync (trash-1) failed: {result}"
 
         # Verify blob is on backup
@@ -1118,7 +1097,7 @@ class TestMegaMultiSyncRegression:
             f"Blob {trash_bid} not on backup after first sync"
         )
 
-        ba = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        ba = login_on_server(backup_server.base_url, _state["user_a_name"], USER_PASSWORD)
         assert ba, "User A cannot login on backup"
         blobs_1 = ba.list_blobs(limit=500).get("blobs", [])
         assert any(b["id"] == trash_bid for b in blobs_1), (
@@ -1141,11 +1120,11 @@ class TestMegaMultiSyncRegression:
         )
 
         # 4. Re-sync
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Sync (trash-2) failed: {result}"
 
         # 5. Verify blob GONE from backup (user-facing blob listing)
-        ba2 = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        ba2 = login_on_server(backup_server.base_url, _state["user_a_name"], USER_PASSWORD)
         assert ba2, "User A cannot login on backup"
         blobs_2 = ba2.list_blobs(limit=500).get("blobs", [])
         blob_ids_2 = [b["id"] for b in blobs_2]
@@ -1183,7 +1162,7 @@ class TestMegaMultiSyncRegression:
         trash_id = _state.get("multi_sync_trash_id")
         assert trash_id, "Prior trash test did not run"
 
-        ba = _login_on_backup(backup_server, _state["user_a_name"], USER_PASSWORD)
+        ba = login_on_server(backup_server.base_url, _state["user_a_name"], USER_PASSWORD)
         assert ba, "User A cannot login on backup"
 
         r = ba.get(f"/api/trash/{trash_id}/thumb")
@@ -1452,14 +1431,14 @@ class TestMegaDuplicateRegression:
         # 1. Backup API photos — no duplicate IDs
         photos = backup_client.backup_list()
         photo_ids = [p["id"] for p in photos]
-        _assert_no_duplicates(photo_ids, "backup API photo IDs")
+        assert_no_duplicates(photo_ids, "backup API photo IDs")
 
         # 2. User A user-facing photos — no duplicate IDs
         client_a = _state.get("backup_client_a")
         if client_a:
             user_photos = client_a.list_photos(limit=500).get("photos", [])
             user_ids = [p["id"] for p in user_photos]
-            _assert_no_duplicates(user_ids, "User A user-facing photo IDs on backup")
+            assert_no_duplicates(user_ids, "User A user-facing photo IDs on backup")
 
             # 3. Cross-check: gallery items must NOT also be in user listing
             gallery_id = _state.get("backup_gallery_id")
@@ -1530,7 +1509,7 @@ class TestMegaDuplicateRegression:
         presync_pid = photo["photo_id"]
 
         # 2. Sync to backup — photo should land on backup
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Sync 2a failed: {result}"
 
         # Verify photo IS on backup
@@ -1546,8 +1525,8 @@ class TestMegaDuplicateRegression:
         backup_count_before_purge = len(backup_photos)
 
         # Also check user-facing listing on backup
-        ba_client = _login_on_backup(
-            backup_server, _state["user_a_name"], USER_PASSWORD,
+        ba_client = login_on_server(
+            backup_server.base_url, _state["user_a_name"], USER_PASSWORD,
         )
         assert ba_client, "User A can't login on backup for presync check"
         user_photos_before = ba_client.list_photos(limit=500)
@@ -1577,7 +1556,7 @@ class TestMegaDuplicateRegression:
         )
 
         # 4. Sync again — retroactive purge should remove it from backup
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Sync 2b failed: {result}"
 
         # 4b. Trigger autoscan on backup — the physical file is still on disk
@@ -1593,7 +1572,7 @@ class TestMegaDuplicateRegression:
         # 5. Verify: photo REMOVED from backup listings (even after autoscan)
         backup_photos_after = backup_client.backup_list()
         backup_photo_ids_after = [p["id"] for p in backup_photos_after]
-        _assert_no_duplicates(
+        assert_no_duplicates(
             backup_photo_ids_after,
             "backup API photos after retroactive purge",
         )
@@ -1630,15 +1609,15 @@ class TestMegaDuplicateRegression:
             )
 
         # User-facing check
-        ba_client2 = _login_on_backup(
-            backup_server, _state["user_a_name"], USER_PASSWORD,
+        ba_client2 = login_on_server(
+            backup_server.base_url, _state["user_a_name"], USER_PASSWORD,
         )
         assert ba_client2, "User A can't login on backup for post-purge check"
         user_photos_after = ba_client2.list_photos(limit=500)
         user_photo_ids_after = [
             p["id"] for p in user_photos_after.get("photos", [])
         ]
-        _assert_no_duplicates(
+        assert_no_duplicates(
             user_photo_ids_after,
             "user-facing photos after retroactive purge",
         )
@@ -1677,8 +1656,8 @@ class TestMegaDuplicateRegression:
         # 6. No duplicates across all backup data — AND no gallery items leaking
         all_backup_photos = backup_photo_ids_after
         all_backup_blobs = [b["id"] for b in backup_client.backup_list_blobs()]
-        _assert_no_duplicates(all_backup_photos, "all backup photos post-purge")
-        _assert_no_duplicates(all_backup_blobs, "all backup blobs post-purge")
+        assert_no_duplicates(all_backup_photos, "all backup photos post-purge")
+        assert_no_duplicates(all_backup_blobs, "all backup blobs post-purge")
 
         # Purged photo's hash must not appear in backup (not even
         # re-registered by autoscan under a new ID)
@@ -1730,7 +1709,7 @@ class TestMegaDuplicateRegression:
         presync_bid = blob["blob_id"]
 
         # 2. Sync
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Sync 3a failed: {result}"
 
         # Verify blob IS on backup
@@ -1748,7 +1727,7 @@ class TestMegaDuplicateRegression:
         presync_blob_clone_id = add_resp["new_blob_id"]
 
         # 4. Sync again
-        result = _trigger_and_wait(primary_admin, backup_configured, timeout=120)
+        result = trigger_and_wait(primary_admin, backup_configured, timeout=120)
         assert result.get("status") != "error", f"Sync 3b failed: {result}"
 
         # 4b. Trigger autoscan on backup — physical file still on disk
@@ -1762,7 +1741,7 @@ class TestMegaDuplicateRegression:
         # 5. Verify: blob REMOVED from backup listings (even after autoscan)
         backup_blobs_after = backup_client.backup_list_blobs()
         backup_blob_ids_after = [b["id"] for b in backup_blobs_after]
-        _assert_no_duplicates(
+        assert_no_duplicates(
             backup_blob_ids_after,
             "backup API blobs after blob retroactive purge",
         )
@@ -1776,8 +1755,8 @@ class TestMegaDuplicateRegression:
         )
 
         # User-facing check
-        ba = _login_on_backup(
-            backup_server, _state["user_a_name"], USER_PASSWORD,
+        ba = login_on_server(
+            backup_server.base_url, _state["user_a_name"], USER_PASSWORD,
         )
         assert ba, "User A can't login on backup"
         user_blobs = ba.list_blobs(limit=500)
@@ -1945,7 +1924,7 @@ class TestMegaRecovery:
         # ── 1. USERS ─────────────────────────────────────────────────
         users = admin.admin_list_users()
         recovered_usernames = {u["username"] for u in users}
-        _assert_no_duplicates([u["id"] for u in users], "recovered users")
+        assert_no_duplicates([u["id"] for u in users], "recovered users")
 
         for uname in expected["usernames"]:
             assert uname in recovered_usernames, (
@@ -1961,7 +1940,7 @@ class TestMegaRecovery:
         photos_a = user_a.list_photos(limit=500)
         photo_list_a = photos_a.get("photos", [])
         photo_ids_a = {p["id"] for p in photo_list_a}
-        _assert_no_duplicates(
+        assert_no_duplicates(
             [p["id"] for p in photo_list_a], "recovered User A photos",
         )
 
@@ -2093,7 +2072,7 @@ class TestMegaRecovery:
         blobs_a = user_a.list_blobs(limit=500)
         blob_list_a = blobs_a.get("blobs", [])
         blob_ids_a = [b["id"] for b in blob_list_a]
-        _assert_no_duplicates(blob_ids_a, "recovered User A blobs")
+        assert_no_duplicates(blob_ids_a, "recovered User A blobs")
         assert _state["blob_ids_a"][2] in blob_ids_a, "b3 not recovered"
         assert _state["blob_ids_a"][0] not in blob_ids_a, (
             "b1 (gallery-hidden) visible after recovery"
@@ -2147,7 +2126,7 @@ class TestMegaRecovery:
         photos_b = user_b.list_photos(limit=500)
         photo_list_b = photos_b.get("photos", [])
         photo_ids_b = {p["id"] for p in photo_list_b}
-        _assert_no_duplicates(
+        assert_no_duplicates(
             [p["id"] for p in photo_list_b], "recovered User B photos",
         )
 
@@ -2212,10 +2191,10 @@ class TestMegaRecovery:
         all_recovered_photos = [p["id"] for p in photo_list_a] + [
             p["id"] for p in photo_list_b
         ]
-        _assert_no_duplicates(all_recovered_photos, "all recovered photos")
+        assert_no_duplicates(all_recovered_photos, "all recovered photos")
 
         all_recovered_blobs = blob_ids_a + blob_ids_b
-        _assert_no_duplicates(all_recovered_blobs, "all recovered blobs")
+        assert_no_duplicates(all_recovered_blobs, "all recovered blobs")
 
         # ── 16. PRE-SYNCED-THEN-SECURED NOT IN LISTINGS ──────────────
         # Items added to secure gallery after initial sync must NOT

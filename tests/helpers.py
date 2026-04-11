@@ -878,3 +878,173 @@ def assert_photo_not_in_list(photos: list, photo_id: str, msg: str = ""):
     """Assert that a photo ID does NOT exist in a list of photo records."""
     ids = [p["id"] for p in photos]
     assert photo_id not in ids, f"Photo {photo_id} unexpectedly found in list. {msg}"
+
+
+# ── Shared sync / backup helpers ─────────────────────────────────────
+
+def trigger_and_wait(admin_client, server_id, timeout=120):
+    """Trigger a backup sync and wait for completion.
+
+    Retries the trigger if a sync/recovery is already in progress.
+    """
+    import requests as _requests
+    deadline = time.time() + timeout
+    triggered = False
+    while time.time() < deadline:
+        try:
+            admin_client.admin_trigger_sync(server_id)
+            triggered = True
+            break
+        except _requests.exceptions.HTTPError as exc:
+            resp = getattr(exc, "response", None)
+            if resp is not None and resp.status_code == 400 and (
+                "already in progress" in resp.text or "in progress" in resp.text
+            ):
+                time.sleep(3)
+            else:
+                raise
+    if not triggered:
+        raise TimeoutError(
+            f"Could not start sync for {server_id} within {timeout}s "
+            "(another sync/recovery kept the lock)"
+        )
+    remaining = max(5, deadline - time.time())
+    return wait_for_sync(admin_client, server_id, timeout=remaining)
+
+
+def assert_no_duplicates(id_list, label):
+    """Assert that no ID appears more than once in a list."""
+    from collections import Counter
+    counts = Counter(id_list)
+    dupes = {k: v for k, v in counts.items() if v > 1}
+    assert not dupes, f"DUPLICATE {label}: {dupes}"
+
+
+def backup_photo_ids(backup_client) -> list:
+    """Return ALL photo IDs on backup (raw list, duplicates preserved)."""
+    return [p["id"] for p in backup_client.backup_list()]
+
+
+def backup_blob_ids(backup_client) -> list:
+    """Return ALL blob IDs on backup (raw list, duplicates preserved)."""
+    return [b["id"] for b in backup_client.backup_list_blobs()]
+
+
+def backup_trash_ids(backup_client) -> list:
+    """Return ALL trash item IDs on backup (raw list, duplicates preserved)."""
+    return [t["id"] for t in backup_client.backup_list_trash()]
+
+
+def backup_user_ids(backup_client) -> list:
+    """Return ALL user IDs on backup."""
+    return [u["id"] for u in backup_client.backup_list_users()]
+
+
+def aes_gcm_decrypt(key_hex, data):
+    """Decrypt AES-256-GCM data: [12-byte nonce][ciphertext + 16-byte tag]."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    _NONCE_LENGTH = 12
+    key = bytes.fromhex(key_hex)
+    assert len(key) == 32, f"Key must be 32 bytes, got {len(key)}"
+    if len(data) < _NONCE_LENGTH + 16:
+        raise ValueError(
+            f"aes/gcm: invalid nonce length — data too short "
+            f"({len(data)} bytes, minimum {_NONCE_LENGTH + 16})"
+        )
+    nonce = data[:_NONCE_LENGTH]
+    ciphertext = data[_NONCE_LENGTH:]
+    try:
+        return AESGCM(key).decrypt(nonce, ciphertext, None)
+    except Exception as e:
+        raise ValueError(f"AES/GCM decryption failed: {e}")
+
+
+def login_on_server(base_url, username, password):
+    """Login as a user on any server. Returns an APIClient or None."""
+    client = APIClient(base_url)
+    try:
+        client.login(username, password)
+        client.username = username
+        return client
+    except Exception as e:
+        print(f"[WARN] Could not login as {username} on {base_url}: {e}")
+        return None
+
+
+def wait_for_encryption(client, photo_id, max_wait=30):
+    """Poll encrypted-sync until the photo has encrypted_blob_id set."""
+    start = time.time()
+    while time.time() - start < max_wait:
+        res = client.encrypted_sync(limit=500)
+        for p in res.get("photos", []):
+            if p["id"] == photo_id and p.get("encrypted_blob_id"):
+                return p["encrypted_blob_id"]
+        time.sleep(1)
+    return None
+
+
+def web_gallery_items(client, label=""):
+    """Simulate the web client's useGalleryData combined gallery view.
+
+    Returns (sync_photos, blob_items, combined_visible, synced_blob_ids).
+    """
+    # Phase 1: encrypted-sync (all pages)
+    sync_photos = []
+    cursor = None
+    while True:
+        params = {"limit": 500}
+        if cursor:
+            params["after"] = cursor
+        res = client.encrypted_sync(**params)
+        sync_photos.extend(res.get("photos", []))
+        cursor = res.get("next_cursor")
+        if not cursor:
+            break
+
+    # Phase 2: list_blobs for all media types
+    blob_items = []
+    for btype in ("photo", "gif", "video", "audio"):
+        page_cursor = None
+        while True:
+            params = {"blob_type": btype, "limit": 200}
+            if page_cursor:
+                params["after"] = page_cursor
+            res = client.list_blobs(**params)
+            blobs = res.get("blobs", [])
+            blob_items.extend(blobs)
+            page_cursor = res.get("next_cursor")
+            if not page_cursor:
+                break
+
+    # Phase 3+4 merge: synced encrypted_blob_ids used for dedup
+    synced_blob_ids = {
+        p["encrypted_blob_id"]
+        for p in sync_photos
+        if p.get("encrypted_blob_id")
+    }
+    unsynced_blobs = [b for b in blob_items if b["id"] not in synced_blob_ids]
+
+    combined = {}
+    for p in sync_photos:
+        if not p.get("encrypted_blob_id"):
+            continue
+        combined[p["id"]] = {"source": "encrypted-sync", "type": "photo", "photo": p}
+    for b in unsynced_blobs:
+        combined[b["id"]] = {"source": "list_blobs", "type": b.get("blob_type", "?"), "blob": b}
+
+    if label:
+        print(f"\n[{label}] encrypted-sync: {len(sync_photos)} photos")
+        print(f"[{label}] list_blobs: {len(blob_items)} blobs (all types)")
+        print(f"[{label}] synced_blob_ids: {synced_blob_ids}")
+        print(f"[{label}] unsynced_blobs: {len(unsynced_blobs)}")
+        print(f"[{label}] combined visible: {len(combined)}")
+        for k, v in combined.items():
+            print(f"  {k} via {v['source']} ({v['type']})")
+
+    return sync_photos, blob_items, combined, synced_blob_ids
+
+
+def secure_blob_id_set(client):
+    """Return the set of blob IDs from the secureBlobIds endpoint."""
+    data = client.get_secure_gallery_blob_ids()
+    return set(data.get("blob_ids", []))

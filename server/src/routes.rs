@@ -179,6 +179,8 @@ fn photo_routes() -> Router<AppState> {
             put(crate::photos::handlers::toggle_favorite),
         )
         .route("/photos/{id}/crop", put(crate::photos::handlers::set_crop))
+        // Photo soft-delete to trash
+        .route("/photos/{id}", delete(crate::trash::operations::soft_delete_photo))
         // Edit copies
         .route(
             "/photos/{id}/copies",

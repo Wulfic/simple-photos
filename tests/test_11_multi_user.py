@@ -15,61 +15,12 @@ from conftest import USER_PASSWORD
 
 
 class TestUserIsolation:
-    """Ensure complete data isolation between users."""
+    """Ensure complete data isolation between users.
 
-    def test_photo_isolation(self, user_client, second_user_client):
-        """Users cannot see each other's photos."""
-        p1 = user_client.upload_photo(unique_filename())
-        p2 = second_user_client.upload_photo(unique_filename())
-
-        list1 = user_client.list_photos()
-        list2 = second_user_client.list_photos()
-
-        u1_ids = {p["id"] for p in list1["photos"]}
-        u2_ids = {p["id"] for p in list2["photos"]}
-
-        assert p1["photo_id"] in u1_ids
-        assert p1["photo_id"] not in u2_ids
-        assert p2["photo_id"] in u2_ids
-        assert p2["photo_id"] not in u1_ids
-
-    def test_blob_isolation(self, user_client, second_user_client):
-        """Users cannot access each other's blobs."""
-        blob = user_client.upload_blob("photo", generate_random_bytes(512))
-        r = second_user_client.download_blob(blob["blob_id"])
-        assert r.status_code in (403, 404)
-
-    def test_trash_isolation(self, user_client, second_user_client):
-        """Users cannot see each other's trash."""
-        blob = user_client.upload_blob("photo")
-        user_client.soft_delete_blob(blob["blob_id"], filename="iso.jpg")
-
-        trash1 = user_client.list_trash()
-        trash2 = second_user_client.list_trash()
-
-        ids1 = {t["id"] for t in trash1["items"]}
-        ids2 = {t["id"] for t in trash2["items"]}
-
-        assert len(ids1) >= 1, "User 1 should have at least 1 trash item"
-        assert ids1.isdisjoint(ids2), (
-            f"User 2 can see user 1's trash! Overlap: {ids1 & ids2}"
-        )
-
-    def test_tag_isolation(self, user_client, second_user_client):
-        """Users cannot see each other's tags."""
-        p = user_client.upload_photo(unique_filename())
-        user_client.add_tag(p["photo_id"], "private_tag_isolation")
-
-        tags2 = second_user_client.list_tags()
-        assert "private_tag_isolation" not in tags2.get("tags", [])
-
-    def test_gallery_isolation(self, user_client, second_user_client):
-        """Users cannot see each other's secure galleries."""
-        user_client.create_secure_gallery("Private Gallery")
-
-        galleries2 = second_user_client.list_secure_galleries()
-        names = [g["name"] for g in galleries2["galleries"]]
-        assert "Private Gallery" not in names
+    Note: Photo, blob, trash, tag, and gallery isolation are tested in their
+    respective test files (test_02-07). This file tests only storage-stats
+    isolation and multi-user interaction scenarios.
+    """
 
     def test_storage_stats_isolation(self, user_client, second_user_client):
         """Storage stats should reflect only the user's own data."""
