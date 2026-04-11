@@ -67,9 +67,9 @@ export default function ConversionBanner() {
   }, [startTask, endTask]);
 
   useEffect(() => {
-    if (dismissed) return;
-
     poll();
+    // Poll continues even when banner is dismissed so the profile icon
+    // keeps spinning until the server finishes converting.
     timerRef.current = setInterval(poll, 2_000);
     return () => {
       if (timerRef.current) {
@@ -78,7 +78,7 @@ export default function ConversionBanner() {
       }
       endTask("conversion");
     };
-  }, [dismissed, poll, endTask]);
+  }, [poll, endTask]);
 
   if (dismissed || !counts || counts.total === 0) return null;
 

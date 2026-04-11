@@ -111,13 +111,13 @@ export default function EncryptionBanner() {
   }, [startTask, endTask]);
 
   useEffect(() => {
-    if (dismissed) return;
     if (!hasCryptoKey()) return;
 
     // Initial check
     poll();
 
-    // Poll every 2 s
+    // Poll every 2 s — continues even when banner is dismissed so the
+    // profile icon keeps spinning until the server finishes.
     timerRef.current = setInterval(poll, 2_000);
     return () => {
       if (timerRef.current) {
@@ -126,7 +126,7 @@ export default function EncryptionBanner() {
       }
       endTask("encryption");
     };
-  }, [dismissed, poll, endTask]);
+  }, [poll, endTask]);
 
   if (dismissed || !counts || counts.batchTotal === 0) return null;
 
