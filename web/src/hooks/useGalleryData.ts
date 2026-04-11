@@ -250,10 +250,17 @@ export function useGalleryData(): GalleryDataResult {
         const idbKey = existing ? existing.blobId : photo.id;
 
         if (existing) {
-          // Update mutable server-synced fields (favorites, serverPhotoId)
+          // Update mutable server-synced fields (favorites, serverPhotoId, dimensions)
           const updates: Partial<CachedPhoto> = {};
           if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
           if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
+          // Sync corrected dimensions from server (the server-side EXIF orientation
+          // repair may have fixed width/height after this entry was cached).
+          if (photo.width > 0 && photo.height > 0 &&
+              (existing.width !== photo.width || existing.height !== photo.height)) {
+            updates.width = photo.width;
+            updates.height = photo.height;
+          }
           // Retry thumbnail download if the previous attempt failed
           if (!existing.thumbnailData) {
             const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
