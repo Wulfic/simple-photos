@@ -7,9 +7,11 @@ package com.simplephotos.sync
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.media.ThumbnailUtils
 import android.util.Log
+import androidx.exifinterface.media.ExifInterface
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.hilt.work.HiltWorker
@@ -196,10 +198,11 @@ class BackupWorker @AssistedInject constructor(
                             }
                         }
                         else -> {
-                            // Photos: standard bitmap thumbnail
+                            // Photos: decode, apply EXIF rotation, then thumbnail
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size)
-                            bitmapToJpeg(ThumbnailUtils.extractThumbnail(bitmap, 256, 256)).also {
-                                bitmap?.recycle()
+                            val rotated = applyExifRotation(bitmap, photoData)
+                            bitmapToJpeg(ThumbnailUtils.extractThumbnail(rotated, 256, 256)).also {
+                                rotated?.recycle()
                             }
                         }
                     }
@@ -299,6 +302,37 @@ class BackupWorker @AssistedInject constructor(
         } catch (e: Exception) {
             Log.w(TAG, "Video thumbnail generation failed", e)
             null
+        }
+    }
+
+    /**
+     * Read EXIF orientation from raw image bytes and apply the matching
+     * rotation/flip to the decoded bitmap so thumbnails are correctly oriented.
+     */
+    private fun applyExifRotation(bitmap: Bitmap?, imageBytes: ByteArray): Bitmap? {
+        bitmap ?: return null
+        return try {
+            val exif = ExifInterface(java.io.ByteArrayInputStream(imageBytes))
+            val orientation = exif.getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
+            val matrix = Matrix()
+            when (orientation) {
+                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+                ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+                ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
+                ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+                ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.setRotate(270f); matrix.postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(270f)
+                else -> return bitmap
+            }
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            if (rotated !== bitmap) bitmap.recycle()
+            rotated
+        } catch (_: Exception) {
+            bitmap
         }
     }
 

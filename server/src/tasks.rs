@@ -53,6 +53,7 @@ pub fn spawn_all(
     spawn_export_cleanup(pool.clone(), storage_root_swap.clone());
     spawn_storage_health_monitor(storage_root_swap.clone(), storage_available.clone());
     spawn_dimension_repair(pool.clone(), config.storage.root.clone());
+    spawn_thumbnail_orientation_repair(pool.clone(), config.storage.root.clone());
 }
 
 // ── Individual task spawners ─────────────────────────────────────────
@@ -392,5 +393,13 @@ async fn probe_storage(probe_path: &std::path::Path) -> bool {
 fn spawn_dimension_repair(pool: SqlitePool, storage_root: PathBuf) {
     tokio::spawn(async move {
         crate::photos::metadata::repair_orientation_dimensions(&pool, &storage_root).await;
+    });
+}
+
+/// One-time startup task: regenerate thumbnails for photos with EXIF
+/// orientation ≥ 2 so portrait camera photos display correctly.
+fn spawn_thumbnail_orientation_repair(pool: SqlitePool, storage_root: PathBuf) {
+    tokio::spawn(async move {
+        crate::photos::thumbnail::repair_thumbnail_orientation(&pool, &storage_root).await;
     });
 }

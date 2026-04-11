@@ -410,7 +410,30 @@ class GalleryViewModel @Inject constructor(
                             android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, opts)
                             val scaleFactor = maxOf(opts.outWidth, opts.outHeight) / 256
                             val opts2 = android.graphics.BitmapFactory.Options().apply { inSampleSize = maxOf(1, scaleFactor) }
-                            val bitmap = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, opts2)
+                            var bitmap = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, opts2)
+                            // Apply EXIF rotation so portrait thumbnails are correct
+                            try {
+                                val exif = androidx.exifinterface.media.ExifInterface(java.io.ByteArrayInputStream(data))
+                                val orient = exif.getAttributeInt(
+                                    androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+                                    androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL
+                                )
+                                val matrix = android.graphics.Matrix()
+                                when (orient) {
+                                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+                                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+                                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(270f)
+                                    androidx.exifinterface.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+                                    androidx.exifinterface.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
+                                    androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }
+                                    androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.setRotate(270f); matrix.postScale(-1f, 1f) }
+                                    else -> null
+                                }?.let {
+                                    val rotated = android.graphics.Bitmap.createBitmap(bitmap!!, 0, 0, bitmap!!.width, bitmap!!.height, matrix, true)
+                                    if (rotated !== bitmap) bitmap?.recycle()
+                                    bitmap = rotated
+                                }
+                            } catch (_: Exception) {}
                             val stream = java.io.ByteArrayOutputStream()
                             bitmap?.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream)
                             bitmap?.recycle()

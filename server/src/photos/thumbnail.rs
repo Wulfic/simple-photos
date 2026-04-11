@@ -10,6 +10,12 @@
 //! on the longest edge) so the justified grid can display them without
 //! excessive cropping.
 //!
+//! **EXIF orientation** is applied during thumbnail generation for static
+//! images so that camera-taken portrait photos render correctly.  The
+//! `image` crate's `open()` loads raw pixel data without consulting EXIF,
+//! so we read the orientation tag separately and apply the matching
+//! rotation/flip before resizing.
+//!
 //! Extracted from `scan.rs` so that upload, backup, and migration code can
 //! reuse the same thumbnail pipeline without pulling in the scan handler.
 
@@ -71,6 +77,7 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
 
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let img = image::open(&input).map_err(|e| format!("Failed to open image: {}", e))?;
+        let img = apply_exif_orientation(&input, img);
         let thumb = img.resize(512, 512, image::imageops::FilterType::Triangle);
         thumb
             .save_with_format(&output, image::ImageFormat::Jpeg)
@@ -250,4 +257,119 @@ pub async fn generate_placeholder_thumbnail(output_path: &Path, color: [u8; 3]) 
             .is_ok();
     }
     false
+}
+
+/// Read the EXIF orientation tag from an image file and apply the
+/// corresponding rotation/flip to the `DynamicImage`.
+///
+/// EXIF orientation values:
+/// 1 = Normal
+/// 2 = Flip horizontal
+/// 3 = Rotate 180°
+/// 4 = Flip vertical
+/// 5 = Rotate 90° CW + flip horizontal
+/// 6 = Rotate 90° CW       (most common portrait)
+/// 7 = Rotate 90° CCW + flip horizontal
+/// 8 = Rotate 90° CCW
+fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> image::DynamicImage {
+    let orientation = (|| -> Option<u32> {
+        let file = std::fs::File::open(path).ok()?;
+        let mut reader = std::io::BufReader::new(file);
+        let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+        let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+        field.value.get_uint(0)
+    })();
+
+    match orientation {
+        Some(2) => img.fliph(),
+        Some(3) => img.rotate180(),
+        Some(4) => img.flipv(),
+        Some(5) => img.rotate90().fliph(),
+        Some(6) => img.rotate90(),
+        Some(7) => img.rotate270().fliph(),
+        Some(8) => img.rotate270(),
+        _ => img, // 1 or missing — no rotation needed
+    }
+}
+
+/// Read the EXIF orientation value from a file (0 if unreadable or absent).
+fn read_exif_orientation(path: &Path) -> u32 {
+    (|| -> Option<u32> {
+        let file = std::fs::File::open(path).ok()?;
+        let mut reader = std::io::BufReader::new(file);
+        let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+        let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+        field.value.get_uint(0)
+    })()
+    .unwrap_or(0)
+}
+
+/// One-time startup task: regenerate thumbnails for photos whose source
+/// image has an EXIF orientation ≥ 2 (i.e. needs rotation/flip).
+///
+/// Previous thumbnail generation did **not** apply EXIF orientation, so
+/// portrait camera photos had landscape thumbnails. This task corrects
+/// existing thumbnails and records a flag so it only runs once.
+pub async fn repair_thumbnail_orientation(
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+) {
+    // Check one-time flag
+    let done: Option<String> = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'thumb_orientation_repaired'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    if done.is_some() {
+        return;
+    }
+
+    // Fetch all non-GIF image photos that have a file_path and thumb_path
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, file_path, thumb_path FROM photos \
+         WHERE file_path != '' AND thumb_path IS NOT NULL \
+         AND media_type = 'photo' AND mime_type != 'image/gif'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let total = rows.len();
+    if total == 0 {
+        tracing::info!("[THUMB-REPAIR] No photos to check");
+    } else {
+        let mut repaired = 0u64;
+        for (id, file_path, thumb_path) in &rows {
+            let src = storage_root.join(file_path);
+            let orient = tokio::task::spawn_blocking({
+                let src = src.clone();
+                move || read_exif_orientation(&src)
+            })
+            .await
+            .unwrap_or(0);
+
+            if orient >= 2 {
+                let thumb_abs = storage_root.join(thumb_path);
+                if generate_thumbnail_file(&src, &thumb_abs, "image/jpeg", None).await {
+                    repaired += 1;
+                    tracing::debug!(photo_id = %id, orientation = orient, "[THUMB-REPAIR] Regenerated thumbnail");
+                }
+            }
+        }
+        tracing::info!(
+            "[THUMB-REPAIR] Checked {} photos, regenerated {} thumbnails",
+            total,
+            repaired
+        );
+    }
+
+    // Record flag
+    let _ = sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('thumb_orientation_repaired', '1') \
+         ON CONFLICT(key) DO UPDATE SET value = '1'",
+    )
+    .execute(pool)
+    .await;
 }
