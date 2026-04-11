@@ -251,10 +251,11 @@ pub async fn check_backup_server_status(
         .ok_or(AppError::NotFound)?;
 
     // Try to reach the server's health endpoint
-    let url = format!("http://{}/health", address);
+    let url = super::models::resolve_backup_url(&address, "/health");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .danger_accept_invalid_certs(true)
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 

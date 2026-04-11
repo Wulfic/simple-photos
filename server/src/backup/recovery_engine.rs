@@ -40,7 +40,7 @@ pub(crate) async fn run_recovery(
         }
     };
 
-    let base_url = format!("http://{}/api", server.address);
+    let base_url = super::models::resolve_backup_url(&server.address, "/api");
 
     // ── Phase 1: Restore user accounts ──────────────────────────────────
     let users_restored = recover_users(pool, &client, &base_url, api_key, &server.name).await;

@@ -2,6 +2,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Build a full URL from a backup server address and a path.
+///
+/// If `address` already contains a scheme (`http://` or `https://`), it is
+/// preserved.  Otherwise `http://` is prepended (backward-compatible default).
+/// The returned URL has the form `<scheme>://<address><path>`.
+pub fn resolve_backup_url(address: &str, path: &str) -> String {
+    let trimmed = address.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        format!("{}{}", trimmed, path)
+    } else {
+        format!("http://{}{}", trimmed, path)
+    }
+}
+
 /// A configured backup server.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct BackupServer {

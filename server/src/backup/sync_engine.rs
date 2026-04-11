@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 
-use super::models::BackupServer;
+use super::models::{resolve_backup_url, BackupServer};
 use super::sync_transfer::{
     build_photo_headers, build_trash_headers, fetch_remote_ids, send_file, update_sync_log,
     PhotoToSync, TrashToSync,
@@ -109,7 +109,7 @@ pub async fn run_sync(
     let ctx = SyncContext {
         pool,
         client: &client,
-        base_url: format!("http://{}/api", server.address),
+        base_url: resolve_backup_url(&server.address, "/api"),
         api_key,
         storage_root,
         server,
@@ -240,7 +240,7 @@ async fn preflight_health_check(
     client: &reqwest::Client,
     server: &BackupServer,
 ) -> Result<(), String> {
-    let health_url = format!("http://{}/health", server.address);
+    let health_url = resolve_backup_url(&server.address, "/health");
     match client.get(&health_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             tracing::info!(

@@ -92,16 +92,21 @@ pub async fn recover_from_backup(
     .execute(&state.pool)
     .await?;
 
-    // Determine this server's routable address from base_url config
+    // Determine this server's routable address from base_url config.
+    // Preserve the scheme (http:// or https://) so the backup can push
+    // data back using the correct protocol.
     let base_url_cfg = state.config.server.base_url.trim_end_matches('/').to_string();
-    let primary_address = base_url_cfg
-        .strip_prefix("https://")
-        .or_else(|| base_url_cfg.strip_prefix("http://"))
-        .unwrap_or(&base_url_cfg)
-        .split('/')
-        .next()
-        .unwrap_or("localhost:8080")
-        .to_string();
+    let primary_address = {
+        let scheme = if base_url_cfg.starts_with("https://") { "https://" } else { "http://" };
+        let host_port = base_url_cfg
+            .strip_prefix("https://")
+            .or_else(|| base_url_cfg.strip_prefix("http://"))
+            .unwrap_or(&base_url_cfg)
+            .split('/')
+            .next()
+            .unwrap_or("localhost:8080");
+        format!("{}{}", scheme, host_port)
+    };
 
     let recovery_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();

@@ -36,12 +36,14 @@ pub(crate) fn normalize_server_url(raw: &str) -> String {
 ///
 /// Uses `config.server.base_url` — the externally-reachable URL the user
 /// configured.  Falls back to LAN IP detection when base_url points at
-/// localhost/loopback.
+/// localhost/loopback.  Preserves the scheme (http:// or https://) so the
+/// primary can reach this backup via the correct protocol.
 pub(crate) fn determine_backup_address(
     config: &crate::config::AppConfig,
     headers: &HeaderMap,
 ) -> String {
     let base = config.server.base_url.trim_end_matches('/');
+    let scheme = if base.starts_with("https://") { "https://" } else { "http://" };
     let host_port = base
         .strip_prefix("https://")
         .or_else(|| base.strip_prefix("http://"))
@@ -58,13 +60,14 @@ pub(crate) fn determine_backup_address(
                 .unwrap_or("unknown-backup-host")
                 .to_string()
         });
-        if ip.contains(':') {
+        let raw = if ip.contains(':') {
             ip
         } else {
             format!("{}:{}", ip, config.server.port)
-        }
+        };
+        format!("{}{}", scheme, raw)
     } else {
-        host_port.to_string()
+        format!("{}{}", scheme, host_port)
     }
 }
 
