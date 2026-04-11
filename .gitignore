@@ -117,3 +117,4 @@ coverage/
 *.jar
 __pycache__/
 *.pyc
+downloads/simple-photos.apk

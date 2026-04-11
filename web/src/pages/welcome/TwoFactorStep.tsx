@@ -17,6 +17,8 @@ export interface TwoFactorStepProps {
   skipTotpStep: () => void;
   step: WizardStep;
   pendingTotpUser: CreatedUser | null;
+  setStep: (step: WizardStep) => void;
+  setError: (msg: string) => void;
 }
 
 export default function TwoFactorStep({
@@ -33,6 +35,8 @@ export default function TwoFactorStep({
   skipTotpStep,
   step,
   pendingTotpUser,
+  setStep,
+  setError,
 }: TwoFactorStepProps) {
   return (
     <div>
@@ -62,6 +66,17 @@ export default function TwoFactorStep({
             </div>
           )}
           <div className="flex gap-3">
+            {step === "admin-2fa" && (
+              <button
+                onClick={() => {
+                  setStep("account");
+                  setError("");
+                }}
+                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+              >
+                ← Back
+              </button>
+            )}
             <button
               onClick={skipTotpStep}
               className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 dark:bg-gray-600 text-sm font-medium transition-colors"

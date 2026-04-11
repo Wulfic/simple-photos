@@ -32,12 +32,21 @@ import CompleteStep from "./welcome/CompleteStep";
 // ── Session persistence helpers ──────────────────────────────────────────────
 const WIZARD_STEP_KEY = "sp_wizard_step";
 const WIZARD_ACTIVE_KEY = "sp_wizard_active";
+const WIZARD_ROLE_KEY = "sp_wizard_server_role";
+const WIZARD_INSTALL_KEY = "sp_wizard_install_type";
 
 function saveWizardStep(step: WizardStep) {
   try {
     sessionStorage.setItem(WIZARD_STEP_KEY, step);
     sessionStorage.setItem(WIZARD_ACTIVE_KEY, "1");
   } catch { /* quota / private mode — non-critical */ }
+}
+
+function saveWizardChoice(role: ServerRole, install: InstallType) {
+  try {
+    if (role) sessionStorage.setItem(WIZARD_ROLE_KEY, role);
+    if (install) sessionStorage.setItem(WIZARD_INSTALL_KEY, install);
+  } catch { /* non-critical */ }
 }
 
 function loadWizardStep(): WizardStep | null {
@@ -48,10 +57,20 @@ function loadWizardStep(): WizardStep | null {
   } catch { return null; }
 }
 
+function loadWizardChoices(): { role: ServerRole; install: InstallType } {
+  try {
+    const role = sessionStorage.getItem(WIZARD_ROLE_KEY) as ServerRole;
+    const install = sessionStorage.getItem(WIZARD_INSTALL_KEY) as InstallType;
+    return { role: role || null, install: install || null };
+  } catch { return { role: null, install: null }; }
+}
+
 function clearWizardStep() {
   try {
     sessionStorage.removeItem(WIZARD_STEP_KEY);
     sessionStorage.removeItem(WIZARD_ACTIVE_KEY);
+    sessionStorage.removeItem(WIZARD_ROLE_KEY);
+    sessionStorage.removeItem(WIZARD_INSTALL_KEY);
   } catch { /* ignore */ }
 }
 
@@ -68,8 +87,18 @@ export default function Welcome() {
   }
 
   // ── Server role (primary vs backup) ─────────────────────────────────
-  const [serverRole, setServerRole] = useState<ServerRole>(null);
-  const [installType, setInstallType] = useState<InstallType>(null);
+  const [serverRole, setServerRoleRaw] = useState<ServerRole>(null);
+  const [installType, setInstallTypeRaw] = useState<InstallType>(null);
+
+  // Wrap setters to persist choices to sessionStorage
+  function setServerRole(role: ServerRole) {
+    setServerRoleRaw(role);
+    saveWizardChoice(role, installType);
+  }
+  function setInstallType(type: InstallType) {
+    setInstallTypeRaw(type);
+    saveWizardChoice(serverRole, type);
+  }
   const [mainServerUrl, setMainServerUrl] = useState("");
   const [restoreSource, setRestoreSource] = useState<RestoreSource | null>(null);
   const navigate = useNavigate();
@@ -129,6 +158,10 @@ export default function Welcome() {
         // Check if the wizard was still in progress (page refresh mid-setup)
         const savedStep = loadWizardStep();
         if (savedStep && savedStep !== "loading" && savedStep !== "complete") {
+          // Restore choices so the step indicator and back-navigation work
+          const { role, install } = loadWizardChoices();
+          if (role) setServerRoleRaw(role);
+          if (install) setInstallTypeRaw(install);
           // Resume the wizard where the user left off
           setStepRaw(savedStep);
         } else {
@@ -137,7 +170,16 @@ export default function Welcome() {
           navigate("/login", { replace: true });
         }
       } else {
-        setStep("welcome");
+        // Also restore choices for the case where setup_complete is still false
+        const savedStep = loadWizardStep();
+        if (savedStep && savedStep !== "loading" && savedStep !== "complete") {
+          const { role, install } = loadWizardChoices();
+          if (role) setServerRoleRaw(role);
+          if (install) setInstallTypeRaw(install);
+          setStepRaw(savedStep);
+        } else {
+          setStep("welcome");
+        }
       }
     } catch {
       setError(
@@ -538,6 +580,8 @@ export default function Welcome() {
               skipTotpStep={skipTotpStep}
               step={step}
               pendingTotpUser={pendingTotpUser}
+              setStep={setStep}
+              setError={setError}
             />
           )}
 
@@ -559,6 +603,7 @@ export default function Welcome() {
               setError={setError}
               setStoragePathDirect={setPendingStoragePath}
               serverRole={serverRole}
+              installType={installType}
             />
           )}
 

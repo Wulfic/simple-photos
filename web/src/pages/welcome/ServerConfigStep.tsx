@@ -29,6 +29,8 @@ export interface ServerConfigStepProps {
   setStoragePathDirect: (path: string) => void;
   /** Server role — determines next step */
   serverRole?: ServerRole;
+  /** Install type — determines back navigation */
+  installType?: "fresh" | "restore" | null;
 }
 
 export default function ServerConfigStep({
@@ -48,6 +50,7 @@ export default function ServerConfigStep({
   setError,
   setStoragePathDirect,
   serverRole,
+  installType,
 }: ServerConfigStepProps) {
   const [pathInput, setPathInput] = useState(storagePath || "");
   const [saving, setSaving] = useState(false);
@@ -222,16 +225,29 @@ export default function ServerConfigStep({
         </div>
       )}
 
-      {/* Continue button */}
-      <button
-        onClick={() => {
-          setError("");
-          setStep(serverRole === "backup" ? "complete" : "ssl");
-        }}
-        className="w-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
-      >
-        {storageConfirmed ? "Continue →" : "Keep Default & Continue →"}
-      </button>
+      {/* Navigation */}
+      <div className="flex gap-3">
+        {serverRole === "primary" && installType === "fresh" && (
+          <button
+            onClick={() => {
+              setError("");
+              setStep("admin-2fa");
+            }}
+            className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+          >
+            ← Back
+          </button>
+        )}
+        <button
+          onClick={() => {
+            setError("");
+            setStep(serverRole === "backup" ? "complete" : "ssl");
+          }}
+          className={`${serverRole === "primary" && installType === "fresh" ? "flex-[2]" : "w-full"} bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors`}
+        >
+          {storageConfirmed ? "Continue →" : "Keep Default & Continue →"}
+        </button>
+      </div>
 
       <FolderBrowserModal
         open={browserOpen}

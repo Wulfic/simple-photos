@@ -22,6 +22,7 @@ export interface CompleteStepProps {
 }
 
 export default function CompleteStep({
+  setStep,
   setError,
   loading,
   setLoading,
@@ -135,6 +136,17 @@ export default function CompleteStep({
       )}
 
       <div className="space-y-3">
+        {!loading && (
+          <button
+            onClick={() => {
+              setError("");
+              setStep(serverRole === "backup" ? "storage" : "android");
+            }}
+            className="w-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+          >
+            ← Back
+          </button>
+        )}
         <button
           onClick={async () => {
             setLoading(true);
