@@ -155,23 +155,47 @@ pub async fn encrypt_one_photo(
     .map_err(|e| format!("Check existing blob: {}", e))?;
 
     if let Some((existing_blob_id,)) = existing_blob {
-        // Find an unlinked thumbnail blob of the right type for this user.
+        // Find the encrypted thumbnail that is already associated with the
+        // photo that owns the matched blob.  This avoids picking a random
+        // unlinked thumbnail which could belong to a completely different
+        // photo (e.g. when a secure-gallery clone shares the same
+        // content_hash as the original).
         let thumb_type = if photo.media_type == "video" {
             "video_thumbnail"
         } else {
             "thumbnail"
         };
         let existing_thumb_id: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM blobs \
-             WHERE user_id = ? AND blob_type = ? \
-               AND id NOT IN (SELECT encrypted_thumb_blob_id FROM photos WHERE encrypted_thumb_blob_id IS NOT NULL) \
-             ORDER BY upload_time ASC LIMIT 1",
+            "SELECT p.encrypted_thumb_blob_id \
+             FROM photos p \
+             WHERE p.encrypted_blob_id = ? AND p.user_id = ? \
+               AND p.encrypted_thumb_blob_id IS NOT NULL \
+             LIMIT 1",
         )
+        .bind(&existing_blob_id)
         .bind(&photo.user_id)
-        .bind(thumb_type)
         .fetch_optional(pool)
         .await
-        .map_err(|e| format!("Check existing thumb: {}", e))?;
+        .map_err(|e| format!("Check existing thumb: {}", e))?
+        .flatten();
+
+        // Fallback: if no photo references the blob yet (backup-sync scenario),
+        // look for an unlinked thumbnail of the right type.
+        let existing_thumb_id = if existing_thumb_id.is_some() {
+            existing_thumb_id
+        } else {
+            sqlx::query_scalar(
+                "SELECT id FROM blobs \
+                 WHERE user_id = ? AND blob_type = ? \
+                   AND id NOT IN (SELECT encrypted_thumb_blob_id FROM photos WHERE encrypted_thumb_blob_id IS NOT NULL) \
+                 ORDER BY upload_time ASC LIMIT 1",
+            )
+            .bind(&photo.user_id)
+            .bind(thumb_type)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Check existing thumb fallback: {}", e))?
+        };
 
         tracing::info!(
             "[SERVER_MIG] reusing existing synced blob {} for {} (content_hash={})",

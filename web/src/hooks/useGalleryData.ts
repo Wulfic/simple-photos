@@ -261,8 +261,24 @@ export function useGalleryData(): GalleryDataResult {
             updates.width = photo.width;
             updates.height = photo.height;
           }
+          // Re-download thumbnail when the server's encrypted_thumb_blob_id
+          // has changed — e.g. after the EXIF orientation repair pass
+          // regenerates thumbnails with correct rotation.
+          const serverThumbId = photo.encrypted_thumb_blob_id ?? undefined;
+          if (serverThumbId && existing.thumbnailBlobId !== serverThumbId) {
+            updates.thumbnailBlobId = serverThumbId;
+            try {
+              const thumbEnc = await api.blobs.download(serverThumbId);
+              const thumbDec = await decrypt(thumbEnc);
+              const thumbPayload: ThumbnailPayload = JSON.parse(new TextDecoder().decode(thumbDec));
+              const freshData = base64ToArrayBuffer(thumbPayload.data);
+              updates.thumbnailData = freshData;
+              updates.thumbnailMimeType = thumbPayload.mime_type;
+            } catch {
+              // Download failed — leave existing thumbnail in place
+            }
+          } else if (!existing.thumbnailData) {
           // Retry thumbnail download if the previous attempt failed
-          if (!existing.thumbnailData) {
             const retryThumbId = existing.thumbnailBlobId ?? photo.encrypted_thumb_blob_id;
             if (retryThumbId) {
               try {

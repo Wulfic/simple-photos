@@ -1,15 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db, type CachedPhoto } from "../db";
 import { useAuthStore } from "../store/auth";
 import { blobsApi } from "../api/blobs";
 import { decrypt } from "../crypto/crypto";
+import { loadFullGif } from "../utils/gifLoader";
 
 interface GalleryItem {
   id: string;
   blob_id: string;
   added_at: string;
   encrypted_thumb_blob_id?: string | null;
+  media_type?: string | null;
 }
 
 // ── Item Tile (shows decrypted thumbnail if available) ────────────────────────
@@ -21,6 +23,45 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
   );
   const [encThumbSrc, setEncThumbSrc] = useState<string | null>(null);
   const [serverThumbSrc, setServerThumbSrc] = useState<string | null>(null);
+  const [fullGifSrc, setFullGifSrc] = useState<string | null>(null);
+  const tileRef = useRef<HTMLDivElement>(null);
+  const fullGifUrlRef = useRef<string | null>(null);
+
+  // Determine if this item is a GIF — check both server-provided media_type
+  // and cached photo data for robustness.
+  const isGif = item.media_type === "gif" || cachedPhoto?.mediaType === "gif";
+  const hasAnimatedThumb = isGif && cachedPhoto?.thumbnailMimeType === "image/gif";
+  const needsFullGifLoad = isGif && !hasAnimatedThumb;
+
+  // IntersectionObserver for GIF autoplay — load full blob when in view
+  useEffect(() => {
+    if (!needsFullGifLoad) return;
+    const el = tileRef.current;
+    if (!el) return;
+    let cancelled = false;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !fullGifUrlRef.current) {
+          const id = cachedPhoto?.storageBlobId ?? cachedPhoto?.blobId ?? item.blob_id;
+          const serverPhotoId = cachedPhoto?.serverSide ? cachedPhoto?.serverPhotoId : undefined;
+          loadFullGif(id, serverPhotoId).then((url) => {
+            if (!cancelled && url) {
+              fullGifUrlRef.current = url;
+              setFullGifSrc(url);
+            }
+          });
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(el);
+    return () => { cancelled = true; observer.disconnect(); };
+  }, [needsFullGifLoad, cachedPhoto?.storageBlobId, cachedPhoto?.blobId, cachedPhoto?.serverSide, cachedPhoto?.serverPhotoId, item.blob_id]);
+
+  // Cleanup full GIF URL on unmount
+  useEffect(() => () => {
+    if (fullGifUrlRef.current) URL.revokeObjectURL(fullGifUrlRef.current);
+  }, []);
 
   useEffect(() => {
     console.log(
@@ -83,10 +124,18 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
   if (cachedPhoto?.thumbnailData) {
     return (
       <div
+        ref={tileRef}
         className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
         onClick={onClick}
       >
-        <PhotoThumbnail photo={cachedPhoto} />
+        {fullGifSrc ? (
+          <img src={fullGifSrc} alt={cachedPhoto.filename} className="w-full h-full object-cover" loading="lazy" />
+        ) : (
+          <PhotoThumbnail photo={cachedPhoto} />
+        )}
+        {isGif && (
+          <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] font-bold px-1 py-0.5 rounded">GIF</div>
+        )}
       </div>
     );
   }
@@ -95,10 +144,18 @@ export function ItemTile({ item, onClick }: { item: GalleryItem; onClick: () => 
   if (cachedPhoto?.serverSide && cachedPhoto?.serverPhotoId) {
     return (
       <div
+        ref={tileRef}
         className="w-full h-full bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity"
         onClick={onClick}
       >
-        <PhotoThumbnail photo={cachedPhoto} />
+        {fullGifSrc ? (
+          <img src={fullGifSrc} alt={cachedPhoto.filename} className="w-full h-full object-cover" loading="lazy" />
+        ) : (
+          <PhotoThumbnail photo={cachedPhoto} />
+        )}
+        {isGif && (
+          <div className="absolute bottom-1 right-1 bg-black/60 text-white text-[10px] font-bold px-1 py-0.5 rounded">GIF</div>
+        )}
       </div>
     );
   }

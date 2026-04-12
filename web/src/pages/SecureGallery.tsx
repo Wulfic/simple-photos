@@ -31,6 +31,9 @@ interface GalleryItem {
   blob_id: string;
   added_at: string;
   encrypted_thumb_blob_id?: string | null;
+  width?: number | null;
+  height?: number | null;
+  media_type?: string | null;
 }
 
 /**
@@ -520,7 +523,7 @@ export default function SecureGallery() {
           ) : !showAddPhotos ? (
             <JustifiedGrid
               items={items}
-              getAspectRatio={() => 1}
+              getAspectRatio={(item) => (item.width && item.height) ? item.width / item.height : 1}
               getKey={(item) => item.id}
               renderItem={(item, idx) => (
                 <ItemTile

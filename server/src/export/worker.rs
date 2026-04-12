@@ -224,6 +224,11 @@ async fn do_export(
         let mut current_zip = new_zip_writer(&export_dir_clone, part_number)?;
         let mut finished_parts: Vec<u32> = Vec::new();
 
+        // Track used zip entry names to avoid duplicates (e.g. two photos
+        // named "IMG_001.jpg"). Key = normalised entry name, value = count.
+        let mut used_names: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+
         // Write manifest into the first zip
         let manifest_bytes = manifest_clone.as_bytes();
         current_zip.start_file("manifest.json", options)?;
@@ -231,6 +236,11 @@ async fn do_export(
         current_zip_size += manifest_bytes.len() as i64;
 
         for entry in &entries {
+            // Skip thumbnail blobs — export should only contain original media
+            if entry.blob_type == "thumbnail" || entry.blob_type == "video_thumbnail" {
+                continue;
+            }
+
             // Check if adding this blob would exceed the size limit
             if current_zip_size + entry.size_bytes + 100 > size_limit_clone
                 && current_zip_size > 0
@@ -243,6 +253,9 @@ async fn do_export(
                 part_number += 1;
                 current_zip = new_zip_writer(&export_dir_clone, part_number)?;
                 current_zip_size = 0;
+                // Reset used names for the new zip part — each zip is
+                // independent so names only need to be unique within a part.
+                used_names.clear();
             }
 
             // Use original filename when available, otherwise fall back to
@@ -252,21 +265,41 @@ async fn do_export(
             } else {
                 let ext = match entry.blob_type.as_str() {
                     "photo" => "jpg",
-                    "thumbnail" => "jpg",
+                    "gif" => "gif",
                     "video" => "mp4",
-                    _ => "bin",
+                    "audio" => "mp3",
+                    "album_manifest" => "json",
+                    _ => "dat",
                 };
                 format!("{}.{}", entry.blob_id, ext)
             };
 
-            // Organise into sub-folders by type. Thumbnails go into a
-            // separate folder so they don't clutter the main photos.
+            // Organise into sub-folders by type.
             let zip_entry_name = match entry.blob_type.as_str() {
-                "thumbnail" => format!("thumbnails/{}", filename),
+                "album_manifest" => format!("metadata/{}", filename),
                 _ => format!("photos/{}", filename),
             };
 
-            current_zip.start_file(&zip_entry_name, options)?;
+            // Deduplicate: if this name was already used in the current zip,
+            // append a counter before the extension (e.g. "photo_(2).jpg").
+            let unique_name = {
+                let count = used_names.entry(zip_entry_name.clone()).or_insert(0);
+                *count += 1;
+                if *count == 1 {
+                    zip_entry_name
+                } else {
+                    // Split at the last '.' to insert the counter before the extension
+                    if let Some(dot_pos) = zip_entry_name.rfind('.') {
+                        format!(
+                            "{}_({}){}", &zip_entry_name[..dot_pos], count, &zip_entry_name[dot_pos..]
+                        )
+                    } else {
+                        format!("{}_({})", zip_entry_name, count)
+                    }
+                }
+            };
+
+            current_zip.start_file(&unique_name, options)?;
             current_zip.write_all(&entry.data)?;
             current_zip_size += entry.data.len() as i64;
         }
