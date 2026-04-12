@@ -281,18 +281,26 @@ export default function Import() {
       thumbnailData = await createAudioFallbackThumbnail();
     } else {
       try {
-        thumbnailData = await generateThumbnailFromBuffer(rawData, mimeType, 256);
+        thumbnailData = await generateThumbnailFromBuffer(rawData, mimeType, 512);
       } catch {
         console.warn(`Thumbnail generation failed for ${item.name}, using fallback`);
         thumbnailData = await createFallbackThumbnail();
       }
     }
 
+    // Decode thumbnail to get actual dimensions
+    const thumbDims = await new Promise<{ w: number; h: number }>((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(new Blob([thumbnailData], { type: "image/jpeg" }));
+      img.onload = () => { URL.revokeObjectURL(url); resolve({ w: img.naturalWidth, h: img.naturalHeight }); };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve({ w: 512, h: 512 }); };
+      img.src = url;
+    });
     const thumbPayload = JSON.stringify({
       v: 1,
       photo_blob_id: "",
-      width: 256,
-      height: 256,
+      width: thumbDims.w,
+      height: thumbDims.h,
       data: arrayBufferToBase64(thumbnailData),
     });
     const encThumb = await encrypt(new TextEncoder().encode(thumbPayload));

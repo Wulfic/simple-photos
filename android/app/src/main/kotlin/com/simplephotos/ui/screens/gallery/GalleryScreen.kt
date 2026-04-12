@@ -532,7 +532,7 @@ private fun MediaTile(
                     .apply {
                         // GIFs: don't constrain size — Coil's GifDecoder needs
                         // the full data to produce an animated Drawable.
-                        if (!isGif) size(256)
+                        if (!isGif) size(512)
                     }
                     .build(),
                 contentDescription = photo.filename,

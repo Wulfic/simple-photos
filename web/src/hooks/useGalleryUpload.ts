@@ -83,7 +83,7 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
       thumbnailData = await createAudioFallbackThumbnail();
     } else {
       try {
-        const thumbResult = await generateThumbnail(file, 256);
+        const thumbResult = await generateThumbnail(file, 512);
         thumbnailData = thumbResult.data;
         thumbnailMimeType = thumbResult.mimeType;
       } catch {

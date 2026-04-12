@@ -357,8 +357,10 @@ class PhotoRepository @Inject constructor(
             for (photo in result.photos) {
                 val blobId = photo.encryptedBlobId ?: continue
 
-                // Skip if already in local DB
-                if (db.photoDao().getByServerBlobId(blobId) != null) continue
+                // Skip if already in local DB — use serverPhotoId (unique per
+                // photo row) instead of blobId because duplicates / edit copies
+                // share the same encrypted_blob_id.
+                if (db.photoDao().getByServerPhotoId(photo.id) != null) continue
 
                 val localId = java.util.UUID.randomUUID().toString()
                 val serverTimestamp = photo.takenAt ?: photo.createdAt
@@ -382,6 +384,20 @@ class PhotoRepository @Inject constructor(
                     }
                 }
 
+                // If the photo has crop_metadata with 90°/270° rotation, swap
+                // width/height so the grid tile reflects the edited orientation.
+                var w = photo.width.toInt()
+                var h = photo.height.toInt()
+                if (!photo.cropMetadata.isNullOrEmpty()) {
+                    try {
+                        val cm = org.json.JSONObject(photo.cropMetadata)
+                        val rot = ((cm.optInt("rotate", 0) % 360) + 360) % 360
+                        if ((rot == 90 || rot == 270) && w > 0 && h > 0) {
+                            val tmp = w; w = h; h = tmp
+                        }
+                    } catch (_: Exception) { /* ignore malformed JSON */ }
+                }
+
                 val entity = PhotoEntity(
                     localId = localId,
                     serverBlobId = blobId,
@@ -390,8 +406,8 @@ class PhotoRepository @Inject constructor(
                     takenAt = takenAtMs,
                     mimeType = photo.mimeType,
                     mediaType = photo.mediaType,
-                    width = photo.width.toInt(),
-                    height = photo.height.toInt(),
+                    width = w,
+                    height = h,
                     durationSecs = photo.durationSecs?.toFloat(),
                     sizeBytes = photo.sizeBytes,
                     localPath = null,

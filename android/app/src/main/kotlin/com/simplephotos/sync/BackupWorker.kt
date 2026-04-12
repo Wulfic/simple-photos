@@ -210,13 +210,13 @@ class BackupWorker @AssistedInject constructor(
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size, opts)
                             // fitThumbnail recycles the original if it creates a new scaled bitmap;
                             // bitmapToJpeg recycles whatever it receives — no extra recycle needed.
-                            bitmapToJpeg(fitThumbnail(bitmap, 256))
+                            bitmapToJpeg(fitThumbnail(bitmap, 512))
                         }
                         else -> {
                             // Photos: decode, apply EXIF rotation, then thumbnail
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size)
                             val rotated = applyExifRotation(bitmap, photoData)
-                            bitmapToJpeg(fitThumbnail(rotated, 256))
+                            bitmapToJpeg(fitThumbnail(rotated, 512))
                         }
                     }
 
@@ -334,7 +334,7 @@ class BackupWorker @AssistedInject constructor(
             val frame = retriever.getFrameAtTime(seekTimeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             retriever.release()
 
-            frame?.let { bitmapToJpeg(fitThumbnail(it, 256)) }
+            frame?.let { bitmapToJpeg(fitThumbnail(it, 512)) }
         } catch (e: Exception) {
             Log.w(TAG, "Video thumbnail generation failed", e)
             null
