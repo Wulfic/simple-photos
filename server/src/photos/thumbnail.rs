@@ -271,7 +271,7 @@ pub async fn generate_placeholder_thumbnail(output_path: &Path, color: [u8; 3]) 
 /// 6 = Rotate 90° CW       (most common portrait)
 /// 7 = Rotate 90° CCW + flip horizontal
 /// 8 = Rotate 90° CCW
-fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> image::DynamicImage {
+pub(super) fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> image::DynamicImage {
     let orientation = (|| -> Option<u32> {
         let file = std::fs::File::open(path).ok()?;
         let mut reader = std::io::BufReader::new(file);
@@ -289,6 +289,31 @@ fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> image::Dynam
         Some(7) => img.rotate270().fliph(),
         Some(8) => img.rotate270(),
         _ => img, // 1 or missing — no rotation needed
+    }
+}
+
+/// Apply EXIF orientation from raw image bytes (in-memory variant).
+///
+/// Same rotation/flip logic as [`apply_exif_orientation`] but reads the
+/// EXIF tag from a byte slice instead of a file path.  Used by the
+/// encryption migration pipeline where the file data is already in memory.
+pub(super) fn apply_exif_orientation_from_bytes(data: &[u8], img: image::DynamicImage) -> image::DynamicImage {
+    let orientation = (|| -> Option<u32> {
+        let mut cursor = std::io::Cursor::new(data);
+        let exif = exif::Reader::new().read_from_container(&mut cursor).ok()?;
+        let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+        field.value.get_uint(0)
+    })();
+
+    match orientation {
+        Some(2) => img.fliph(),
+        Some(3) => img.rotate180(),
+        Some(4) => img.flipv(),
+        Some(5) => img.rotate90().fliph(),
+        Some(6) => img.rotate90(),
+        Some(7) => img.rotate270().fliph(),
+        Some(8) => img.rotate270(),
+        _ => img,
     }
 }
 

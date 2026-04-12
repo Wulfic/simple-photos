@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::blobs::storage;
 use crate::crypto;
 
-use super::thumbnail::generate_thumbnail_file;
+use super::thumbnail::{apply_exif_orientation_from_bytes, generate_thumbnail_file};
 use super::web_preview::{generate_web_preview_bg, needs_web_preview};
 
 // ── Data model ───────────────────────────────────────────────────────────────
@@ -71,7 +71,10 @@ pub async fn generate_thumbnail_for_migration(
         let data_owned = data.to_vec();
         let image_result = tokio::task::spawn_blocking(move || {
             if let Ok(img) = image::load_from_memory(&data_owned) {
-                let thumb = img.resize_to_fill(256, 256, image::imageops::FilterType::Triangle);
+                // Apply EXIF orientation so portrait photos are thumbnailed
+                // correctly (image::load_from_memory ignores EXIF).
+                let img = apply_exif_orientation_from_bytes(&data_owned, img);
+                let thumb = img.resize(512, 512, image::imageops::FilterType::Triangle);
                 let mut buf = std::io::Cursor::new(Vec::new());
                 if thumb
                     .write_to(&mut buf, image::ImageFormat::Jpeg)
@@ -399,6 +402,138 @@ pub async fn repair_missing_thumbnails(
             }
         }
     }
+}
+
+/// One-time repair: regenerate encrypted thumbnail blobs for photos whose
+/// source image has EXIF orientation ≥ 2.
+///
+/// The original migration (`generate_thumbnail_for_migration`) did not apply
+/// EXIF orientation, so encrypted thumbnail blobs for portrait camera photos
+/// contain landscape-oriented pixel data.  This task re-generates those
+/// thumbnails with correct orientation, re-encrypts them, and replaces the
+/// old blob reference.
+///
+/// Requires the encryption key (loaded from the wrapped key in the DB).
+pub async fn repair_encrypted_thumbnail_orientation(
+    key: [u8; 32],
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+) {
+    // Check one-time flag
+    let done: Option<String> = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = 'enc_thumb_orientation_repaired'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    if done.is_some() {
+        return;
+    }
+
+    // Find all encrypted photos that have both a source file and an encrypted thumbnail
+    let rows: Vec<PlainPhotoRow> = match sqlx::query_as::<_, PlainPhotoRow>(
+        "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, \
+         width, height, duration_secs, taken_at, latitude, longitude, created_at \
+         FROM photos \
+         WHERE file_path != '' AND encrypted_thumb_blob_id IS NOT NULL \
+         AND media_type = 'photo' AND mime_type != 'image/gif'",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("[ENC_THUMB_REPAIR] Failed to query photos: {}", e);
+            return;
+        }
+    };
+
+    if rows.is_empty() {
+        tracing::info!("[ENC_THUMB_REPAIR] No photos to check");
+    } else {
+        let mut repaired = 0u64;
+        let total = rows.len();
+
+        for photo in &rows {
+            let full_path = storage_root.join(&photo.file_path);
+            if !full_path.exists() {
+                continue;
+            }
+
+            // Check EXIF orientation — only repair if rotation/flip is needed
+            let path_clone = full_path.clone();
+            let orientation = tokio::task::spawn_blocking(move || {
+                (|| -> Option<u32> {
+                    let file = std::fs::File::open(&path_clone).ok()?;
+                    let mut reader = std::io::BufReader::new(file);
+                    let exif = exif::Reader::new().read_from_container(&mut reader).ok()?;
+                    let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
+                    field.value.get_uint(0)
+                })()
+                .unwrap_or(0)
+            })
+            .await
+            .unwrap_or(0);
+
+            if orientation < 2 {
+                continue; // No rotation needed
+            }
+
+            // Re-generate thumbnail with correct EXIF orientation
+            let file_data = match tokio::fs::read(&full_path).await {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let thumb_data =
+                generate_thumbnail_for_migration(&full_path, &file_data, &photo.mime_type).await;
+
+            if let Some(thumb_bytes) = thumb_data {
+                match encrypt_and_store_repair_thumbnail(
+                    &thumb_bytes,
+                    &key,
+                    photo,
+                    pool,
+                    storage_root,
+                    &photo.id,
+                    &photo.user_id,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        repaired += 1;
+                        tracing::debug!(
+                            photo_id = %photo.id,
+                            orientation = orientation,
+                            "[ENC_THUMB_REPAIR] Regenerated encrypted thumbnail"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            photo_id = %photo.id,
+                            error = %e,
+                            "[ENC_THUMB_REPAIR] Failed to repair"
+                        );
+                    }
+                }
+            }
+        }
+
+        tracing::info!(
+            "[ENC_THUMB_REPAIR] Checked {} photos, regenerated {} encrypted thumbnails",
+            total,
+            repaired
+        );
+    }
+
+    // Record flag
+    let _ = sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES ('enc_thumb_orientation_repaired', '1') \
+         ON CONFLICT(key) DO UPDATE SET value = '1'",
+    )
+    .execute(pool)
+    .await;
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
