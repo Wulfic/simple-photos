@@ -62,12 +62,22 @@ function computeRows(
     }
   }
 
-  // Last incomplete row — keep target height, left-aligned
+  // Last incomplete row — increase height when items would be very narrow
+  // (e.g. a single portrait photo), capped at 2× target to keep it balanced.
   if (rowStart < aspectRatios.length) {
+    const count = aspectRatios.length - rowStart;
+    const lastAspects = aspectRatios.slice(rowStart);
+    const aspectSum = lastAspects.reduce((s, a) => s + a, 0);
+    const gapTotal = (count - 1) * gap;
+    // Items should collectively span at least 35 % of the container
+    const minWidth = containerWidth * 0.35;
+    const desiredHeight = (minWidth - gapTotal) / aspectSum;
+    const maxHeight = targetRowHeight * 2;
+    const rowHeight = Math.min(Math.max(desiredHeight, targetRowHeight), maxHeight);
     rows.push({
       startIdx: rowStart,
-      count: aspectRatios.length - rowStart,
-      height: targetRowHeight,
+      count,
+      height: rowHeight,
     });
   }
 

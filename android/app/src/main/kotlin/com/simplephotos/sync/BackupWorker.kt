@@ -79,6 +79,12 @@ class BackupWorker @AssistedInject constructor(
             // Step 1.5: One-time EXIF dimension repair for previously uploaded photos
             repairExifDimensions(diag)
 
+            // Step 1.6: Reconcile — detect server reset / data loss.
+            // If the server's encrypted-sync returns zero photos but we have
+            // locally SYNCED entries with server blob IDs, the server was reset.
+            // Reset those items to PENDING so they get re-uploaded.
+            reconcileSyncedWithServer(diag)
+
             // Step 2: Recover stuck uploads — photos left at UPLOADING from a crash
             // are reset to PENDING so they get retried.
             db.photoDao().resetStuckUploading()
@@ -202,17 +208,15 @@ class BackupWorker @AssistedInject constructor(
                             // For GIFs, decode first frame
                             val opts = BitmapFactory.Options().apply { inSampleSize = 1 }
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size, opts)
-                            bitmapToJpeg(fitThumbnail(bitmap, 256)).also {
-                                bitmap?.recycle()
-                            }
+                            // fitThumbnail recycles the original if it creates a new scaled bitmap;
+                            // bitmapToJpeg recycles whatever it receives — no extra recycle needed.
+                            bitmapToJpeg(fitThumbnail(bitmap, 256))
                         }
                         else -> {
                             // Photos: decode, apply EXIF rotation, then thumbnail
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size)
                             val rotated = applyExifRotation(bitmap, photoData)
-                            bitmapToJpeg(fitThumbnail(rotated, 256)).also {
-                                rotated?.recycle()
-                            }
+                            bitmapToJpeg(fitThumbnail(rotated, 256))
                         }
                     }
 
@@ -395,6 +399,40 @@ class BackupWorker @AssistedInject constructor(
         bitmap.compress(Bitmap.CompressFormat.JPEG, 80, stream)
         bitmap.recycle()
         return stream.toByteArray()
+    }
+
+    /**
+     * Detect server reset / data loss: if the server has no encrypted photos
+     * but we have locally SYNCED entries with serverBlobId, the server was
+     * wiped after our last sync.  Reset those entries to PENDING (clear their
+     * server IDs) so they get re-uploaded on this run.
+     */
+    private suspend fun reconcileSyncedWithServer(diag: DiagnosticLogger) {
+        val synced = db.photoDao().getByStatus(SyncStatus.SYNCED)
+        val withServerBlob = synced.filter { it.serverBlobId != null && it.localPath != null }
+        if (withServerBlob.isEmpty()) return  // nothing to reconcile
+
+        try {
+            // Quick check: fetch the first page of the server's encrypted-sync.
+            // If the server has zero encrypted photos, all local SYNCED entries
+            // are stale.
+            val page = api.encryptedSync(limit = 1)
+            if (page.photos.isNotEmpty()) return  // server still has data — nothing to do
+
+            // Server has zero photos — reset local entries
+            diag.info(TAG, "Server appears empty but we have ${withServerBlob.size} SYNCED photos — resetting to PENDING for re-upload")
+            for (photo in withServerBlob) {
+                db.photoDao().update(photo.copy(
+                    syncStatus = SyncStatus.PENDING,
+                    serverBlobId = null,
+                    thumbnailBlobId = null,
+                    serverPhotoId = null
+                ))
+            }
+        } catch (e: Exception) {
+            diag.warn(TAG, "Reconcile check failed: ${e.message}")
+            // Non-fatal — skip reconciliation this run
+        }
     }
 
     /**

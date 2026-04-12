@@ -4,7 +4,7 @@
  *  thumbnail directly; large GIFs with a static JPEG thumbnail load the full
  *  encrypted blob when scrolled into view. */
 import { useState, useEffect, useRef } from "react";
-import type { CachedPhoto } from "../../db";
+import { db, type CachedPhoto } from "../../db";
 import useLongPress from "../../hooks/useLongPress";
 import { thumbnailSrc, formatDuration } from "../../utils/gallery";
 import { loadFullGif } from "../../utils/gifLoader";
@@ -128,6 +128,24 @@ export default function MediaTile({ photo, onClick, onLongPress, selectionMode, 
             className="w-full h-full object-cover"
             loading="lazy"
             style={isGif ? undefined : getThumbnailStyle(photo.cropData)}
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              const nw = img.naturalWidth;
+              const nh = img.naturalHeight;
+              // Self-heal: if the thumbnail's orientation disagrees with stored
+              // photo dimensions, swap them in IDB so the grid AR is correct.
+              if (
+                nw > 0 && nh > 0 && nw !== nh &&
+                photo.width > 0 && photo.height > 0 &&
+                !photo.cropData &&
+                (nw > nh) !== (photo.width > photo.height)
+              ) {
+                db.photos.update(photo.blobId, {
+                  width: photo.height,
+                  height: photo.width,
+                });
+              }
+            }}
           />
           {/* Filename overlay — only for audio files */}
           {photo.mediaType === "audio" && (

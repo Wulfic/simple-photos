@@ -30,7 +30,8 @@ import androidx.compose.ui.unit.dp
 internal data class LayoutRow(
     val startIdx: Int,
     val count: Int,
-    val height: Float   // px
+    val height: Float,   // px
+    val isFull: Boolean  // true when items naturally filled the container width
 )
 
 /**
@@ -63,10 +64,14 @@ internal fun computeRows(
         if (i in breakBefore && i > rowStart) {
             val count = i - rowStart
             val totalGap = (count - 1) * gapPx
-            val availableWidth = containerWidthPx - totalGap
-            val rowHeight = if (rowAspectSum > 0f) (availableWidth / rowAspectSum).coerceAtMost(targetRowHeightPx)
-                            else targetRowHeightPx
-            rows.add(LayoutRow(startIdx = rowStart, count = count, height = rowHeight))
+            val naturalWidth = rowAspectSum * targetRowHeightPx + totalGap
+            val isFull = naturalWidth >= containerWidthPx
+            val rowHeight = if (isFull) {
+                (containerWidthPx - totalGap) / rowAspectSum
+            } else {
+                incompleteRowHeight(rowAspectSum, totalGap, containerWidthPx, targetRowHeightPx)
+            }
+            rows.add(LayoutRow(startIdx = rowStart, count = count, height = rowHeight, isFull = isFull))
             rowStart = i
             rowAspectSum = 0f
         }
@@ -79,22 +84,44 @@ internal fun computeRows(
         if (naturalWidth >= containerWidthPx) {
             val availableWidth = containerWidthPx - totalGap
             val rowHeight = availableWidth / rowAspectSum
-            rows.add(LayoutRow(startIdx = rowStart, count = itemCount, height = rowHeight))
+            rows.add(LayoutRow(startIdx = rowStart, count = itemCount, height = rowHeight, isFull = true))
             rowStart = i + 1
             rowAspectSum = 0f
         }
     }
 
-    // Last incomplete row — keep target height, left-aligned
+    // Last incomplete row — boost height so items span at least 35% of container
     if (rowStart < aspectRatios.size) {
+        val count = aspectRatios.size - rowStart
+        val lastAspects = aspectRatios.subList(rowStart, aspectRatios.size)
+        val aspectSum = lastAspects.sum()
+        val gapTotal = (count - 1) * gapPx
+        val rowHeight = incompleteRowHeight(aspectSum, gapTotal, containerWidthPx, targetRowHeightPx)
         rows.add(LayoutRow(
             startIdx = rowStart,
-            count = aspectRatios.size - rowStart,
-            height = targetRowHeightPx
+            count = count,
+            height = rowHeight,
+            isFull = false
         ))
     }
 
     return rows
+}
+
+/**
+ * Compute a boosted row height for incomplete rows so items span at least
+ * 35 % of the container width, capped at 2× the target height.
+ */
+private fun incompleteRowHeight(
+    aspectSum: Float,
+    totalGapPx: Float,
+    containerWidthPx: Float,
+    targetRowHeightPx: Float
+): Float {
+    val minWidth = containerWidthPx * 0.35f
+    val desiredHeight = (minWidth - totalGapPx) / aspectSum
+    val maxHeight = targetRowHeightPx * 2f
+    return desiredHeight.coerceIn(targetRowHeightPx, maxHeight)
 }
 
 // ── Composable ──────────────────────────────────────────────────────────────
@@ -186,8 +213,7 @@ fun <T> JustifiedGrid(
             } else if (entry.row != null) {
                 val row = entry.row
                 val rowHeightDp = with(density) { row.height.toDp() }
-                val isLastRow = row.startIdx + row.count >= items.size
-                val isFullRow = !isLastRow
+                val isFullRow = row.isFull
 
                 Row(
                     modifier = Modifier

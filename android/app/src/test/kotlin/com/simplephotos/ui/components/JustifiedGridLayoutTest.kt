@@ -19,7 +19,8 @@ class JustifiedGridLayoutTest {
     private data class LayoutRow(
         val startIdx: Int,
         val count: Int,
-        val height: Float
+        val height: Float,
+        val isFull: Boolean
     )
 
     private fun computeRows(
@@ -39,10 +40,14 @@ class JustifiedGridLayoutTest {
             if (i in breakBefore && i > rowStart) {
                 val count = i - rowStart
                 val totalGap = (count - 1) * gap
-                val availableWidth = containerWidth - totalGap
-                val rowHeight = if (rowAspectSum > 0f) (availableWidth / rowAspectSum).coerceAtMost(targetRowHeight)
-                                else targetRowHeight
-                rows.add(LayoutRow(startIdx = rowStart, count = count, height = rowHeight))
+                val naturalWidth = rowAspectSum * targetRowHeight + totalGap
+                val isFull = naturalWidth >= containerWidth
+                val rowHeight = if (isFull) {
+                    (containerWidth - totalGap) / rowAspectSum
+                } else {
+                    incompleteRowHeight(rowAspectSum, totalGap, containerWidth, targetRowHeight)
+                }
+                rows.add(LayoutRow(startIdx = rowStart, count = count, height = rowHeight, isFull = isFull))
                 rowStart = i
                 rowAspectSum = 0f
             }
@@ -55,22 +60,40 @@ class JustifiedGridLayoutTest {
             if (naturalWidth >= containerWidth) {
                 val availableWidth = containerWidth - totalGap
                 val rowHeight = availableWidth / rowAspectSum
-                rows.add(LayoutRow(startIdx = rowStart, count = itemCount, height = rowHeight))
+                rows.add(LayoutRow(startIdx = rowStart, count = itemCount, height = rowHeight, isFull = true))
                 rowStart = i + 1
                 rowAspectSum = 0f
             }
         }
 
-        // Last incomplete row — keep target height, left-aligned
+        // Last incomplete row — boost height so items span at least 35% of container
         if (rowStart < aspectRatios.size) {
+            val count = aspectRatios.size - rowStart
+            val lastAspects = aspectRatios.subList(rowStart, aspectRatios.size)
+            val aspectSum = lastAspects.sum()
+            val gapTotal = (count - 1) * gap
+            val rowHeight = incompleteRowHeight(aspectSum, gapTotal, containerWidth, targetRowHeight)
             rows.add(LayoutRow(
                 startIdx = rowStart,
-                count = aspectRatios.size - rowStart,
-                height = targetRowHeight
+                count = count,
+                height = rowHeight,
+                isFull = false
             ))
         }
 
         return rows
+    }
+
+    private fun incompleteRowHeight(
+        aspectSum: Float,
+        totalGapPx: Float,
+        containerWidth: Float,
+        targetRowHeight: Float
+    ): Float {
+        val minWidth = containerWidth * 0.35f
+        val desiredHeight = (minWidth - totalGapPx) / aspectSum
+        val maxHeight = targetRowHeight * 2f
+        return desiredHeight.coerceIn(targetRowHeight, maxHeight)
     }
 
     @Test
@@ -176,14 +199,15 @@ class JustifiedGridLayoutTest {
 
     @Test
     fun breakBefore_flushedRowRespectstargetHeight() {
-        // Break forces a short row — its height should not exceed target
+        // Break forces a short row — its height should be boosted but capped at 2× target
         val aspects = listOf(0.5f, 0.5f, 1.0f, 1.0f, 1.0f)
         val targetH = 240f
         val rows = computeRows(aspects, 1080f, targetH, 4f, breakBefore = setOf(2))
-        // The first row (items 0-1) is flushed short — height ≤ target
+        // The first row (items 0-1) is flushed short — height ≤ 2× target
         val firstRow = rows.first()
         assertEquals(0, firstRow.startIdx)
         assertTrue(firstRow.count <= 2)
-        assertTrue("Flushed row height should not exceed target", firstRow.height <= targetH)
+        assertFalse("Flushed incomplete row should not be full", firstRow.isFull)
+        assertTrue("Flushed row height should not exceed 2× target", firstRow.height <= targetH * 2f)
     }
 }
