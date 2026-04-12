@@ -231,8 +231,9 @@ class BackupWorker @AssistedInject constructor(
                     }
 
                     // Correct width/height for EXIF orientation before uploading.
-                    // MediaStore returns raw pixel dimensions; portrait photos
-                    // need width/height swapped for 90°/270° rotation.
+                    // scanImages() already swaps dimensions for 90°/270° EXIF
+                    // rotation, so only swap here if they still appear to be raw
+                    // sensor dimensions (width > height for a portrait-EXIF photo).
                     val correctedPhoto = if (photo.mediaType == "photo" || photo.mediaType == null) {
                         try {
                             val exif = androidx.exifinterface.media.ExifInterface(photoData.inputStream())
@@ -244,7 +245,7 @@ class BackupWorker @AssistedInject constructor(
                                     || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270
                                     || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSPOSE
                                     || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSVERSE
-                            if (needsSwap && photo.width > 0 && photo.height > 0 && photo.width != photo.height) {
+                            if (needsSwap && photo.width > 0 && photo.height > 0 && photo.width > photo.height) {
                                 photo.copy(width = photo.height, height = photo.width).also {
                                     db.photoDao().update(it)
                                 }
@@ -416,8 +417,9 @@ class BackupWorker @AssistedInject constructor(
                         || orient == ExifInterface.ORIENTATION_TRANSPOSE
                         || orient == ExifInterface.ORIENTATION_TRANSVERSE
 
-                if (needsSwap && photo.width != photo.height) {
-                    // Width/height are currently raw pixels; swap to display dimensions
+                if (needsSwap && photo.width > photo.height) {
+                    // Width/height are currently raw pixels (W > H for a portrait
+                    // EXIF photo); swap to display dimensions
                     val corrected = photo.copy(width = photo.height, height = photo.width)
                     db.photoDao().update(corrected)
                     serverUpdates.add(
