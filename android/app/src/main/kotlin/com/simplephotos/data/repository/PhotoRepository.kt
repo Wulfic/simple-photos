@@ -131,12 +131,19 @@ class PhotoRepository @Inject constructor(
             if (thumbnailData != null && thumbnailData.isNotEmpty()) {
                 android.util.Log.d("PhotoRepository", "uploadPhoto: encrypting thumbnail for ${photo.filename}")
 
+                // Decode thumbnail to get actual dimensions (thumbnails are now
+                // aspect-ratio-preserving, not always 256×256).
+                val thumbBitmap = android.graphics.BitmapFactory.decodeByteArray(thumbnailData, 0, thumbnailData.size)
+                val thumbW = thumbBitmap?.width ?: 256
+                val thumbH = thumbBitmap?.height ?: 256
+                thumbBitmap?.recycle()
+
                 // Build & encrypt thumbnail payload
                 val thumbPayload = JSONObject().apply {
                     put("v", 1)
                     put("photo_blob_id", "")
-                    put("width", 256)
-                    put("height", 256)
+                    put("width", thumbW)
+                    put("height", thumbH)
                     put("data", android.util.Base64.encodeToString(thumbnailData, android.util.Base64.NO_WRAP))
                 }.toString()
 

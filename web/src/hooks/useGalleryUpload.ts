@@ -102,11 +102,20 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     }
 
     // ── Thumbnail blob ───────────────────────────────────────────────────────
+    // Decode thumbnail to get actual dimensions (thumbnails are now
+    // aspect-ratio-preserving, not always 256×256).
+    const thumbDims = await new Promise<{ w: number; h: number }>((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(new Blob([thumbnailData], { type: thumbnailMimeType }));
+      img.onload = () => { URL.revokeObjectURL(url); resolve({ w: img.naturalWidth, h: img.naturalHeight }); };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve({ w: 256, h: 256 }); };
+      img.src = url;
+    });
     const thumbPayload = JSON.stringify({
       v: 1,
       photo_blob_id: "", // filled after photo upload
-      width: 256,
-      height: 256,
+      width: thumbDims.w,
+      height: thumbDims.h,
       mime_type: thumbnailMimeType,
       data: arrayBufferToBase64(thumbnailData),
     } satisfies Partial<ThumbnailPayload>);

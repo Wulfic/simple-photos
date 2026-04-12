@@ -260,10 +260,26 @@ class SyncRepository @Inject constructor(
 
                 val filename = c.getString(nameCol) ?: "unknown.mp4"
                 val mimeType = c.getString(mimeCol) ?: "video/mp4"
-                val width = c.getInt(widthCol)
-                val height = c.getInt(heightCol)
+                var width = c.getInt(widthCol)
+                var height = c.getInt(heightCol)
                 val durationMs = c.getLong(durationCol)
                 val dateTaken = c.getLong(dateCol)
+
+                // MediaStore returns coded pixel dimensions for videos; swap for
+                // portrait-recorded videos that have a 90°/270° rotation tag.
+                if (width > 0 && height > 0) {
+                    try {
+                        val retriever = android.media.MediaMetadataRetriever()
+                        retriever.setDataSource(context, uri)
+                        val rotation = retriever.extractMetadata(
+                            android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
+                        )?.toIntOrNull() ?: 0
+                        retriever.release()
+                        if (rotation == 90 || rotation == 270) {
+                            val tmp = width; width = height; height = tmp
+                        }
+                    } catch (_: Exception) { /* ignore — keep coded dimensions */ }
+                }
 
                 val localId = UUID.randomUUID().toString()
                 val photo = PhotoEntity(

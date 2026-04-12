@@ -5,7 +5,11 @@
 
 // ── Thumbnail generation ──────────────────────────────────────────────────────
 
-/** Generate a JPEG thumbnail from raw image data */
+/** Generate a JPEG thumbnail from raw image data.
+ *  Preserves the original aspect ratio — the longest edge is scaled to `size`
+ *  pixels so the justified grid can display portrait thumbnails without
+ *  excessive cropping.
+ */
 function generateImageThumbnailFromBuffer(
   data: ArrayBuffer,
   mimeType: string,
@@ -17,14 +21,15 @@ function generateImageThumbnailFromBuffer(
     const url = URL.createObjectURL(blob);
     img.onload = () => {
       URL.revokeObjectURL(url);
+      // Fit within `size` — scale so the longest edge = size
+      const scale = Math.min(size / img.width, size / img.height);
+      const tw = Math.round(img.width * scale);
+      const th = Math.round(img.height * scale);
       const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
+      canvas.width = tw;
+      canvas.height = th;
       const ctx = canvas.getContext("2d")!;
-      const scale = Math.max(size / img.width, size / img.height);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+      ctx.drawImage(img, 0, 0, tw, th);
       canvas.toBlob(
         (blob) =>
           blob
@@ -62,14 +67,15 @@ function generateVideoThumbnailFromBuffer(
     };
     video.onseeked = () => {
       URL.revokeObjectURL(url);
+      // Fit within `size` — scale so the longest edge = size
+      const scale = Math.min(size / video.videoWidth, size / video.videoHeight);
+      const tw = Math.round(video.videoWidth * scale);
+      const th = Math.round(video.videoHeight * scale);
       const canvas = document.createElement("canvas");
-      canvas.width = size;
-      canvas.height = size;
+      canvas.width = tw;
+      canvas.height = th;
       const ctx = canvas.getContext("2d")!;
-      const scale = Math.max(size / video.videoWidth, size / video.videoHeight);
-      const w = video.videoWidth * scale;
-      const h = video.videoHeight * scale;
-      ctx.drawImage(video, (size - w) / 2, (size - h) / 2, w, h);
+      ctx.drawImage(video, 0, 0, tw, th);
       canvas.toBlob(
         (blob) =>
           blob

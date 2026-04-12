@@ -315,13 +315,14 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
     (w, h, cam, lat, lon, taken)
 }
 
-/// Use ffprobe to get the display dimensions of a video, accounting for SAR/DAR.
+/// Use ffprobe to get the display dimensions of a video, accounting for
+/// SAR/DAR and container-level rotation (portrait phone videos).
 async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, i64)> {
     let output = tokio::process::Command::new("ffprobe")
         .args([
             "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=width,height,sample_aspect_ratio",
+            "-show_entries", "stream=width,height,sample_aspect_ratio:stream_side_data=rotation:format_tags=rotate",
             "-of", "csv=p=0:s=,",
         ])
         .arg(path)
@@ -332,7 +333,10 @@ async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, 
         .ok()?;
 
     let s = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = s.trim().split(',').collect();
+    // Output may have multiple lines (stream info, side_data, format tags).
+    // Collect all parts across lines.
+    let all_text = s.trim().replace('\n', ",");
+    let parts: Vec<&str> = all_text.split(',').collect();
     if parts.len() < 2 {
         return None;
     }
@@ -355,8 +359,19 @@ async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, 
     };
 
     // Display width = coded width × SAR
-    let display_w = (coded_w * sar).round() as i64;
-    let display_h = coded_h as i64;
+    let mut display_w = (coded_w * sar).round() as i64;
+    let mut display_h = coded_h as i64;
+
+    // Check for rotation in remaining fields: 90 or 270 degrees means portrait.
+    // Rotation can appear as side_data rotation or format tag "rotate".
+    let has_90_270_rotation = parts[3..].iter().any(|p| {
+        let trimmed = p.trim();
+        // Match rotation values that indicate portrait: 90, -90, 270, -270
+        matches!(trimmed, "90" | "-90" | "270" | "-270")
+    });
+    if has_90_270_rotation {
+        std::mem::swap(&mut display_w, &mut display_h);
+    }
 
     if display_w > 0 && display_h > 0 {
         Some((display_w, display_h))

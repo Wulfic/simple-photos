@@ -192,14 +192,17 @@ class BackupWorker @AssistedInject constructor(
                         "mimeType" to photo.mimeType
                     ))
 
-                    // Generate thumbnail based on media type
+                    // Generate thumbnail based on media type.
+                    // Thumbnails preserve the original aspect ratio (longest edge
+                    // scaled to 256px) so the justified grid doesn't double-crop
+                    // portrait photos.
                     val thumbnailData = when (photo.mediaType) {
                         "video" -> generateVideoThumbnail(uri)
                         "gif" -> {
                             // For GIFs, decode first frame
                             val opts = BitmapFactory.Options().apply { inSampleSize = 1 }
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size, opts)
-                            bitmapToJpeg(ThumbnailUtils.extractThumbnail(bitmap, 256, 256)).also {
+                            bitmapToJpeg(fitThumbnail(bitmap, 256)).also {
                                 bitmap?.recycle()
                             }
                         }
@@ -207,7 +210,7 @@ class BackupWorker @AssistedInject constructor(
                             // Photos: decode, apply EXIF rotation, then thumbnail
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size)
                             val rotated = applyExifRotation(bitmap, photoData)
-                            bitmapToJpeg(ThumbnailUtils.extractThumbnail(rotated, 256, 256)).also {
+                            bitmapToJpeg(fitThumbnail(rotated, 256)).also {
                                 rotated?.recycle()
                             }
                         }
@@ -327,11 +330,32 @@ class BackupWorker @AssistedInject constructor(
             val frame = retriever.getFrameAtTime(seekTimeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             retriever.release()
 
-            frame?.let { bitmapToJpeg(ThumbnailUtils.extractThumbnail(it, 256, 256)) }
+            frame?.let { bitmapToJpeg(fitThumbnail(it, 256)) }
         } catch (e: Exception) {
             Log.w(TAG, "Video thumbnail generation failed", e)
             null
         }
+    }
+
+    /**
+     * Scale a bitmap so the longest edge is at most [maxEdge] pixels,
+     * preserving the original aspect ratio.  Unlike ThumbnailUtils.extractThumbnail
+     * (which center-crops to a square), this produces a non-square thumbnail
+     * that matches the source's proportions — avoiding double-crop in the
+     * justified grid.
+     */
+    private fun fitThumbnail(bitmap: Bitmap?, maxEdge: Int): Bitmap? {
+        bitmap ?: return null
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return bitmap
+        val scale = maxEdge.toFloat() / maxOf(w, h)
+        if (scale >= 1f) return bitmap
+        val tw = (w * scale).toInt().coerceAtLeast(1)
+        val th = (h * scale).toInt().coerceAtLeast(1)
+        val scaled = Bitmap.createScaledBitmap(bitmap, tw, th, true)
+        if (scaled !== bitmap) bitmap.recycle()
+        return scaled
     }
 
     /**
