@@ -1,0 +1,546 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Run weekly on Monday at 06:00 UTC to catch new CVEs
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Secret & Credential Scanning
+  # ─────────────────────────────────────────────
+  secret-scanning:
+    name: Secret Scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────
+  # SAST — Semgrep (Cross-Language)
+  # ─────────────────────────────────────────────
+  semgrep:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config auto \
+            --config p/owasp-top-ten \
+            --config p/r2c-security-audit \
+            --config p/secrets \
+            --config p/rust \
+            --config p/typescript \
+            --config p/kotlin \
+            --error \
+            --sarif -o semgrep-results.sarif \
+            .
+        continue-on-error: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-results.sarif
+        continue-on-error: true
+
+      - name: Upload Semgrep results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: semgrep-results.sarif
+
+  # ─────────────────────────────────────────────
+  # Rust Server — Audit, Deny, Clippy
+  # ─────────────────────────────────────────────
+  rust-audit:
+    name: Rust Dependency Audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            server/target
+          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-audit-
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        run: cargo audit --deny warnings
+
+  rust-deny:
+    name: Rust Supply Chain (cargo-deny)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo deny (advisories)
+        run: cargo deny check advisories
+        continue-on-error: true
+
+      - name: Run cargo deny (licenses)
+        run: cargo deny check licenses
+        continue-on-error: true
+
+      - name: Run cargo deny (bans)
+        run: cargo deny check bans
+        continue-on-error: true
+
+      - name: Run cargo deny (sources)
+        run: cargo deny check sources
+        continue-on-error: true
+
+  rust-clippy-security:
+    name: Rust Security Lints (Clippy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            server/target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-clippy-
+
+      - name: Run Clippy with security lints
+        run: |
+          cargo clippy --all-targets -- \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic \
+            -D clippy::indexing_slicing \
+            -W clippy::pedantic \
+            -W clippy::nursery
+        continue-on-error: true
+
+      - name: Run Clippy (default strict)
+        run: cargo clippy --all-targets -- -D warnings
+
+  rust-unsafe-audit:
+    name: Rust Unsafe Code Audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-geiger
+        run: cargo install cargo-geiger --locked
+        continue-on-error: true
+
+      - name: Scan for unsafe code
+        run: cargo geiger --all-features --output-format ascii 2>&1 | tee ../unsafe-report.txt
+        continue-on-error: true
+
+      - name: Upload unsafe code report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-unsafe-report
+          path: unsafe-report.txt
+
+  # ─────────────────────────────────────────────
+  # Web Frontend — npm audit, ESLint security
+  # ─────────────────────────────────────────────
+  web-audit:
+    name: Web Dependency Audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run npm audit (production)
+        run: npm audit --omit=dev --audit-level=moderate
+
+      - name: Run npm audit (all)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  web-lint-security:
+    name: Web Security Linting
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install security linting tools
+        run: npm install --no-save eslint-plugin-security eslint-plugin-no-secrets
+
+      - name: Check for known vulnerable patterns
+        run: |
+          echo "=== Checking for eval() usage ==="
+          ! grep -rn 'eval(' src/ --include='*.ts' --include='*.tsx' --include='*.js' || echo "WARNING: eval() found"
+
+          echo "=== Checking for innerHTML usage ==="
+          ! grep -rn 'innerHTML\|dangerouslySetInnerHTML' src/ --include='*.ts' --include='*.tsx' --include='*.js' || echo "WARNING: innerHTML/dangerouslySetInnerHTML found"
+
+          echo "=== Checking for document.write ==="
+          ! grep -rn 'document\.write' src/ --include='*.ts' --include='*.tsx' --include='*.js' || echo "WARNING: document.write found"
+
+          echo "=== Checking for hardcoded secrets ==="
+          ! grep -rn 'password\s*=\s*["\x27]' src/ --include='*.ts' --include='*.tsx' --include='*.js' -i || echo "WARNING: Possible hardcoded secret"
+
+  # ─────────────────────────────────────────────
+  # Android — Dependency Check, Lint
+  # ─────────────────────────────────────────────
+  android-audit:
+    name: Android Security Audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Android Lint (security checks)
+        run: ./gradlew :app:lintDebug
+        continue-on-error: true
+
+      - name: Upload Android lint results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lint-results
+          path: android/app/build/reports/lint-results-*.html
+
+      - name: Check for insecure network config
+        run: |
+          echo "=== Checking AndroidManifest for cleartext traffic ==="
+          if grep -r 'usesCleartextTraffic="true"' app/src/; then
+            echo "::warning::cleartext traffic is enabled"
+          fi
+
+          echo "=== Checking for certificate pinning bypass ==="
+          if grep -r 'TrustAllCerts\|ALLOW_ALL_HOSTNAME_VERIFIER\|setHostnameVerifier' app/src/; then
+            echo "::warning::Possible certificate validation bypass found"
+          fi
+
+          echo "=== Checking for hardcoded keys ==="
+          if grep -rn 'SECRET\|API_KEY\|PASSWORD' app/src/ --include='*.kt' --include='*.java' | grep -v 'import\|//\|BuildConfig\|companion'; then
+            echo "::warning::Possible hardcoded secrets in source"
+          fi
+
+  # ─────────────────────────────────────────────
+  # Docker — Image Scanning (Trivy)
+  # ─────────────────────────────────────────────
+  docker-scan:
+    name: Docker Security Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy on Dockerfile (config scan)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: server/Dockerfile
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: 0
+
+      - name: Build Docker image
+        run: docker build -t simple-photos:audit -f server/Dockerfile server/
+
+      - name: Run Trivy on built image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: simple-photos:audit
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: 0
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+        continue-on-error: true
+
+      - name: Upload Trivy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+
+  # ─────────────────────────────────────────────
+  # Dockerfile Linting (Hadolint)
+  # ─────────────────────────────────────────────
+  dockerfile-lint:
+    name: Dockerfile Lint (Hadolint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: server/Dockerfile
+          failure-threshold: warning
+
+  # ─────────────────────────────────────────────
+  # SQL Migration Review
+  # ─────────────────────────────────────────────
+  sql-audit:
+    name: SQL Migration Security Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check SQL migrations for injection risks
+        run: |
+          echo "=== Scanning SQL migrations for potential issues ==="
+          ISSUES=0
+
+          # Check for dynamic SQL construction
+          if grep -rn 'EXEC\|EXECUTE\|sp_executesql' server/migrations/ 2>/dev/null; then
+            echo "::warning::Dynamic SQL execution found in migrations"
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          # Check for overly permissive grants
+          if grep -rn 'GRANT ALL\|GRANT .* TO PUBLIC' server/migrations/ 2>/dev/null; then
+            echo "::warning::Overly permissive GRANT found in migrations"
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          # Check for disabled foreign keys
+          if grep -rn 'PRAGMA foreign_keys\s*=\s*OFF\|PRAGMA foreign_keys=0' server/migrations/ 2>/dev/null; then
+            echo "::warning::Foreign keys disabled in migration"
+            ISSUES=$((ISSUES + 1))
+          fi
+
+          echo "SQL audit complete. Issues found: $ISSUES"
+
+  # ─────────────────────────────────────────────
+  # Cryptographic Implementation Review
+  # ─────────────────────────────────────────────
+  crypto-audit:
+    name: Cryptographic Implementation Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for weak cryptographic patterns
+        run: |
+          echo "=== Cryptographic Implementation Audit ==="
+          WARNINGS=0
+
+          # Rust: Check for weak algorithms
+          echo "--- Rust server crypto checks ---"
+          if grep -rn 'Md5\|md5\|Sha1\b\|sha1\b\|DES\|RC4\|ECB' server/src/ --include='*.rs' 2>/dev/null; then
+            echo "::warning::Potentially weak cryptographic algorithm found in Rust source"
+            WARNINGS=$((WARNINGS + 1))
+          fi
+
+          # Rust: Check for hardcoded keys/IVs
+          if grep -rn 'b"\|&\[0u8' server/src/ --include='*.rs' | grep -i 'key\|iv\|nonce\|secret' 2>/dev/null; then
+            echo "::warning::Possible hardcoded cryptographic material in Rust source"
+            WARNINGS=$((WARNINGS + 1))
+          fi
+
+          # TypeScript: Check for weak crypto
+          echo "--- Web frontend crypto checks ---"
+          if grep -rn 'createHash.*md5\|createHash.*sha1\|CryptoJS\.\(MD5\|SHA1\|DES\|RC4\)' web/src/ --include='*.ts' --include='*.tsx' 2>/dev/null; then
+            echo "::warning::Potentially weak cryptographic algorithm in web source"
+            WARNINGS=$((WARNINGS + 1))
+          fi
+
+          # Kotlin: Check for weak crypto
+          echo "--- Android crypto checks ---"
+          if grep -rn 'MD5\|DES/\|RC4\|ECB\|getInstance.*DES\|Cipher.*ECB' android/app/src/ --include='*.kt' 2>/dev/null; then
+            echo "::warning::Potentially weak cryptographic algorithm in Android source"
+            WARNINGS=$((WARNINGS + 1))
+          fi
+
+          # Check for Math.random() usage (not cryptographically secure)
+          if grep -rn 'Math\.random()' web/src/ --include='*.ts' --include='*.tsx' 2>/dev/null; then
+            echo "::warning::Math.random() found - use crypto.getRandomValues() instead"
+            WARNINGS=$((WARNINGS + 1))
+          fi
+
+          # Check for kotlin.random (not cryptographically secure for secrets)
+          if grep -rn 'kotlin\.random\|java\.util\.Random()' android/app/src/ --include='*.kt' 2>/dev/null | grep -iv 'SecureRandom\|import'; then
+            echo "::warning::Non-secure random found in Android - use SecureRandom"
+            WARNINGS=$((WARNINGS + 1))
+          fi
+
+          echo ""
+          echo "Crypto audit complete. Warnings: $WARNINGS"
+
+  # ─────────────────────────────────────────────
+  # Security Headers & Config Review
+  # ─────────────────────────────────────────────
+  config-audit:
+    name: Configuration Security Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Review security-relevant configuration
+        run: |
+          echo "=== Configuration Security Audit ==="
+
+          # Ensure example config doesn't contain real secrets
+          echo "--- Checking example config for leaked secrets ---"
+          if grep -P '(?!change_me|your_secret|example)[a-f0-9]{64}' server/config.example.toml 2>/dev/null; then
+            echo "::error::Possible real secret in example configuration"
+            exit 1
+          fi
+
+          # Ensure bcrypt cost is adequate
+          echo "--- Checking bcrypt cost factor ---"
+          BCRYPT_COST=$(grep -oP 'bcrypt_cost\s*=\s*\K\d+' server/config.example.toml 2>/dev/null || echo "not set")
+          if [ "$BCRYPT_COST" != "not set" ] && [ "$BCRYPT_COST" -lt 12 ]; then
+            echo "::warning::bcrypt cost factor is below recommended minimum of 12 (found: $BCRYPT_COST)"
+          fi
+
+          # Check that TLS is documented
+          echo "--- Checking TLS configuration documentation ---"
+          if ! grep -q '\[tls\]' server/config.example.toml 2>/dev/null; then
+            echo "::warning::TLS section missing from example config"
+          fi
+
+          echo "Configuration audit complete."
+
+  # ─────────────────────────────────────────────
+  # Summary Report
+  # ─────────────────────────────────────────────
+  security-summary:
+    name: Security Audit Summary
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - secret-scanning
+      - semgrep
+      - rust-audit
+      - rust-deny
+      - rust-clippy-security
+      - rust-unsafe-audit
+      - web-audit
+      - web-lint-security
+      - android-audit
+      - docker-scan
+      - dockerfile-lint
+      - sql-audit
+      - crypto-audit
+      - config-audit
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## 🔒 Security Audit Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scanning | ${{ needs.secret-scanning.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST (Semgrep) | ${{ needs.semgrep.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rust Dependency Audit | ${{ needs.rust-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rust Supply Chain | ${{ needs.rust-deny.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rust Security Lints | ${{ needs.rust-clippy-security.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rust Unsafe Code | ${{ needs.rust-unsafe-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Web Dependency Audit | ${{ needs.web-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Web Security Linting | ${{ needs.web-lint-security.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Android Security | ${{ needs.android-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Image Scan | ${{ needs.docker-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dockerfile Lint | ${{ needs.dockerfile-lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SQL Migration Review | ${{ needs.sql-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Crypto Implementation | ${{ needs.crypto-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Config Security | ${{ needs.config-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Triggered by: ${{ github.event_name }} on ${{ github.ref }}_" >> $GITHUB_STEP_SUMMARY
