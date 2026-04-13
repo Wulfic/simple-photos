@@ -221,6 +221,14 @@ data class SslStatusResponse(
     val message: String? = null
 )
 
+// ── Conversion status ────────────────────────────────────────────────────────
+
+data class ConversionStatusResponse(
+    val active: Boolean,
+    val total: Int,
+    val done: Int
+)
+
 // ── Batch dimension update ───────────────────────────────────────────────────
 
 data class DimensionUpdateItem(

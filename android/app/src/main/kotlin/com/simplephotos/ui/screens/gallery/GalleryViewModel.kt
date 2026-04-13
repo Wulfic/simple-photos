@@ -82,6 +82,8 @@ class GalleryViewModel @Inject constructor(
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val photos = photoRepository.getAllPhotos()
+    /** Exposed for banner composables that need to poll the server. */
+    val apiService get() = photoRepository.apiService
     var error by mutableStateOf<String?>(null)
     var isSyncing by mutableStateOf(false)
         private set

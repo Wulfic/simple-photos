@@ -268,14 +268,10 @@ class TestPhotoDuplicate:
 
     def test_duplicate_with_crop(self, user_client):
         photo = user_client.upload_photo(unique_filename())
-        crop = '{"x":5,"y":10,"w":50,"h":50}'
+        crop = '{"x":0.05,"y":0.10,"width":0.5,"height":0.5}'
         dup = user_client.duplicate_photo(photo["photo_id"], crop_metadata=crop)
-        # Server may return crop_metadata as parsed JSON object or string
-        actual = dup["crop_metadata"]
-        if isinstance(actual, dict):
-            assert actual == {"x": 5, "y": 10, "w": 50, "h": 50}
-        else:
-            assert actual == crop
+        # Server renders crop into the file, so crop_metadata is NULL
+        assert dup["crop_metadata"] is None
 
     def test_duplicate_is_independent(self, user_client):
         """Favoriting the original should not affect the duplicate's metadata."""

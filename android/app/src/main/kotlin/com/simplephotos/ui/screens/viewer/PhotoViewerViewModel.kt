@@ -247,15 +247,24 @@ class PhotoViewerViewModel @Inject constructor(
                         it[idx] = it[idx].copy(cropMetadata = metadata)
                     }
                 }
+                // Sync to server so web and other clients see the edit
+                photo.serverPhotoId?.let { serverId ->
+                    withContext(Dispatchers.IO) {
+                        try {
+                            photoRepository.setCropOnServer(serverId, metadata)
+                        } catch (_: Exception) { /* non-fatal */ }
+                    }
+                }
             } catch (_: Exception) {}
         }
     }
 
-    /** Duplicate a photo with optional crop/edit metadata (Save Copy). */
+    /** Duplicate a photo with optional crop/edit metadata (Save Copy).
+     *  When the photo has a server record, calls the server duplicate
+     *  endpoint which renders edits via ffmpeg into a fully independent file. */
     fun duplicatePhoto(photo: PhotoEntity, metadata: String?, onDone: () -> Unit = {}) {
         viewModelScope.launch {
             try {
-                // Duplicate the local DB entry with new ID + metadata
                 val copyId = java.util.UUID.randomUUID().toString()
 
                 // Copy the local file if available, handling both content:// URIs
@@ -272,15 +281,30 @@ class PhotoViewerViewModel @Inject constructor(
                     }
                 }
 
+                // If the photo has a server record, call the server's duplicate
+                // endpoint — it renders via ffmpeg and produces an independent file
+                // with crop_metadata=NULL (edits baked in).
+                var serverCopyId: String? = null
+                photo.serverPhotoId?.let { serverId ->
+                    try {
+                        val res = withContext(Dispatchers.IO) {
+                            photoRepository.duplicatePhotoOnServer(serverId, metadata)
+                        }
+                        serverCopyId = res.id
+                    } catch (_: Exception) { /* proceed with local-only copy */ }
+                }
+
                 val copyEntity = photo.copy(
                     localId = copyId,
-                    serverPhotoId = null,
+                    serverPhotoId = serverCopyId,
                     filename = if (photo.filename.startsWith("Copy of ")) photo.filename
                                else "Copy of ${photo.filename}",
-                    cropMetadata = metadata,
+                    // Server bakes edits into the file, so crop_metadata is NULL
+                    // when we have a server copy. For local-only copies, keep metadata.
+                    cropMetadata = if (serverCopyId != null) null else metadata,
                     createdAt = System.currentTimeMillis(),
                     localPath = newLocalPath,
-                    syncStatus = SyncStatus.PENDING
+                    syncStatus = if (serverCopyId != null) SyncStatus.SYNCED else SyncStatus.PENDING
                 )
                 withContext(Dispatchers.IO) {
                     photoRepository.insertPhoto(copyEntity)

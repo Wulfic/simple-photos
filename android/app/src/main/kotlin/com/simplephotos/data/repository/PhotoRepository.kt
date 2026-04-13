@@ -47,6 +47,9 @@ class PhotoRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     @ApplicationContext private val context: Context
 ) {
+    /** Expose the API service for banner polling in the gallery. */
+    val apiService: ApiService get() = api
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     /**

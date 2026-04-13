@@ -104,6 +104,7 @@ export default function useViewerActions({
   const handleSaveEdit = useCallback(async () => {
     if (!id) return;
     const meta = buildEditMetadata();
+    const metaJson = meta ? JSON.stringify(meta) : null;
     if (!meta) {
       // All defaults — clear metadata
       try {
@@ -116,6 +117,13 @@ export default function useViewerActions({
         setCropData(meta);
       } catch { /* ignore */ }
     }
+    // Sync to server so Android and other clients see the edit
+    try {
+      const cached = await db.photos.get(id);
+      if (cached?.serverPhotoId) {
+        await api.photos.setCrop(cached.serverPhotoId, metaJson);
+      }
+    } catch { /* non-fatal */ }
     setEditMode(false);
   }, [id, buildEditMetadata, setCropData, setEditMode]);
 
@@ -167,7 +175,9 @@ export default function useViewerActions({
             contentHash: undefined,
             storageBlobId: original.storageBlobId || original.blobId,
             filename: copyFilename,
-            cropData: metaJson ?? undefined,
+            // Server now bakes edits into the rendered file (crop_metadata=NULL),
+            // so the local copy should also have no crop overlay.
+            cropData: serverCopyId ? undefined : (metaJson ?? undefined),
             takenAt: Date.now(),
             thumbnailData: original.thumbnailData,
             serverPhotoId: serverCopyId,

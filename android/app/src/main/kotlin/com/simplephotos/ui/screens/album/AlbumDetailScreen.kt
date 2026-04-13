@@ -4,6 +4,7 @@
  */
 package com.simplephotos.ui.screens.album
 
+import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -337,7 +338,9 @@ private fun AddPhotoTile(
             .clip(MaterialTheme.shapes.small)
             .clickable(onClick = onClick)
     ) {
+        val isGif = photo.mediaType == "gif"
         val imageModel: Any? = when {
+            isGif && photo.localPath != null -> Uri.parse(photo.localPath)
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> photo.localPath
             else -> null
@@ -348,7 +351,7 @@ private fun AddPhotoTile(
                 model = ImageRequest.Builder(context)
                     .data(imageModel)
                     .crossfade(true)
-                    .size(256)
+                    .apply { if (!isGif) size(256) }
                     .build(),
                 contentDescription = photo.filename,
                 contentScale = ContentScale.Crop,
@@ -410,7 +413,9 @@ private fun AlbumPhotoTile(
                 onLongClick = onLongPress
             )
     ) {
+        val isGif = photo.mediaType == "gif"
         val imageModel: Any? = when {
+            isGif && photo.localPath != null -> Uri.parse(photo.localPath)
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> photo.localPath
             else -> null
@@ -421,7 +426,7 @@ private fun AlbumPhotoTile(
                 model = ImageRequest.Builder(context)
                     .data(imageModel)
                     .crossfade(true)
-                    .size(256)
+                    .apply { if (!isGif) size(256) }
                     .build(),
                 contentDescription = photo.filename,
                 contentScale = ContentScale.Crop,

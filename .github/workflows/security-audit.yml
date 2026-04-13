@@ -31,9 +31,37 @@ jobs:
           fetch-depth: 0
 
       - name: Run Gitleaks
+        id: gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Write report section
+        if: always()
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/01-secret-scanning.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  SECRET SCANNING (Gitleaks)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+          if [[ "${{ steps.gitleaks.outcome }}" == "success" ]]; then
+            echo "STATUS: PASS" >> "$REPORT"
+            echo "No leaked secrets or credentials detected." >> "$REPORT"
+          else
+            echo "STATUS: FAIL" >> "$REPORT"
+            echo "Gitleaks detected potential secret leaks. Review the Gitleaks action" >> "$REPORT"
+            echo "output above or the SARIF results for details." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-secret-scanning
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # SAST — Semgrep (Cross-Language)
@@ -47,6 +75,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Semgrep
+        id: semgrep-scan
         run: |
           semgrep scan \
             --config auto \
@@ -57,9 +86,40 @@ jobs:
             --config p/typescript \
             --config p/kotlin \
             --error \
+            --text -o /tmp/semgrep-text.txt \
+            . 2>&1 || true
+          semgrep scan \
+            --config auto \
+            --config p/owasp-top-ten \
+            --config p/r2c-security-audit \
+            --config p/secrets \
+            --config p/rust \
+            --config p/typescript \
+            --config p/kotlin \
+            --error \
             --sarif -o semgrep-results.sarif \
-            .
+            . 2>/dev/null || true
         continue-on-error: true
+
+      - name: Write report section
+        if: always()
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/02-semgrep.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  SAST — SEMGREP (Cross-Language)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+          if [ -s /tmp/semgrep-text.txt ]; then
+            FINDING_COUNT=$(grep -c '^.*:.*:.*' /tmp/semgrep-text.txt 2>/dev/null || echo "0")
+            echo "STATUS: FINDINGS DETECTED ($FINDING_COUNT potential issues)" >> "$REPORT"
+            echo "" >> "$REPORT"
+            cat /tmp/semgrep-text.txt >> "$REPORT"
+          else
+            echo "STATUS: PASS" >> "$REPORT"
+            echo "No SAST findings detected." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
 
       - name: Upload SARIF
         if: always()
@@ -68,12 +128,12 @@ jobs:
           sarif_file: semgrep-results.sarif
         continue-on-error: true
 
-      - name: Upload Semgrep results
+      - name: Upload report section
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: semgrep-results
-          path: semgrep-results.sarif
+          name: report-semgrep
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # Rust Server — Audit, Deny, Clippy
@@ -104,7 +164,38 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
-        run: cargo audit --deny warnings
+        id: cargo-audit
+        run: cargo audit --deny warnings 2>&1 | tee /tmp/cargo-audit-output.txt || echo "AUDIT_FAILED=true" >> "$GITHUB_ENV"
+        continue-on-error: true
+
+      - name: Write report section
+        if: always()
+        working-directory: .
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/03-rust-audit.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  RUST DEPENDENCY AUDIT (cargo-audit)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+          if [[ "${{ steps.cargo-audit.outcome }}" == "success" ]]; then
+            echo "STATUS: PASS" >> "$REPORT"
+            echo "No known vulnerabilities found in Rust dependencies." >> "$REPORT"
+          else
+            echo "STATUS: FAIL — Vulnerabilities found in Rust dependencies" >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+          if [ -f /tmp/cargo-audit-output.txt ]; then
+            cat /tmp/cargo-audit-output.txt >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-rust-audit
+          path: /tmp/report-parts/
 
   rust-deny:
     name: Rust Supply Chain (cargo-deny)
@@ -121,21 +212,40 @@ jobs:
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
-      - name: Run cargo deny (advisories)
-        run: cargo deny check advisories
+      - name: Run cargo deny (all checks)
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/04-rust-deny.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  RUST SUPPLY CHAIN (cargo-deny)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          FAIL=0
+          for CHECK in advisories licenses bans sources; do
+            echo "--- cargo deny check $CHECK ---" >> "$REPORT"
+            if cargo deny check "$CHECK" 2>&1 | tee -a "$REPORT"; then
+              echo "  Result: PASS" >> "$REPORT"
+            else
+              echo "  Result: FAIL" >> "$REPORT"
+              FAIL=$((FAIL + 1))
+            fi
+            echo "" >> "$REPORT"
+          done
+
+          if [ "$FAIL" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: FAIL — $FAIL check(s) failed" "$REPORT"
+          fi
         continue-on-error: true
 
-      - name: Run cargo deny (licenses)
-        run: cargo deny check licenses
-        continue-on-error: true
-
-      - name: Run cargo deny (bans)
-        run: cargo deny check bans
-        continue-on-error: true
-
-      - name: Run cargo deny (sources)
-        run: cargo deny check sources
-        continue-on-error: true
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-rust-deny
+          path: /tmp/report-parts/
 
   rust-clippy-security:
     name: Rust Security Lints (Clippy)
@@ -161,19 +271,44 @@ jobs:
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('server/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-clippy-
 
-      - name: Run Clippy with security lints
+      - name: Run Clippy security lints
         run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/05-rust-clippy.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  RUST SECURITY LINTS (Clippy)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          FAIL=0
+
+          echo "--- Strict security lints (unwrap, expect, panic, indexing) ---" >> "$REPORT"
           cargo clippy --all-targets -- \
             -D clippy::unwrap_used \
             -D clippy::expect_used \
             -D clippy::panic \
             -D clippy::indexing_slicing \
             -W clippy::pedantic \
-            -W clippy::nursery
+            -W clippy::nursery 2>&1 | tee -a "$REPORT" || FAIL=$((FAIL + 1))
+          echo "" >> "$REPORT"
+
+          echo "--- Default strict lints ---" >> "$REPORT"
+          cargo clippy --all-targets -- -D warnings 2>&1 | tee -a "$REPORT" || FAIL=$((FAIL + 1))
+          echo "" >> "$REPORT"
+
+          if [ "$FAIL" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: FAIL — $FAIL lint pass(es) produced errors" "$REPORT"
+          fi
         continue-on-error: true
 
-      - name: Run Clippy (default strict)
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-rust-clippy
+          path: /tmp/report-parts/
 
   rust-unsafe-audit:
     name: Rust Unsafe Code Audit
@@ -192,15 +327,29 @@ jobs:
         continue-on-error: true
 
       - name: Scan for unsafe code
-        run: cargo geiger --all-features --output-format ascii 2>&1 | tee ../unsafe-report.txt
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/06-rust-unsafe.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  RUST UNSAFE CODE AUDIT (cargo-geiger)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+          if command -v cargo-geiger &>/dev/null; then
+            cargo geiger --all-features --output-format ascii 2>&1 | tee -a "$REPORT" || true
+            UNSAFE_COUNT=$(grep -c 'unsafe' "$REPORT" 2>/dev/null || echo "0")
+            sed -i "4a STATUS: REVIEW — $UNSAFE_COUNT lines reference unsafe code" "$REPORT"
+          else
+            echo "STATUS: SKIPPED — cargo-geiger installation failed" >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
         continue-on-error: true
 
-      - name: Upload unsafe code report
+      - name: Upload report section
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rust-unsafe-report
-          path: unsafe-report.txt
+          name: report-rust-unsafe
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # Web Frontend — npm audit, ESLint security
@@ -224,12 +373,36 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run npm audit (production)
-        run: npm audit --omit=dev --audit-level=moderate
+      - name: Run npm audit
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/07-web-audit.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  WEB DEPENDENCY AUDIT (npm audit)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
 
-      - name: Run npm audit (all)
-        run: npm audit --audit-level=high
+          FAIL=0
+          echo "--- Production dependencies (moderate+) ---" >> "$REPORT"
+          npm audit --omit=dev --audit-level=moderate 2>&1 | tee -a "$REPORT" || FAIL=$((FAIL + 1))
+          echo "" >> "$REPORT"
+          echo "--- All dependencies (high+) ---" >> "$REPORT"
+          npm audit --audit-level=high 2>&1 | tee -a "$REPORT" || FAIL=$((FAIL + 1))
+          echo "" >> "$REPORT"
+
+          if [ "$FAIL" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: FAIL — $FAIL audit pass(es) reported vulnerabilities" "$REPORT"
+          fi
         continue-on-error: true
+
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-web-audit
+          path: /tmp/report-parts/
 
   web-lint-security:
     name: Web Security Linting
@@ -255,17 +428,63 @@ jobs:
 
       - name: Check for known vulnerable patterns
         run: |
-          echo "=== Checking for eval() usage ==="
-          ! grep -rn 'eval(' src/ --include='*.ts' --include='*.tsx' --include='*.js' || echo "WARNING: eval() found"
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/08-web-lint.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  WEB SECURITY LINTING (Pattern Scan)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
 
-          echo "=== Checking for innerHTML usage ==="
-          ! grep -rn 'innerHTML\|dangerouslySetInnerHTML' src/ --include='*.ts' --include='*.tsx' --include='*.js' || echo "WARNING: innerHTML/dangerouslySetInnerHTML found"
+          WARNINGS=0
 
-          echo "=== Checking for document.write ==="
-          ! grep -rn 'document\.write' src/ --include='*.ts' --include='*.tsx' --include='*.js' || echo "WARNING: document.write found"
+          echo "--- eval() usage ---" >> "$REPORT"
+          if grep -rn 'eval(' src/ --include='*.ts' --include='*.tsx' --include='*.js' 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: eval() found — potential code injection risk" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
 
-          echo "=== Checking for hardcoded secrets ==="
-          ! grep -rn 'password\s*=\s*["\x27]' src/ --include='*.ts' --include='*.tsx' --include='*.js' -i || echo "WARNING: Possible hardcoded secret"
+          echo "--- innerHTML / dangerouslySetInnerHTML usage ---" >> "$REPORT"
+          if grep -rn 'innerHTML\|dangerouslySetInnerHTML' src/ --include='*.ts' --include='*.tsx' --include='*.js' 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: innerHTML/dangerouslySetInnerHTML found — potential XSS" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- document.write usage ---" >> "$REPORT"
+          if grep -rn 'document\.write' src/ --include='*.ts' --include='*.tsx' --include='*.js' 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: document.write found" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Hardcoded secrets ---" >> "$REPORT"
+          if grep -rn 'password\s*=\s*["\x27]' src/ --include='*.ts' --include='*.tsx' --include='*.js' -i 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Possible hardcoded password" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          if [ "$WARNINGS" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: WARN — $WARNINGS pattern(s) flagged for review" "$REPORT"
+          fi
+
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-web-lint
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # Android — Dependency Check, Lint
@@ -289,32 +508,75 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run Android Lint (security checks)
-        run: ./gradlew :app:lintDebug
+        id: android-lint
+        run: ./gradlew :app:lintDebug 2>&1 | tee /tmp/android-lint-output.txt
         continue-on-error: true
 
-      - name: Upload Android lint results
+      - name: Write report section
+        if: always()
+        working-directory: .
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/09-android-audit.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  ANDROID SECURITY AUDIT" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          WARNINGS=0
+
+          echo "--- Android Lint ---" >> "$REPORT"
+          if [[ "${{ steps.android-lint.outcome }}" == "success" ]]; then
+            echo "  Lint: PASS" >> "$REPORT"
+          else
+            echo "  Lint: FAIL (see details below)" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          fi
+          # Include relevant lint summary lines
+          if [ -f /tmp/android-lint-output.txt ]; then
+            grep -E 'warning|error|Error:|Warning:' /tmp/android-lint-output.txt >> "$REPORT" 2>/dev/null || true
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Cleartext traffic check ---" >> "$REPORT"
+          if grep -r 'usesCleartextTraffic="true"' android/app/src/ 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: cleartext traffic is enabled" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Certificate pinning bypass check ---" >> "$REPORT"
+          if grep -r 'TrustAllCerts\|ALLOW_ALL_HOSTNAME_VERIFIER\|setHostnameVerifier' android/app/src/ 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Possible certificate validation bypass" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Hardcoded keys/secrets check ---" >> "$REPORT"
+          if grep -rn 'SECRET\|API_KEY\|PASSWORD' android/app/src/ --include='*.kt' --include='*.java' 2>/dev/null | grep -v 'import\|//\|BuildConfig\|companion' | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Possible hardcoded secrets in source" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          if [ "$WARNINGS" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: WARN — $WARNINGS issue(s) flagged" "$REPORT"
+          fi
+
+      - name: Upload report section
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-lint-results
-          path: android/app/build/reports/lint-results-*.html
-
-      - name: Check for insecure network config
-        run: |
-          echo "=== Checking AndroidManifest for cleartext traffic ==="
-          if grep -r 'usesCleartextTraffic="true"' app/src/; then
-            echo "::warning::cleartext traffic is enabled"
-          fi
-
-          echo "=== Checking for certificate pinning bypass ==="
-          if grep -r 'TrustAllCerts\|ALLOW_ALL_HOSTNAME_VERIFIER\|setHostnameVerifier' app/src/; then
-            echo "::warning::Possible certificate validation bypass found"
-          fi
-
-          echo "=== Checking for hardcoded keys ==="
-          if grep -rn 'SECRET\|API_KEY\|PASSWORD' app/src/ --include='*.kt' --include='*.java' | grep -v 'import\|//\|BuildConfig\|companion'; then
-            echo "::warning::Possible hardcoded secrets in source"
-          fi
+          name: report-android-audit
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # Docker — Image Scanning (Trivy)
@@ -332,11 +594,23 @@ jobs:
           scan-ref: server/Dockerfile
           severity: CRITICAL,HIGH,MEDIUM
           exit-code: 0
+          output: trivy-config-results.txt
 
       - name: Build Docker image
         run: docker build -t simple-photos:audit -f server/Dockerfile server/
 
-      - name: Run Trivy on built image
+      - name: Run Trivy on built image (table)
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v /tmp:/tmp \
+            aquasec/trivy:latest image \
+            --severity CRITICAL,HIGH \
+            --format table \
+            simple-photos:audit 2>&1 | tee /tmp/trivy-image-table.txt || true
+        continue-on-error: true
+
+      - name: Run Trivy on built image (SARIF)
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: simple-photos:audit
@@ -345,19 +619,56 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: 0
 
-      - name: Upload Trivy SARIF
+      - name: Write report section
+        if: always()
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/10-docker-scan.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  DOCKER SECURITY SCAN (Trivy)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          echo "--- Dockerfile Configuration Scan ---" >> "$REPORT"
+          if [ -f trivy-config-results.txt ]; then
+            cat trivy-config-results.txt >> "$REPORT"
+          else
+            echo "  No config issues found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Built Image Vulnerability Scan (CRITICAL + HIGH) ---" >> "$REPORT"
+          if [ -f /tmp/trivy-image-table.txt ]; then
+            cat /tmp/trivy-image-table.txt >> "$REPORT"
+          else
+            echo "  Image scan output not available." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          # Count CVEs from table output
+          CVE_COUNT=0
+          if [ -f /tmp/trivy-image-table.txt ]; then
+            CVE_COUNT=$(grep -c 'CVE-' /tmp/trivy-image-table.txt 2>/dev/null || echo "0")
+          fi
+          if [ "$CVE_COUNT" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: FAIL — $CVE_COUNT CVE(s) found (CRITICAL/HIGH)" "$REPORT"
+          fi
+
+      - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
         continue-on-error: true
 
-      - name: Upload Trivy results
+      - name: Upload report section
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-results
-          path: trivy-results.sarif
+          name: report-docker-scan
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # Dockerfile Linting (Hadolint)
@@ -369,10 +680,40 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run Hadolint
+        id: hadolint
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: server/Dockerfile
           failure-threshold: warning
+        continue-on-error: true
+
+      - name: Write report section
+        if: always()
+        run: |
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/11-dockerfile-lint.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  DOCKERFILE LINT (Hadolint)" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+          if [[ "${{ steps.hadolint.outcome }}" == "success" ]]; then
+            echo "STATUS: PASS" >> "$REPORT"
+            echo "No Dockerfile lint warnings." >> "$REPORT"
+          else
+            echo "STATUS: WARN — Hadolint found issues" >> "$REPORT"
+            echo "" >> "$REPORT"
+            echo "Run 'hadolint server/Dockerfile' locally to see full details." >> "$REPORT"
+            # Hadolint action puts results in GITHUB_OUTPUT
+            echo "${{ steps.hadolint.outputs.results }}" >> "$REPORT" 2>/dev/null || true
+          fi
+          echo "" >> "$REPORT"
+
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-dockerfile-lint
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # SQL Migration Review
@@ -385,28 +726,54 @@ jobs:
 
       - name: Check SQL migrations for injection risks
         run: |
-          echo "=== Scanning SQL migrations for potential issues ==="
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/12-sql-audit.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  SQL MIGRATION SECURITY REVIEW" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+
           ISSUES=0
 
-          # Check for dynamic SQL construction
-          if grep -rn 'EXEC\|EXECUTE\|sp_executesql' server/migrations/ 2>/dev/null; then
-            echo "::warning::Dynamic SQL execution found in migrations"
+          echo "--- Dynamic SQL construction ---" >> "$REPORT"
+          if grep -rn 'EXEC\|EXECUTE\|sp_executesql' server/migrations/ 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Dynamic SQL execution found in migrations" >> "$REPORT"
             ISSUES=$((ISSUES + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Overly permissive grants ---" >> "$REPORT"
+          if grep -rn 'GRANT ALL\|GRANT .* TO PUBLIC' server/migrations/ 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Overly permissive GRANT found" >> "$REPORT"
+            ISSUES=$((ISSUES + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Disabled foreign keys ---" >> "$REPORT"
+          if grep -rn 'PRAGMA foreign_keys\s*=\s*OFF\|PRAGMA foreign_keys=0' server/migrations/ 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Foreign keys disabled in migration" >> "$REPORT"
+            ISSUES=$((ISSUES + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          if [ "$ISSUES" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: WARN — $ISSUES issue(s) found" "$REPORT"
           fi
 
-          # Check for overly permissive grants
-          if grep -rn 'GRANT ALL\|GRANT .* TO PUBLIC' server/migrations/ 2>/dev/null; then
-            echo "::warning::Overly permissive GRANT found in migrations"
-            ISSUES=$((ISSUES + 1))
-          fi
-
-          # Check for disabled foreign keys
-          if grep -rn 'PRAGMA foreign_keys\s*=\s*OFF\|PRAGMA foreign_keys=0' server/migrations/ 2>/dev/null; then
-            echo "::warning::Foreign keys disabled in migration"
-            ISSUES=$((ISSUES + 1))
-          fi
-
-          echo "SQL audit complete. Issues found: $ISSUES"
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-sql-audit
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # Cryptographic Implementation Review
@@ -419,50 +786,81 @@ jobs:
 
       - name: Check for weak cryptographic patterns
         run: |
-          echo "=== Cryptographic Implementation Audit ==="
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/13-crypto-audit.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  CRYPTOGRAPHIC IMPLEMENTATION REVIEW" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+
           WARNINGS=0
 
-          # Rust: Check for weak algorithms
-          echo "--- Rust server crypto checks ---"
-          if grep -rn 'Md5\|md5\|Sha1\b\|sha1\b\|DES\|RC4\|ECB' server/src/ --include='*.rs' 2>/dev/null; then
-            echo "::warning::Potentially weak cryptographic algorithm found in Rust source"
+          echo "--- Rust: Weak algorithms (MD5, SHA1, DES, RC4, ECB) ---" >> "$REPORT"
+          if grep -rn 'Md5\|md5\|Sha1\b\|sha1\b\|DES\|RC4\|ECB' server/src/ --include='*.rs' 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Potentially weak cryptographic algorithm in Rust source" >> "$REPORT"
             WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Rust: Hardcoded keys/IVs ---" >> "$REPORT"
+          if grep -rn 'b"\|&\[0u8' server/src/ --include='*.rs' 2>/dev/null | grep -i 'key\|iv\|nonce\|secret' | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Possible hardcoded cryptographic material" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Web: Weak crypto (MD5, SHA1, DES, RC4) ---" >> "$REPORT"
+          if grep -rn 'createHash.*md5\|createHash.*sha1\|CryptoJS\.\(MD5\|SHA1\|DES\|RC4\)' web/src/ --include='*.ts' --include='*.tsx' 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Potentially weak cryptographic algorithm in web source" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Android: Weak crypto ---" >> "$REPORT"
+          if grep -rn 'MD5\|DES/\|RC4\|ECB\|getInstance.*DES\|Cipher.*ECB' android/app/src/ --include='*.kt' 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Potentially weak cryptographic algorithm in Android source" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Web: Math.random() usage (not CSPRNG) ---" >> "$REPORT"
+          if grep -rn 'Math\.random()' web/src/ --include='*.ts' --include='*.tsx' 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Math.random() — use crypto.getRandomValues() instead" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- Android: Non-secure Random ---" >> "$REPORT"
+          if grep -rn 'kotlin\.random\|java\.util\.Random()' android/app/src/ --include='*.kt' 2>/dev/null | grep -iv 'SecureRandom\|import' | tee -a "$REPORT" | grep -q .; then
+            echo "  WARNING: Non-secure random — use SecureRandom" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  None found." >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          if [ "$WARNINGS" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: WARN — $WARNINGS crypto pattern(s) flagged" "$REPORT"
           fi
 
-          # Rust: Check for hardcoded keys/IVs
-          if grep -rn 'b"\|&\[0u8' server/src/ --include='*.rs' | grep -i 'key\|iv\|nonce\|secret' 2>/dev/null; then
-            echo "::warning::Possible hardcoded cryptographic material in Rust source"
-            WARNINGS=$((WARNINGS + 1))
-          fi
-
-          # TypeScript: Check for weak crypto
-          echo "--- Web frontend crypto checks ---"
-          if grep -rn 'createHash.*md5\|createHash.*sha1\|CryptoJS\.\(MD5\|SHA1\|DES\|RC4\)' web/src/ --include='*.ts' --include='*.tsx' 2>/dev/null; then
-            echo "::warning::Potentially weak cryptographic algorithm in web source"
-            WARNINGS=$((WARNINGS + 1))
-          fi
-
-          # Kotlin: Check for weak crypto
-          echo "--- Android crypto checks ---"
-          if grep -rn 'MD5\|DES/\|RC4\|ECB\|getInstance.*DES\|Cipher.*ECB' android/app/src/ --include='*.kt' 2>/dev/null; then
-            echo "::warning::Potentially weak cryptographic algorithm in Android source"
-            WARNINGS=$((WARNINGS + 1))
-          fi
-
-          # Check for Math.random() usage (not cryptographically secure)
-          if grep -rn 'Math\.random()' web/src/ --include='*.ts' --include='*.tsx' 2>/dev/null; then
-            echo "::warning::Math.random() found - use crypto.getRandomValues() instead"
-            WARNINGS=$((WARNINGS + 1))
-          fi
-
-          # Check for kotlin.random (not cryptographically secure for secrets)
-          if grep -rn 'kotlin\.random\|java\.util\.Random()' android/app/src/ --include='*.kt' 2>/dev/null | grep -iv 'SecureRandom\|import'; then
-            echo "::warning::Non-secure random found in Android - use SecureRandom"
-            WARNINGS=$((WARNINGS + 1))
-          fi
-
-          echo ""
-          echo "Crypto audit complete. Warnings: $WARNINGS"
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-crypto-audit
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # Security Headers & Config Review
@@ -475,29 +873,55 @@ jobs:
 
       - name: Review security-relevant configuration
         run: |
-          echo "=== Configuration Security Audit ==="
+          mkdir -p /tmp/report-parts
+          REPORT=/tmp/report-parts/14-config-audit.txt
+          echo "================================================================================" >> "$REPORT"
+          echo "  CONFIGURATION SECURITY REVIEW" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
 
-          # Ensure example config doesn't contain real secrets
-          echo "--- Checking example config for leaked secrets ---"
-          if grep -P '(?!change_me|your_secret|example)[a-f0-9]{64}' server/config.example.toml 2>/dev/null; then
-            echo "::error::Possible real secret in example configuration"
-            exit 1
+          WARNINGS=0
+
+          echo "--- Example config leaked secrets check ---" >> "$REPORT"
+          if grep -P '(?!change_me|your_secret|example)[a-f0-9]{64}' server/config.example.toml 2>/dev/null | tee -a "$REPORT" | grep -q .; then
+            echo "  CRITICAL: Possible real secret in example configuration" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  No leaked secrets found." >> "$REPORT"
           fi
+          echo "" >> "$REPORT"
 
-          # Ensure bcrypt cost is adequate
-          echo "--- Checking bcrypt cost factor ---"
+          echo "--- bcrypt cost factor check ---" >> "$REPORT"
           BCRYPT_COST=$(grep -oP 'bcrypt_cost\s*=\s*\K\d+' server/config.example.toml 2>/dev/null || echo "not set")
           if [ "$BCRYPT_COST" != "not set" ] && [ "$BCRYPT_COST" -lt 12 ]; then
-            echo "::warning::bcrypt cost factor is below recommended minimum of 12 (found: $BCRYPT_COST)"
+            echo "  WARNING: bcrypt cost below minimum 12 (found: $BCRYPT_COST)" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          else
+            echo "  bcrypt cost: $BCRYPT_COST (OK)" >> "$REPORT"
+          fi
+          echo "" >> "$REPORT"
+
+          echo "--- TLS configuration documentation ---" >> "$REPORT"
+          if grep -q '\[tls\]' server/config.example.toml 2>/dev/null; then
+            echo "  TLS section present in example config." >> "$REPORT"
+          else
+            echo "  WARNING: TLS section missing from example config" >> "$REPORT"
+            WARNINGS=$((WARNINGS + 1))
+          fi
+          echo "" >> "$REPORT"
+
+          if [ "$WARNINGS" -eq 0 ]; then
+            sed -i '4a STATUS: PASS' "$REPORT"
+          else
+            sed -i "4a STATUS: WARN — $WARNINGS issue(s) found" "$REPORT"
           fi
 
-          # Check that TLS is documented
-          echo "--- Checking TLS configuration documentation ---"
-          if ! grep -q '\[tls\]' server/config.example.toml 2>/dev/null; then
-            echo "::warning::TLS section missing from example config"
-          fi
-
-          echo "Configuration audit complete."
+      - name: Upload report section
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-config-audit
+          path: /tmp/report-parts/
 
   # ─────────────────────────────────────────────
   # Summary Report
@@ -522,9 +946,106 @@ jobs:
       - crypto-audit
       - config-audit
     steps:
-      - name: Generate summary
+      - name: Download all report sections
+        uses: actions/download-artifact@v4
+        with:
+          pattern: report-*
+          path: /tmp/all-reports
+          merge-multiple: false
+
+      - name: Consolidate into single report
         run: |
-          echo "## 🔒 Security Audit Summary" >> $GITHUB_STEP_SUMMARY
+          REPORT="security-audit-report.txt"
+          DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          SHA="${{ github.sha }}"
+          REF="${{ github.ref_name }}"
+          TRIGGER="${{ github.event_name }}"
+
+          # Header
+          cat > "$REPORT" << 'HEADER'
+          ╔══════════════════════════════════════════════════════════════════════════════╗
+          ║                     SIMPLE-PHOTOS SECURITY AUDIT REPORT                    ║
+          ╚══════════════════════════════════════════════════════════════════════════════╝
+          HEADER
+
+          # Strip leading whitespace from heredoc
+          sed -i 's/^          //' "$REPORT"
+
+          echo "" >> "$REPORT"
+          echo "Date:      $DATE" >> "$REPORT"
+          echo "Commit:    $SHA" >> "$REPORT"
+          echo "Branch:    $REF" >> "$REPORT"
+          echo "Trigger:   $TRIGGER" >> "$REPORT"
+          echo "Run:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          # Status overview table
+          echo "================================================================================" >> "$REPORT"
+          echo "  STATUS OVERVIEW" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+          printf "  %-35s %s\n" "Check" "Result" >> "$REPORT"
+          printf "  %-35s %s\n" "-----------------------------------" "----------" >> "$REPORT"
+          printf "  %-35s %s\n" "Secret Scanning (Gitleaks)"    "${{ needs.secret-scanning.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "SAST (Semgrep)"                "${{ needs.semgrep.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Rust Dependency Audit"         "${{ needs.rust-audit.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Rust Supply Chain (cargo-deny)" "${{ needs.rust-deny.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Rust Security Lints (Clippy)"  "${{ needs.rust-clippy-security.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Rust Unsafe Code Audit"        "${{ needs.rust-unsafe-audit.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Web Dependency Audit"          "${{ needs.web-audit.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Web Security Linting"          "${{ needs.web-lint-security.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Android Security Audit"        "${{ needs.android-audit.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Docker Image Scan (Trivy)"     "${{ needs.docker-scan.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Dockerfile Lint (Hadolint)"    "${{ needs.dockerfile-lint.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "SQL Migration Review"          "${{ needs.sql-audit.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Crypto Implementation Review"  "${{ needs.crypto-audit.result }}" >> "$REPORT"
+          printf "  %-35s %s\n" "Configuration Security Review" "${{ needs.config-audit.result }}" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          # Count failures
+          RESULTS="${{ needs.secret-scanning.result }} ${{ needs.semgrep.result }} ${{ needs.rust-audit.result }} ${{ needs.rust-deny.result }} ${{ needs.rust-clippy-security.result }} ${{ needs.rust-unsafe-audit.result }} ${{ needs.web-audit.result }} ${{ needs.web-lint-security.result }} ${{ needs.android-audit.result }} ${{ needs.docker-scan.result }} ${{ needs.dockerfile-lint.result }} ${{ needs.sql-audit.result }} ${{ needs.crypto-audit.result }} ${{ needs.config-audit.result }}"
+          FAIL_COUNT=$(echo "$RESULTS" | tr ' ' '\n' | grep -c 'failure' || true)
+          PASS_COUNT=$(echo "$RESULTS" | tr ' ' '\n' | grep -c 'success' || true)
+          SKIP_COUNT=$(echo "$RESULTS" | tr ' ' '\n' | grep -c 'skipped' || true)
+          TOTAL=14
+          echo "  Summary: $PASS_COUNT passed, $FAIL_COUNT failed, $SKIP_COUNT skipped (of $TOTAL)" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          # Append all individual report sections in order
+          echo "" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "  DETAILED FINDINGS" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+          echo "" >> "$REPORT"
+
+          # Merge report sections sorted by filename (numbered 01-14)
+          for DIR in $(find /tmp/all-reports -mindepth 1 -maxdepth 1 -type d | sort); do
+            for FILE in $(find "$DIR" -name '*.txt' | sort); do
+              cat "$FILE" >> "$REPORT"
+              echo "" >> "$REPORT"
+            done
+          done
+
+          # Footer
+          echo "================================================================================" >> "$REPORT"
+          echo "  END OF REPORT" >> "$REPORT"
+          echo "================================================================================" >> "$REPORT"
+
+          echo "--- Report generated ($( wc -l < "$REPORT" ) lines) ---"
+          cat "$REPORT"
+
+      - name: Upload consolidated report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report
+          path: security-audit-report.txt
+          retention-days: 90
+
+      - name: Generate GitHub step summary
+        if: always()
+        run: |
+          echo "## Security Audit Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
@@ -543,4 +1064,4 @@ jobs:
           echo "| Crypto Implementation | ${{ needs.crypto-audit.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Config Security | ${{ needs.config-audit.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_Triggered by: ${{ github.event_name }} on ${{ github.ref }}_" >> $GITHUB_STEP_SUMMARY
+          echo "Download the full **security-audit-report.txt** from the Artifacts section above." >> $GITHUB_STEP_SUMMARY

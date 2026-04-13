@@ -140,6 +140,10 @@ interface ApiService {
     @GET("api/admin/ssl")
     suspend fun getSslStatus(): SslStatusResponse
 
+    // ── Conversion / encryption status ───────────────────────────────────
+    @GET("api/admin/conversion-status")
+    suspend fun getConversionStatus(): ConversionStatusResponse
+
     // ── Admin ────────────────────────────────────────────────────────────
     @POST("api/admin/photos/scan")
     suspend fun scanAndRegister(): ScanResponse

@@ -56,6 +56,8 @@ import com.simplephotos.sync.DiagnosticLogger
 import com.simplephotos.sync.SyncScheduler
 import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
+import com.simplephotos.ui.components.ConversionBanner
+import com.simplephotos.ui.components.EncryptionBanner
 import com.simplephotos.ui.components.HeaderNavigation
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
@@ -233,6 +235,10 @@ fun GalleryScreen(
                 viewModel.error?.let { err ->
                     Text(err, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
                 }
+
+                // Conversion & encryption progress banners
+                ConversionBanner(api = viewModel.apiService)
+                EncryptionBanner(api = viewModel.apiService)
 
                 if (visiblePhotos.isEmpty() && !viewModel.isSyncing && viewModel.dataReady) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

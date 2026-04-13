@@ -28,6 +28,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -602,18 +608,24 @@ internal fun SecureItemTile(
     viewModel: SecureGalleryViewModel
 ) {
     var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var gifBytes by remember(item.blobId) { mutableStateOf<ByteArray?>(null) }
     var loading by remember(item.blobId) { mutableStateOf(true) }
 
-    // Try to find matching photo in local DB for its thumbnail
-    // Use the dedicated thumbnail endpoint to avoid downloading the full-size
-    // encrypted blob for every grid tile. Falls back to full blob if no thumb.
     LaunchedEffect(item.blobId) {
         loading = true
         try {
             val data = viewModel.downloadThumb(item.blobId)
-            bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+            // Detect GIF by magic bytes (GIF87a / GIF89a)
+            val isGif = data.size > 3 &&
+                data[0] == 0x47.toByte() && data[1] == 0x49.toByte() && data[2] == 0x46.toByte()
+            if (isGif) {
+                gifBytes = data
+            } else {
+                bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+            }
         } catch (_: Exception) {
             bitmap = null
+            gifBytes = null
         } finally {
             loading = false
         }
@@ -631,6 +643,14 @@ internal fun SecureItemTile(
             loading -> CircularProgressIndicator(
                 modifier = Modifier.size(24.dp),
                 strokeWidth = 2.dp
+            )
+            gifBytes != null -> AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(java.nio.ByteBuffer.wrap(gifBytes!!))
+                    .build(),
+                contentDescription = "Secure photo",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
             )
             bitmap != null -> Image(
                 bitmap = bitmap!!.asImageBitmap(),
@@ -663,7 +683,18 @@ internal fun SecureItemTile(
 
 @Composable
 internal fun PhotoThumbnail(photo: PhotoEntity) {
+    val isGif = photo.mediaType == "gif"
     when {
+        isGif && photo.localPath != null -> {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(android.net.Uri.parse(photo.localPath))
+                    .build(),
+                contentDescription = photo.filename,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
         photo.thumbnailPath != null -> {
             val bitmap = remember(photo.thumbnailPath) {
                 try { BitmapFactory.decodeFile(photo.thumbnailPath) } catch (_: Exception) { null }
@@ -723,15 +754,23 @@ internal fun SecurePhotoViewer(
         ) { page ->
             val item = items[page]
             var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
+            var gifBytes by remember(item.blobId) { mutableStateOf<ByteArray?>(null) }
             var loading by remember(item.blobId) { mutableStateOf(true) }
 
             LaunchedEffect(item.blobId) {
                 loading = true
                 try {
                     val data = viewModel.downloadAndDecrypt(item.blobId)
-                    bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+                    val isGif = data.size > 3 &&
+                        data[0] == 0x47.toByte() && data[1] == 0x49.toByte() && data[2] == 0x46.toByte()
+                    if (isGif) {
+                        gifBytes = data
+                    } else {
+                        bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+                    }
                 } catch (_: Exception) {
                     bitmap = null
+                    gifBytes = null
                 } finally {
                     loading = false
                 }
@@ -743,6 +782,14 @@ internal fun SecurePhotoViewer(
             ) {
                 when {
                     loading -> CircularProgressIndicator(color = Color.White)
+                    gifBytes != null -> AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(java.nio.ByteBuffer.wrap(gifBytes!!))
+                            .build(),
+                        contentDescription = "Secure photo",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
                     bitmap != null -> Image(
                         bitmap = bitmap!!.asImageBitmap(),
                         contentDescription = "Secure photo",
