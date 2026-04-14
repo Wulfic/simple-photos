@@ -245,6 +245,7 @@ pub async fn background_diagnostics_push_task(
     pool: sqlx::SqlitePool,
     storage_root: std::path::PathBuf,
     db_path: std::path::PathBuf,
+    accept_invalid_certs: bool,
 ) {
     use crate::diagnostics::handlers::{
         disk_stats, read_cpu_seconds, read_rss_bytes, server_start,
@@ -344,7 +345,7 @@ pub async fn background_diagnostics_push_task(
 
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
-            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_certs(accept_invalid_certs)
             .build()
         {
             Ok(c) => c,
@@ -400,6 +401,7 @@ pub async fn background_diagnostics_push_task(
 pub async fn background_log_forward_task(
     pool: sqlx::SqlitePool,
     audit_tx: tokio::sync::broadcast::Sender<AuditBroadcast>,
+    accept_invalid_certs: bool,
 ) {
     use super::models::ForwardedAuditLog;
 
@@ -455,7 +457,7 @@ pub async fn background_log_forward_task(
 
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
-            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_certs(accept_invalid_certs)
             .build()
         {
             Ok(c) => c,

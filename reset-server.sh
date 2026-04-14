@@ -55,8 +55,9 @@ if [[ -d "$ANDROID_DIR" ]]; then
     fi
     APK_SRC="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
     if [[ -f "$APK_SRC" ]]; then
-        cp "$APK_SRC" "$DOWNLOADS_DIR/simple-photos.apk"
-        echo "Android APK copied to $DOWNLOADS_DIR/simple-photos.apk"
+        cp "$APK_SRC" "$DOWNLOADS_DIR/simple-photos.apk" 2>/dev/null \
+            || { echo "WARNING: Could not copy APK to $DOWNLOADS_DIR (permission denied) — continuing"; }
+        [[ -f "$DOWNLOADS_DIR/simple-photos.apk" ]] && echo "Android APK copied to $DOWNLOADS_DIR/simple-photos.apk"
     else
         echo "WARNING: APK not found at $APK_SRC after build"
     fi
@@ -126,6 +127,10 @@ if [[ -d "$DOCKER_DIR" ]]; then
     BACKUP_DATA="$DOCKER_DIR/backup-1/data"
     if [[ -d "$BACKUP_DATA" ]]; then
         rm -rf "$BACKUP_DATA/db/"* "$BACKUP_DATA/storage/"* 2>/dev/null || true
+        # The container runs as appuser (uid 999). Ensure the bind-mounted
+        # data dirs are writable after the wipe recreates them as the host user.
+        mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
+        chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
         echo "  backup-1 data wiped"
     fi
 

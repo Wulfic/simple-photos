@@ -341,6 +341,7 @@ private fun AddPhotoTile(
         val isGif = photo.mediaType == "gif"
         val imageModel: Any? = when {
             isGif && photo.localPath != null -> Uri.parse(photo.localPath)
+            isGif && photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> photo.localPath
             else -> null
@@ -416,6 +417,7 @@ private fun AlbumPhotoTile(
         val isGif = photo.mediaType == "gif"
         val imageModel: Any? = when {
             isGif && photo.localPath != null -> Uri.parse(photo.localPath)
+            isGif && photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> photo.localPath
             else -> null

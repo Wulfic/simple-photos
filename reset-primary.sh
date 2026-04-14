@@ -52,8 +52,9 @@ if [[ -d "$ANDROID_DIR" ]]; then
     fi
     APK_SRC="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
     if [[ -f "$APK_SRC" ]]; then
-        cp "$APK_SRC" "$DOWNLOADS_DIR/simple-photos.apk"
-        echo "Android APK copied to $DOWNLOADS_DIR/simple-photos.apk"
+        cp "$APK_SRC" "$DOWNLOADS_DIR/simple-photos.apk" 2>/dev/null \
+            || { echo "WARNING: Could not copy APK to $DOWNLOADS_DIR (permission denied) — continuing"; }
+        [[ -f "$DOWNLOADS_DIR/simple-photos.apk" ]] && echo "Android APK copied to $DOWNLOADS_DIR/simple-photos.apk"
     else
         echo "WARNING: APK not found at $APK_SRC after build"
     fi

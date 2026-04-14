@@ -521,10 +521,12 @@ private fun MediaTile(
     ) {
         val isGif = photo.mediaType == "gif"
         val imageModel: Any? = when {
-            // GIFs: prefer local file so Coil's GifDecoder can animate them
-            // (thumbnailPath is a static JPEG first-frame that won't animate).
+            // GIFs: prefer local file so Coil's GifDecoder can animate them.
             // Parse content:// URIs so Coil resolves them via ContentResolver.
             isGif && photo.localPath != null -> Uri.parse(photo.localPath)
+            // Server-synced GIFs: the thumbnail IS an animated GIF (saved with
+            // .gif extension) — use it so Coil's GifDecoder can animate it.
+            isGif && photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.thumbnailPath != null -> File(photo.thumbnailPath)
             photo.localPath != null -> Uri.parse(photo.localPath)
             else -> null

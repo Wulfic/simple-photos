@@ -73,6 +73,10 @@ static_root = "./web/dist"
 # API key that other servers must provide to pull photos from this instance.
 # Generate with: openssl rand -hex 32
 # api_key = ""
+# Accept self-signed/invalid TLS certificates when connecting to backup servers.
+# Default: true (for self-hosted LAN setups). Set to false in production with
+# proper CA-signed certificates.
+# accept_invalid_certs = true
 
 [scan]
 # How often (seconds) to scan the storage directory for new files.

@@ -377,7 +377,9 @@ export default function Welcome() {
       // Create a temporary admin account — the setup/init endpoint requires
       // this before any authenticated API calls work.
       const tempUser = "restore_admin";
-      const tempPass = "Restore_Temp_" + Math.random().toString(36).slice(2, 10) + "1!";
+      const arr = new Uint8Array(8);
+      crypto.getRandomValues(arr);
+      const tempPass = "Restore_Temp_" + Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("") + "1!";
 
       await fetch("/api/setup/init", {
         method: "POST",

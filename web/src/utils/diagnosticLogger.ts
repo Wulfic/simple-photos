@@ -33,7 +33,10 @@ type LogLevel = LogEntry["level"];
 // ── Session ID ───────────────────────────────────────────────────────────────
 
 function generateSessionId(): string {
-  return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const arr = new Uint8Array(8);
+  crypto.getRandomValues(arr);
+  const hex = Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `web-${Date.now()}-${hex}`;
 }
 
 // ── Logger Singleton ─────────────────────────────────────────────────────────

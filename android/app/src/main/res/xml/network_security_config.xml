@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Allow cleartext (HTTP) traffic to local/private network servers.
-         Simple Photos servers are typically self-hosted on LANs. -->
+    <!-- Allow cleartext (HTTP) for all connections.
+         Simple Photos servers are self-hosted on LANs and the app connects
+         to arbitrary private IPs that cannot be enumerated in advance.
+         Android's <domain> element does not support CIDR ranges, so we
+         cannot restrict cleartext to RFC-1918 addresses here.
+         The app itself only connects to user-configured or LAN-discovered
+         servers, and uses its own E2E encryption layer. -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />

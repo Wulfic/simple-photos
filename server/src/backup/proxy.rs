@@ -41,7 +41,7 @@ pub async fn proxy_backup_photos(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
         .build()
         .map_err(|e| AppError::BadRequest(format!("HTTP client error: {}", e)))?;
 
@@ -106,7 +106,7 @@ pub async fn proxy_backup_thumbnail(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
         .build()
         .map_err(|e| AppError::BadRequest(format!("HTTP client error: {}", e)))?;
 

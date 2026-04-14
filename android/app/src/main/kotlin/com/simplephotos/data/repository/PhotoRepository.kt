@@ -433,11 +433,18 @@ class PhotoRepository @Inject constructor(
     }
 
     /**
-     * Save thumbnail JPEG bytes to app-internal storage.
+     * Save thumbnail bytes to app-internal storage.
+     * Detects GIF magic bytes and uses `.gif` extension so Coil's
+     * GifDecoder can animate them; everything else gets `.jpg`.
      * Returns the absolute path to the saved file.
      */
     fun saveThumbnailToDisk(photoLocalId: String, thumbnailBytes: ByteArray): String {
-        val file = File(thumbnailDir, "$photoLocalId.jpg")
+        val isGif = thumbnailBytes.size >= 3 &&
+            thumbnailBytes[0] == 0x47.toByte() && // 'G'
+            thumbnailBytes[1] == 0x49.toByte() && // 'I'
+            thumbnailBytes[2] == 0x46.toByte()    // 'F'
+        val ext = if (isGif) "gif" else "jpg"
+        val file = File(thumbnailDir, "$photoLocalId.$ext")
         file.writeBytes(thumbnailBytes)
         return file.absolutePath
     }

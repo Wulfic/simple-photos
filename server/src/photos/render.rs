@@ -19,10 +19,12 @@ use hex;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::process::Command;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::process::{run_with_timeout, FFMPEG_RENDER_TIMEOUT, FFPROBE_TIMEOUT};
 use crate::state::AppState;
 
 use super::models::Photo;
@@ -84,12 +86,10 @@ pub async fn render_photo(
     static FFMPEG_CHECKED: OnceLock<AtomicBool> = OnceLock::new();
     let checked = FFMPEG_CHECKED.get_or_init(|| AtomicBool::new(false));
     if !checked.load(AtomicOrdering::Relaxed) {
-        let probe = Command::new("ffmpeg")
-            .arg("-version")
-            .output()
-            .await
-            .ok();
-        if probe.map_or(true, |o| !o.status.success()) {
+        let mut probe_cmd = Command::new("ffmpeg");
+        probe_cmd.arg("-version");
+        let probe = run_with_timeout(&mut probe_cmd, FFPROBE_TIMEOUT).await.ok();
+        if probe.as_ref().map_or(true, |o| !o.status.success()) {
             return Err(AppError::Internal(
                 "ffmpeg is not installed on this server; install it and restart".into(),
             ));
@@ -182,13 +182,14 @@ pub async fn render_photo(
 
     if tokio::fs::try_exists(&cache_path).await.unwrap_or(false) {
         tracing::info!("[render] cache hit: {:?}", cache_path);
-        let data = tokio::fs::read(&cache_path)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to read render cache: {e}")))?;
-        return Ok(build_response(data, &photo.mime_type, &photo.filename).into_response());
+        return Ok(stream_file_response(&cache_path, &photo.mime_type, &photo.filename).await?);
     }
 
-    let tmp_path = std::env::temp_dir().join(format!("sp-render-{}.{}", Uuid::new_v4(), ext));
+    let tmp_dir = state.config.storage.root.join(".tmp");
+    tokio::fs::create_dir_all(&tmp_dir)
+        .await
+        .map_err(|e| AppError::Internal(format!("Create tmp dir: {e}")))?;
+    let tmp_path = tmp_dir.join(format!("sp-render-{}.{}", Uuid::new_v4(), ext));
 
     // ── Build ffmpeg argument list ────────────────────────────────────────────
     // We use output-side seeking (ss/to placed after -i) for frame accuracy.
@@ -273,11 +274,11 @@ pub async fn render_photo(
     tracing::info!("[render] ffmpeg args: {:?}", args);
 
     // ── Run ffmpeg ────────────────────────────────────────────────────────────
-    let output = Command::new("ffmpeg")
-        .args(&args)
-        .output()
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(&args);
+    let output = run_with_timeout(&mut cmd, FFMPEG_RENDER_TIMEOUT)
         .await
-        .map_err(|e| AppError::Internal(format!("ffmpeg spawn failed: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("ffmpeg render: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -287,26 +288,37 @@ pub async fn render_photo(
         return Err(AppError::Internal(format!("ffmpeg render failed: {last_line}")));
     }
 
-    // ── Read rendered file, save to cache, and stream back ───────────────────
-    let data = tokio::fs::read(&tmp_path)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to read rendered file: {e}")))?;
-
-    // Save to cache (best-effort — don't fail the request if the write fails)
-    if let Err(e) = tokio::fs::copy(&tmp_path, &cache_path).await {
-        tracing::warn!("[render] failed to write render cache {:?}: {}", cache_path, e);
-    } else {
-        tracing::info!("[render] cached render at {:?}", cache_path);
+    // ── Save to cache and stream back ─────────────────────────────────────────
+    // Move the rendered temp file into the cache (best-effort), then stream
+    // from whichever path succeeded — never read the whole file into memory.
+    if let Err(e) = tokio::fs::rename(&tmp_path, &cache_path).await {
+        tracing::warn!("[render] failed to cache render {:?}: {}", cache_path, e);
+        // Fall back to streaming from tmp_path directly
+        let resp = stream_file_response(&tmp_path, &photo.mime_type, &photo.filename).await;
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return resp;
     }
+    tracing::info!("[render] cached render at {:?}", cache_path);
 
-    // Clean up temp file
-    let _ = tokio::fs::remove_file(&tmp_path).await;
-
-    Ok(build_response(data, &photo.mime_type, &photo.filename).into_response())
+    Ok(stream_file_response(&cache_path, &photo.mime_type, &photo.filename).await?)
 }
 
-/// Build the download response headers + body for a rendered media file.
-fn build_response(data: Vec<u8>, mime: &str, original_filename: &str) -> impl IntoResponse {
+/// Stream a file from disk as the download response.
+///
+/// Uses `ReaderStream` so we never load the entire file into memory —
+/// critical for large video renders.
+async fn stream_file_response(
+    path: &std::path::Path,
+    mime: &str,
+    original_filename: &str,
+) -> Result<Response, AppError> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to open rendered file: {e}")))?;
+
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+
     let download_filename = format!("Edited {original_filename}");
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -322,5 +334,5 @@ fn build_response(data: Vec<u8>, mime: &str, original_filename: &str) -> impl In
         ))
         .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
     );
-    (StatusCode::OK, headers, Body::from(data))
+    Ok((StatusCode::OK, headers, body).into_response())
 }

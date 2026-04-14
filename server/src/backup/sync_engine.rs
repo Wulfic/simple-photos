@@ -93,10 +93,11 @@ pub async fn run_sync(
     api_key: &Option<String>,
     log_id: &str,
     is_recovery: bool,
+    accept_invalid_certs: bool,
 ) {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(accept_invalid_certs)
         .build()
     {
         Ok(c) => c,

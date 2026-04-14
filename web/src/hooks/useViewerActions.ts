@@ -158,7 +158,7 @@ export default function useViewerActions({
 
           const copyId = typeof crypto.randomUUID === "function"
             ? crypto.randomUUID()
-            : Date.now().toString(36) + Math.random().toString(36).substring(2);
+            : (() => { const a = new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); })();
           // For server-side originals where the duplicate succeeded, keep
           // serverSide: true so MediaTile fetches the thumbnail via the API
           // endpoint (/api/photos/:id/thumbnail) using the copy's serverCopyId.

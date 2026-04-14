@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::process::{run_with_timeout, FFMPEG_RENDER_TIMEOUT};
 use crate::sanitize;
 use crate::state::AppState;
 
@@ -223,6 +224,12 @@ pub async fn duplicate_photo(
             "source_photo_id": photo_id,
             "filename": copy_filename,
             "crop_metadata": null,
+            "width": new_w,
+            "height": new_h,
+            "duration_secs": new_duration.or(original.duration_secs),
+            "mime_type": original.mime_type,
+            "media_type": original.media_type,
+            "size_bytes": size_bytes,
         })),
     ))
 }
@@ -334,11 +341,11 @@ async fn render_video_copy(
 
     tracing::info!("[duplicate/render] ffmpeg args: {:?}", args);
 
-    let output = Command::new("ffmpeg")
-        .args(&args)
-        .output()
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(&args);
+    let output = run_with_timeout(&mut cmd, FFMPEG_RENDER_TIMEOUT)
         .await
-        .map_err(|e| AppError::Internal(format!("ffmpeg spawn failed: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("ffmpeg render for copy: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

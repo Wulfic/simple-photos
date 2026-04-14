@@ -27,10 +27,11 @@ pub(crate) async fn run_recovery(
     api_key: &Option<String>,
     admin_user_id: &str,
     recovery_id: &str,
+    accept_invalid_certs: bool,
 ) {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(accept_invalid_certs)
         .build()
     {
         Ok(c) => c,

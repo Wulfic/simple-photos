@@ -228,32 +228,34 @@ pub async fn convert_file(
 /// Image → JPEG.  Tries FFmpeg first, falls back to ImageMagick.
 async fn convert_image(input: &str, output: &str) -> bool {
     // FFmpeg: high-quality JPEG output (-q:v 2 ≈ 92% quality).
-    let ffmpeg = tokio::process::Command::new("nice")
-        .args(["-n", "19", "ffmpeg", "-y", "-i", input, "-q:v", "2", output])
-        .stdin(std::process::Stdio::null())
+    let mut cmd = tokio::process::Command::new("nice");
+    cmd.args(["-n", "19", "ffmpeg", "-y", "-i", input, "-q:v", "2", output])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await;
+        .stderr(std::process::Stdio::null());
+    let ffmpeg = crate::process::status_with_timeout(
+        &mut cmd,
+        std::time::Duration::from_secs(600),
+    ).await;
 
     if matches!(ffmpeg, Ok(s) if s.success()) {
         return true;
     }
 
     // Fallback: ImageMagick `convert` (handles RAW, PSD, SVG, etc.)
-    let magick = tokio::process::Command::new("convert")
-        .args([
+    let mut cmd = tokio::process::Command::new("convert");
+    cmd.args([
             &format!("{}[0]", input), // [0] = first frame/page
             "-quality",
             "92",
             "-auto-orient",
             output,
         ])
-        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await;
+        .stderr(std::process::Stdio::null());
+    let magick = crate::process::status_with_timeout(
+        &mut cmd,
+        std::time::Duration::from_secs(600),
+    ).await;
 
     matches!(magick, Ok(s) if s.success())
 }
@@ -264,8 +266,8 @@ async fn convert_image(input: &str, output: &str) -> bool {
 /// For videos already having square pixels (SAR=1:1), `iw*sar` equals `iw`
 /// so no rescaling occurs.
 async fn convert_video(input: &str, output: &str) -> bool {
-    let status = tokio::process::Command::new("nice")
-        .args([
+    let mut cmd = tokio::process::Command::new("nice");
+    cmd.args([
             "-n", "19",
             "ffmpeg", "-y",
             "-i", input,
@@ -278,19 +280,20 @@ async fn convert_video(input: &str, output: &str) -> bool {
             "-movflags", "+faststart",
             output,
         ])
-        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await;
+        .stderr(std::process::Stdio::null());
+    let status = crate::process::status_with_timeout(
+        &mut cmd,
+        std::time::Duration::from_secs(600),
+    ).await;
 
     matches!(status, Ok(s) if s.success())
 }
 
-/// Audio → MP3 at 192 kbps (high quality, ≈ 1.5 MB/min).
+/// Audio → MP3 (LAME).
 async fn convert_audio(input: &str, output: &str) -> bool {
-    let status = tokio::process::Command::new("nice")
-        .args([
+    let mut cmd = tokio::process::Command::new("nice");
+    cmd.args([
             "-n", "19",
             "ffmpeg", "-y",
             "-i", input,
@@ -298,11 +301,12 @@ async fn convert_audio(input: &str, output: &str) -> bool {
             "-b:a", "192k",
             output,
         ])
-        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await;
+        .stderr(std::process::Stdio::null());
+    let status = crate::process::status_with_timeout(
+        &mut cmd,
+        std::time::Duration::from_secs(600),
+    ).await;
 
     matches!(status, Ok(s) if s.success())
 }

@@ -143,13 +143,14 @@ pub async fn recover_from_backup(
     let pool = state.pool.clone();
     let recovery_id_clone = recovery_id.clone();
     let callback_url = format!("{}/api/backup/recovery-callback", base_url_cfg);
+    let accept_invalid_certs = state.config.backup.accept_invalid_certs;
 
     tokio::spawn(async move {
         let _guard = guard;
 
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
-            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_certs(accept_invalid_certs)
             .build()
         {
             Ok(c) => c,
@@ -341,12 +342,13 @@ pub async fn push_sync_to_target(
     let callback_url = req.callback_url;
     let recovery_id = req.recovery_id;
     let callback_api_key = req.target_api_key;
+    let accept_invalid_certs = state.config.backup.accept_invalid_certs;
 
     tokio::spawn(async move {
         // Run the full sync engine targeting the recovering primary.
         // is_recovery=true skips the deletion phases that would otherwise
         // remove users/photos that exist on the primary but not on the backup.
-        run_sync(&pool, &storage_root, &temp_server, &target_api_key, &log_id_clone, true).await;
+        run_sync(&pool, &storage_root, &temp_server, &target_api_key, &log_id_clone, true, accept_invalid_certs).await;
 
         // Notify the primary of completion via callback
         if let Some(ref url) = callback_url {
@@ -355,7 +357,7 @@ pub async fn push_sync_to_target(
 
             if let Ok(c) = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(15))
-                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_certs(accept_invalid_certs)
                 .build()
             {
                 let body = serde_json::json!({

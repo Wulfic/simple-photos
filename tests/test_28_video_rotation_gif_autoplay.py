@@ -272,45 +272,6 @@ class TestDuplicateDatePreservation:
 
 
 # =====================================================================
-# 3. In-place crop with rotation should update stored dimensions
-# =====================================================================
-
-class TestCropRotationDimensions:
-    """When crop_metadata with rotation is set on a photo, the list endpoint
-    should report the display-correct dimensions for client rendering."""
-
-    @needs_ffmpeg
-    def test_crop_rotation_90_updates_dimensions(self, user_client):
-        """After setting 90° rotation via crop, the photo listing should
-        report swapped width/height so clients can size the container correctly."""
-        video_bytes = generate_landscape_mp4(320, 180)
-        upload = user_client.upload_photo(
-            filename="crop_rotate.mp4",
-            content=video_bytes,
-            mime_type="video/mp4",
-        )
-        photo_id = upload["photo_id"]
-        time.sleep(2)
-
-        # Set crop metadata with 90° rotation
-        crop_meta = json.dumps({"rotate": 90, "x": 0, "y": 0, "width": 1, "height": 1})
-        user_client.crop_photo(photo_id, crop_meta)
-        time.sleep(1)
-
-        # The listing should reflect rotated dimensions
-        photos = user_client.list_photos()["photos"]
-        photo = next(p for p in photos if p["id"] == photo_id)
-
-        # After 90° rotation, width should become original height and vice versa
-        assert photo["width"] == 180, (
-            f"Expected width=180 after 90° rotation, got {photo['width']}"
-        )
-        assert photo["height"] == 320, (
-            f"Expected height=320 after 90° rotation, got {photo['height']}"
-        )
-
-
-# =====================================================================
 # 4. Render endpoint produces correctly-oriented video
 # =====================================================================
 

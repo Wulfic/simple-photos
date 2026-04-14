@@ -318,8 +318,8 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
 /// Use ffprobe to get the display dimensions of a video, accounting for
 /// SAR/DAR and container-level rotation (portrait phone videos).
 async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, i64)> {
-    let output = tokio::process::Command::new("ffprobe")
-        .args([
+    let mut cmd = tokio::process::Command::new("ffprobe");
+    cmd.args([
             "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height,sample_aspect_ratio:stream_side_data=rotation:format_tags=rotate",
@@ -327,10 +327,13 @@ async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, 
         ])
         .arg(path)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .await
-        .ok()?;
+        .stderr(std::process::Stdio::null());
+    let output = crate::process::run_with_timeout(
+        &mut cmd,
+        crate::process::FFPROBE_TIMEOUT,
+    )
+    .await
+    .ok()?;
 
     let s = String::from_utf8_lossy(&output.stdout);
     // Output may have multiple lines (stream info, side_data, format tags).

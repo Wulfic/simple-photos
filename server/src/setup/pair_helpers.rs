@@ -382,14 +382,14 @@ pub(crate) async fn configure_backup_mode(
 }
 
 /// Fire-and-forget: ask the primary to push all existing photos to this backup.
-pub(crate) fn trigger_initial_sync(base_url: &str, remote_token: &str, server_id: Option<String>) {
+pub(crate) fn trigger_initial_sync(base_url: &str, remote_token: &str, server_id: Option<String>, accept_invalid_certs: bool) {
     if let Some(server_id) = server_id {
         let sync_url = format!("{}/api/admin/backup/servers/{}/sync", base_url, server_id);
         let remote_token = remote_token.to_string();
         tokio::spawn(async move {
             let sync_client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
-                .danger_accept_invalid_certs(true)
+                .danger_accept_invalid_certs(accept_invalid_certs)
                 .build()
                 .ok();
 

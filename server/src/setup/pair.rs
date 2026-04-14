@@ -72,7 +72,7 @@ pub async fn pair(
     let base_url = normalize_server_url(&req.main_server_url);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 
@@ -171,7 +171,7 @@ pub async fn pair(
         base_url
     );
 
-    trigger_initial_sync(&base_url, &remote_token, backup_server_id);
+    trigger_initial_sync(&base_url, &remote_token, backup_server_id, state.config.backup.accept_invalid_certs);
 
     Ok((
         StatusCode::CREATED,
@@ -239,7 +239,7 @@ pub async fn verify_backup(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 

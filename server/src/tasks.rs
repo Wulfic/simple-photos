@@ -29,13 +29,14 @@ pub fn spawn_all(
 ) {
     spawn_housekeeping(pool.clone());
     spawn_trash_purge(pool.clone(), config.storage.root.clone());
-    spawn_backup_sync(pool.clone(), config.storage.root.clone());
+    spawn_backup_sync(pool.clone(), config.storage.root.clone(), config.backup.accept_invalid_certs);
     spawn_diagnostics_push(
         pool.clone(),
         config.storage.root.clone(),
         PathBuf::from(&config.database.path),
+        config.backup.accept_invalid_certs,
     );
-    spawn_log_forward(pool.clone(), audit_tx.clone());
+    spawn_log_forward(pool.clone(), audit_tx.clone(), config.backup.accept_invalid_certs);
     spawn_broadcast(pool.clone(), config.server.port);
     spawn_discovery_listener(pool.clone(), Arc::new(config.clone()));
     spawn_auto_scan(
@@ -150,24 +151,24 @@ fn spawn_trash_purge(pool: SqlitePool, storage_root: PathBuf) {
 }
 
 /// Periodic sync to registered backup servers.
-fn spawn_backup_sync(pool: SqlitePool, storage_root: PathBuf) {
+fn spawn_backup_sync(pool: SqlitePool, storage_root: PathBuf, accept_invalid_certs: bool) {
     tokio::spawn(async move {
-        crate::backup::sync::background_sync_task(pool, storage_root).await;
+        crate::backup::sync::background_sync_task(pool, storage_root, accept_invalid_certs).await;
     });
 }
 
 /// Push diagnostics snapshot from backup to primary every 15 min.
-fn spawn_diagnostics_push(pool: SqlitePool, storage_root: PathBuf, db_path: PathBuf) {
+fn spawn_diagnostics_push(pool: SqlitePool, storage_root: PathBuf, db_path: PathBuf, accept_invalid_certs: bool) {
     tokio::spawn(async move {
-        crate::backup::diagnostics::background_diagnostics_push_task(pool, storage_root, db_path)
+        crate::backup::diagnostics::background_diagnostics_push_task(pool, storage_root, db_path, accept_invalid_certs)
             .await;
     });
 }
 
 /// Forward audit logs from backup to primary in real time.
-fn spawn_log_forward(pool: SqlitePool, audit_tx: tokio::sync::broadcast::Sender<AuditBroadcast>) {
+fn spawn_log_forward(pool: SqlitePool, audit_tx: tokio::sync::broadcast::Sender<AuditBroadcast>, accept_invalid_certs: bool) {
     tokio::spawn(async move {
-        crate::backup::diagnostics::background_log_forward_task(pool, audit_tx).await;
+        crate::backup::diagnostics::background_log_forward_task(pool, audit_tx, accept_invalid_certs).await;
     });
 }
 

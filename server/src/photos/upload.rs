@@ -61,7 +61,7 @@ pub async fn upload_photo(
     };
 
     let (body, filename, mime_type) = if let Some(target) = conversion::conversion_target(&filename) {
-        let tmp_dir = std::env::temp_dir().join("sp_upload_conv");
+        let tmp_dir = state.config.storage.root.join(".tmp").join("sp_upload_conv");
         let conv_id = Uuid::new_v4();
         let tmp_input = tmp_dir.join(format!("{}_in.{}", conv_id,
             filename.rsplit('.').next().unwrap_or("bin")));

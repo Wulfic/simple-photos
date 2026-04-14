@@ -255,7 +255,7 @@ pub async fn check_backup_server_status(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 

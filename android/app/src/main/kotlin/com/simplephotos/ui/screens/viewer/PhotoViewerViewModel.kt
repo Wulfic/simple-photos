@@ -285,12 +285,23 @@ class PhotoViewerViewModel @Inject constructor(
                 // endpoint — it renders via ffmpeg and produces an independent file
                 // with crop_metadata=NULL (edits baked in).
                 var serverCopyId: String? = null
+                var serverWidth = photo.width
+                var serverHeight = photo.height
+                var serverDuration = photo.durationSecs
                 photo.serverPhotoId?.let { serverId ->
                     try {
                         val res = withContext(Dispatchers.IO) {
                             photoRepository.duplicatePhotoOnServer(serverId, metadata)
                         }
                         serverCopyId = res.id
+                        // Use server-probed dimensions (correct after rotation/crop)
+                        if (res.width > 0 && res.height > 0) {
+                            serverWidth = res.width
+                            serverHeight = res.height
+                        }
+                        if (res.durationSecs != null) {
+                            serverDuration = res.durationSecs
+                        }
                     } catch (_: Exception) { /* proceed with local-only copy */ }
                 }
 
@@ -302,6 +313,9 @@ class PhotoViewerViewModel @Inject constructor(
                     // Server bakes edits into the file, so crop_metadata is NULL
                     // when we have a server copy. For local-only copies, keep metadata.
                     cropMetadata = if (serverCopyId != null) null else metadata,
+                    width = serverWidth,
+                    height = serverHeight,
+                    durationSecs = serverDuration,
                     createdAt = System.currentTimeMillis(),
                     localPath = newLocalPath,
                     syncStatus = if (serverCopyId != null) SyncStatus.SYNCED else SyncStatus.PENDING
@@ -383,11 +397,8 @@ class PhotoViewerViewModel @Inject constructor(
             val cw = meta?.optDouble("width", 1.0) ?: 1.0
             val ch = meta?.optDouble("height", 1.0) ?: 1.0
             val brightness = (meta?.optDouble("brightness", 0.0) ?: 0.0).toFloat()
-            val rotate = (meta?.optInt("rotate", 0) ?: 0).toFloat()
+            val rotateDeg = meta?.optInt("rotate", 0) ?: 0
 
-            val SIZE = 256
-            val output = android.graphics.Bitmap.createBitmap(SIZE, SIZE, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(output)
             val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG)
 
             // Apply brightness via ColorMatrix
@@ -402,29 +413,52 @@ class PhotoViewerViewModel @Inject constructor(
                 paint.colorFilter = android.graphics.ColorMatrixColorFilter(cm)
             }
 
-            // Source rectangle (crop region on original thumbnail)
-            val sx = (cx * srcBitmap.width).toInt()
-            val sy = (cy * srcBitmap.height).toInt()
-            val sw = (cw * srcBitmap.width).toInt().coerceAtLeast(1)
-            val sh = (ch * srcBitmap.height).toInt().coerceAtLeast(1)
-            val srcRect = android.graphics.Rect(sx, sy, sx + sw, sy + sh)
+            // 1. Crop the source bitmap to the selected region
+            val sx = (cx * srcBitmap.width).toInt().coerceIn(0, srcBitmap.width - 1)
+            val sy = (cy * srcBitmap.height).toInt().coerceIn(0, srcBitmap.height - 1)
+            val sw = (cw * srcBitmap.width).toInt().coerceAtLeast(1).coerceAtMost(srcBitmap.width - sx)
+            val sh = (ch * srcBitmap.height).toInt().coerceAtLeast(1).coerceAtMost(srcBitmap.height - sy)
 
-            // Fit cropped region into SIZE×SIZE
-            val scale = maxOf(SIZE.toFloat() / sw, SIZE.toFloat() / sh)
-            val dw = sw * scale
-            val dh = sh * scale
-            val dstRect = android.graphics.RectF(
-                (SIZE - dw) / 2f, (SIZE - dh) / 2f,
-                (SIZE + dw) / 2f, (SIZE + dh) / 2f,
-            )
+            // 2. Determine output dimensions after crop + rotation.
+            //    For 90°/270° rotations, width and height swap.
+            val isSwapped = (rotateDeg == 90 || rotateDeg == 270)
+            val croppedW = if (isSwapped) sh else sw
+            val croppedH = if (isSwapped) sw else sh
 
-            canvas.save()
-            if (rotate != 0f) {
-                canvas.rotate(rotate, SIZE / 2f, SIZE / 2f)
+            // 3. Scale to fit within 256px on the longest edge (preserve aspect ratio)
+            val maxSize = 256f
+            val scale = maxSize / maxOf(croppedW, croppedH).toFloat()
+            val outW = (croppedW * scale).toInt().coerceAtLeast(1)
+            val outH = (croppedH * scale).toInt().coerceAtLeast(1)
+
+            val output = android.graphics.Bitmap.createBitmap(outW, outH, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(output)
+
+            // 4. Apply rotation via Matrix, then draw scaled crop
+            val matrix = android.graphics.Matrix()
+            // Scale the cropped region to fit the output
+            val scaleX = outW.toFloat() / sw.toFloat()
+            val scaleY = outH.toFloat() / sh.toFloat()
+            if (rotateDeg != 0) {
+                // Translate so that rotation pivot is at center of the cropped region
+                // mapped into output space, then rotate, then scale.
+                matrix.postTranslate(-sw / 2f, -sh / 2f)
+                matrix.postRotate(rotateDeg.toFloat())
+                matrix.postScale(
+                    outW.toFloat() / (if (isSwapped) sh else sw).toFloat(),
+                    outH.toFloat() / (if (isSwapped) sw else sh).toFloat()
+                )
+                matrix.postTranslate(outW / 2f, outH / 2f)
+            } else {
+                matrix.postScale(scaleX, scaleY)
             }
-            canvas.drawBitmap(srcBitmap, srcRect, dstRect, paint)
-            canvas.restore()
+
+            // Extract cropped portion as a new bitmap
+            val cropped = android.graphics.Bitmap.createBitmap(srcBitmap, sx, sy, sw, sh)
             srcBitmap.recycle()
+
+            canvas.drawBitmap(cropped, matrix, paint)
+            cropped.recycle()
 
             // Compress to JPEG and save
             val stream = java.io.ByteArrayOutputStream()

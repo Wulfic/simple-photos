@@ -21,6 +21,8 @@
 
 use std::path::Path;
 
+use crate::process::{run_with_timeout, status_with_timeout, THUMBNAIL_TIMEOUT, FFPROBE_TIMEOUT};
+
 /// Generate a thumbnail for a media file.
 ///
 /// Supported inputs: JPEG, PNG, GIF, WebP, BMP, ICO, AVIF, video, audio.
@@ -152,8 +154,8 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
 
     // setsar=1 normalises non-square pixel aspect ratios before scaling.
     // force_original_aspect_ratio=decrease fits within 512×512 without cropping.
-    let result = tokio::process::Command::new("ffmpeg")
-        .args(["-y", "-ss", &format!("{:.2}", seek_to), "-i"])
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-ss", &format!("{:.2}", seek_to), "-i"])
         .arg(input_path)
         .args([
             "-frames:v",
@@ -165,9 +167,8 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
         ])
         .arg(output_path)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await;
+        .stderr(std::process::Stdio::null());
+    let result = status_with_timeout(&mut cmd, THUMBNAIL_TIMEOUT).await;
 
     match result {
         Ok(status) if status.success() && output_path.exists() => {
@@ -186,7 +187,7 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
             tracing::warn!(
                 path = %input_path.display(),
                 error = %e,
-                "FFmpeg not available for video thumbnail, using placeholder"
+                "FFmpeg not available or timed out for video thumbnail, using placeholder"
             );
             generate_placeholder_thumbnail(output_path, [30, 30, 30]).await
         }
@@ -198,8 +199,8 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
 /// Preserves the original aspect ratio (fits within 512px) at reduced
 /// frame rate to keep file size reasonable.
 async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) -> bool {
-    let result = tokio::process::Command::new("ffmpeg")
-        .args(["-y", "-i"])
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-i"])
         .arg(input_path)
         .args([
             "-vf",
@@ -209,9 +210,8 @@ async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) ->
         ])
         .arg(output_path)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await;
+        .stderr(std::process::Stdio::null());
+    let result = status_with_timeout(&mut cmd, THUMBNAIL_TIMEOUT).await;
 
     match result {
         Ok(status) if status.success() && output_path.exists() => {
@@ -224,8 +224,8 @@ async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) ->
 
 /// Probe the duration of a media file using ffprobe.
 pub async fn probe_duration(path: &Path) -> Option<f64> {
-    let output = tokio::process::Command::new("ffprobe")
-        .args([
+    let mut cmd = tokio::process::Command::new("ffprobe");
+    cmd.args([
             "-v",
             "error",
             "-show_entries",
@@ -235,10 +235,8 @@ pub async fn probe_duration(path: &Path) -> Option<f64> {
         ])
         .arg(path)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .await
-        .ok()?;
+        .stderr(std::process::Stdio::null());
+    let output = run_with_timeout(&mut cmd, FFPROBE_TIMEOUT).await.ok()?;
 
     let s = String::from_utf8_lossy(&output.stdout);
     s.trim().parse::<f64>().ok()

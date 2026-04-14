@@ -154,6 +154,18 @@ pub struct BackupConfig {
     /// See also: `server_settings.backup_api_key` (DB-stored fallback).
     #[serde(default)]
     pub api_key: Option<String>,
+
+    /// Accept invalid/self-signed TLS certificates when connecting to
+    /// other backup servers. Defaults to `true` for backward compatibility
+    /// with self-hosted LAN setups using self-signed certs.
+    #[serde(default = "BackupConfig::default_accept_invalid_certs")]
+    pub accept_invalid_certs: bool,
+}
+
+impl BackupConfig {
+    fn default_accept_invalid_certs() -> bool {
+        true
+    }
 }
 
 /// Storage auto-scan configuration.

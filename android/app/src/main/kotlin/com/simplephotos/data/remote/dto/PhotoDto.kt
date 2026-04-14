@@ -163,7 +163,13 @@ data class DuplicatePhotoResponse(
     val id: String,
     @SerializedName("source_photo_id") val sourcePhotoId: String,
     val filename: String,
-    @SerializedName("crop_metadata") val cropMetadata: String?
+    @SerializedName("crop_metadata") val cropMetadata: String?,
+    val width: Int = 0,
+    val height: Int = 0,
+    @SerializedName("duration_secs") val durationSecs: Float? = null,
+    @SerializedName("mime_type") val mimeType: String? = null,
+    @SerializedName("media_type") val mediaType: String? = null,
+    @SerializedName("size_bytes") val sizeBytes: Long? = null,
 )
 
 // ── 2FA Status ───────────────────────────────────────────────────────────────
