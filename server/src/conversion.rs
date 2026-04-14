@@ -43,10 +43,11 @@ pub fn progress_finish() {
 }
 
 /// Read the current conversion progress snapshot.
+/// `done` is clamped to `total` as a safety net against races.
 pub fn progress_snapshot() -> (bool, i64, i64) {
     let active = CONV_ACTIVE.load(Ordering::Relaxed);
     let total = CONV_TOTAL.load(Ordering::Relaxed);
-    let done = CONV_DONE.load(Ordering::Relaxed);
+    let done = CONV_DONE.load(Ordering::Relaxed).min(total);
     (active, total, done)
 }
 

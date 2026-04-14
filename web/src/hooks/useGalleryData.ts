@@ -250,10 +250,13 @@ export function useGalleryData(): GalleryDataResult {
         const idbKey = existing ? existing.blobId : photo.id;
 
         if (existing) {
-          // Update mutable server-synced fields (favorites, serverPhotoId, dimensions)
+          // Update mutable server-synced fields (favorites, serverPhotoId, dimensions, crop)
           const updates: Partial<CachedPhoto> = {};
           if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
           if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
+          // Sync crop metadata from server (e.g. when Android saves edits)
+          const serverCrop = photo.crop_metadata ?? undefined;
+          if (existing.cropData !== serverCrop) updates.cropData = serverCrop;
           // Sync corrected dimensions from server (the server-side EXIF orientation
           // repair may have fixed width/height after this entry was cached).
           if (photo.width > 0 && photo.height > 0 &&

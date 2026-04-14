@@ -48,7 +48,7 @@ export default function ConversionBanner() {
         batchStartRef.current = Date.now();
       }
 
-      setCounts({ total: res.total, done: res.done });
+      setCounts({ total: res.total, done: Math.min(res.done, res.total) });
       startTask("conversion");
 
       // ETA estimation

@@ -14,14 +14,23 @@
 //! simultaneously on different files.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use futures_util::TryStreamExt;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::conversion;
 use crate::photos::metadata::extract_media_metadata_async;
 use crate::photos::thumbnail::generate_thumbnail_file;
 use crate::photos::utils::{compute_photo_hash_streaming, normalize_iso_timestamp, utc_now_iso};
+
+/// Serializes conversion passes so only one runs at a time.
+/// Prevents concurrent passes from racing on the global progress counters.
+fn conversion_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 /// Run a conversion pass: discover non-native files, convert, register, encrypt.
 ///
@@ -32,6 +41,9 @@ pub async fn run_conversion_pass(
     storage_root: PathBuf,
     jwt_secret: String,
 ) {
+    // Serialize: only one conversion pass at a time to keep progress counters accurate.
+    let _guard = conversion_lock().lock().await;
+
     // ── Step 0: Determine the admin user to assign new photos to ─────────
     let admin_id: Option<String> = sqlx::query_scalar(
         "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",

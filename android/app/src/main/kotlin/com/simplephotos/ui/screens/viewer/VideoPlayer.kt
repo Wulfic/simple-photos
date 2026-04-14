@@ -35,7 +35,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 
 // ---------------------------------------------------------------------------
@@ -219,15 +218,17 @@ internal fun VideoPlayerPage(
                     .fillMaxSize()
                     .then(videoRotationModifier)
             ) {
+                // Use a raw TextureView instead of PlayerView's default SurfaceView.
+                // SurfaceView creates a separate window surface that doesn't support
+                // Compose graphicsLayer transforms (rotation, scale) — it crashes or
+                // renders incorrectly on many devices. TextureView renders into a
+                // regular texture that participates in normal view compositing.
                 AndroidView(
                 factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        this.player = sharedPlayer
-                        useController = false
-                    }
+                    android.view.TextureView(ctx)
                 },
-                update = { playerView ->
-                    playerView.player = sharedPlayer
+                update = { view ->
+                    sharedPlayer.setVideoTextureView(view)
                 },
                 modifier = Modifier.fillMaxSize()
             )

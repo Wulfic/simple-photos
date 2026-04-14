@@ -203,11 +203,6 @@ fun LoginScreen(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
-            TextButton(onClick = onNavigateToRegister) {
-                Text("Don't have an account? Create one")
-            }
-
         }
     }
 }

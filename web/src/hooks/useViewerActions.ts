@@ -76,6 +76,7 @@ export default function useViewerActions({
 
   const [showLeavePrompt, setShowLeavePrompt] = useState(false);
   const [saveCopySuccess, setSaveCopySuccess] = useState(false);
+  const [isSavingCopy, setIsSavingCopy] = useState(false);
   const [isRenderingVideo, setIsRenderingVideo] = useState(false);
   // Holds the in-flight render promise so a second download click during
   // conversion waits for the same job rather than starting a duplicate.
@@ -131,69 +132,74 @@ export default function useViewerActions({
     if (!id) return;
     const meta = buildEditMetadata();
     const metaJson = meta ? JSON.stringify(meta) : null;
+    setIsSavingCopy(true);
     try {
       {
         // Duplicate the IndexedDB entry with its own ID + new metadata,
         // sync the copy to the server, and generate an edited thumbnail.
         const original = await db.photos.get(id);
-        if (original) {
-          const copyFilename = original.filename.startsWith("Copy of ")
-            ? original.filename
-            : `Copy of ${original.filename}`;
+        if (!original) {
+          setError("Could not find photo data — try refreshing the page.");
+          setIsSavingCopy(false);
+          return;
+        }
 
-          // ── Server sync ────────────────────────────────────────────
-          // If the original has a server-side photo record, call the
-          // server's duplicate endpoint so the copy persists across
-          // sessions and devices. The server row shares the same
-          // encrypted_blob_id so no data is duplicated.
-          let serverCopyId: string | undefined;
-          if (original.serverPhotoId) {
-            // No catch here — let errors propagate up to the outer catch so the
-            // user sees the failure rather than silently getting a local-only copy.
-            const res = await api.photos.duplicate(original.serverPhotoId, metaJson);
-            serverCopyId = res.id;
-          }
+        const copyFilename = original.filename.startsWith("Copy of ")
+          ? original.filename
+          : `Copy of ${original.filename}`;
 
-          // Re-use original thumbnail; the UI applies cropData via CSS
+        // ── Server sync ────────────────────────────────────────────
+        // If the original has a server-side photo record, call the
+        // server's duplicate endpoint so the copy persists across
+        // sessions and devices. The server row shares the same
+        // encrypted_blob_id so no data is duplicated.
+        let serverCopyId: string | undefined;
+        if (original.serverPhotoId) {
+          // No catch here — let errors propagate up to the outer catch so the
+          // user sees the failure rather than silently getting a local-only copy.
+          const res = await api.photos.duplicate(original.serverPhotoId, metaJson);
+          serverCopyId = res.id;
+        }
 
-          const copyId = typeof crypto.randomUUID === "function"
-            ? crypto.randomUUID()
-            : (() => { const a = new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); })();
-          // For server-side originals where the duplicate succeeded, keep
-          // serverSide: true so MediaTile fetches the thumbnail via the API
-          // endpoint (/api/photos/:id/thumbnail) using the copy's serverCopyId.
-          // For encrypted originals or failed server duplicates, clear
-          // serverSide so the stale-cleanup logic doesn't delete the copy
-          // (which uses a random blobId, not a server photo ID).
-          const copyShouldBeServerSide = !!(original.serverSide && serverCopyId);
+        // Re-use original thumbnail; the UI applies cropData via CSS
 
-          await db.photos.put({
-            ...original,
-            blobId: copyId,
-            serverSide: copyShouldBeServerSide || undefined,
-            // contentHash must not be duplicated — each row has a unique identity
-            contentHash: undefined,
-            storageBlobId: original.storageBlobId || original.blobId,
-            filename: copyFilename,
-            // Server now bakes edits into the rendered file (crop_metadata=NULL),
-            // so the local copy should also have no crop overlay.
-            cropData: serverCopyId ? undefined : (metaJson ?? undefined),
-            takenAt: Date.now(),
-            thumbnailData: original.thumbnailData,
-            serverPhotoId: serverCopyId,
-          });
-          console.log("[Viewer:saveCopy] Copy saved to IDB:", {
-            copyId, serverCopyId, copyShouldBeServerSide, filename: copyFilename,
-            originalBlobId: id, originalServerSide: original.serverSide,
-          });
+        const copyId = typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : (() => { const a = new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); })();
+        // For server-side originals where the duplicate succeeded, keep
+        // serverSide: true so MediaTile fetches the thumbnail via the API
+        // endpoint (/api/photos/:id/thumbnail) using the copy's serverCopyId.
+        // For encrypted originals or failed server duplicates, clear
+        // serverSide so the stale-cleanup logic doesn't delete the copy
+        // (which uses a random blobId, not a server photo ID).
+        const copyShouldBeServerSide = !!(original.serverSide && serverCopyId);
 
-          // Fire-and-forget: trigger backup sync so the copy propagates to all
-          // configured backup servers without blocking the UI.
-          if (serverCopyId) {
-            const servers = useBackupStore.getState().backupServers;
-            for (const srv of servers) {
-              api.backup.triggerSync(srv.id).catch(() => { /* non-fatal */ });
-            }
+        await db.photos.put({
+          ...original,
+          blobId: copyId,
+          serverSide: copyShouldBeServerSide || undefined,
+          // contentHash must not be duplicated — each row has a unique identity
+          contentHash: undefined,
+          storageBlobId: original.storageBlobId || original.blobId,
+          filename: copyFilename,
+          // Server now bakes edits into the rendered file (crop_metadata=NULL),
+          // so the local copy should also have no crop overlay.
+          cropData: serverCopyId ? undefined : (metaJson ?? undefined),
+          takenAt: Date.now(),
+          thumbnailData: original.thumbnailData,
+          serverPhotoId: serverCopyId,
+        });
+        console.log("[Viewer:saveCopy] Copy saved to IDB:", {
+          copyId, serverCopyId, copyShouldBeServerSide, filename: copyFilename,
+          originalBlobId: id, originalServerSide: original.serverSide,
+        });
+
+        // Fire-and-forget: trigger backup sync so the copy propagates to all
+        // configured backup servers without blocking the UI.
+        if (serverCopyId) {
+          const servers = useBackupStore.getState().backupServers;
+          for (const srv of servers) {
+            api.backup.triggerSync(srv.id).catch(() => { /* non-fatal */ });
           }
         }
       }
@@ -204,6 +210,8 @@ export default function useViewerActions({
     } catch (err) {
       console.error("[Viewer] Save Copy failed:", err);
       setError("Save Copy failed — please try again.");
+    } finally {
+      setIsSavingCopy(false);
     }
   }, [id, buildEditMetadata, setEditMode, setError]);
 
@@ -439,6 +447,7 @@ export default function useViewerActions({
     showLeavePrompt,
     setShowLeavePrompt,
     saveCopySuccess,
+    isSavingCopy,
     isRenderingVideo,
     buildEditMetadata,
     handleSaveEdit,

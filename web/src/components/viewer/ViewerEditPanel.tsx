@@ -48,6 +48,8 @@ interface ViewerEditPanelProps {
   onSave: () => void;
   /** Save Copy creates a new metadata-only version */
   onSaveCopy: () => void;
+  /** True while a save-copy operation is in progress */
+  isSavingCopy?: boolean;
   /** Reset clears all edits */
   onClear: () => void;
   /** Cancel exits edit mode without saving */
@@ -84,6 +86,7 @@ export default function ViewerEditPanel({
   duration,
   onSave,
   onSaveCopy,
+  isSavingCopy,
   onClear,
   onCancel,
 }: ViewerEditPanelProps) {
@@ -330,10 +333,11 @@ export default function ViewerEditPanel({
         </button>
         <button
           onClick={onSaveCopy}
-          className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+          disabled={isSavingCopy}
+          className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-wait"
           title="Save as a new copy — keeps the original unchanged"
         >
-          Save Copy
+          {isSavingCopy ? "Saving…" : "Save Copy"}
         </button>
         {cropData && (
           <button

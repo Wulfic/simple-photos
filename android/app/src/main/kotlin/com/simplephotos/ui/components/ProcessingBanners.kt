@@ -44,7 +44,7 @@ fun ConversionBanner(api: ApiService) {
                 val status = api.getConversionStatus()
                 active = status.active && status.total > 0
                 total = status.total
-                done = status.done
+                done = status.done.coerceAtMost(status.total)
                 // Reset dismissal when a new batch starts
                 if (!active) dismissed = false
             } catch (_: Exception) {
