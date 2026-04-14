@@ -31,10 +31,17 @@ export const photosApi = {
       body: JSON.stringify({ crop_metadata: cropMetadata }),
     }),
 
-  /** Duplicate a photo (Save as Copy) — creates a new photos row sharing
-   *  the same underlying file but with its own crop/edit metadata. */
+  /** Duplicate a photo (Save as Copy) — creates a new photos row with
+   *  edits baked into a rendered file (its own encrypted blob). */
   duplicate: (photoId: string, cropMetadata: string | null) =>
-    request<{ id: string; source_photo_id: string; filename: string; crop_metadata: object | null }>(
+    request<{
+      id: string;
+      source_photo_id: string;
+      filename: string;
+      crop_metadata: object | null;
+      encrypted_blob_id: string | null;
+      encrypted_thumb_blob_id: string | null;
+    }>(
       `/photos/${photoId}/duplicate`,
       {
         method: "POST",

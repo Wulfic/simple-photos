@@ -119,7 +119,6 @@ export default function Viewer() {
   const {
     showLeavePrompt, setShowLeavePrompt,
     saveCopySuccess,
-    isSavingCopy,
     handleSaveEdit, handleSaveCopy, handleClearCrop,
     handleLeaveAndSave, handleLeaveAndDiscard,
     handleDelete, handleRemoveFromAlbum,
@@ -591,7 +590,7 @@ export default function Viewer() {
           rotateValue={rotateValue} setRotateValue={setRotateValue}
           cropData={cropData} trimStart={trimStart} trimEnd={trimEnd}
           setTrimStart={setTrimStart} setTrimEnd={setTrimEnd} duration={mediaDuration}
-          onSave={handleSaveEdit} onSaveCopy={handleSaveCopy} isSavingCopy={isSavingCopy}
+          onSave={handleSaveEdit} onSaveCopy={handleSaveCopy}
           onClear={handleClearCrop} onCancel={() => setEditMode(false)}
         />
       )}

@@ -10,6 +10,7 @@ import { api } from "../api/client";
 import { db, type MediaType } from "../db";
 import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
+import { useProcessingStore } from "../store/processing";
 import { applyEditsToImageDownload } from "../utils/media";
 import type { CropMetadata, PreloadEntry } from "./useViewerMedia";
 
@@ -76,7 +77,6 @@ export default function useViewerActions({
 
   const [showLeavePrompt, setShowLeavePrompt] = useState(false);
   const [saveCopySuccess, setSaveCopySuccess] = useState(false);
-  const [isSavingCopy, setIsSavingCopy] = useState(false);
   const [isRenderingVideo, setIsRenderingVideo] = useState(false);
   // Holds the in-flight render promise so a second download click during
   // conversion waits for the same job rather than starting a duplicate.
@@ -118,100 +118,134 @@ export default function useViewerActions({
         setCropData(meta);
       } catch { /* ignore */ }
     }
+    // Keep fullPhotos cache in sync so the Viewer doesn't show stale edits
+    // when re-opening the same photo (fullPhotos is the fast-path cache).
+    try {
+      const existing = await db.fullPhotos?.get(id);
+      if (existing) {
+        await db.fullPhotos?.update(id, { cropData: metaJson ?? undefined });
+      }
+    } catch { /* non-fatal */ }
+    // Update preload cache so swiping back shows the edit immediately
+    const cached = preloadCache.current.get(id);
+    if (cached) {
+      preloadCache.current.set(id, { ...cached, cropData: meta });
+    }
     // Sync to server so Android and other clients see the edit
     try {
-      const cached = await db.photos.get(id);
-      if (cached?.serverPhotoId) {
-        await api.photos.setCrop(cached.serverPhotoId, metaJson);
+      const dbEntry = await db.photos.get(id);
+      if (dbEntry?.serverPhotoId) {
+        await api.photos.setCrop(dbEntry.serverPhotoId, metaJson);
       }
     } catch { /* non-fatal */ }
     setEditMode(false);
-  }, [id, buildEditMetadata, setCropData, setEditMode]);
+  }, [id, buildEditMetadata, setCropData, setEditMode, preloadCache]);
 
   const handleSaveCopy = useCallback(async () => {
     if (!id) return;
     const meta = buildEditMetadata();
     const metaJson = meta ? JSON.stringify(meta) : null;
-    setIsSavingCopy(true);
     try {
-      {
-        // Duplicate the IndexedDB entry with its own ID + new metadata,
-        // sync the copy to the server, and generate an edited thumbnail.
-        const original = await db.photos.get(id);
-        if (!original) {
-          setError("Could not find photo data — try refreshing the page.");
-          setIsSavingCopy(false);
-          return;
-        }
+      // Read original data before leaving edit mode
+      const original = await db.photos.get(id);
+      if (!original) {
+        setError("Could not find photo data — try refreshing the page.");
+        return;
+      }
 
-        const copyFilename = original.filename.startsWith("Copy of ")
-          ? original.filename
-          : `Copy of ${original.filename}`;
+      const copyFilename = original.filename.startsWith("Copy of ")
+        ? original.filename
+        : `Copy of ${original.filename}`;
 
-        // ── Server sync ────────────────────────────────────────────
-        // If the original has a server-side photo record, call the
-        // server's duplicate endpoint so the copy persists across
-        // sessions and devices. The server row shares the same
-        // encrypted_blob_id so no data is duplicated.
-        let serverCopyId: string | undefined;
-        if (original.serverPhotoId) {
-          // No catch here — let errors propagate up to the outer catch so the
-          // user sees the failure rather than silently getting a local-only copy.
-          const res = await api.photos.duplicate(original.serverPhotoId, metaJson);
-          serverCopyId = res.id;
-        }
+      const copyId = typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : (() => { const a = new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); })();
 
-        // Re-use original thumbnail; the UI applies cropData via CSS
+      // ── Exit edit mode immediately — don't block the UI ──────────
+      setEditMode(false);
+      setSaveCopySuccess(true);
+      setTimeout(() => setSaveCopySuccess(false), 2000);
 
-        const copyId = typeof crypto.randomUUID === "function"
-          ? crypto.randomUUID()
-          : (() => { const a = new Uint8Array(16); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); })();
-        // For server-side originals where the duplicate succeeded, keep
-        // serverSide: true so MediaTile fetches the thumbnail via the API
-        // endpoint (/api/photos/:id/thumbnail) using the copy's serverCopyId.
-        // For encrypted originals or failed server duplicates, clear
-        // serverSide so the stale-cleanup logic doesn't delete the copy
-        // (which uses a random blobId, not a server photo ID).
-        const copyShouldBeServerSide = !!(original.serverSide && serverCopyId);
+      // ── Server sync runs in the background ───────────────────────
+      // Show a "Saving copy" spinner in the nav bar while the server
+      // renders the duplicate (ffmpeg for video can take 30+ seconds).
+      if (original.serverPhotoId) {
+        const { startTask, endTask } = useProcessingStore.getState();
+        startTask("saveCopy");
 
+        api.photos.duplicate(original.serverPhotoId, metaJson)
+          .then(async (res) => {
+            const serverCopyId = res.id;
+            const copyShouldBeServerSide = !!(original.serverSide && serverCopyId);
+            // Use the copy's own encrypted blob so the viewer fetches the
+            // rendered file (with edits baked in) instead of the original.
+            const copyBlobId = res.encrypted_blob_id ?? undefined;
+            const copyThumbBlobId = res.encrypted_thumb_blob_id ?? undefined;
+
+            await db.photos.put({
+              ...original,
+              blobId: copyId,
+              serverSide: copyShouldBeServerSide || undefined,
+              contentHash: undefined,
+              storageBlobId: copyBlobId ?? (original.storageBlobId || original.blobId),
+              thumbnailBlobId: copyThumbBlobId ?? original.thumbnailBlobId,
+              filename: copyFilename,
+              cropData: serverCopyId ? undefined : (metaJson ?? undefined),
+              takenAt: Date.now(),
+              thumbnailData: original.thumbnailData,
+              serverPhotoId: serverCopyId,
+            });
+            console.log("[Viewer:saveCopy] Copy saved to IDB:", {
+              copyId, serverCopyId, copyShouldBeServerSide, filename: copyFilename,
+              originalBlobId: id, originalServerSide: original.serverSide,
+            });
+
+            // Trigger backup sync for the new copy
+            const servers = useBackupStore.getState().backupServers;
+            for (const srv of servers) {
+              api.backup.triggerSync(srv.id).catch(() => { /* non-fatal */ });
+            }
+          })
+          .catch((err) => {
+            console.error("[Viewer] Save Copy server sync failed:", err);
+            // Create a local-only copy as fallback so the user doesn't lose work
+            db.photos.put({
+              ...original,
+              blobId: copyId,
+              serverSide: undefined,
+              contentHash: undefined,
+              storageBlobId: original.storageBlobId || original.blobId,
+              filename: copyFilename,
+              cropData: metaJson ?? undefined,
+              takenAt: Date.now(),
+              thumbnailData: original.thumbnailData,
+              serverPhotoId: undefined,
+            }).catch(() => { /* last resort */ });
+          })
+          .finally(() => {
+            endTask("saveCopy");
+          });
+      } else {
+        // No server photo — create local-only copy immediately
         await db.photos.put({
           ...original,
           blobId: copyId,
-          serverSide: copyShouldBeServerSide || undefined,
-          // contentHash must not be duplicated — each row has a unique identity
+          serverSide: undefined,
           contentHash: undefined,
           storageBlobId: original.storageBlobId || original.blobId,
           filename: copyFilename,
-          // Server now bakes edits into the rendered file (crop_metadata=NULL),
-          // so the local copy should also have no crop overlay.
-          cropData: serverCopyId ? undefined : (metaJson ?? undefined),
+          cropData: metaJson ?? undefined,
           takenAt: Date.now(),
           thumbnailData: original.thumbnailData,
-          serverPhotoId: serverCopyId,
+          serverPhotoId: undefined,
         });
-        console.log("[Viewer:saveCopy] Copy saved to IDB:", {
-          copyId, serverCopyId, copyShouldBeServerSide, filename: copyFilename,
-          originalBlobId: id, originalServerSide: original.serverSide,
+        console.log("[Viewer:saveCopy] Local-only copy saved to IDB:", {
+          copyId, filename: copyFilename, originalBlobId: id,
         });
-
-        // Fire-and-forget: trigger backup sync so the copy propagates to all
-        // configured backup servers without blocking the UI.
-        if (serverCopyId) {
-          const servers = useBackupStore.getState().backupServers;
-          for (const srv of servers) {
-            api.backup.triggerSync(srv.id).catch(() => { /* non-fatal */ });
-          }
-        }
       }
-      setEditMode(false);
-      // Brief success flash — auto-clears after 2 seconds
-      setSaveCopySuccess(true);
-      setTimeout(() => setSaveCopySuccess(false), 2000);
     } catch (err) {
       console.error("[Viewer] Save Copy failed:", err);
       setError("Save Copy failed — please try again.");
-    } finally {
-      setIsSavingCopy(false);
     }
   }, [id, buildEditMetadata, setEditMode, setError]);
 
@@ -447,7 +481,6 @@ export default function useViewerActions({
     showLeavePrompt,
     setShowLeavePrompt,
     saveCopySuccess,
-    isSavingCopy,
     isRenderingVideo,
     buildEditMetadata,
     handleSaveEdit,

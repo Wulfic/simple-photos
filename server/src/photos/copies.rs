@@ -22,10 +22,13 @@ use axum::http::StatusCode;
 use axum::Json;
 use chrono::Utc;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
+use crate::blobs::storage;
+use crate::crypto;
 use crate::error::AppError;
 use crate::process::{run_with_timeout, FFMPEG_RENDER_TIMEOUT};
 use crate::sanitize;
@@ -185,36 +188,252 @@ pub async fn duplicate_photo(
     // ── Use the original's taken_at (for timeline ordering) ──────────────
     let created_at = original.created_at.clone();
 
-    // ── Insert DB row — crop_metadata is NULL (edits are baked in) ───────
-    sqlx::query(
-        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-         size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
-         thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
-         is_favorite, crop_metadata, camera_model, photo_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, NULL, ?, NULL)",
-    )
-    .bind(&new_id)
-    .bind(&auth.user_id)
-    .bind(&copy_filename)
-    .bind(&copy_rel)
-    .bind(&original.mime_type)
-    .bind(&original.media_type)
-    .bind(size_bytes)
-    .bind(new_w)
-    .bind(new_h)
-    .bind(new_duration.or(original.duration_secs))
-    .bind(&original.taken_at)
-    .bind(original.latitude)
-    .bind(original.longitude)
-    .bind(&thumb_rel_opt)
-    .bind(&created_at)
-    .bind(&original.camera_model)
-    .execute(&state.pool)
-    .await?;
+    // ── Try to encrypt the copy inline (so no unencrypted file persists) ─
+    let enc_key = crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
+        .await
+        .ok()
+        .flatten();
+
+    let (_final_file_path, _final_thumb_path, enc_blob_id, enc_thumb_blob_id) =
+        if let Some(key) = enc_key {
+            // Read the rendered file data
+            let file_data = tokio::fs::read(&copy_abs).await.map_err(|e| {
+                AppError::Internal(format!("Failed to read rendered copy: {e}"))
+            })?;
+
+            // Read thumbnail data (if generated)
+            let thumb_data = if thumb_rel_opt.is_some() {
+                tokio::fs::read(&thumb_abs).await.ok()
+            } else {
+                None
+            };
+
+            // Encrypt and store thumbnail blob
+            let mut thumb_blob_id_str = String::new();
+            let thumb_insert_params = if let Some(ref tb) = thumb_data {
+                let thumb_payload = serde_json::json!({
+                    "v": 1,
+                    "photo_blob_id": "",
+                    "width": 256,
+                    "height": 256,
+                    "data": base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD, tb,
+                    ),
+                });
+                let thumb_json = serde_json::to_vec(&thumb_payload).map_err(|e| {
+                    AppError::Internal(format!("Thumb JSON failed: {e}"))
+                })?;
+
+                let enc_thumb = {
+                    let kc = key;
+                    let jc = thumb_json;
+                    tokio::task::spawn_blocking(move || crypto::encrypt(&kc, &jc))
+                        .await
+                        .map_err(|e| AppError::Internal(format!("Thumb encrypt panicked: {e}")))?
+                        .map_err(|e| AppError::Internal(format!("Thumb encrypt failed: {e}")))?
+                };
+
+                let enc_thumb_hash = hex::encode(Sha256::digest(&enc_thumb));
+                let tid = Uuid::new_v4().to_string();
+                let ttype = if original.media_type == "video" {
+                    "video_thumbnail"
+                } else {
+                    "thumbnail"
+                };
+                let tpath = storage::write_blob(
+                    &storage_root, &auth.user_id, &tid, &enc_thumb,
+                )
+                .await
+                .map_err(|e| AppError::Internal(format!("Write thumb blob: {e}")))?;
+                let tnow = Utc::now().to_rfc3339();
+                thumb_blob_id_str = tid.clone();
+                Some((tid, ttype.to_string(), enc_thumb.len() as i64, enc_thumb_hash, tnow, tpath))
+            } else {
+                None
+            };
+
+            // Classify blob type
+            let blob_type = if original.mime_type == "image/gif" {
+                "gif"
+            } else if original.mime_type.starts_with("video/") {
+                "video"
+            } else if original.mime_type.starts_with("audio/") {
+                "audio"
+            } else {
+                "photo"
+            };
+
+            // Build photo payload (same format as encrypt_one_photo)
+            let photo_payload = serde_json::json!({
+                "v": 1,
+                "filename": copy_filename,
+                "taken_at": original.taken_at.as_deref().unwrap_or(&created_at),
+                "mime_type": original.mime_type,
+                "media_type": original.media_type,
+                "width": new_w,
+                "height": new_h,
+                "duration": new_duration.or(original.duration_secs),
+                "latitude": original.latitude,
+                "longitude": original.longitude,
+                "album_ids": [],
+                "thumbnail_blob_id": thumb_blob_id_str,
+                "data": base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD, &file_data,
+                ),
+            });
+            let photo_json = serde_json::to_vec(&photo_payload).map_err(|e| {
+                AppError::Internal(format!("Photo JSON failed: {e}"))
+            })?;
+
+            // Encrypt the photo payload
+            let enc_photo = {
+                let kc = key;
+                let jc = photo_json;
+                tokio::task::spawn_blocking(move || crypto::encrypt(&kc, &jc))
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Photo encrypt panicked: {e}")))?
+                    .map_err(|e| AppError::Internal(format!("Photo encrypt failed: {e}")))?
+            };
+
+            let enc_photo_hash = hex::encode(Sha256::digest(&enc_photo));
+            let blob_id = Uuid::new_v4().to_string();
+            let blob_storage_path = storage::write_blob(
+                &storage_root, &auth.user_id, &blob_id, &enc_photo,
+            )
+            .await
+            .map_err(|e| AppError::Internal(format!("Write photo blob: {e}")))?;
+
+            let now = Utc::now().to_rfc3339();
+
+            // Atomic transaction: INSERT blob rows + INSERT photos row
+            let mut tx = state.pool.begin().await.map_err(|e| {
+                AppError::Internal(format!("Begin tx: {e}"))
+            })?;
+
+            if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) =
+                thumb_insert_params
+            {
+                sqlx::query(
+                    "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, \
+                     upload_time, storage_path, content_hash) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+                )
+                .bind(tid)
+                .bind(&auth.user_id)
+                .bind(ttype)
+                .bind(tsize)
+                .bind(thash)
+                .bind(ttime)
+                .bind(tpath)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::Internal(format!("Insert thumb blob: {e}")))?;
+            }
+
+            sqlx::query(
+                "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, \
+                 upload_time, storage_path, content_hash) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+            )
+            .bind(&blob_id)
+            .bind(&auth.user_id)
+            .bind(blob_type)
+            .bind(enc_photo.len() as i64)
+            .bind(&enc_photo_hash)
+            .bind(&now)
+            .bind(&blob_storage_path)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("Insert photo blob: {e}")))?;
+
+            sqlx::query(
+                "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                 size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
+                 thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
+                 is_favorite, crop_metadata, camera_model, photo_hash) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL)",
+            )
+            .bind(&new_id)
+            .bind(&auth.user_id)
+            .bind(&copy_filename)
+            .bind("")  // no unencrypted file_path
+            .bind(&original.mime_type)
+            .bind(&original.media_type)
+            .bind(size_bytes)
+            .bind(new_w)
+            .bind(new_h)
+            .bind(new_duration.or(original.duration_secs))
+            .bind(&original.taken_at)
+            .bind(original.latitude)
+            .bind(original.longitude)
+            .bind(Option::<&str>::None)  // no unencrypted thumb_path
+            .bind(&created_at)
+            .bind(&blob_id)
+            .bind(if thumb_blob_id_str.is_empty() {
+                None::<&str>
+            } else {
+                Some(thumb_blob_id_str.as_str())
+            })
+            .bind(&original.camera_model)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("Insert photo row: {e}")))?;
+
+            tx.commit().await.map_err(|e| {
+                AppError::Internal(format!("Commit tx: {e}"))
+            })?;
+
+            // Delete the unencrypted temp files — they must not persist on disk
+            let _ = tokio::fs::remove_file(&copy_abs).await;
+            if thumb_rel_opt.is_some() {
+                let _ = tokio::fs::remove_file(&thumb_abs).await;
+            }
+
+            (
+                String::new(),
+                Option::<String>::None,
+                Some(blob_id),
+                if thumb_blob_id_str.is_empty() { None } else { Some(thumb_blob_id_str) },
+            )
+        } else {
+            // No encryption key — fall back to unencrypted storage
+            sqlx::query(
+                "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                 size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
+                 thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
+                 is_favorite, crop_metadata, camera_model, photo_hash) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, NULL, ?, NULL)",
+            )
+            .bind(&new_id)
+            .bind(&auth.user_id)
+            .bind(&copy_filename)
+            .bind(&copy_rel)
+            .bind(&original.mime_type)
+            .bind(&original.media_type)
+            .bind(size_bytes)
+            .bind(new_w)
+            .bind(new_h)
+            .bind(new_duration.or(original.duration_secs))
+            .bind(&original.taken_at)
+            .bind(original.latitude)
+            .bind(original.longitude)
+            .bind(&thumb_rel_opt)
+            .bind(&created_at)
+            .bind(&original.camera_model)
+            .execute(&state.pool)
+            .await?;
+
+            (
+                copy_rel.clone(),
+                thumb_rel_opt.clone(),
+                Option::<String>::None,
+                Option::<String>::None,
+            )
+        };
 
     tracing::info!(
-        "Rendered duplicate {} → {} ({}×{}) for user {}",
-        photo_id, new_id, new_w, new_h, auth.user_id
+        "Rendered duplicate {} → {} ({}×{}, encrypted={}) for user {}",
+        photo_id, new_id, new_w, new_h, enc_blob_id.is_some(), auth.user_id
     );
 
     Ok((
@@ -230,6 +449,8 @@ pub async fn duplicate_photo(
             "mime_type": original.mime_type,
             "media_type": original.media_type,
             "size_bytes": size_bytes,
+            "encrypted_blob_id": enc_blob_id,
+            "encrypted_thumb_blob_id": enc_thumb_blob_id,
         })),
     ))
 }

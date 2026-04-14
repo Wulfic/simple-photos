@@ -441,3 +441,76 @@ class TestSaveSyncsToServer:
             meta = json.loads(meta)
         assert meta.get("rotate") == 90
         assert meta.get("brightness") == 25
+
+
+# =====================================================================
+# 7. Duplicate response includes encrypted blob IDs
+# =====================================================================
+
+class TestDuplicateResponseBlobIds:
+    """The duplicate endpoint should return encrypted_blob_id and
+    encrypted_thumb_blob_id so the client can fetch the rendered copy's
+    blob directly (instead of the original's blob)."""
+
+    def test_photo_duplicate_returns_encrypted_blob_id(self, user_client):
+        from helpers import generate_test_jpeg
+        jpeg = generate_test_jpeg(200, 100)
+        upload = user_client.upload_photo("blob_id_test.jpg", jpeg, "image/jpeg")
+        photo_id = upload["photo_id"]
+        time.sleep(2)
+
+        crop = json.dumps({"rotate": 90})
+        dup = user_client.duplicate_photo(photo_id, crop_metadata=crop)
+
+        assert "encrypted_blob_id" in dup, "Response missing encrypted_blob_id"
+        assert dup["encrypted_blob_id"] is not None, "encrypted_blob_id should not be null"
+        assert isinstance(dup["encrypted_blob_id"], str)
+        assert len(dup["encrypted_blob_id"]) > 0
+
+    def test_photo_duplicate_returns_encrypted_thumb_blob_id(self, user_client):
+        from helpers import generate_test_jpeg
+        jpeg = generate_test_jpeg(200, 100)
+        upload = user_client.upload_photo("thumb_blob_test.jpg", jpeg, "image/jpeg")
+        photo_id = upload["photo_id"]
+        time.sleep(2)
+
+        crop = json.dumps({"rotate": 90})
+        dup = user_client.duplicate_photo(photo_id, crop_metadata=crop)
+
+        assert "encrypted_thumb_blob_id" in dup, "Response missing encrypted_thumb_blob_id"
+        assert dup["encrypted_thumb_blob_id"] is not None, "encrypted_thumb_blob_id should not be null"
+
+    @needs_ffmpeg
+    def test_video_duplicate_returns_encrypted_blob_id(self, user_client):
+        video = generate_landscape_mp4(320, 180, 0.5)
+        upload = user_client.upload_photo("vid_blob_test.mp4", video, "video/mp4")
+        photo_id = upload["photo_id"]
+        time.sleep(2)
+
+        crop = json.dumps({"rotate": 90})
+        dup = user_client.duplicate_photo(photo_id, crop_metadata=crop)
+
+        assert "encrypted_blob_id" in dup, "Response missing encrypted_blob_id"
+        assert dup["encrypted_blob_id"] is not None, "encrypted_blob_id should not be null"
+        assert "encrypted_thumb_blob_id" in dup, "Response missing encrypted_thumb_blob_id"
+
+    def test_blob_ids_differ_from_original(self, user_client):
+        """The copy's blob IDs should be different from the original's —
+        they represent independently encrypted rendered files."""
+        from helpers import generate_test_jpeg
+        jpeg = generate_test_jpeg(200, 100)
+        upload = user_client.upload_photo("differ_blob.jpg", jpeg, "image/jpeg")
+        photo_id = upload["photo_id"]
+        time.sleep(2)
+
+        # Get original's blob IDs
+        photos = user_client.list_photos()["photos"]
+        orig = next(p for p in photos if p["id"] == photo_id)
+        orig_blob = orig.get("encrypted_blob_id")
+
+        crop = json.dumps({"rotate": 90})
+        dup = user_client.duplicate_photo(photo_id, crop_metadata=crop)
+
+        assert dup["encrypted_blob_id"] != orig_blob, (
+            "Copy's encrypted_blob_id should differ from original"
+        )

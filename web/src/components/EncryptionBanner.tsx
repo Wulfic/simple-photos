@@ -65,7 +65,7 @@ export default function EncryptionBanner() {
         cursor = res.next_cursor ?? undefined;
       } while (cursor);
 
-      const pending = all.filter((p) => !p.encrypted_blob_id).length;
+      const pending = all.filter((p) => p.encrypted_blob_id === null || p.encrypted_blob_id === undefined).length;
 
       // ── Batch tracking ────────────────────────────────────────────
       if (pending === 0) {

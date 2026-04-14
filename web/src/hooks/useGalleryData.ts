@@ -254,6 +254,13 @@ export function useGalleryData(): GalleryDataResult {
           const updates: Partial<CachedPhoto> = {};
           if (existing.isFavorite !== photo.is_favorite) updates.isFavorite = photo.is_favorite;
           if (existing.serverPhotoId !== photo.id) updates.serverPhotoId = photo.id;
+          // Keep storageBlobId in sync with the server's encrypted_blob_id so
+          // the Viewer fetches the correct blob (critical for save-copy entries
+          // whose storageBlobId initially pointed to the original's blob).
+          const serverBlobIdVal = photo.encrypted_blob_id ?? undefined;
+          if (serverBlobIdVal && existing.storageBlobId !== serverBlobIdVal) {
+            updates.storageBlobId = serverBlobIdVal;
+          }
           // Sync crop metadata from server (e.g. when Android saves edits)
           const serverCrop = photo.crop_metadata ?? undefined;
           if (existing.cropData !== serverCrop) updates.cropData = serverCrop;

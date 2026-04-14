@@ -34,6 +34,9 @@ if [[ -d "$WEB_DIR" ]]; then
         (cd "$WEB_DIR" && npm run build) \
             || { echo "WARNING: Web frontend build failed — continuing with existing dist"; }
     fi
+    # Ensure dist files are world-readable so Docker bind-mount containers
+    # (which run as a different uid) can serve them.
+    chmod -R a+r "$WEB_DIR/dist" 2>/dev/null || true
     echo "Web frontend built."
 else
     echo "WARNING: $WEB_DIR not found — skipping web build"
@@ -87,7 +90,7 @@ rm -f "$SERVER_DIR/data/db/"*
 # Clean server-managed subdirectories under internal storage, preserving any
 # manually placed test/sample files (e.g. existing.jpg in the root).
 echo "Cleaning internal storage (server-managed dirs only)..."
-for subdir in blobs metadata logs .thumbnails; do
+for subdir in blobs metadata logs .thumbnails .renders .tmp .web_previews .converted uploads; do
     if [[ -d "$SERVER_DIR/data/storage/$subdir" ]]; then
         echo "  Removing $SERVER_DIR/data/storage/$subdir/..."
         rm -rf "$SERVER_DIR/data/storage/$subdir"
@@ -104,7 +107,7 @@ fi
 # Clean server-managed subdirectories under the storage root, preserving user photos
 if [[ -n "$STORAGE_ROOT" && -d "$STORAGE_ROOT" ]]; then
     echo "Cleaning storage root subdirectories in: $STORAGE_ROOT"
-    for subdir in blobs metadata logs .thumbnails; do
+    for subdir in blobs metadata logs .thumbnails .renders .tmp .web_previews .converted uploads; do
         if [[ -d "$STORAGE_ROOT/$subdir" ]]; then
             echo "  Removing $STORAGE_ROOT/$subdir/..."
             rm -rf "$STORAGE_ROOT/$subdir"
