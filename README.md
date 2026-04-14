@@ -63,43 +63,60 @@ A self-hosted photo & video library with always-on end-to-end encryption, multi-
 
 ## Getting Started
 
-### Server
+The install scripts handle everything — building the server, web frontend, and (optionally) the Android APK. They support both Docker and bare-metal (native) installations with auto-port detection, admin account creation, and backup server pairing.
+
+### Linux / macOS
 
 ```bash
-cd server
-cp config.example.toml config.toml
-# Edit config.toml with your settings
-cargo build --release
-./target/release/simple-photos-server
+./install.sh
 ```
 
-FFmpeg is required for media conversion, video thumbnails, and rendering. Install it via your system package manager.
+### Windows (PowerShell)
 
-### Web
+```powershell
+.\install.ps1
+```
+
+### CLI Flags
+
+```
+--mode <native|docker>  Installation mode
+--port <number>         Starting port (auto-increments if busy)
+--role <primary|backup> Server role (default: primary)
+--name <string>         Instance name (for Docker containers)
+--storage <path>        Path to photo storage directory
+--admin-user <string>   Admin username (skip interactive prompt)
+--admin-pass <string>   Admin password (skip interactive prompt)
+--backup-api-key <key>  Backup API key for backup servers
+--primary-url <url>     Primary server URL (for backup pairing)
+--no-build-android      Skip Android APK build prompt
+--no-start              Don't start the server after install
+--yes                   Auto-accept all prompts
+--help                  Show this help
+```
+
+**Examples:**
 
 ```bash
-cd web
-npm install
-npm run build
+# Native install on port 8080
+./install.sh --mode native --port 8080
+
+# Docker install as a backup server
+./install.sh --mode docker --role backup --port 8081
+
+# Fully non-interactive
+./install.sh --mode docker --port 8080 --admin-user admin --admin-pass secret --yes
 ```
 
-The built frontend is served by the Rust server from the configured `static_root`.
+### Prerequisites
 
-### Android
+- **Rust** (for native builds)
+- **Node.js** (for building the web frontend)
+- **Docker** (for Docker-mode installs)
+- **FFmpeg** (required for media conversion, video thumbnails, and rendering)
+- **Android SDK** (optional, for building the Android APK)
 
-```bash
-cd android
-./gradlew assembleDebug
-```
-
-The APK is available at `android/app/build/outputs/apk/debug/app-debug.apk` and served by the server at `/api/downloads/android`.
-
-### Docker
-
-```bash
-cd server
-docker compose up -d
-```
+The built web frontend is served by the Rust server from the configured `static_root`. The Android APK is available at `android/app/build/outputs/apk/debug/app-debug.apk` and served by the server at `/api/downloads/android`.
 
 ## API
 
