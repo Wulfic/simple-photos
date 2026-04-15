@@ -633,6 +633,17 @@ def generate_test_gif(width: int = 20, height: int = 20, frames: int = 3) -> byt
     return buf.getvalue()
 
 
+def generate_test_bmp(width: int = 8, height: int = 8) -> bytes:
+    """Generate a valid BMP file for upload tests using PIL."""
+    from PIL import Image as _PILImage
+    import io as _io
+
+    img = _PILImage.new("RGB", (width, height), color=(0, 128, 255))
+    buf = _io.BytesIO()
+    img.save(buf, format="BMP")
+    return buf.getvalue()
+
+
 def generate_random_bytes(size: int = 1024) -> bytes:
     """Generate random bytes for blob uploads."""
     return os.urandom(size)

@@ -335,68 +335,64 @@ export default function Viewer() {
             slideDirection === "right" ? "slide-in-right" : slideDirection === "left" ? "slide-in-left" : ""
           }`}
         >
-        {/* Photo / GIF viewer — single <img> stays mounted across normal & edit modes
-             to avoid blob-URL reload failures on large images */}
+        {/* Photo / GIF viewer — wrapper div always mounted so <img> stays in the
+             same React tree position across normal ↔ edit transitions, preventing
+             blob-URL reload failures (which caused BMP blanking & alt-text filenames) */}
         {mediaUrl && (mediaType === "photo" || mediaType === "gif") && (() => {
           const inEdit = editMode && mediaType === "photo";
           const rot = inEdit ? ((rotateValue % 360) + 360) % 360 : 0;
           const isSwapped = rot === 90 || rot === 270;
 
-          const imgEl = (
-            <img
-              ref={(el) => {
-                // Assign to both refs so crop overlay + crop-zoom both work
-                (viewImgRef as React.MutableRefObject<HTMLImageElement | null>).current = el;
-                (cropImageRef as React.MutableRefObject<HTMLImageElement | null>).current = el;
-              }}
-              src={mediaUrl}
-              alt={filename}
+          return (
+            <div
+              ref={cropContainerRef}
               className={inEdit
-                ? "w-full h-full object-contain pointer-events-none"
-                : "w-full h-full object-contain transition-transform duration-150"
+                ? "relative w-full h-full flex items-center justify-center overflow-hidden"
+                : "w-full h-full flex items-center justify-center"
               }
-              draggable={inEdit ? false : undefined}
-              onLoad={inEdit ? undefined : computeCropZoom}
-              style={{
-                imageRendering: mediaType === "gif" ? "auto" : undefined,
-                ...(inEdit ? {
-                  filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
-                  ...(rot !== 0 ? {
-                    transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(cropImageRef.current, cropContainerRef.current)})` : ""}`,
-                  } : {}),
-                } : {
-                  ...(cropData && zoomScale <= 1 ? cropZoomStyle : {}),
-                  ...(zoomScale > 1 ? {
-                    transform: `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)`,
-                    transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
-                    cursor: "grab",
-                  } : {}),
-                }),
-              }}
-            />
+              onPointerMove={inEdit && editTab === "crop" ? (e: React.PointerEvent) => handleCornerPointerMove(e, mediaType) : undefined}
+              onPointerUp={inEdit && editTab === "crop" ? handleCornerPointerUp : undefined}
+            >
+              <img
+                ref={(el) => {
+                  (viewImgRef as React.MutableRefObject<HTMLImageElement | null>).current = el;
+                  (cropImageRef as React.MutableRefObject<HTMLImageElement | null>).current = el;
+                }}
+                src={mediaUrl}
+                alt={filename}
+                className={inEdit
+                  ? "w-full h-full object-contain pointer-events-none"
+                  : "w-full h-full object-contain transition-transform duration-150"
+                }
+                draggable={inEdit ? false : undefined}
+                onLoad={inEdit ? undefined : computeCropZoom}
+                style={{
+                  imageRendering: mediaType === "gif" ? "auto" : undefined,
+                  ...(inEdit ? {
+                    filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
+                    ...(rot !== 0 ? {
+                      transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(cropImageRef.current, cropContainerRef.current)})` : ""}`,
+                    } : {}),
+                  } : {
+                    ...(cropData && zoomScale <= 1 ? cropZoomStyle : {}),
+                    ...(zoomScale > 1 ? {
+                      transform: `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)`,
+                      transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                      cursor: "grab",
+                    } : {}),
+                  }),
+                }}
+              />
+              {inEdit && editTab === "crop" && cropImageRef.current && cropContainerRef.current && (
+                <CropOverlay
+                  mediaRect={cropImageRef.current.getBoundingClientRect()}
+                  containerRect={cropContainerRef.current.getBoundingClientRect()}
+                  cropCorners={cropCorners}
+                  onCornerPointerDown={handleCornerPointerDown}
+                />
+              )}
+            </div>
           );
-
-          if (inEdit) {
-            return (
-              <div
-                ref={cropContainerRef}
-                className="relative w-full h-full flex items-center justify-center overflow-hidden"
-                onPointerMove={editTab === "crop" ? (e: React.PointerEvent) => handleCornerPointerMove(e, mediaType) : undefined}
-                onPointerUp={editTab === "crop" ? handleCornerPointerUp : undefined}
-              >
-                {imgEl}
-                {editTab === "crop" && cropImageRef.current && cropContainerRef.current && (
-                  <CropOverlay
-                    mediaRect={cropImageRef.current.getBoundingClientRect()}
-                    containerRect={cropContainerRef.current.getBoundingClientRect()}
-                    cropCorners={cropCorners}
-                    onCornerPointerDown={handleCornerPointerDown}
-                  />
-                )}
-              </div>
-            );
-          }
-          return imgEl;
         })()}
 
         {/* Video player (normal mode) — rotation applied to inner wrapper,
