@@ -134,6 +134,32 @@ export function getImageDimensions(file: File): Promise<{ width: number; height:
   });
 }
 
+/**
+ * Decode the pixel dimensions of a thumbnail stored as an ArrayBuffer.
+ * Uses a temporary Image element; returns {0,0} on failure.
+ * The browser auto-applies EXIF orientation, so the returned dimensions
+ * reflect the display orientation (portrait photos → width < height).
+ */
+export function decodeThumbnailDimensions(
+  data: ArrayBuffer,
+  mimeType?: string,
+): Promise<{ width: number; height: number }> {
+  return new Promise((resolve) => {
+    const blob = new Blob([data], { type: mimeType || "image/jpeg" });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve({ width: 0, height: 0 });
+    };
+    img.src = url;
+  });
+}
+
 // ── Paginated blob fetching ───────────────────────────────────────────────────
 
 /** Fetch all pages of a given blob type from the server. */

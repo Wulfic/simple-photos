@@ -15,7 +15,7 @@ import {
   mediaTypeFromMime,
 } from "../db";
 import { base64ToArrayBuffer } from "../utils/media";
-import { fetchAllPages } from "../utils/gallery";
+import { fetchAllPages, decodeThumbnailDimensions } from "../utils/gallery";
 import { useLiveQuery } from "dexie-react-hooks";
 import type { PhotoPayload, ThumbnailPayload } from "../types/media";
 export type { PhotoPayload, ThumbnailPayload };
@@ -293,6 +293,20 @@ export function useGalleryData(): GalleryDataResult {
               const freshData = base64ToArrayBuffer(thumbPayload.data);
               updates.thumbnailData = freshData;
               updates.thumbnailMimeType = thumbPayload.mime_type;
+              // Check if the new thumbnail's orientation disagrees with stored
+              // dimensions and correct proactively (avoids flash on next render).
+              const curW = updates.width ?? existing.width;
+              const curH = updates.height ?? existing.height;
+              if (curW > 0 && curH > 0) {
+                try {
+                  const td = await decodeThumbnailDimensions(freshData, thumbPayload.mime_type);
+                  if (td.width > 0 && td.height > 0 && td.width !== td.height &&
+                      (td.width > td.height) !== (curW > curH)) {
+                    updates.width = curH;
+                    updates.height = curW;
+                  }
+                } catch { /* ignore */ }
+              }
             } catch {
               // Download failed — leave existing thumbnail in place
             }
@@ -343,6 +357,34 @@ export function useGalleryData(): GalleryDataResult {
           }
         }
 
+        // Resolve display dimensions: prefer the thumbnail's actual pixel
+        // orientation over the server-stored values.  The browser auto-applies
+        // EXIF rotation when decoding the image, so naturalWidth/Height reflect
+        // the true display orientation.  This prevents the "landscape flash"
+        // where the grid initially renders a portrait photo in a landscape tile
+        // then corrects itself after the thumbnail loads.
+        let displayWidth = photo.width;
+        let displayHeight = photo.height;
+        if (thumbnailData && displayWidth > 0 && displayHeight > 0) {
+          try {
+            const thumbDims = await decodeThumbnailDimensions(thumbnailData, thumbnailMimeType);
+            if (
+              thumbDims.width > 0 && thumbDims.height > 0 &&
+              thumbDims.width !== thumbDims.height &&
+              (thumbDims.width > thumbDims.height) !== (displayWidth > displayHeight)
+            ) {
+              // Thumbnail orientation disagrees with stored dimensions — swap
+              [displayWidth, displayHeight] = [displayHeight, displayWidth];
+              // Push corrected dimensions to the server
+              api.photos.batchUpdateDimensions([{
+                photo_id: photo.id,
+                width: displayWidth,
+                height: displayHeight,
+              }]).catch(() => { /* non-fatal */ });
+            }
+          } catch { /* decode failed — use server dimensions as-is */ }
+        }
+
         await db.photos.put({
           blobId: idbKey,
           storageBlobId: photo.encrypted_blob_id ?? undefined,
@@ -351,8 +393,8 @@ export function useGalleryData(): GalleryDataResult {
           takenAt,
           mimeType: photo.mime_type,
           mediaType: (photo.media_type as MediaType) ?? mediaTypeFromMime(photo.mime_type),
-          width: photo.width,
-          height: photo.height,
+          width: displayWidth,
+          height: displayHeight,
           duration: photo.duration_secs ?? undefined,
           albumIds: [],
           thumbnailData,

@@ -335,60 +335,68 @@ export default function Viewer() {
             slideDirection === "right" ? "slide-in-right" : slideDirection === "left" ? "slide-in-left" : ""
           }`}
         >
-        {/* Photo / GIF viewer (normal mode) */}
-        {mediaUrl && (mediaType === "photo" || mediaType === "gif") && !editMode && (
-          <img
-            ref={viewImgRef}
-            src={mediaUrl}
-            alt={filename}
-            className="w-full h-full object-contain transition-transform duration-150"
-            onLoad={computeCropZoom}
-            style={{
-              imageRendering: mediaType === "gif" ? "auto" : undefined,
-              ...(cropData && zoomScale <= 1 ? cropZoomStyle : {}),
-              ...(zoomScale > 1 ? {
-                transform: `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)`,
-                transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
-                cursor: "grab",
-              } : {}),
-            }}
-          />
-        )}
-
-        {/* Photo edit mode */}
-        {editMode && mediaUrl && mediaType === "photo" && (() => {
-          const rot = ((rotateValue % 360) + 360) % 360;
+        {/* Photo / GIF viewer — single <img> stays mounted across normal & edit modes
+             to avoid blob-URL reload failures on large images */}
+        {mediaUrl && (mediaType === "photo" || mediaType === "gif") && (() => {
+          const inEdit = editMode && mediaType === "photo";
+          const rot = inEdit ? ((rotateValue % 360) + 360) % 360 : 0;
           const isSwapped = rot === 90 || rot === 270;
-          return (
-          <div
-            ref={cropContainerRef}
-            className="relative w-full h-full flex items-center justify-center overflow-hidden"
-            onPointerMove={editTab === "crop" ? (e: React.PointerEvent) => handleCornerPointerMove(e, mediaType) : undefined}
-            onPointerUp={editTab === "crop" ? handleCornerPointerUp : undefined}
-          >
+
+          const imgEl = (
             <img
-              ref={cropImageRef}
+              ref={(el) => {
+                // Assign to both refs so crop overlay + crop-zoom both work
+                (viewImgRef as React.MutableRefObject<HTMLImageElement | null>).current = el;
+                (cropImageRef as React.MutableRefObject<HTMLImageElement | null>).current = el;
+              }}
               src={mediaUrl}
               alt={filename}
-              className="w-full h-full object-contain pointer-events-none"
-              draggable={false}
+              className={inEdit
+                ? "w-full h-full object-contain pointer-events-none"
+                : "w-full h-full object-contain transition-transform duration-150"
+              }
+              draggable={inEdit ? false : undefined}
+              onLoad={inEdit ? undefined : computeCropZoom}
               style={{
-                filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
-                ...(rot !== 0 ? {
-                  transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(cropImageRef.current, cropContainerRef.current)})` : ""}`,
-                } : {}),
+                imageRendering: mediaType === "gif" ? "auto" : undefined,
+                ...(inEdit ? {
+                  filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
+                  ...(rot !== 0 ? {
+                    transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(cropImageRef.current, cropContainerRef.current)})` : ""}`,
+                  } : {}),
+                } : {
+                  ...(cropData && zoomScale <= 1 ? cropZoomStyle : {}),
+                  ...(zoomScale > 1 ? {
+                    transform: `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)`,
+                    transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                    cursor: "grab",
+                  } : {}),
+                }),
               }}
             />
-            {editTab === "crop" && cropImageRef.current && cropContainerRef.current && (
-              <CropOverlay
-                mediaRect={cropImageRef.current.getBoundingClientRect()}
-                containerRect={cropContainerRef.current.getBoundingClientRect()}
-                cropCorners={cropCorners}
-                onCornerPointerDown={handleCornerPointerDown}
-              />
-            )}
-          </div>
           );
+
+          if (inEdit) {
+            return (
+              <div
+                ref={cropContainerRef}
+                className="relative w-full h-full flex items-center justify-center overflow-hidden"
+                onPointerMove={editTab === "crop" ? (e: React.PointerEvent) => handleCornerPointerMove(e, mediaType) : undefined}
+                onPointerUp={editTab === "crop" ? handleCornerPointerUp : undefined}
+              >
+                {imgEl}
+                {editTab === "crop" && cropImageRef.current && cropContainerRef.current && (
+                  <CropOverlay
+                    mediaRect={cropImageRef.current.getBoundingClientRect()}
+                    containerRect={cropContainerRef.current.getBoundingClientRect()}
+                    cropCorners={cropCorners}
+                    onCornerPointerDown={handleCornerPointerDown}
+                  />
+                )}
+              </div>
+            );
+          }
+          return imgEl;
         })()}
 
         {/* Video player (normal mode) — rotation applied to inner wrapper,

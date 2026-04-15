@@ -116,6 +116,8 @@ The install scripts handle everything — building the server, web frontend, and
 - **FFmpeg** (required for media conversion, video thumbnails, and rendering)
 - **Android SDK** (optional, for building the Android APK)
 
+All prerequisites are handled automatically by the install scripts, minus docker installation on Windows (which requires manual setup).
+
 The built web frontend is served by the Rust server from the configured `static_root`. The Android APK is available at `android/app/build/outputs/apk/debug/app-debug.apk` and served by the server at `/api/downloads/android`.
 
 ## API
