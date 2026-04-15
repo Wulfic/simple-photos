@@ -5,6 +5,7 @@
  *  encrypted blob when scrolled into view. */
 import { useState, useEffect, useRef } from "react";
 import { db, type CachedPhoto } from "../../db";
+import { api } from "../../api/client";
 import useLongPress from "../../hooks/useLongPress";
 import { thumbnailSrc, formatDuration } from "../../utils/gallery";
 import { loadFullGif } from "../../utils/gifLoader";
@@ -134,16 +135,28 @@ export default function MediaTile({ photo, onClick, onLongPress, selectionMode, 
               const nh = img.naturalHeight;
               // Self-heal: if the thumbnail's orientation disagrees with stored
               // photo dimensions, swap them in IDB so the grid AR is correct.
+              // Also push the fix to the server so the sync engine stops
+              // overwriting with wrong values.
               if (
                 nw > 0 && nh > 0 && nw !== nh &&
                 photo.width > 0 && photo.height > 0 &&
                 !photo.cropData &&
                 (nw > nh) !== (photo.width > photo.height)
               ) {
+                const correctedW = photo.height;
+                const correctedH = photo.width;
                 db.photos.update(photo.blobId, {
-                  width: photo.height,
-                  height: photo.width,
+                  width: correctedW,
+                  height: correctedH,
                 });
+                // Push corrected dimensions to the server
+                if (photo.serverPhotoId) {
+                  api.photos.batchUpdateDimensions([{
+                    photo_id: photo.serverPhotoId,
+                    width: correctedW,
+                    height: correctedH,
+                  }]).catch(() => { /* non-fatal */ });
+                }
               }
             }}
           />

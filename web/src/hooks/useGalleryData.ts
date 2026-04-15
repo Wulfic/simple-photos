@@ -261,15 +261,24 @@ export function useGalleryData(): GalleryDataResult {
           if (serverBlobIdVal && existing.storageBlobId !== serverBlobIdVal) {
             updates.storageBlobId = serverBlobIdVal;
           }
+          // Sync source_path so the client knows this item was converted
+          const serverSourcePath = photo.source_path ?? undefined;
+          if (existing.sourcePath !== serverSourcePath) updates.sourcePath = serverSourcePath;
           // Sync crop metadata from server (e.g. when Android saves edits)
           const serverCrop = photo.crop_metadata ?? undefined;
           if (existing.cropData !== serverCrop) updates.cropData = serverCrop;
           // Sync corrected dimensions from server (the server-side EXIF orientation
           // repair may have fixed width/height after this entry was cached).
+          // Skip overwrite when the client has the transposed values — client-side
+          // self-heal corrected an EXIF orientation mismatch and has already pushed
+          // the fix to the server (the server response may be stale).
           if (photo.width > 0 && photo.height > 0 &&
               (existing.width !== photo.width || existing.height !== photo.height)) {
-            updates.width = photo.width;
-            updates.height = photo.height;
+            const isTransposed = existing.width === photo.height && existing.height === photo.width;
+            if (!isTransposed) {
+              updates.width = photo.width;
+              updates.height = photo.height;
+            }
           }
           // Re-download thumbnail when the server's encrypted_thumb_blob_id
           // has changed — e.g. after the EXIF orientation repair pass
@@ -352,6 +361,7 @@ export function useGalleryData(): GalleryDataResult {
           cropData: photo.crop_metadata ?? undefined,
           isFavorite: photo.is_favorite ?? false,
           serverPhotoId: photo.id,
+          sourcePath: photo.source_path ?? undefined,
         });
       }
 

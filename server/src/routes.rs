@@ -168,6 +168,7 @@ fn photo_routes() -> Router<AppState> {
         .route("/photos/register", post(crate::photos::handlers::register_photo))
         .route("/photos/upload", post(crate::photos::upload::upload_photo))
         .route("/photos/{id}/file", get(crate::photos::serve::serve_photo))
+        .route("/photos/{id}/source-file", get(crate::photos::serve::serve_source_file))
         .route("/photos/{id}/thumb", get(crate::photos::serve::serve_thumbnail))
         .route(
             "/photos/{id}/thumbnail",

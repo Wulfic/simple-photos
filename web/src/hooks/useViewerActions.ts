@@ -78,6 +78,8 @@ export default function useViewerActions({
   const [showLeavePrompt, setShowLeavePrompt] = useState(false);
   const [saveCopySuccess, setSaveCopySuccess] = useState(false);
   const [isRenderingVideo, setIsRenderingVideo] = useState(false);
+  /** When true, show a download-choice dialog (converted vs original source) */
+  const [showDownloadChoice, setShowDownloadChoice] = useState(false);
   // Holds the in-flight render promise so a second download click during
   // conversion waits for the same job rather than starting a duplicate.
   const renderInflightRef = useRef<Promise<Blob> | null>(null);
@@ -191,7 +193,7 @@ export default function useViewerActions({
               thumbnailBlobId: copyThumbBlobId ?? original.thumbnailBlobId,
               filename: copyFilename,
               cropData: serverCopyId ? undefined : (metaJson ?? undefined),
-              takenAt: Date.now(),
+              takenAt: original.takenAt,
               thumbnailData: original.thumbnailData,
               serverPhotoId: serverCopyId,
             });
@@ -217,7 +219,7 @@ export default function useViewerActions({
               storageBlobId: original.storageBlobId || original.blobId,
               filename: copyFilename,
               cropData: metaJson ?? undefined,
-              takenAt: Date.now(),
+              takenAt: original.takenAt,
               thumbnailData: original.thumbnailData,
               serverPhotoId: undefined,
             }).catch(() => { /* last resort */ });
@@ -235,7 +237,7 @@ export default function useViewerActions({
           storageBlobId: original.storageBlobId || original.blobId,
           filename: copyFilename,
           cropData: metaJson ?? undefined,
-          takenAt: Date.now(),
+          takenAt: original.takenAt,
           thumbnailData: original.thumbnailData,
           serverPhotoId: undefined,
         });
@@ -379,6 +381,15 @@ export default function useViewerActions({
     const isImage = mediaType === "photo" || mediaType === "gif";
     const isVideoOrAudio = mediaType === "video" || mediaType === "audio";
 
+    // ── Converted file without edits: ask user which version to download ─
+    if (!cropData) {
+      const cached = id ? await db.photos.get(id) : undefined;
+      if (cached?.sourcePath) {
+        setShowDownloadChoice(true);
+        return;
+      }
+    }
+
     // ── Images: bake edits via Canvas 2D (no server round-trip needed) ─────
     if (cropData && isImage) {
       try {
@@ -459,6 +470,46 @@ export default function useViewerActions({
     }
   }, [id, filename]);
 
+  /** Download the converted (browser-native) version — dismiss the choice dialog */
+  const handleDownloadConverted = useCallback(() => {
+    setShowDownloadChoice(false);
+    if (!mediaUrl) return;
+    const a = document.createElement("a");
+    a.href = mediaUrl;
+    a.download = filename || "media";
+    a.click();
+  }, [mediaUrl, filename]);
+
+  /** Download the original unconverted source file from the server */
+  const handleDownloadSource = useCallback(async () => {
+    setShowDownloadChoice(false);
+    if (!id) return;
+    try {
+      const cached = await db.photos.get(id);
+      const serverPhotoId = cached?.serverPhotoId;
+      if (!serverPhotoId) {
+        setError("Server photo ID not available");
+        return;
+      }
+      const { accessToken } = useAuthStore.getState();
+      const headers: Record<string, string> = { "X-Requested-With": "SimplePhotos" };
+      if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+      const res = await fetch(api.photos.sourceFileUrl(serverPhotoId), { headers });
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      // Extract original filename from sourcePath
+      const sourceName = cached?.sourcePath?.split("/").pop() || filename || "original";
+      a.download = sourceName;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Download source failed");
+    }
+  }, [id, filename, setError]);
+
 
   const handleToggleFavorite = useCallback(async () => {
     if (!id) return;
@@ -482,6 +533,8 @@ export default function useViewerActions({
     setShowLeavePrompt,
     saveCopySuccess,
     isRenderingVideo,
+    showDownloadChoice,
+    setShowDownloadChoice,
     buildEditMetadata,
     handleSaveEdit,
     handleSaveCopy,
@@ -492,6 +545,8 @@ export default function useViewerActions({
     handleRemoveFromAlbum,
     handleDownload,
     handleDownloadOriginal,
+    handleDownloadConverted,
+    handleDownloadSource,
     handleToggleFavorite,
   };
 }

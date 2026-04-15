@@ -14,6 +14,7 @@ import LeavePrompt from "../components/viewer/LeavePrompt";
 import CropOverlay from "../components/viewer/CropOverlay";
 import VideoControls from "../components/viewer/VideoControls";
 import ViewerTopBar from "../components/viewer/ViewerTopBar";
+import DownloadChoiceModal from "../components/viewer/DownloadChoiceModal";
 import useZoomPan from "../hooks/useZoomPan";
 import usePhotoPreload from "../hooks/usePhotoPreload";
 import useViewerMedia from "../hooks/useViewerMedia";
@@ -123,8 +124,10 @@ export default function Viewer() {
     handleLeaveAndSave, handleLeaveAndDiscard,
     handleDelete, handleRemoveFromAlbum,
     handleDownload, handleDownloadOriginal,
+    handleDownloadConverted, handleDownloadSource,
     handleToggleFavorite,
     isRenderingVideo,
+    showDownloadChoice, setShowDownloadChoice,
   } = useViewerActions({
     id, mediaUrl, filename, mediaType, mimeType,
     albumId, photoIds, currentIndex,
@@ -367,7 +370,7 @@ export default function Viewer() {
               ref={cropImageRef}
               src={mediaUrl}
               alt={filename}
-              className="max-w-full max-h-full object-contain pointer-events-none"
+              className="w-full h-full object-contain pointer-events-none"
               draggable={false}
               style={{
                 filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
@@ -598,6 +601,15 @@ export default function Viewer() {
       {/* Photo info panel */}
       <PhotoInfoPanel show={showInfoPanel} onClose={() => setShowInfoPanel(false)} photoInfo={photoInfo} />
       <LeavePrompt show={showLeavePrompt} onCancel={() => setShowLeavePrompt(false)} onDiscard={handleLeaveAndDiscard} onSave={handleLeaveAndSave} />
+
+      {/* Download choice dialog for converted files */}
+      {showDownloadChoice && (
+        <DownloadChoiceModal
+          onConvertedDownload={handleDownloadConverted}
+          onSourceDownload={handleDownloadSource}
+          onCancel={() => setShowDownloadChoice(false)}
+        />
+      )}
 
       {/* Save Copy success toast */}
       {saveCopySuccess && (

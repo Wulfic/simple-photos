@@ -15,6 +15,9 @@ export const photosApi = {
   /** Get the URL for serving a photo file */
   fileUrl: (photoId: string) => `${BASE}/photos/${photoId}/file`,
 
+  /** Get the URL for downloading the original unconverted source file */
+  sourceFileUrl: (photoId: string) => `${BASE}/photos/${photoId}/source-file`,
+
   /** Get the URL for serving a photo thumbnail */
   thumbUrl: (photoId: string) => `${BASE}/photos/${photoId}/thumb`,
 
@@ -82,6 +85,15 @@ export const photosApi = {
       method: "DELETE",
     }),
 
+  /** Batch-update width/height for photos (used by client-side self-heal) */
+  batchUpdateDimensions: (
+    updates: Array<{ photo_id?: string; blob_id?: string; width: number; height: number }>,
+  ) =>
+    request<{ updated: number }>("/photos/dimensions", {
+      method: "PATCH",
+      body: JSON.stringify({ updates }),
+    }),
+
   /** Lightweight encrypted-mode sync — returns photo metadata from the photos table
    *  without requiring blob decryption. Both web and mobile use this for consistent sort order. */
   encryptedSync: (params?: { after?: string; limit?: number }) => {
@@ -106,6 +118,7 @@ export const photosApi = {
         is_favorite: boolean;
         crop_metadata: string | null;
         photo_hash: string | null;
+        source_path: string | null;
       }>;
       next_cursor: string | null;
     }>(`/photos/encrypted-sync${qs ? `?${qs}` : ""}`);

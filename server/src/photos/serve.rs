@@ -405,3 +405,92 @@ pub async fn serve_web(
     )
     .await
 }
+
+/// GET /api/photos/:id/source-file
+/// Serve the **original unconverted** source file for a converted photo.
+/// Returns 404 if the photo was not converted or the source file is missing.
+pub async fn serve_source_file(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    Path(photo_id): Path<String>,
+) -> Result<Response, AppError> {
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
+    let source_path: Option<String> = sqlx::query_scalar(
+        "SELECT source_path FROM photos WHERE id = ? AND user_id = ?",
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.read_pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let source_path = source_path.ok_or_else(|| {
+        tracing::debug!(
+            photo_id = %photo_id,
+            "serve_source_file: photo has no source_path (not converted)"
+        );
+        AppError::NotFound
+    })?;
+
+    let storage_root = (**state.storage_root.load()).clone();
+    let full_path = storage_root.join(&source_path);
+
+    if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
+        tracing::warn!(
+            photo_id = %photo_id,
+            source_path = %source_path,
+            "serve_source_file: original source file not found on disk"
+        );
+        return Err(AppError::NotFound);
+    }
+
+    let meta = tokio::fs::metadata(&full_path)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read source file: {}", e)))?;
+
+    let total_size = meta.len();
+
+    // Guess MIME type from extension
+    let content_type = match full_path.extension().and_then(|e| e.to_str()) {
+        Some("heic" | "heif") => "image/heic",
+        Some("mkv") => "video/x-matroska",
+        Some("avi") => "video/x-msvideo",
+        Some("wmv") => "video/x-ms-wmv",
+        Some("tiff" | "tif") => "image/tiff",
+        Some("bmp") => "image/bmp",
+        Some("webm") => "video/webm",
+        Some("flac") => "audio/flac",
+        Some("wav") => "audio/wav",
+        Some("ogg") => "audio/ogg",
+        _ => "application/octet-stream",
+    };
+
+    let etag = format!("\"{}-source-{}\"", photo_id, total_size);
+
+    // Force download via Content-Disposition
+    let filename = full_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("original");
+    let disposition = format!("attachment; filename=\"{}\"", filename);
+
+    let mut resp = serve_file_with_range(
+        &full_path,
+        total_size,
+        content_type,
+        &headers,
+        Some(&etag),
+    )
+    .await?;
+
+    resp.headers_mut().insert(
+        "Content-Disposition",
+        HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("attachment")),
+    );
+
+    Ok(resp)
+}

@@ -38,6 +38,9 @@ export interface CachedPhoto {
   storageBlobId?: string;
   /** Whether this photo is marked as favorite — synced with the server */
   isFavorite?: boolean;
+  /** Non-null when this photo was converted from a non-native format.
+   *  Contains the relative path to the original source file on the server. */
+  sourcePath?: string;
   /** Server-side `photos.id` for API calls requiring the photo record ID
    *  (e.g., toggle_favorite, duplicate). Set for photos synced via encrypted-sync. */
   serverPhotoId?: string;
