@@ -22,7 +22,7 @@ use crate::error::AppError;
 use crate::sanitize;
 use crate::state::AppState;
 
-use super::models::*;
+use crate::sharing::models::*;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

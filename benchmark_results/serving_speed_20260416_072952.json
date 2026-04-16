@@ -1,0 +1,857 @@
+[
+  {
+    "name": "photo/file/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 1.16,
+    "total_time_ms": 1.22,
+    "throughput_mbps": 39.88,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 0.88,
+    "total_time_ms": 0.95,
+    "throughput_mbps": 51.39,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 0.81,
+    "total_time_ms": 40.8,
+    "throughput_mbps": 1.2,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 1.08,
+    "total_time_ms": 42.0,
+    "throughput_mbps": 1.16,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 1.06,
+    "total_time_ms": 42.02,
+    "throughput_mbps": 1.16,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/medium (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 4.44,
+    "total_time_ms": 5.3,
+    "throughput_mbps": 352.73,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/medium (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 1.01,
+    "total_time_ms": 1.89,
+    "throughput_mbps": 989.96,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/medium (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 0.81,
+    "total_time_ms": 1.65,
+    "throughput_mbps": 1132.15,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/medium (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 0.76,
+    "total_time_ms": 1.65,
+    "throughput_mbps": 1130.23,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/medium (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 0.86,
+    "total_time_ms": 1.91,
+    "throughput_mbps": 980.87,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/large (10MB)",
+    "file_size_bytes": 9547630,
+    "ttfb_ms": 0.95,
+    "total_time_ms": 45.84,
+    "throughput_mbps": 198.62,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/large (10MB)",
+    "file_size_bytes": 9547630,
+    "ttfb_ms": 1.09,
+    "total_time_ms": 46.98,
+    "throughput_mbps": 193.83,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/large (10MB)",
+    "file_size_bytes": 9547630,
+    "ttfb_ms": 1.11,
+    "total_time_ms": 46.96,
+    "throughput_mbps": 193.92,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/large (10MB)",
+    "file_size_bytes": 9547630,
+    "ttfb_ms": 1.14,
+    "total_time_ms": 47.0,
+    "throughput_mbps": 193.71,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/large (10MB)",
+    "file_size_bytes": 9547630,
+    "ttfb_ms": 1.19,
+    "total_time_ms": 6.9,
+    "throughput_mbps": 1320.16,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/file/etag-304 (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 1.09,
+    "total_time_ms": 1.09,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "photo/file/etag-304 (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 1.12,
+    "total_time_ms": 1.12,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "photo/file/etag-304 (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 0.96,
+    "total_time_ms": 0.96,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "photo/file/etag-304 (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 0.81,
+    "total_time_ms": 0.81,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "photo/file/etag-304 (2MB)",
+    "file_size_bytes": 1961095,
+    "ttfb_ms": 0.81,
+    "total_time_ms": 0.81,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "photo/thumb (pre-generated)",
+    "file_size_bytes": 110482,
+    "ttfb_ms": 0.86,
+    "total_time_ms": 0.95,
+    "throughput_mbps": 110.47,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb (pre-generated)",
+    "file_size_bytes": 110482,
+    "ttfb_ms": 1.0,
+    "total_time_ms": 41.76,
+    "throughput_mbps": 2.52,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb (pre-generated)",
+    "file_size_bytes": 110482,
+    "ttfb_ms": 1.37,
+    "total_time_ms": 1.48,
+    "throughput_mbps": 71.21,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb (pre-generated)",
+    "file_size_bytes": 110482,
+    "ttfb_ms": 1.1,
+    "total_time_ms": 1.2,
+    "throughput_mbps": 87.9,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb (pre-generated)",
+    "file_size_bytes": 110482,
+    "ttfb_ms": 0.88,
+    "total_time_ms": 0.97,
+    "throughput_mbps": 108.65,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb/burst (3 thumbs)",
+    "file_size_bytes": 0,
+    "ttfb_ms": 14.5,
+    "total_time_ms": 43.49,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb/burst (3 thumbs)",
+    "file_size_bytes": 0,
+    "ttfb_ms": 15.0,
+    "total_time_ms": 45.0,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb/burst (3 thumbs)",
+    "file_size_bytes": 0,
+    "ttfb_ms": 14.66,
+    "total_time_ms": 43.99,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb/burst (3 thumbs)",
+    "file_size_bytes": 0,
+    "ttfb_ms": 15.0,
+    "total_time_ms": 45.01,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/thumb/burst (3 thumbs)",
+    "file_size_bytes": 0,
+    "ttfb_ms": 15.31,
+    "total_time_ms": 45.93,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/small (100KB)",
+    "file_size_bytes": 102400,
+    "ttfb_ms": 1.16,
+    "total_time_ms": 1.26,
+    "throughput_mbps": 77.71,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/small (100KB)",
+    "file_size_bytes": 102400,
+    "ttfb_ms": 0.98,
+    "total_time_ms": 1.07,
+    "throughput_mbps": 91.42,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/small (100KB)",
+    "file_size_bytes": 102400,
+    "ttfb_ms": 1.1,
+    "total_time_ms": 1.22,
+    "throughput_mbps": 80.19,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/small (100KB)",
+    "file_size_bytes": 102400,
+    "ttfb_ms": 1.15,
+    "total_time_ms": 1.27,
+    "throughput_mbps": 77.16,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/small (100KB)",
+    "file_size_bytes": 102400,
+    "ttfb_ms": 1.01,
+    "total_time_ms": 1.1,
+    "throughput_mbps": 88.4,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/large (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 0.9,
+    "total_time_ms": 4.39,
+    "throughput_mbps": 2275.48,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/large (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 0.99,
+    "total_time_ms": 4.51,
+    "throughput_mbps": 2218.49,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/large (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 1.13,
+    "total_time_ms": 4.42,
+    "throughput_mbps": 2262.49,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/large (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 1.21,
+    "total_time_ms": 5.57,
+    "throughput_mbps": 1796.91,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/large (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 1.27,
+    "total_time_ms": 4.61,
+    "throughput_mbps": 2168.84,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/video (20MB)",
+    "file_size_bytes": 20971520,
+    "ttfb_ms": 1.06,
+    "total_time_ms": 8.71,
+    "throughput_mbps": 2295.92,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/video (20MB)",
+    "file_size_bytes": 20971520,
+    "ttfb_ms": 1.2,
+    "total_time_ms": 7.86,
+    "throughput_mbps": 2546.05,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/video (20MB)",
+    "file_size_bytes": 20971520,
+    "ttfb_ms": 1.19,
+    "total_time_ms": 7.75,
+    "throughput_mbps": 2580.2,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/video (20MB)",
+    "file_size_bytes": 20971520,
+    "ttfb_ms": 1.08,
+    "total_time_ms": 7.64,
+    "throughput_mbps": 2618.62,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/video (20MB)",
+    "file_size_bytes": 20971520,
+    "ttfb_ms": 1.16,
+    "total_time_ms": 8.06,
+    "throughput_mbps": 2481.64,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/download/etag-304 (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 1.15,
+    "total_time_ms": 1.15,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "blob/download/etag-304 (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 0.95,
+    "total_time_ms": 0.95,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "blob/download/etag-304 (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 0.92,
+    "total_time_ms": 0.92,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "blob/download/etag-304 (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 0.87,
+    "total_time_ms": 0.87,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "blob/download/etag-304 (10MB)",
+    "file_size_bytes": 10485760,
+    "ttfb_ms": 0.84,
+    "total_time_ms": 0.84,
+    "throughput_mbps": 0,
+    "status_code": 304,
+    "cache_hit": true
+  },
+  {
+    "name": "blob/range/first-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 0.99,
+    "total_time_ms": 1.45,
+    "throughput_mbps": 691.24,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/first-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 1.06,
+    "total_time_ms": 1.48,
+    "throughput_mbps": 676.71,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/first-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 0.92,
+    "total_time_ms": 1.29,
+    "throughput_mbps": 777.13,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/first-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 0.89,
+    "total_time_ms": 1.26,
+    "throughput_mbps": 790.76,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/first-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 0.89,
+    "total_time_ms": 1.3,
+    "throughput_mbps": 768.25,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/mid-seek-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 1.06,
+    "total_time_ms": 1.46,
+    "throughput_mbps": 682.85,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/mid-seek-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 0.92,
+    "total_time_ms": 1.27,
+    "throughput_mbps": 787.88,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/mid-seek-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 0.87,
+    "total_time_ms": 1.42,
+    "throughput_mbps": 703.89,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/mid-seek-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 0.84,
+    "total_time_ms": 1.22,
+    "throughput_mbps": 818.63,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/mid-seek-1MB (of 20MB)",
+    "file_size_bytes": 1048576,
+    "ttfb_ms": 0.9,
+    "total_time_ms": 1.26,
+    "throughput_mbps": 794.93,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/64KB-chunk (of 20MB)",
+    "file_size_bytes": 65536,
+    "ttfb_ms": 1.02,
+    "total_time_ms": 1.08,
+    "throughput_mbps": 57.98,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/64KB-chunk (of 20MB)",
+    "file_size_bytes": 65536,
+    "ttfb_ms": 0.86,
+    "total_time_ms": 0.92,
+    "throughput_mbps": 67.78,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/64KB-chunk (of 20MB)",
+    "file_size_bytes": 65536,
+    "ttfb_ms": 0.85,
+    "total_time_ms": 0.92,
+    "throughput_mbps": 68.14,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/64KB-chunk (of 20MB)",
+    "file_size_bytes": 65536,
+    "ttfb_ms": 1.02,
+    "total_time_ms": 1.1,
+    "throughput_mbps": 56.9,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/range/64KB-chunk (of 20MB)",
+    "file_size_bytes": 65536,
+    "ttfb_ms": 1.01,
+    "total_time_ms": 1.06,
+    "throughput_mbps": 58.87,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/range/first-256KB (of 10MB)",
+    "file_size_bytes": 262144,
+    "ttfb_ms": 0.87,
+    "total_time_ms": 0.98,
+    "throughput_mbps": 253.84,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/range/first-256KB (of 10MB)",
+    "file_size_bytes": 262144,
+    "ttfb_ms": 0.83,
+    "total_time_ms": 0.93,
+    "throughput_mbps": 268.12,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/range/first-256KB (of 10MB)",
+    "file_size_bytes": 262144,
+    "ttfb_ms": 0.84,
+    "total_time_ms": 0.95,
+    "throughput_mbps": 264.25,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/range/first-256KB (of 10MB)",
+    "file_size_bytes": 262144,
+    "ttfb_ms": 0.77,
+    "total_time_ms": 0.9,
+    "throughput_mbps": 276.76,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/range/first-256KB (of 10MB)",
+    "file_size_bytes": 262144,
+    "ttfb_ms": 0.89,
+    "total_time_ms": 1.01,
+    "throughput_mbps": 248.04,
+    "status_code": 206,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/upload/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 1.96,
+    "total_time_ms": 1.96,
+    "throughput_mbps": 24.93,
+    "status_code": 201,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/upload/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 1.26,
+    "total_time_ms": 1.26,
+    "throughput_mbps": 38.61,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/upload/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 1.12,
+    "total_time_ms": 1.12,
+    "throughput_mbps": 43.59,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/upload/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 1.06,
+    "total_time_ms": 1.06,
+    "throughput_mbps": 46.04,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "photo/upload/small (50KB)",
+    "file_size_bytes": 51204,
+    "ttfb_ms": 0.99,
+    "total_time_ms": 0.99,
+    "throughput_mbps": 49.32,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/upload/large (10MB)",
+    "file_size_bytes": 10485776,
+    "ttfb_ms": 42.79,
+    "total_time_ms": 42.79,
+    "throughput_mbps": 233.72,
+    "status_code": 201,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/upload/large (10MB)",
+    "file_size_bytes": 10485776,
+    "ttfb_ms": 42.94,
+    "total_time_ms": 42.94,
+    "throughput_mbps": 232.89,
+    "status_code": 201,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/upload/large (10MB)",
+    "file_size_bytes": 10485776,
+    "ttfb_ms": 42.82,
+    "total_time_ms": 42.82,
+    "throughput_mbps": 233.51,
+    "status_code": 201,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/upload/large (10MB)",
+    "file_size_bytes": 10485776,
+    "ttfb_ms": 42.75,
+    "total_time_ms": 42.75,
+    "throughput_mbps": 233.93,
+    "status_code": 201,
+    "cache_hit": false
+  },
+  {
+    "name": "blob/upload/large (10MB)",
+    "file_size_bytes": 10485776,
+    "ttfb_ms": 42.73,
+    "total_time_ms": 42.73,
+    "throughput_mbps": 234.03,
+    "status_code": 201,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/list-photos",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 1.1,
+    "total_time_ms": 1.1,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/fetch-4-thumbs",
+    "file_size_bytes": 0,
+    "ttfb_ms": 11.27,
+    "total_time_ms": 45.07,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/list-photos",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 0.9,
+    "total_time_ms": 0.9,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/fetch-4-thumbs",
+    "file_size_bytes": 0,
+    "ttfb_ms": 11.23,
+    "total_time_ms": 44.9,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/list-photos",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 0.9,
+    "total_time_ms": 0.9,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/fetch-4-thumbs",
+    "file_size_bytes": 0,
+    "ttfb_ms": 11.25,
+    "total_time_ms": 45.02,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/list-photos",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 0.94,
+    "total_time_ms": 0.94,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/fetch-4-thumbs",
+    "file_size_bytes": 0,
+    "ttfb_ms": 11.48,
+    "total_time_ms": 45.93,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/list-photos",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 0.99,
+    "total_time_ms": 0.99,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "pattern/fetch-4-thumbs",
+    "file_size_bytes": 0,
+    "ttfb_ms": 11.22,
+    "total_time_ms": 44.88,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "api/list-photos (limit=100)",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 1.07,
+    "total_time_ms": 1.07,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "api/list-photos (limit=100)",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 1.15,
+    "total_time_ms": 1.15,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "api/list-photos (limit=100)",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 1.03,
+    "total_time_ms": 1.03,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "api/list-photos (limit=100)",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 0.94,
+    "total_time_ms": 0.94,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  },
+  {
+    "name": "api/list-photos (limit=100)",
+    "file_size_bytes": 2083,
+    "ttfb_ms": 0.82,
+    "total_time_ms": 0.82,
+    "throughput_mbps": 0,
+    "status_code": 200,
+    "cache_hit": false
+  }
+]

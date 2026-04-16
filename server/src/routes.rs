@@ -164,7 +164,7 @@ fn import_routes() -> Router<AppState> {
 fn photo_routes() -> Router<AppState> {
     Router::new()
         .route("/photos", get(crate::photos::handlers::list_photos))
-        .route("/photos/encrypted-sync", get(crate::photos::sync::encrypted_sync))
+        .route("/photos/encrypted-sync", get(crate::gallery::sync::encrypted_sync))
         .route("/photos/register", post(crate::photos::handlers::register_photo))
         .route("/photos/upload", post(crate::photos::upload::upload_photo))
         .route("/photos/{id}/file", get(crate::photos::serve::serve_photo))
@@ -222,31 +222,31 @@ fn gallery_routes() -> Router<AppState> {
     Router::new()
         .route(
             "/galleries/secure",
-            get(crate::photos::galleries::list_secure_galleries),
+            get(crate::gallery::secure::list_secure_galleries),
         )
         .route(
             "/galleries/secure",
-            post(crate::photos::galleries::create_secure_gallery),
+            post(crate::gallery::secure::create_secure_gallery),
         )
         .route(
             "/galleries/secure/unlock",
-            post(crate::photos::galleries::unlock_secure_galleries),
+            post(crate::gallery::secure::unlock_secure_galleries),
         )
         .route(
             "/galleries/secure/blob-ids",
-            get(crate::photos::galleries::list_secure_blob_ids),
+            get(crate::gallery::secure::list_secure_blob_ids),
         )
         .route(
             "/galleries/secure/{id}",
-            delete(crate::photos::galleries::delete_secure_gallery),
+            delete(crate::gallery::secure::delete_secure_gallery),
         )
         .route(
             "/galleries/secure/{id}/items",
-            get(crate::photos::galleries::list_gallery_items),
+            get(crate::gallery::secure::list_gallery_items),
         )
         .route(
             "/galleries/secure/{id}/items",
-            post(crate::photos::galleries::add_gallery_item),
+            post(crate::gallery::secure::add_gallery_item),
         )
 }
 
@@ -406,43 +406,43 @@ fn sharing_routes() -> Router<AppState> {
     Router::new()
         .route(
             "/sharing/albums",
-            get(crate::sharing::handlers::list_shared_albums),
+            get(crate::gallery::shared::list_shared_albums),
         )
         .route(
             "/sharing/albums",
-            post(crate::sharing::handlers::create_shared_album),
+            post(crate::gallery::shared::create_shared_album),
         )
         .route(
             "/sharing/albums/{id}",
-            delete(crate::sharing::handlers::delete_shared_album),
+            delete(crate::gallery::shared::delete_shared_album),
         )
         .route(
             "/sharing/albums/{id}/members",
-            get(crate::sharing::handlers::list_members),
+            get(crate::gallery::shared::list_members),
         )
         .route(
             "/sharing/albums/{id}/members",
-            post(crate::sharing::handlers::add_member),
+            post(crate::gallery::shared::add_member),
         )
         .route(
             "/sharing/albums/{id}/members/{user_id}",
-            delete(crate::sharing::handlers::remove_member),
+            delete(crate::gallery::shared::remove_member),
         )
         .route(
             "/sharing/albums/{id}/photos",
-            get(crate::sharing::handlers::list_shared_photos),
+            get(crate::gallery::shared::list_shared_photos),
         )
         .route(
             "/sharing/albums/{id}/photos",
-            post(crate::sharing::handlers::add_photo),
+            post(crate::gallery::shared::add_photo),
         )
         .route(
             "/sharing/albums/{album_id}/photos/{photo_id}",
-            delete(crate::sharing::handlers::remove_photo),
+            delete(crate::gallery::shared::remove_photo),
         )
         .route(
             "/sharing/users",
-            get(crate::sharing::handlers::list_users_for_sharing),
+            get(crate::gallery::shared::list_users_for_sharing),
         )
 }
 

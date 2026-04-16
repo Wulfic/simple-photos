@@ -16,7 +16,7 @@ use crate::error::AppError;
 use crate::sanitize;
 use crate::state::AppState;
 
-use super::models::*;
+use crate::photos::models::*;
 
 /// GET /api/galleries/secure
 /// List secure galleries for the authenticated user.

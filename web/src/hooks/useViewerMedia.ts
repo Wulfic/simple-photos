@@ -9,6 +9,7 @@ import { api } from "../api/client";
 import { decrypt } from "../crypto/crypto";
 import { db, type MediaType } from "../db";
 import { base64ToUint8Array } from "../utils/media";
+import { diagnosticLogger } from "../utils/diagnosticLogger";
 import type { MediaPayload, PreloadEntry, CropMetadata, PhotoInfoData } from "../types/media";
 export type { MediaPayload, PreloadEntry, CropMetadata, PhotoInfoData };
 
@@ -88,16 +89,16 @@ export default function useViewerMedia(
       }
 
       // Cache miss — download, decrypt, display
-      console.log(`[DIAG:VIEWER] Downloading blob ${blobId}...`);
+      diagnosticLogger.debug("VIEWER", `Downloading blob ${blobId}`);
       const encrypted = await api.blobs.download(blobId, controller.signal);
       // Check if aborted during download
       if (controller.signal.aborted) return;
-      console.log(`[DIAG:VIEWER] Downloaded ${encrypted.byteLength} bytes, decrypting...`);
+      diagnosticLogger.debug("VIEWER", `Downloaded ${encrypted.byteLength} bytes, decrypting`);
       const decrypted = await decrypt(encrypted);
       if (controller.signal.aborted) return;
-      console.log(`[DIAG:VIEWER] Decrypted ${decrypted.byteLength} bytes, parsing JSON...`);
+      diagnosticLogger.debug("VIEWER", `Decrypted ${decrypted.byteLength} bytes, parsing JSON`);
       const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
-      console.log(`[DIAG:VIEWER] Payload: mime_type=${payload.mime_type}, media_type=${payload.media_type}, filename=${payload.filename}, data_length=${payload.data?.length ?? 0}`);
+      diagnosticLogger.debug("VIEWER", `Payload: mime_type=${payload.mime_type}, media_type=${payload.media_type}, filename=${payload.filename}`, { data_length: payload.data?.length ?? 0 });
 
       setFilename(payload.filename);
       setMimeType(payload.mime_type);
@@ -113,13 +114,13 @@ export default function useViewerMedia(
           ? "audio"
           : "photo");
       setMediaType(resolvedType);
-      console.log(`[DIAG:VIEWER] Resolved mediaType=${resolvedType}`);
+      diagnosticLogger.debug("VIEWER", `Resolved mediaType=${resolvedType}`);
 
       // Decode base64 → Blob → Object URL
       const bytes = base64ToUint8Array(payload.data).buffer as ArrayBuffer;
       const blob = new Blob([bytes], { type: payload.mime_type });
       const url = URL.createObjectURL(blob);
-      console.log(`[DIAG:VIEWER] Created blob URL: type=${payload.mime_type}, size=${blob.size}`);
+      diagnosticLogger.debug("VIEWER", `Created blob URL: type=${payload.mime_type}, size=${blob.size}`);
       setMediaUrl(url);
 
       // Load crop data from IndexedDB for cache entry

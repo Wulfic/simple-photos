@@ -22,6 +22,7 @@ import useViewerActions from "../hooks/useViewerActions";
 import useViewerEdit from "../hooks/useViewerEdit";
 import useSwipeNavigation from "../hooks/useSwipeNavigation";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import { diagnosticLogger } from "../utils/diagnosticLogger";
 import type { PhotoInfoData } from "../hooks/useViewerMedia";
 
 // ── Navigation context passed via location.state ─────────────────────────────
@@ -232,7 +233,7 @@ export default function Viewer() {
         }
         // Use storageBlobId for copies that reference the original's server blob
         const fetchId = dbCached?.storageBlobId || id;
-        console.log(`[DIAG:VIEWER] Resolved fetchId=${fetchId} (storageBlobId=${dbCached?.storageBlobId})`);
+        diagnosticLogger.debug("VIEWER", `Resolved fetchId=${fetchId}`, { storageBlobId: dbCached?.storageBlobId });
         loadEncryptedMedia(fetchId);
       }).catch(() => loadEncryptedMedia(id));
     }

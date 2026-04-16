@@ -29,6 +29,9 @@ export async function loadFullGif(blobId: string, serverPhotoId?: string): Promi
   return promise;
 }
 
+/** Maximum time (ms) to wait for a full GIF download before giving up. */
+const GIF_LOAD_TIMEOUT_MS = 30_000;
+
 async function _load(blobId: string, serverPhotoId?: string): Promise<string | null> {
   try {
     // 1. Check IndexedDB full-photo cache
@@ -37,27 +40,36 @@ async function _load(blobId: string, serverPhotoId?: string): Promise<string | n
       return URL.createObjectURL(new Blob([cached.data], { type: cached.mimeType }));
     }
 
-    // 2. Server-side (unencrypted) photo — load via photos API
-    if (serverPhotoId) {
-      const token = useAuthStore.getState().accessToken;
-      const res = await fetch(`/api/photos/${serverPhotoId}/file`, {
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "X-Requested-With": "SimplePhotos",
-        },
-      });
-      if (!res.ok) return null;
-      const blob = await res.blob();
-      return URL.createObjectURL(blob);
-    }
+    // Enforce a timeout on network fetches
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), GIF_LOAD_TIMEOUT_MS);
 
-    // 3. Encrypted blob — download + decrypt
-    const encrypted = await api.blobs.download(blobId);
-    const decrypted = await decrypt(encrypted);
-    const payload = JSON.parse(new TextDecoder().decode(decrypted));
-    const bytes = base64ToUint8Array(payload.data);
-    const blob = new Blob([bytes.buffer as ArrayBuffer], { type: payload.mime_type || "image/gif" });
-    return URL.createObjectURL(blob);
+    try {
+      // 2. Server-side (unencrypted) photo — load via photos API
+      if (serverPhotoId) {
+        const token = useAuthStore.getState().accessToken;
+        const res = await fetch(`/api/photos/${serverPhotoId}/file`, {
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "X-Requested-With": "SimplePhotos",
+          },
+          signal: controller.signal,
+        });
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return URL.createObjectURL(blob);
+      }
+
+      // 3. Encrypted blob — download + decrypt
+      const encrypted = await api.blobs.download(blobId, controller.signal);
+      const decrypted = await decrypt(encrypted);
+      const payload = JSON.parse(new TextDecoder().decode(decrypted));
+      const bytes = base64ToUint8Array(payload.data);
+      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: payload.mime_type || "image/gif" });
+      return URL.createObjectURL(blob);
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (err) {
     console.warn(`[GIF_LOADER] Failed to load full GIF ${blobId}:`, err);
     return null;

@@ -15,7 +15,8 @@ import {
 import { createFallbackThumbnail, createAudioFallbackThumbnail, arrayBufferToBase64 } from "../utils/media";
 import type { ThumbnailPayload, PhotoPayload } from "../types/media";
 import { useProcessingStore } from "../store/processing";
-import { generateThumbnail, getImageDimensions } from "../utils/gallery";
+import { generateThumbnail } from "../gallery";
+import { getImageDimensions } from "../utils/gallery";
 
 export interface UploadDeps {
   loadEncryptedPhotos: () => Promise<void>;
@@ -83,7 +84,7 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
       thumbnailData = await createAudioFallbackThumbnail();
     } else {
       try {
-        const thumbResult = await generateThumbnail(file, 512);
+        const thumbResult = await generateThumbnail(file, { size: 512 });
         thumbnailData = thumbResult.data;
         thumbnailMimeType = thumbResult.mimeType;
       } catch {

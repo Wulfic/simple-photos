@@ -2,6 +2,7 @@
 //!
 //! Album owners can add members (other users on this server). Members can
 //! view all photos in the album. Photos can be added/removed by any member.
+//!
+//! Handlers have moved to [`crate::gallery::shared`].
 
-pub mod handlers;
 pub mod models;

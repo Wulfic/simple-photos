@@ -30,6 +30,7 @@ mod downloads;
 mod editing;
 mod error;
 mod export;
+mod gallery;
 mod health;
 mod http_utils;
 mod import;

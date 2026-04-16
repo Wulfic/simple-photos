@@ -135,7 +135,7 @@ export function getDimensionsFromBuffer(
       const img = new Image();
       img.onload = () => {
         URL.revokeObjectURL(url);
-        resolve({ width: img.width, height: img.height });
+        resolve({ width: img.naturalWidth, height: img.naturalHeight });
       };
       img.onerror = () => {
         URL.revokeObjectURL(url);

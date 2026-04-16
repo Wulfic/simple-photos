@@ -14,7 +14,7 @@ import { api } from "../api/client";
 import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
-import MediaTile from "../components/gallery/MediaTile";
+import { ThumbnailTile, type ThumbnailSource, applyDimensionCorrection, correctDimensionsFromThumbnail } from "../gallery";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { useGalleryData } from "../hooks/useGalleryData";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
@@ -483,9 +483,21 @@ export default function Gallery() {
                 getKey={(p) => p.blobId}
                 renderItem={(photo, localIdx) => {
                   const globalIdx = groupStartIdx + localIdx;
+                  const source: ThumbnailSource = {
+                    blobId: photo.blobId,
+                    storageBlobId: photo.storageBlobId,
+                    serverPhotoId: photo.serverPhotoId,
+                    serverSide: photo.serverSide,
+                    thumbnailData: photo.thumbnailData,
+                    thumbnailMimeType: photo.thumbnailMimeType,
+                  };
                   return (
-                    <MediaTile
-                      photo={photo}
+                    <ThumbnailTile
+                      source={source}
+                      mediaType={photo.mediaType}
+                      filename={photo.filename}
+                      cropData={photo.cropData}
+                      duration={photo.duration}
                       selectionMode={selectionMode}
                       isSelected={selectedIds.has(photo.blobId)}
                       onClick={() => {
@@ -496,6 +508,15 @@ export default function Gallery() {
                       }}
                       onLongPress={() => {
                         if (!selectionMode) enterSelectionMode(photo.blobId);
+                      }}
+                      onDimensionMismatch={(nw, nh) => {
+                        const correction = correctDimensionsFromThumbnail(nw, nh, photo.width, photo.height);
+                        if (correction) {
+                          applyDimensionCorrection(
+                            photo.blobId, photo.serverPhotoId,
+                            correction.width, correction.height,
+                          );
+                        }
                       }}
                     />
                   );

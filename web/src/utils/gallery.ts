@@ -1,112 +1,38 @@
 /**
- * Gallery utilities — thumbnail generation, in-memory thumbnail caching,
- * and cursor-based pagination helpers.
+ * Gallery utilities — cursor-based pagination helpers, caching, duration
+ * formatting, and legacy re-exports of functions now living in the
+ * gallery module.
  */
 import { api } from "../api/client";
+
+// ── Re-exports from gallery module (kept for backward compatibility) ──────────
+export {
+  generateThumbnail,
+  decodeThumbnailDimensions,
+  thumbnailSrc,
+} from "../gallery/utils/thumbnailGenerate";
+
+// ── Legacy generation functions ───────────────────────────────────────────────
+// These thin wrappers delegate to the unified `generateThumbnail`.
+// New code should import from `../gallery` directly.
+
+import { generateThumbnail as _generate } from "../gallery/utils/thumbnailGenerate";
 import { createFallbackThumbnail } from "./media";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+/**
+ * @deprecated Use `generateThumbnail(file, { size })` from `../gallery` instead.
+ */
+export async function generateImageThumbnail(file: File, size: number): Promise<ArrayBuffer> {
+  const result = await _generate(file, { size });
+  return result.data;
+}
 
 /**
- * Generate an aspect-ratio-preserving JPEG thumbnail from an image file.
- * Scales so the longest edge fits within `size` pixels.
- * @param file - Source image file
- * @param size - Maximum dimension in pixels (longest edge)
- * @returns JPEG ArrayBuffer at 80% quality
+ * @deprecated Use `generateThumbnail(file, { size })` from `../gallery` instead.
  */
-export function generateImageThumbnail(file: File, size: number): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      // Fit within size x size, preserving aspect ratio
-      const scale = Math.min(size / img.width, size / img.height, 1);
-      const w = Math.round(img.width * scale) || 1;
-      const h = Math.round(img.height * scale) || 1;
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, w, h);
-      canvas.toBlob(
-        (blob) => (blob ? blob.arrayBuffer().then(resolve) : reject(new Error("Canvas toBlob failed"))),
-        "image/jpeg",
-        0.8
-      );
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Image load failed")); };
-    img.src = url;
-  });
-}
-
-/** Seek to 10 % of video duration and capture a frame.
- *  Preserves the original aspect ratio (fits within size x size). */
-export function generateVideoThumbnail(file: File, size: number): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    const url = URL.createObjectURL(file);
-
-    video.onloadedmetadata = () => {
-      // Seek to 10 % of the video (at least 1 s in)
-      video.currentTime = Math.min(Math.max(video.duration * 0.1, 1), video.duration);
-    };
-
-    video.onseeked = () => {
-      URL.revokeObjectURL(url);
-      // Fit within size x size, preserving aspect ratio
-      const scale = Math.min(size / video.videoWidth, size / video.videoHeight, 1);
-      const w = Math.round(video.videoWidth * scale) || 1;
-      const h = Math.round(video.videoHeight * scale) || 1;
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(video, 0, 0, w, h);
-      canvas.toBlob(
-        (blob) => (blob ? blob.arrayBuffer().then(resolve) : reject(new Error("Canvas toBlob failed"))),
-        "image/jpeg",
-        0.8
-      );
-    };
-
-    video.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Video load failed")); };
-    video.src = url;
-  });
-}
-
-/** Generate a JPEG thumbnail from any image or video file.
- *  For GIFs, returns scaled animated GIF data (preserving animation).
- *  For videos, captures a frame at 10% of duration.
- *  For everything else, returns a JPEG cover-crop. */
-export async function generateThumbnail(file: File, size: number): Promise<{ data: ArrayBuffer; mimeType: string }> {
-  if (file.type.startsWith("video/")) {
-    return { data: await generateVideoThumbnail(file, size), mimeType: "image/jpeg" };
-  }
-  if (file.type.startsWith("audio/")) {
-    // Audio files have no visual content; return a small placeholder
-    const fallback = await generateImageThumbnail(new File([new Blob()], file.name, { type: "image/png" }), size).catch(() => createFallbackThumbnail());
-    return { data: fallback, mimeType: "image/jpeg" };
-  }
-  if (file.type === "image/gif") {
-    // Preserve GIF animation by using the original file data as the thumbnail.
-    // For large GIFs (>5 MB) fall back to static first-frame JPEG to save space.
-    const MAX_GIF_THUMB_BYTES = 5 * 1024 * 1024;
-    if (file.size <= MAX_GIF_THUMB_BYTES) {
-      return { data: await file.arrayBuffer(), mimeType: "image/gif" };
-    }
-    // Large GIF — static first-frame is the safer default
-    return { data: await generateImageThumbnail(file, size), mimeType: "image/jpeg" };
-  }
-  return { data: await generateImageThumbnail(file, size), mimeType: "image/jpeg" };
-}
-
-/** Return a data URL to preview a thumbnail stored as ArrayBuffer.
- *  @param mimeType - Thumbnail MIME type (defaults to "image/jpeg") */
-export function thumbnailSrc(data: ArrayBuffer, mimeType?: string): string {
-  return URL.createObjectURL(new Blob([data], { type: mimeType || "image/jpeg" }));
+export async function generateVideoThumbnail(file: File, size: number): Promise<ArrayBuffer> {
+  const result = await _generate(file, { size });
+  return result.data;
 }
 
 /** Get the natural width/height of an image file. */
@@ -131,32 +57,6 @@ export function getImageDimensions(file: File): Promise<{ width: number; height:
       img.onerror = () => { URL.revokeObjectURL(url); resolve({ width: 0, height: 0 }); };
       img.src = url;
     }
-  });
-}
-
-/**
- * Decode the pixel dimensions of a thumbnail stored as an ArrayBuffer.
- * Uses a temporary Image element; returns {0,0} on failure.
- * The browser auto-applies EXIF orientation, so the returned dimensions
- * reflect the display orientation (portrait photos → width < height).
- */
-export function decodeThumbnailDimensions(
-  data: ArrayBuffer,
-  mimeType?: string,
-): Promise<{ width: number; height: number }> {
-  return new Promise((resolve) => {
-    const blob = new Blob([data], { type: mimeType || "image/jpeg" });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve({ width: img.naturalWidth, height: img.naturalHeight });
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve({ width: 0, height: 0 });
-    };
-    img.src = url;
   });
 }
 

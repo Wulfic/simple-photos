@@ -16,7 +16,6 @@ import { useProcessingStore } from "../store/processing";
 import type { ImportItem, ServerFile, GooglePhotosMetadata } from "../utils/importTypes";
 import {
   arrayBufferToBase64,
-  generateThumbnailFromBuffer,
   getDimensionsFromBuffer,
   getVideoDurationFromBuffer,
   guessMimeFromName,
@@ -24,6 +23,7 @@ import {
   createFallbackThumbnail,
   createAudioFallbackThumbnail,
 } from "../utils/media";
+import { generateThumbnail } from "../gallery";
 import { formatBytes } from "../utils/formatters";
 import ImportFileList from "./import/ImportFileList";
 
@@ -277,11 +277,14 @@ export default function Import() {
     }
 
     let thumbnailData: ArrayBuffer;
+    let thumbnailMimeType = "image/jpeg";
     if (mediaType === "audio") {
       thumbnailData = await createAudioFallbackThumbnail();
     } else {
       try {
-        thumbnailData = await generateThumbnailFromBuffer(rawData, mimeType, 512);
+        const thumbResult = await generateThumbnail(rawData, { size: 512, mimeType });
+        thumbnailData = thumbResult.data;
+        thumbnailMimeType = thumbResult.mimeType;
       } catch {
         console.warn(`Thumbnail generation failed for ${item.name}, using fallback`);
         thumbnailData = await createFallbackThumbnail();
@@ -291,7 +294,7 @@ export default function Import() {
     // Decode thumbnail to get actual dimensions
     const thumbDims = await new Promise<{ w: number; h: number }>((resolve) => {
       const img = new Image();
-      const url = URL.createObjectURL(new Blob([thumbnailData], { type: "image/jpeg" }));
+      const url = URL.createObjectURL(new Blob([thumbnailData], { type: thumbnailMimeType }));
       img.onload = () => { URL.revokeObjectURL(url); resolve({ w: img.naturalWidth, h: img.naturalHeight }); };
       img.onerror = () => { URL.revokeObjectURL(url); resolve({ w: 512, h: 512 }); };
       img.src = url;

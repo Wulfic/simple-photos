@@ -24,11 +24,9 @@ export function getThumbnailStyle(cropJson?: string | null): CSSProperties {
 
     if (rot) {
       transform += `rotate(${rot}deg) `;
-      if (rot === 90 || rot === 270) {
-          // If the thumbnail wrapper is non-square, rotating will mess up aspect,
-          // but our wrappers are `aspect-square`, `overflow-hidden`.
-          // If the image itself is object-cover, it should look right.
-      }
+      // 90°/270° rotations swap the visual width/height but the layout box
+      // stays unchanged.  This is fine because tile wrappers use
+      // overflow-hidden + object-cover which clip and fill correctly.
     }
 
     if (transform) {

@@ -15,9 +15,10 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getErrorMessage } from "../utils/formatters";
+import { diagnosticLogger } from "../utils/diagnosticLogger";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
-import { ItemTile, PhotoThumbnail } from "../components/SecureGalleryTile";
+import { SecureGalleryItem, PickerThumbnail, type ThumbnailSource } from "../gallery";
 
 interface Gallery {
   id: string;
@@ -189,9 +190,9 @@ export default function SecureGallery() {
     try {
       const addedOriginalIds: string[] = [];
       for (const blobId of selectedPhotos) {
-        console.log(`[DIAG:SECURE_ADD] Adding photo ${blobId} to secure gallery ${selectedGallery.id}`);
+        diagnosticLogger.debug("SECURE_ADD", `Adding photo ${blobId} to secure gallery ${selectedGallery.id}`);
         const response = await api.secureGalleries.addItem(selectedGallery.id, blobId);
-        console.log(`[DIAG:SECURE_ADD] Server response: item_id=${response.item_id}, new_blob_id=${response.new_blob_id}`);
+        diagnosticLogger.debug("SECURE_ADD", `Server response: item_id=${response.item_id}, new_blob_id=${response.new_blob_id}`);
         // The server creates a physical copy of the blob under a new ID.
         // Duplicate the IDB cache entry to the cloned blob ID so that
         // ItemTile (which uses the server's blob_id) can display the thumbnail.
@@ -211,10 +212,10 @@ export default function SecureGallery() {
               // Clear storageBlobId — the clone is its own blob
               storageBlobId: undefined,
             };
-            console.log(`[DIAG:SECURE_ADD] Creating IDB clone entry: blobId=${cloneEntry.blobId}, serverSide=${cloneEntry.serverSide}, serverPhotoId=${cloneEntry.serverPhotoId}`);
+            diagnosticLogger.debug("SECURE_ADD", `Creating IDB clone entry`, { blobId: cloneEntry.blobId, serverSide: cloneEntry.serverSide, serverPhotoId: cloneEntry.serverPhotoId });
             await db.photos.put(cloneEntry);
           } else {
-            console.warn(`[DIAG:SECURE_ADD] Original cached photo not found in IDB for ${blobId}`);
+            diagnosticLogger.warn("SECURE_ADD", `Original cached photo not found in IDB for ${blobId}`);
           }
           addedOriginalIds.push(blobId);
         }
@@ -225,7 +226,7 @@ export default function SecureGallery() {
       // immediately (the server's secureBlobIds endpoint also hides them, but
       // that depends on polling and may have a delay).
       for (const origId of addedOriginalIds) {
-        console.log(`[DIAG:SECURE_ADD] Deleting original IDB entry: ${origId}`);
+        diagnosticLogger.debug("SECURE_ADD", `Deleting original IDB entry: ${origId}`);
         await db.photos.delete(origId);
       }
 
@@ -473,7 +474,17 @@ export default function SecureGallery() {
                         }`}
                         onClick={() => togglePhotoSelection(photo.blobId)}
                       >
-                        <PhotoThumbnail photo={photo} />
+                        <PickerThumbnail
+                          source={{
+                            blobId: photo.blobId,
+                            storageBlobId: photo.storageBlobId,
+                            serverPhotoId: photo.serverPhotoId,
+                            serverSide: photo.serverSide,
+                            thumbnailData: photo.thumbnailData,
+                            thumbnailMimeType: photo.thumbnailMimeType,
+                          }}
+                          filename={photo.filename}
+                        />
                         {/* Selection circle in top-right */}
                         <div
                           className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
@@ -526,7 +537,7 @@ export default function SecureGallery() {
               getAspectRatio={(item) => (item.width && item.height) ? item.width / item.height : 1}
               getKey={(item) => item.id}
               renderItem={(item, idx) => (
-                <ItemTile
+                <SecureGalleryItem
                   item={item}
                   onClick={() =>
                     navigate(`/photo/${item.blob_id}`, {

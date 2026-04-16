@@ -13,14 +13,11 @@
 //! - [`upload`]          — Mobile client upload with content-hash deduplication.
 //! - [`scan`]            — Filesystem scan and thumbnail generation (pure Rust).
 //! - [`encryption`]      — Encryption key storage endpoint.
-//! - [`sync`]            — Photo metadata sync for mobile gallery population.
-//! - [`galleries`]       — Secure (password-protected) gallery CRUD.
 //! - [`storage_stats`]   — Per-user and filesystem storage usage stats.
 //! - [`metadata`]        — EXIF extraction (dimensions, GPS, camera model, date).
 //! - [`utils`]           — Timestamp normalization and content hashing.
 
 pub mod encryption;
-pub mod galleries;
 pub mod handlers;
 pub mod metadata;
 pub mod models;
@@ -29,7 +26,6 @@ pub mod serve;
 pub mod server_migrate;
 pub mod server_migrate_encrypt;
 pub mod storage_stats;
-pub mod sync;
 pub mod thumbnail;
 pub mod upload;
 pub mod utils;
