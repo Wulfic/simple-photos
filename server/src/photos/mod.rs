@@ -9,24 +9,21 @@
 //! via FFmpeg during import — see [`crate::conversion`].
 //!
 //! Key sub-modules:
-//! - [`handlers`]        — List, serve, favorite, and crop endpoints for photos.
+//! - [`handlers`]        — List, serve, favorite endpoints for photos.
 //! - [`upload`]          — Mobile client upload with content-hash deduplication.
 //! - [`scan`]            — Filesystem scan and thumbnail generation (pure Rust).
 //! - [`encryption`]      — Encryption key storage endpoint.
 //! - [`sync`]            — Photo metadata sync for mobile gallery population.
-//! - [`copies`]          — Photo duplication and edit-copy management.
 //! - [`galleries`]       — Secure (password-protected) gallery CRUD.
 //! - [`storage_stats`]   — Per-user and filesystem storage usage stats.
 //! - [`metadata`]        — EXIF extraction (dimensions, GPS, camera model, date).
 //! - [`utils`]           — Timestamp normalization and content hashing.
 
-pub mod copies;
 pub mod encryption;
 pub mod galleries;
 pub mod handlers;
 pub mod metadata;
 pub mod models;
-pub mod render;
 pub mod scan;
 pub mod serve;
 pub mod server_migrate;

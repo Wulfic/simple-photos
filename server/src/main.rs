@@ -27,6 +27,7 @@ mod crypto;
 mod db;
 mod diagnostics;
 mod downloads;
+mod editing;
 mod error;
 mod export;
 mod health;

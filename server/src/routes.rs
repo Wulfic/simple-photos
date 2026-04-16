@@ -179,27 +179,27 @@ fn photo_routes() -> Router<AppState> {
             "/photos/{id}/favorite",
             put(crate::photos::handlers::toggle_favorite),
         )
-        .route("/photos/{id}/crop", put(crate::photos::handlers::set_crop))
+        .route("/photos/{id}/crop", put(crate::editing::save::set_crop))
         .route("/photos/dimensions", patch(crate::photos::handlers::batch_update_dimensions))
         // Photo soft-delete to trash
         .route("/photos/{id}", delete(crate::trash::operations::soft_delete_photo))
         // Edit copies
         .route(
             "/photos/{id}/copies",
-            post(crate::photos::copies::create_edit_copy),
+            post(crate::editing::edit_copies::create_edit_copy),
         )
-        .route("/photos/{id}/copies", get(crate::photos::copies::list_edit_copies))
+        .route("/photos/{id}/copies", get(crate::editing::edit_copies::list_edit_copies))
         .route(
             "/photos/{id}/copies/{copy_id}",
-            delete(crate::photos::copies::delete_edit_copy),
+            delete(crate::editing::edit_copies::delete_edit_copy),
         )
-        // Duplicate photo
+        // Duplicate photo (save as rendered copy)
         .route(
             "/photos/{id}/duplicate",
-            post(crate::photos::copies::duplicate_photo),
+            post(crate::editing::save_copy::duplicate_photo),
         )
-        // Render with baked-in edits
-        .route("/photos/{id}/render", post(crate::photos::render::render_photo))
+        // Render with baked-in edits (on-demand download)
+        .route("/photos/{id}/render", post(crate::editing::render_download::render_photo))
         // Scan & register
         .route("/admin/photos/scan", post(crate::photos::scan::scan_and_register))
         // Conversion progress
