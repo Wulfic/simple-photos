@@ -103,6 +103,19 @@ export default function useViewerEdit(
     if (elW === 0 || elH === 0 || containerW === 0 || containerH === 0) return;
 
     const rot = ((cropData.rotate ?? 0) % 360 + 360) % 360;
+
+    // Full-frame crop (no actual cropping) with no rotation — just brightness.
+    // Skip the translate/scale transform so the image stays at its natural
+    // object-contain size instead of shrinking to 85%.
+    const isFullFrame = cropData.x <= 0.01 && cropData.y <= 0.01 &&
+                        cropData.width >= 0.99 && cropData.height >= 0.99;
+    if (isFullFrame && rot === 0) {
+      setCropZoomStyle({
+        filter: cropData.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
+      });
+      return;
+    }
+
     const isSwapped = rot === 90 || rot === 270;
     const cropPixW = cropData.width * elW;
     const cropPixH = cropData.height * elH;
