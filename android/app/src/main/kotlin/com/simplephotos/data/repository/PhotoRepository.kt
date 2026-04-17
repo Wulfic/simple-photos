@@ -367,7 +367,8 @@ class PhotoRepository @Inject constructor(
         // Also pull crop_metadata updates for already-synced photos so
         // non-destructive edits from web/other devices are reflected.
         val cropUpdated = syncCropMetadata()
-        return imported + cropUpdated
+        val favUpdated = syncFavorites()
+        return imported + cropUpdated + favUpdated
     }
 
     /**
@@ -404,7 +405,8 @@ class PhotoRepository @Inject constructor(
                     blobId = serverEntity.serverBlobId ?: localMatch.serverBlobId ?: continue,
                     thumbBlobId = serverEntity.thumbnailBlobId,
                     cropMetadata = serverEntity.cropMetadata,
-                    photoHash = serverEntity.photoHash
+                    photoHash = serverEntity.photoHash,
+                    isFavorite = serverEntity.isFavorite
                 )
                 // Delete the server-only duplicate and its thumbnail file
                 serverEntity.thumbnailPath?.let { File(it).delete() }
@@ -462,7 +464,8 @@ class PhotoRepository @Inject constructor(
                         blobId = blobId,
                         thumbBlobId = photo.encryptedThumbBlobId,
                         cropMetadata = photo.cropMetadata,
-                        photoHash = photo.photoHash
+                        photoHash = photo.photoHash,
+                        isFavorite = photo.isFavorite
                     )
                     android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: merged server photo '${photo.filename}' (${photo.id}) into local entity ${localMatch.localId}")
                     merged++
@@ -559,6 +562,30 @@ class PhotoRepository @Inject constructor(
     }
 
     /**
+     * Pull is_favorite updates from the server for photos that have already
+     * been synced.  The main encrypted-sync skips existing photos, so
+     * favorites toggled on the web would never arrive otherwise.
+     */
+    suspend fun syncFavorites(): Int {
+        var updated = 0
+        try {
+            val records = api.favoriteSync()
+            for (record in records) {
+                val existing = db.photoDao().getByServerPhotoId(record.id) ?: continue
+                if (existing.isFavorite != record.isFavorite) {
+                    db.photoDao().updateFavorite(existing.localId, record.isFavorite)
+                    updated++
+                    android.util.Log.d("PhotoRepository",
+                        "syncFavorites: updated fav for ${record.id} (local=${existing.localId}) → ${record.isFavorite}")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PhotoRepository", "syncFavorites failed: ${e.message}")
+        }
+        return updated
+    }
+
+    /**
      * Save thumbnail bytes to app-internal storage.
      * Detects GIF magic bytes and uses `.gif` extension so Coil's
      * GifDecoder can animate them; everything else gets `.jpg`.
@@ -621,9 +648,15 @@ class PhotoRepository @Inject constructor(
 
     // ── Server-side metadata operations (used by PhotoViewerViewModel) ────
 
-    /** Toggle the is_favorite flag on the server and return the new state. */
-    suspend fun toggleFavorite(photoId: String): FavoriteToggleResponse =
-        api.toggleFavorite(photoId)
+    /** Toggle the is_favorite flag on the server and persist to local DB. */
+    suspend fun toggleFavorite(photoId: String): FavoriteToggleResponse {
+        val response = api.toggleFavorite(photoId)
+        val local = db.photoDao().getByServerPhotoId(photoId)
+        if (local != null) {
+            db.photoDao().updateFavorite(local.localId, response.isFavorite)
+        }
+        return response
+    }
 
     /** Persist crop/brightness/trim metadata on the server. */
     suspend fun setCropOnServer(photoId: String, cropMetadata: String?) {

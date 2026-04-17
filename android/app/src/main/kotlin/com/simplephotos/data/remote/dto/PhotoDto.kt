@@ -73,6 +73,13 @@ data class CropSyncRecord(
     @SerializedName("crop_metadata") val cropMetadata: String? = null
 )
 
+// ── Favorite sync (lightweight delta for cross-device favorites) ─────────────
+
+data class FavSyncRecord(
+    val id: String,
+    @SerializedName("is_favorite") val isFavorite: Boolean = false
+)
+
 // ── Storage stats ────────────────────────────────────────────────────────────
 
 data class StorageStatsResponse(

@@ -182,6 +182,7 @@ fn photo_routes() -> Router<AppState> {
         )
         .route("/photos/{id}/crop", put(crate::editing::save::set_crop))
         .route("/photos/crop-sync", get(crate::editing::save::crop_sync))
+        .route("/photos/favorite-sync", get(crate::photos::handlers::favorite_sync))
         .route("/photos/dimensions", patch(crate::photos::handlers::batch_update_dimensions))
         // Photo soft-delete to trash
         .route("/photos/{id}", delete(crate::trash::operations::soft_delete_photo))

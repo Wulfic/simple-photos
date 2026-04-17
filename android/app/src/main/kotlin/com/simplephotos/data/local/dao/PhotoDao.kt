@@ -64,12 +64,15 @@ interface PhotoDao {
     @Query("UPDATE photos SET serverPhotoId = :photoId, syncStatus = 'SYNCED' WHERE localId = :localId")
     suspend fun markSynced(localId: String, photoId: String)
 
-    /** Merge a server photo into an existing local entity — sets serverPhotoId, blobId, thumbBlobId, cropMetadata, photoHash. */
-    @Query("UPDATE photos SET serverPhotoId = :serverPhotoId, serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, cropMetadata = :cropMetadata, photoHash = :photoHash, syncStatus = 'SYNCED' WHERE localId = :localId")
-    suspend fun mergeServerPhoto(localId: String, serverPhotoId: String, blobId: String, thumbBlobId: String?, cropMetadata: String?, photoHash: String?)
+    /** Merge a server photo into an existing local entity — sets serverPhotoId, blobId, thumbBlobId, cropMetadata, photoHash, isFavorite. */
+    @Query("UPDATE photos SET serverPhotoId = :serverPhotoId, serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, cropMetadata = :cropMetadata, photoHash = :photoHash, isFavorite = :isFavorite, syncStatus = 'SYNCED' WHERE localId = :localId")
+    suspend fun mergeServerPhoto(localId: String, serverPhotoId: String, blobId: String, thumbBlobId: String?, cropMetadata: String?, photoHash: String?, isFavorite: Boolean)
 
     @Query("UPDATE photos SET thumbnailPath = :path WHERE localId = :id")
     suspend fun updateThumbnailPath(id: String, path: String)
+
+    @Query("UPDATE photos SET isFavorite = :isFavorite WHERE localId = :id")
+    suspend fun updateFavorite(id: String, isFavorite: Boolean)
 
     @Query("UPDATE photos SET cropMetadata = :metadata WHERE localId = :id")
     suspend fun updateCropMetadata(id: String, metadata: String?)

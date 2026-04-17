@@ -67,6 +67,9 @@ interface ApiService {
     @GET("api/photos/crop-sync")
     suspend fun cropSync(): List<CropSyncRecord>
 
+    @GET("api/photos/favorite-sync")
+    suspend fun favoriteSync(): List<FavSyncRecord>
+
     @GET("api/photos/{id}/thumb")
     @Streaming
     suspend fun photoThumbnail(@Path("id") photoId: String): ResponseBody

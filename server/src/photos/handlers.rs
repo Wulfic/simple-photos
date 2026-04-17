@@ -6,7 +6,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{self, AuditEvent};
@@ -415,6 +415,34 @@ pub async fn toggle_favorite(
         "id": photo_id,
         "is_favorite": is_favorite,
     })))
+}
+
+// ── Favorite sync (lightweight delta for cross-device sync) ───────────────────
+
+/// Lightweight record returned by the favorite-sync endpoint.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct FavSyncRecord {
+    pub id: String,
+    pub is_favorite: bool,
+}
+
+/// GET /api/photos/favorite-sync
+///
+/// Returns `{id, is_favorite}` for **all** of the user's photos.
+/// Android clients poll this during periodic sync so favorites
+/// toggled on the web (or another device) are reflected locally.
+pub async fn favorite_sync(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<FavSyncRecord>>, AppError> {
+    let records = sqlx::query_as::<_, FavSyncRecord>(
+        "SELECT id, is_favorite FROM photos WHERE user_id = ?",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.read_pool)
+    .await?;
+
+    Ok(Json(records))
 }
 
 // ── Batch dimension update ────────────────────────────────────────────────────

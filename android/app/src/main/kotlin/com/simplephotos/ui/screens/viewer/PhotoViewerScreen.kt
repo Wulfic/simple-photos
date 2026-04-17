@@ -28,6 +28,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -242,6 +244,10 @@ fun PhotoViewerScreen(
         mediaIntrinsicWidth = -1f
         mediaIntrinsicHeight = -1f
         val photo = viewModel.allPhotos.getOrNull(pagerState.currentPage)
+
+        // Sync favorite state from the local entity
+        viewModel.loadFavoriteForPhoto(photo)
+
         val cm = photo?.cropMetadata
         if (cm != null) {
             try {
@@ -723,7 +729,7 @@ fun PhotoViewerScreen(
                         if (currentPhoto.serverPhotoId != null) {
                             IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_star),
+                                    imageVector = if (viewModel.isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
                                     contentDescription = if (viewModel.isFavorite) "Unfavorite" else "Favorite",
                                     tint = if (viewModel.isFavorite) Color(0xFFFBBF24) else Color.White,
                                     modifier = Modifier.size(12.dp)

@@ -219,9 +219,9 @@ class PhotoViewerViewModel @Inject constructor(
         }
     }
 
-    /** Load favorite state for a specific photo — no-op in encrypted mode. */
-    fun loadFavoriteForPhoto(photoId: String?) {
-        // Favorites are not supported in always-encrypted mode
+    /** Load favorite state from the current photo entity. */
+    fun loadFavoriteForPhoto(photo: PhotoEntity?) {
+        isFavorite = photo?.isFavorite ?: false
     }
 
     /** Toggle the favorite state of the current photo. */
