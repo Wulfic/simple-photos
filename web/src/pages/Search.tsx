@@ -36,18 +36,10 @@ export default function Search() {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [allTags, setAllTags] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [searchError, setSearchError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-
-  // Load all user tags on mount
-  useEffect(() => {
-    api.tags.list().then((res) => setAllTags(res.tags)).catch((err) => {
-      console.warn("Failed to load tag suggestions:", err);
-    });
-  }, []);
 
   // Auto-focus the search input
   useEffect(() => {
@@ -212,10 +204,6 @@ export default function Search() {
     return () => clearTimeout(timer);
   }, [query, doSearch]);
 
-  function handleTagClick(tag: string) {
-    setQuery(tag);
-  }
-
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       <AppHeader />
@@ -244,24 +232,6 @@ export default function Search() {
             </button>
           )}
         </div>
-
-        {/* Tag cloud — shown when no query */}
-        {!query && allTags.length > 0 && (
-          <div className="max-w-xl mx-auto mb-8">
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Your tags</p>
-            <div className="flex flex-wrap gap-2">
-              {allTags.map((tag) => (
-                <button
-                  key={tag}
-                  onClick={() => handleTagClick(tag)}
-                  className="px-3 py-1.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-sm font-medium hover:bg-blue-200 dark:hover:bg-blue-800/60 transition-colors"
-                >
-                  {tag}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Server search error banner */}
         {searchError && (
@@ -314,13 +284,13 @@ export default function Search() {
           </>
         )}
 
-        {/* Empty state — no tags at all */}
-        {!query && allTags.length === 0 && (
+        {/* Empty state */}
+        {!query && (
           <div className="text-center py-16">
             <AppIcon name="magnify-glass" size="w-12 h-12" className="mx-auto mb-4 opacity-30" />
-            <p className="text-gray-500 dark:text-gray-400 mb-1">No tags yet</p>
+            <p className="text-gray-500 dark:text-gray-400 mb-1">Search your library</p>
             <p className="text-sm text-gray-400 dark:text-gray-500">
-              Open a photo and add tags to start organizing your library
+              Search by tags, filenames, dates, or media types
             </p>
           </div>
         )}

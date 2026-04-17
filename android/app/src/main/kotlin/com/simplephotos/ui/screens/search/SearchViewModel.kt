@@ -34,8 +34,6 @@ class SearchViewModel @Inject constructor(
         private set
     var results by mutableStateOf<List<SearchResult>>(emptyList())
         private set
-    var allTags by mutableStateOf<List<String>>(emptyList())
-        private set
     var isLoading by mutableStateOf(false)
         private set
     var searched by mutableStateOf(false)
@@ -53,8 +51,6 @@ class SearchViewModel @Inject constructor(
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
                 val prefs = dataStore.data.first()
                 username = prefs[KEY_USERNAME] ?: ""
-                val tagsResponse = withContext(Dispatchers.IO) { api.listTags() }
-                allTags = tagsResponse.tags
             } catch (_: Exception) {}
         }
     }
@@ -71,12 +67,6 @@ class SearchViewModel @Inject constructor(
             delay(300) // debounce
             doSearch(newQuery)
         }
-    }
-
-    fun searchTag(tag: String) {
-        query = tag
-        searchJob?.cancel()
-        searchJob = viewModelScope.launch { doSearch(tag) }
     }
 
     private suspend fun doSearch(q: String) {

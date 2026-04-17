@@ -4,12 +4,9 @@
  */
 package com.simplephotos.ui.screens.search
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -118,38 +115,6 @@ fun SearchScreen(
                 shape = RoundedCornerShape(16.dp)
             )
 
-            // Tag cloud when no query
-            AnimatedVisibility(visible = viewModel.query.isEmpty() && viewModel.allTags.isNotEmpty()) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    Text(
-                        "Your tags",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        viewModel.allTags.forEach { tag ->
-                            Surface(
-                                modifier = Modifier.clickable { viewModel.searchTag(tag) },
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.primaryContainer
-                            ) {
-                                Text(
-                                    text = tag,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             // Loading
             if (viewModel.isLoading) {
                 Box(
@@ -207,8 +172,8 @@ fun SearchScreen(
                 }
             }
 
-            // Empty state when no tags at all
-            if (viewModel.query.isEmpty() && viewModel.allTags.isEmpty() && !viewModel.isLoading) {
+            // Empty state
+            if (viewModel.query.isEmpty() && !viewModel.isLoading) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -222,13 +187,13 @@ fun SearchScreen(
                         )
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            "No tags yet",
+                            "Search your library",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Open a photo and add tags to\nstart organizing your library",
+                            "Search by tags, filenames,\ndates, or media types",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                             textAlign = TextAlign.Center

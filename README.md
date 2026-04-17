@@ -1,6 +1,9 @@
 # Simple Photos
 
-A self-hosted photo & video library with always-on end-to-end encryption, multi-device backup, and web + Android access.
+A self-hosted photo & video library with end-to-end encryption, multi-server backup & restore, and web + Android access.
+
+###Authors Note
+Simple Photos was born out of a desire for a secure, private, and user-friendly photo management solution that I could host myself. But found that other solutions lacked one critical thing, backup servers! Forcing users to choose between only having one backup target, or use multiple solutions; So I decided to build something from the ground up that met all my needs — and hopefully yours too!
 
 ## Features
 
@@ -13,7 +16,7 @@ A self-hosted photo & video library with always-on end-to-end encryption, multi-
 
 ### Media
 
-- **Supporrted Photo, video, and audio formats** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
+- **Supported Photo, video, and audio formats** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
 - **Media conversion** — automatic FFmpeg-based conversion of non-native formats (I.E HEIC → JPEG, MKV → MP4, WMA → MP3) during import and scan
 - **Photo/Video/Audio editing** — crop, rotate, adjust brightness, and trim videos/audio using non-destructive edits stored as metadata or rendered into a saved copy.  
 
