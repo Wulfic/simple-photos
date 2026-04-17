@@ -10,17 +10,13 @@ A self-hosted photo & video library with always-on end-to-end encryption, multi-
 - **End-to-end encryption** — always-on AES-256-GCM encryption with client-side key management, so only you can access your photos. Even if the server is compromised, your data remains secure.
 - **Multi-user** — multiple accounts with per-user storage, shared albums, and admin controls
 - **Themes** — full light/dark theme support
-- **NO AI** — no AI features, no data collection, just a secure and private photo library
 
 ### Media
 
-- **Photo, video, and audio support** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
-- **Media conversion** — automatic FFmpeg-based conversion of non-native formats (HEIC → JPEG, MKV → MP4, WMA → MP3, and more) during import and scan
-- **GIF autoplay** — animated GIFs play automatically in both the main gallery and secure galleries
-- **Portrait orientation** — EXIF-aware dimension handling across upload, sync, and display for correct portrait rendering
-- **Justified grid layout** — aspect-ratio-preserving gallery grid on both web and Android
-- **Photo editing** — crop, rotate, and save copies with full metadata tracking
-- **Thumbnails** — aspect-ratio-preserving thumbnails (512px) with EXIF orientation applied
+- **Supporrted Photo, video, and audio formats** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
+- **Media conversion** — automatic FFmpeg-based conversion of non-native formats (I.E HEIC → JPEG, MKV → MP4, WMA → MP3) during import and scan
+- **Photo/Video/Audio editing** — crop, rotate, adjust brightness, and trim videos/audio using non-destructive edits stored as metadata or rendered into a saved copy.  
+
 
 ### Organization
 
@@ -36,8 +32,6 @@ A self-hosted photo & video library with always-on end-to-end encryption, multi-
 
 - **Backup sync** — automatic server-to-server backup replication with support for multiple backup targets, including remote servers
 - **Backup recovery** — restore a primary server from any backup with full data integrity (photos, blobs, albums, secure galleries, trash, metadata)
-- **Encrypted sync** — encrypted blobs, thumbnails, and secure gallery data are fully replicated to backup servers
-- **Conflict-free sync** — content-hash deduplication prevents duplicate blobs across primary and backup
 
 ### Security
 
@@ -48,9 +42,8 @@ A self-hosted photo & video library with always-on end-to-end encryption, multi-
 
 ### Android
 
-- **Android app** — view and manage your library on the go with Jetpack Compose UI
-- **Automatic backup** — background photo backup from your device via WorkManager
-- **Justified grid** — aspect-ratio-preserving gallery layout matching the web experience
+- **Android app** — view and manage your library
+- **Automatic backup** — background photo backup from your device
 - **Server discovery** — automatic network scanning to find your server during setup
 
 ## Tech Stack
@@ -118,7 +111,7 @@ The install scripts handle everything — building the server, web frontend, and
 
 All prerequisites are handled automatically by the install scripts, minus docker installation on Windows (which requires manual setup).
 
-The built web frontend is served by the Rust server from the configured `static_root`. The Android APK is available at `android/app/build/outputs/apk/debug/app-debug.apk` and served by the server at `/api/downloads/android`.
+The built web frontend is served by the Rust server from the configured `static_root`. The Android APK is available at `android/app/build/outputs/apk/debug/app-debug.apk` and served by the server at `/api/downloads/android` (a download button is available in settings).
 
 ## API
 
@@ -145,4 +138,8 @@ See [tests/README.md](tests/README.md) for details.
 
 ## License
 
-© 2026 WulfNet Designs. All rights reserved.
+This project is licensed under the [MIT License](LICENSE).
+
+© 2026 WulfNet Designs — [github.com/Wulfic/simple-photos](https://github.com/Wulfic/simple-photos)
+
+Attribution is required when redistributing or using this software. Please retain the original copyright notice and link to the source repository.

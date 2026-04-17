@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { db } from "../db";
 import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
+import TagPanel from "../components/viewer/TagPanel";
 import ViewerEditPanel from "../components/viewer/ViewerEditPanel";
 import LeavePrompt from "../components/viewer/LeavePrompt";
 import CropOverlay from "../components/viewer/CropOverlay";
@@ -59,6 +60,7 @@ export default function Viewer() {
 
   // ── Info panel state ───────────────────────────────────────────────────────
   const [showInfoPanel, setShowInfoPanel] = useState(false);
+  const [showTagPanel, setShowTagPanel] = useState(false);
   const [photoInfo, setPhotoInfo] = useState<PhotoInfoData | null>(null);
 
   // ── Slide animation direction ─────────────────────────────────────────────
@@ -272,6 +274,8 @@ export default function Viewer() {
         showOverlay={showOverlay}
         showInfoPanel={showInfoPanel}
         setShowInfoPanel={setShowInfoPanel}
+        showTagPanel={showTagPanel}
+        setShowTagPanel={setShowTagPanel}
         mediaType={mediaType}
         mediaUrl={mediaUrl}
         isFavorite={isFavorite}
@@ -610,6 +614,9 @@ export default function Viewer() {
 
       {/* Photo info panel */}
       <PhotoInfoPanel show={showInfoPanel} onClose={() => setShowInfoPanel(false)} photoInfo={photoInfo} />
+
+      {/* Tag panel */}
+      <TagPanel show={showTagPanel} onClose={() => setShowTagPanel(false)} photoId={id} />
       <LeavePrompt show={showLeavePrompt} onCancel={() => setShowLeavePrompt(false)} onDiscard={handleLeaveAndDiscard} onSave={handleLeaveAndSave} />
 
       {/* Download choice dialog for converted files */}

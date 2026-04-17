@@ -9,6 +9,8 @@ export interface ViewerTopBarProps {
   showOverlay: boolean;
   showInfoPanel: boolean;
   setShowInfoPanel: (v: boolean) => void;
+  showTagPanel: boolean;
+  setShowTagPanel: (v: boolean) => void;
   mediaType: MediaType;
   mediaUrl: string | null;
   isFavorite: boolean;
@@ -28,6 +30,8 @@ export default function ViewerTopBar({
   showOverlay,
   showInfoPanel,
   setShowInfoPanel,
+  showTagPanel,
+  setShowTagPanel,
   mediaType,
   mediaUrl,
   isFavorite,
@@ -65,6 +69,17 @@ export default function ViewerTopBar({
             <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </button>
+        {!isBackupServer && (
+          <button
+            onClick={() => setShowTagPanel(!showTagPanel)}
+            className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
+              showTagPanel ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
+            }`}
+            title="Tags"
+          >
+            <AppIcon name="tag" size="w-5 h-5" themed={false} className="invert" />
+          </button>
+        )}
         {(mediaType === "photo" || mediaType === "video" || mediaType === "audio") && !isBackupServer && (
           <button
             onClick={onToggleEdit}

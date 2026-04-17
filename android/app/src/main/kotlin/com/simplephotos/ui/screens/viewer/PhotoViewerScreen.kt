@@ -222,6 +222,7 @@ fun PhotoViewerScreen(
 
     // ── Info panel state ─────────────────────────────────────────────
     var showInfoPanel by remember { mutableStateOf(false) }
+    var showTagPanel by remember { mutableStateOf(false) }
 
     // ── Download state ───────────────────────────────────────────────
     val scope = rememberCoroutineScope()
@@ -706,28 +707,16 @@ fun PhotoViewerScreen(
                         .windowInsetsPadding(WindowInsets.statusBars)
                         .padding(top = 12.dp) // extra padding below notch / camera cutout
                         .padding(horizontal = 4.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     IconButton(onClick = onBack, modifier = Modifier.size(32.dp)) {
                         Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", tint = Color.White, modifier = Modifier.size(12.dp))
                     }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = currentPhoto?.filename ?: "Viewer",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            text = "${pagerState.currentPage + 1} / ${viewModel.allPhotos.size}",
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                            color = Color.White.copy(alpha = 0.7f)
-                        )
-                    }
+                    Spacer(Modifier.weight(1f))
                     if (currentPhoto != null) {
                         if (currentPhoto.serverPhotoId != null) {
-                            IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }) {
+                            IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }, modifier = Modifier.size(32.dp)) {
                                 Icon(
                                     imageVector = if (viewModel.isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
                                     contentDescription = if (viewModel.isFavorite) "Unfavorite" else "Favorite",
@@ -737,13 +726,29 @@ fun PhotoViewerScreen(
                             }
                         }
                         // Info button
-                        IconButton(onClick = { showInfoPanel = !showInfoPanel }) {
+                        IconButton(onClick = { showInfoPanel = !showInfoPanel }, modifier = Modifier.size(32.dp)) {
                             Icon(
                                 imageVector = Icons.Default.Info,
                                 contentDescription = "Info",
                                 tint = if (showInfoPanel) Color(0xFF60A5FA) else Color.White,
                                 modifier = Modifier.size(18.dp)
                             )
+                        }
+                        // Tag button
+                        if (currentPhoto.serverPhotoId != null) {
+                            IconButton(onClick = {
+                                showTagPanel = !showTagPanel
+                                if (showTagPanel) {
+                                    viewModel.loadTagsForPhoto(currentPhoto.serverPhotoId)
+                                }
+                            }, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_tag),
+                                    contentDescription = "Tags",
+                                    tint = if (showTagPanel) Color(0xFF60A5FA) else Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                         // Edit button — available for photos, videos, and audio
                         if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
@@ -762,7 +767,7 @@ fun PhotoViewerScreen(
                             }
                         }
                         // Download button
-                        IconButton(onClick = {
+                        IconButton(modifier = Modifier.size(32.dp), onClick = {
                             val photo = currentPhoto ?: return@IconButton
                             scope.launch {
                                 try {
@@ -833,7 +838,7 @@ fun PhotoViewerScreen(
                         }
                         if (viewModel.albumId != null) {
                             // Album context: remove from album only (don't delete the photo)
-                            IconButton(onClick = { viewModel.removeFromAlbum(currentPhoto, onBack) }) {
+                            IconButton(onClick = { viewModel.removeFromAlbum(currentPhoto, onBack) }, modifier = Modifier.size(32.dp)) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trashcan),
                                     contentDescription = "Remove from album",
@@ -843,7 +848,7 @@ fun PhotoViewerScreen(
                             }
                         } else {
                             // Gallery context: delete the photo
-                            IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }) {
+                            IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }, modifier = Modifier.size(32.dp)) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trashcan),
                                     contentDescription = "Delete",
@@ -872,6 +877,20 @@ fun PhotoViewerScreen(
             visible = showInfoPanel,
             photo = currentPhoto,
             onDismiss = { showInfoPanel = false },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+
+        // ── Tag panel (slide up from bottom) ──────────────────────────
+        ViewerTagPanel(
+            visible = showTagPanel,
+            tags = viewModel.currentTags,
+            onAddTag = { tag ->
+                currentPhoto?.serverPhotoId?.let { viewModel.addTag(it, tag) }
+            },
+            onRemoveTag = { tag ->
+                currentPhoto?.serverPhotoId?.let { viewModel.removeTag(it, tag) }
+            },
+            onDismiss = { showTagPanel = false },
             modifier = Modifier.align(Alignment.BottomCenter)
         )
 

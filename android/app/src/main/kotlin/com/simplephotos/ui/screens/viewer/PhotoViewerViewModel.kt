@@ -186,7 +186,25 @@ class PhotoViewerViewModel @Inject constructor(
 
     /** Load tags for a specific photo — no-op in encrypted mode. */
     fun loadTagsForPhoto(photoId: String?) {
-        // Tags are not supported in always-encrypted mode
+        if (photoId == null) return
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) { tagRepository.getPhotoTags(photoId) }
+                currentTags = response.tags.sorted()
+            } catch (_: Exception) {
+                currentTags = emptyList()
+            }
+        }
+    }
+
+    /** Load all user tags for suggestions. */
+    fun loadAllTags() {
+        viewModelScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) { tagRepository.listTags() }
+                allTags = response.tags.sorted()
+            } catch (_: Exception) {}
+        }
     }
 
     /** Add a tag to the current photo. */

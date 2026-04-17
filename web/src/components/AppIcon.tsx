@@ -30,6 +30,7 @@ export type IconName =
   | "star"
   | "suffle"
   | "sun"
+  | "tag"
   | "trashcan"
   | "upload";
 
