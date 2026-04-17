@@ -8,7 +8,7 @@
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::audit::{self, AuditEvent};
 use crate::auth::middleware::AuthUser;
@@ -63,6 +63,13 @@ pub async fn set_crop(
         return Err(AppError::NotFound);
     }
 
+    tracing::info!(
+        "[editing/save] Set crop_metadata for photo_id={}: has_crop={}, raw={:?}",
+        photo_id,
+        req.crop_metadata.is_some(),
+        req.crop_metadata.as_deref().unwrap_or("null"),
+    );
+
     audit::log(
         &state,
         AuditEvent::PhotoCropSet,
@@ -79,4 +86,30 @@ pub async fn set_crop(
         "id": photo_id,
         "crop_metadata": req.crop_metadata,
     })))
+}
+
+/// Lightweight record returned by the crop-sync endpoint.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct CropSyncRecord {
+    pub id: String,
+    pub crop_metadata: Option<String>,
+}
+
+/// GET /api/photos/crop-sync
+///
+/// Returns `{id, crop_metadata}` for **all** of the user's photos.
+/// Android clients poll this during periodic sync so non-destructive edits
+/// made on the web (or another device) are reflected locally.
+pub async fn crop_sync(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CropSyncRecord>>, AppError> {
+    let records = sqlx::query_as::<_, CropSyncRecord>(
+        "SELECT id, crop_metadata FROM photos WHERE user_id = ?",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.read_pool)
+    .await?;
+
+    Ok(Json(records))
 }

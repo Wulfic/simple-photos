@@ -64,6 +64,9 @@ interface ApiService {
         @Query("limit") limit: Int? = null
     ): EncryptedSyncResponse
 
+    @GET("api/photos/crop-sync")
+    suspend fun cropSync(): List<CropSyncRecord>
+
     @GET("api/photos/{id}/thumb")
     @Streaming
     suspend fun photoThumbnail(@Path("id") photoId: String): ResponseBody
@@ -109,6 +112,12 @@ interface ApiService {
 
     @DELETE("api/blobs/{id}")
     suspend fun deleteBlob(@Path("id") blobId: String): Response<Unit>
+
+    // ── Register encrypted photo ─────────────────────────────────────────
+    @POST("api/photos/register-encrypted")
+    suspend fun registerEncryptedPhoto(
+        @Body request: RegisterEncryptedPhotoRequest
+    ): RegisterEncryptedPhotoResponse
 
     // ── Settings ─────────────────────────────────────────────────────────
     @GET("api/settings/storage-stats")

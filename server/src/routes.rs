@@ -166,6 +166,7 @@ fn photo_routes() -> Router<AppState> {
         .route("/photos", get(crate::photos::handlers::list_photos))
         .route("/photos/encrypted-sync", get(crate::gallery::sync::encrypted_sync))
         .route("/photos/register", post(crate::photos::handlers::register_photo))
+        .route("/photos/register-encrypted", post(crate::photos::handlers::register_encrypted_photo))
         .route("/photos/upload", post(crate::photos::upload::upload_photo))
         .route("/photos/{id}/file", get(crate::photos::serve::serve_photo))
         .route("/photos/{id}/source-file", get(crate::photos::serve::serve_source_file))
@@ -180,6 +181,7 @@ fn photo_routes() -> Router<AppState> {
             put(crate::photos::handlers::toggle_favorite),
         )
         .route("/photos/{id}/crop", put(crate::editing::save::set_crop))
+        .route("/photos/crop-sync", get(crate::editing::save::crop_sync))
         .route("/photos/dimensions", patch(crate::photos::handlers::batch_update_dimensions))
         // Photo soft-delete to trash
         .route("/photos/{id}", delete(crate::trash::operations::soft_delete_photo))

@@ -16,6 +16,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { ThumbnailTile, type ThumbnailSource, applyDimensionCorrection, correctDimensionsFromThumbnail } from "../gallery";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
+import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
 import { useGalleryData } from "../hooks/useGalleryData";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
 import { useBackupStore } from "../store/backup";
@@ -479,7 +480,7 @@ export default function Gallery() {
               </div>
               <JustifiedGrid
                 items={group.photos}
-                getAspectRatio={(p) => (p.width && p.height) ? p.width / p.height : 1}
+                getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
                 getKey={(p) => p.blobId}
                 renderItem={(photo, localIdx) => {
                   const globalIdx = groupStartIdx + localIdx;

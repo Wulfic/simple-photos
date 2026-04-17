@@ -104,6 +104,12 @@ export default function useViewerEdit(
 
     const rot = ((cropData.rotate ?? 0) % 360 + 360) % 360;
 
+    console.log("[EDIT:cropZoom]", {
+      cropData: { x: cropData.x, y: cropData.y, w: cropData.width, h: cropData.height,
+                  rotate: cropData.rotate, brightness: cropData.brightness },
+      containerW, containerH, elW, elH, rot,
+    });
+
     // Full-frame crop (no actual cropping) with no rotation — just brightness.
     // Skip the translate/scale transform so the image stays at its natural
     // object-contain size instead of shrinking to 85%.

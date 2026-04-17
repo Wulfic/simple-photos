@@ -127,7 +127,7 @@ export default function Viewer() {
     handleDownload, handleDownloadOriginal,
     handleDownloadConverted, handleDownloadSource,
     handleToggleFavorite,
-    isRenderingVideo,
+    isRenderingVideo, setIsRenderingVideo,
     showDownloadChoice, setShowDownloadChoice,
   } = useViewerActions({
     id, mediaUrl, filename, mediaType, mimeType,
@@ -288,9 +288,14 @@ export default function Viewer() {
 
       {/* Converting banner — shown while ffmpeg renders a video/audio file */}
       {isRenderingVideo && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-2 rounded-full bg-black/80 text-white text-sm shadow-lg pointer-events-none">
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-2 rounded-full bg-black/80 text-white text-sm shadow-lg">
           <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin flex-shrink-0" />
           Converting… download will begin automatically
+          <button
+            onClick={() => setIsRenderingVideo(false)}
+            className="ml-1 text-white/60 hover:text-white text-base leading-none"
+            aria-label="Dismiss"
+          >✕</button>
         </div>
       )}
 

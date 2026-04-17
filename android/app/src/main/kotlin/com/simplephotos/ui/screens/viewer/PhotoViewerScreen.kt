@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -66,6 +67,8 @@ import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.R
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+
+private const val TAG = "PhotoViewerScreen"
 
 // Mutable crop region used during edit mode (normalised 0..1)
 private data class CropCorners(
@@ -258,6 +261,9 @@ fun PhotoViewerScreen(
     // Initialize edit mode from existing crop metadata
     fun enterEditMode() {
         val photo = currentPhoto ?: return
+        Log.d(TAG, "[enterEditMode] photo=${photo.localId}, server=${photo.serverPhotoId}, " +
+            "dims=${photo.width}×${photo.height}, mediaType=${photo.mediaType}, " +
+            "cropMetadata=${photo.cropMetadata}")
         val cm = photo.cropMetadata
         // Use photo duration as fallback for trim end
         val dur = photo.durationSecs ?: 0f
@@ -299,6 +305,8 @@ fun PhotoViewerScreen(
 
     fun saveEdit() {
         val photo = currentPhoto ?: return
+        Log.d(TAG, "[saveEdit] photo=${photo.localId}, crop=(${cropCorners.x},${cropCorners.y},${cropCorners.w},${cropCorners.h}), " +
+            "rotate=$rotateValue, brightness=$brightnessValue, trimStart=$trimStart, trimEnd=$trimEnd")
         val c = cropCorners
         val isDefaultCrop = c.x <= 0.01f && c.y <= 0.01f && c.w >= 0.99f && c.h >= 0.99f
         val isDefaultBrightness = kotlin.math.abs(brightnessValue) < 1f
@@ -329,6 +337,8 @@ fun PhotoViewerScreen(
 
     fun saveCopy() {
         val photo = currentPhoto ?: return
+        Log.d(TAG, "[saveCopy] photo=${photo.localId}, crop=(${cropCorners.x},${cropCorners.y},${cropCorners.w},${cropCorners.h}), " +
+            "rotate=$rotateValue, brightness=$brightnessValue, trimStart=$trimStart, trimEnd=$trimEnd")
         val c = cropCorners
         val isDefaultCrop = c.x <= 0.01f && c.y <= 0.01f && c.w >= 0.99f && c.h >= 0.99f
         val isDefaultBrightness = kotlin.math.abs(brightnessValue) < 1f
@@ -356,6 +366,7 @@ fun PhotoViewerScreen(
 
     fun clearCrop() {
         val photo = currentPhoto ?: return
+        Log.d(TAG, "[clearCrop] photo=${photo.localId}")
         viewModel.saveCropMetadata(photo, null)
         cropCorners = CropCorners(0f, 0f, 1f, 1f)
         brightnessValue = 0f
@@ -835,6 +846,40 @@ fun PhotoViewerScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // ── Conversion banner (shown while server renders a copy) ─────
+        androidx.compose.animation.AnimatedVisibility(
+            visible = viewModel.isRenderingCopy,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 110.dp)
+                .zIndex(10f)
+        ) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = Color.Black.copy(alpha = 0.8f),
+                modifier = Modifier.padding(horizontal = 16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White
+                    )
+                    Text(
+                        "Converting…",
+                        color = Color.White,
+                        fontSize = 13.sp
+                    )
                 }
             }
         }

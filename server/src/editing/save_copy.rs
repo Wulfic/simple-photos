@@ -67,6 +67,25 @@ pub async fn duplicate_photo(
 
     let original = original.ok_or(AppError::NotFound)?;
 
+    tracing::info!(
+        "[editing/save_copy] Starting duplicate for photo_id={}, user={}, \
+         original={}×{}, media_type={}, mime={}, has_crop_metadata={}",
+        photo_id,
+        auth.user_id,
+        original.width,
+        original.height,
+        original.media_type,
+        original.mime_type,
+        req.crop_metadata.is_some(),
+    );
+
+    if let Some(ref raw_crop) = req.crop_metadata {
+        tracing::info!(
+            "[editing/save_copy] Raw crop_metadata from client: {}",
+            raw_crop,
+        );
+    }
+
     // ── Validate crop_metadata JSON if provided ──────────────────────────
     let meta_json: Option<String> = req
         .crop_metadata
@@ -75,6 +94,20 @@ pub async fn duplicate_photo(
         .transpose()?;
 
     let meta: Option<CropMeta> = meta_json.as_deref().and_then(CropMeta::from_json);
+
+    if let Some(ref m) = meta {
+        tracing::info!(
+            "[editing/save_copy] Parsed CropMeta: crop=({:.4},{:.4},{:.4},{:.4}), \
+             rotate={}°, brightness={:.1}, trim=({:.2},{:.2}), \
+             has_crop={}, has_rotation={}, swaps_dims={}",
+            m.x.unwrap_or(0.0), m.y.unwrap_or(0.0),
+            m.width.unwrap_or(1.0), m.height.unwrap_or(1.0),
+            m.rotation_degrees(),
+            m.brightness.unwrap_or(0.0),
+            m.trim_start.unwrap_or(0.0), m.trim_end.unwrap_or(0.0),
+            m.has_crop(), m.has_rotation(), m.rotation_swaps_dimensions(),
+        );
+    }
 
     let new_id = Uuid::new_v4().to_string();
 
@@ -101,15 +134,84 @@ pub async fn duplicate_photo(
     };
 
     let source_abs = storage_root.join(&original.file_path);
-    if !tokio::fs::try_exists(&source_abs).await.unwrap_or(false) {
-        return Err(AppError::NotFound);
-    }
+
+    // For blob-only photos (uploaded from mobile, no file on disk), decrypt
+    // the encrypted blob to a temp file so the rendering pipeline can read it.
+    let temp_source_path: Option<std::path::PathBuf>;
+    let source_abs = if original.file_path.is_empty() {
+        if original.encrypted_blob_id.is_empty() {
+            return Err(AppError::Internal("Photo has no file_path and no encrypted_blob_id".into()));
+        }
+        let blob_id = &original.encrypted_blob_id;
+        tracing::info!(
+            "[editing/save_copy] Blob-only photo — decrypting blob {} to temp file",
+            blob_id,
+        );
+        let enc_key = crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to load encryption key: {e}")))?
+            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+
+        // Look up the blob's storage_path
+        let blob_row: Option<(String,)> = sqlx::query_as(
+            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.read_pool)
+        .await?;
+        let (blob_storage_path,) = blob_row.ok_or(AppError::NotFound)?;
+
+        let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
+        let plaintext = {
+            let k = enc_key;
+            tokio::task::spawn_blocking(move || crypto::decrypt(&k, &enc_data))
+                .await
+                .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+                .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?
+        };
+
+        // Parse JSON envelope and extract the base64 "data" field
+        let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
+            .map_err(|e| AppError::Internal(format!("Invalid blob envelope JSON: {e}")))?;
+        let data_b64 = envelope["data"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
+        let raw_bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            data_b64,
+        )
+        .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
+
+        // Write to a temp file with proper extension for ffmpeg/image crate
+        let tmp_path = std::env::temp_dir().join(format!("sp-dup-{}.{}", new_id, ext));
+        tokio::fs::write(&tmp_path, &raw_bytes).await.map_err(|e| {
+            AppError::Internal(format!("Failed to write temp source: {e}"))
+        })?;
+        tracing::info!(
+            "[editing/save_copy] Decrypted blob to temp file: {} ({} bytes)",
+            tmp_path.display(),
+            raw_bytes.len(),
+        );
+        temp_source_path = Some(tmp_path.clone());
+        tmp_path
+    } else {
+        temp_source_path = None;
+        if !tokio::fs::try_exists(&source_abs).await.unwrap_or(false) {
+            return Err(AppError::NotFound);
+        }
+        source_abs.clone()
+    };
 
     let media_type = original.media_type.as_str();
     let has_edits = meta.is_some();
 
     // ── Render or copy the file ──────────────────────────────────────────
     if has_edits && (media_type == "video" || media_type == "audio") {
+        tracing::info!(
+            "[editing/save_copy] Rendering video/audio via ffmpeg: {} → {}",
+            source_abs.display(), copy_abs.display(),
+        );
         super::ffmpeg::run_ffmpeg_render(
             &source_abs,
             &copy_abs,
@@ -118,18 +220,32 @@ pub async fn duplicate_photo(
             ext,
         )
         .await?;
+        tracing::info!("[editing/save_copy] FFmpeg render completed");
     } else if has_edits && media_type == "photo" {
+        tracing::info!(
+            "[editing/save_copy] Rendering photo via image crate: {} → {}",
+            source_abs.display(), copy_abs.display(),
+        );
         super::image_render::render_image(
             &source_abs,
             &copy_abs,
             meta.as_ref().unwrap(),
         )
         .await?;
+        tracing::info!("[editing/save_copy] Image render completed");
     } else {
-        // No edits: plain file copy
+        tracing::info!(
+            "[editing/save_copy] No edits — plain file copy: {} → {}",
+            source_abs.display(), copy_abs.display(),
+        );
         tokio::fs::copy(&source_abs, &copy_abs).await.map_err(|e| {
             AppError::Internal(format!("Failed to copy file: {e}"))
         })?;
+    }
+
+    // Clean up decrypted temp source file (blob-only photos)
+    if let Some(ref tmp) = temp_source_path {
+        let _ = tokio::fs::remove_file(tmp).await;
     }
 
     // ── Probe rendered file for dimensions and size ──────────────────────
@@ -140,6 +256,26 @@ pub async fn duplicate_photo(
 
     let (new_w, new_h, _, _, _, _) =
         extract_media_metadata_async(copy_abs.clone()).await;
+
+    tracing::info!(
+        "[editing/save_copy] Rendered file metadata: {}×{}, size={} bytes, \
+         original was {}×{}",
+        new_w, new_h, size_bytes,
+        original.width, original.height,
+    );
+
+    // Sanity check: if rotation swaps dimensions, verify they actually changed
+    if let Some(ref m) = meta {
+        if m.rotation_swaps_dimensions() {
+            let expected_swap = (new_w != original.width) || (new_h != original.height);
+            tracing::info!(
+                "[editing/save_copy] Rotation {}° swaps dims: original={}×{} → \
+                 rendered={}×{} (dims_changed={})",
+                m.rotation_degrees(), original.width, original.height,
+                new_w, new_h, expected_swap,
+            );
+        }
+    }
 
     // For video copies, probe the new duration
     let new_duration = if media_type == "video" || media_type == "audio" {
@@ -160,10 +296,25 @@ pub async fn duplicate_photo(
         let mime_clone = original.mime_type.clone();
         let copy_abs_c = copy_abs.clone();
         let thumb_abs_c = thumb_abs.clone();
+        tracing::info!(
+            "[editing/save_copy] Generating thumbnail from rendered file: {} → {}",
+            copy_abs_c.display(), thumb_abs_c.display(),
+        );
         let ok = generate_thumbnail_file(&copy_abs_c, &thumb_abs_c, &mime_clone, None).await;
         if ok {
+            // Log the actual thumbnail dimensions
+            if let Ok(tsize) = imagesize::size(&thumb_abs_c) {
+                tracing::info!(
+                    "[editing/save_copy] Thumbnail generated: {}×{} (source rendered={}×{})",
+                    tsize.width, tsize.height, new_w, new_h,
+                );
+            }
             Some(thumb_rel.clone())
         } else {
+            tracing::warn!(
+                "[editing/save_copy] Thumbnail generation FAILED for {}",
+                copy_abs_c.display(),
+            );
             None
         }
     };
@@ -300,11 +451,19 @@ async fn encrypt_and_store_copy(
     // Encrypt and store thumbnail blob
     let mut thumb_blob_id_str = String::new();
     let thumb_insert_params = if let Some(ref tb) = thumb_data {
+        // Read actual thumbnail dimensions instead of hardcoding 256×256
+        let (thumb_w, thumb_h) = imagesize::blob_size(tb)
+            .map(|s| (s.width as i64, s.height as i64))
+            .unwrap_or((512, 512));
+        tracing::info!(
+            "[editing/save_copy] Encrypting thumbnail: {}×{}, {} bytes",
+            thumb_w, thumb_h, tb.len(),
+        );
         let thumb_payload = serde_json::json!({
             "v": 1,
             "photo_blob_id": "",
-            "width": 256,
-            "height": 256,
+            "width": thumb_w,
+            "height": thumb_h,
             "data": base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD, tb,
             ),

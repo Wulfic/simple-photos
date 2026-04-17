@@ -226,6 +226,151 @@ pub async fn register_photo(
     ))
 }
 
+/// POST /api/photos/register-encrypted
+/// Create a photos record linked to already-uploaded encrypted blobs.
+/// This is called by mobile clients after uploading blobs to bridge the
+/// gap between the blobs table and the photos table.
+pub async fn register_encrypted_photo(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    Json(req): Json<RegisterEncryptedPhotoRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    // Verify the blob actually exists and belongs to this user.
+    let blob_exists: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM blobs WHERE id = ? AND user_id = ?",
+    )
+    .bind(&req.encrypted_blob_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.read_pool)
+    .await?;
+
+    if blob_exists.is_none() {
+        return Err(AppError::BadRequest(format!(
+            "Blob {} not found or does not belong to user",
+            req.encrypted_blob_id
+        )));
+    }
+
+    // Dedup: if a photo already references this blob, return it.
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM photos WHERE user_id = ? AND encrypted_blob_id = ? LIMIT 1",
+    )
+    .bind(&auth.user_id)
+    .bind(&req.encrypted_blob_id)
+    .fetch_optional(&state.read_pool)
+    .await?;
+
+    if let Some((eid,)) = existing {
+        tracing::info!(
+            user_id = %auth.user_id,
+            existing_photo_id = %eid,
+            blob_id = %req.encrypted_blob_id,
+            "register-encrypted: photo already exists for this blob"
+        );
+        return Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "photo_id": eid,
+                "duplicate": true,
+            })),
+        ));
+    }
+
+    // Content-hash dedup.
+    if let Some(ref hash) = req.photo_hash {
+        if !hash.is_empty() {
+            let existing: Option<(String,)> = sqlx::query_as(
+                "SELECT id FROM photos WHERE user_id = ? AND photo_hash = ? LIMIT 1",
+            )
+            .bind(&auth.user_id)
+            .bind(hash)
+            .fetch_optional(&state.read_pool)
+            .await?;
+
+            if let Some((eid,)) = existing {
+                tracing::info!(
+                    user_id = %auth.user_id,
+                    existing_photo_id = %eid,
+                    photo_hash = %hash,
+                    "register-encrypted: duplicate hash — returning existing"
+                );
+                return Ok((
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "photo_id": eid,
+                        "duplicate": true,
+                    })),
+                ));
+            }
+        }
+    }
+
+    let photo_id = Uuid::new_v4().to_string();
+    let now = utc_now_iso();
+    let media_type = req.media_type.unwrap_or_else(|| {
+        if req.mime_type.starts_with("video/") {
+            "video".to_string()
+        } else if req.mime_type == "image/gif" {
+            "gif".to_string()
+        } else {
+            "photo".to_string()
+        }
+    });
+
+    sqlx::query(
+        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+         size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
+         thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, photo_hash) \
+         VALUES (?, ?, ?, '', ?, ?, 0, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)",
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .bind(&req.filename)
+    .bind(&req.mime_type)
+    .bind(&media_type)
+    .bind(req.width.unwrap_or(0))
+    .bind(req.height.unwrap_or(0))
+    .bind(req.duration_secs)
+    .bind(req.taken_at.as_ref().map(|t| normalize_iso_timestamp(t)))
+    .bind(req.latitude)
+    .bind(req.longitude)
+    .bind(&now)
+    .bind(&req.encrypted_blob_id)
+    .bind(&req.encrypted_thumb_blob_id)
+    .bind(&req.photo_hash)
+    .execute(&state.pool)
+    .await?;
+
+    audit::log(
+        &state,
+        AuditEvent::PhotoRegister,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "photo_id": photo_id,
+            "filename": req.filename,
+            "encrypted_blob_id": req.encrypted_blob_id,
+        })),
+    )
+    .await;
+
+    tracing::info!(
+        user_id = %auth.user_id,
+        photo_id = %photo_id,
+        filename = %req.filename,
+        blob_id = %req.encrypted_blob_id,
+        "register-encrypted: created photos row"
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "photo_id": photo_id,
+        })),
+    ))
+}
+
 // ── Favorite Toggle ─────────────────────────────────────────────────────────
 
 /// PUT /api/photos/:id/favorite

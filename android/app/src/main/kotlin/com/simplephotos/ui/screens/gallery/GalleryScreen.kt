@@ -30,6 +30,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -533,6 +536,25 @@ private fun MediaTile(
         }
 
         if (imageModel != null) {
+            // Parse cropMetadata for thumbnail transforms (rotation + brightness)
+            val cropMeta = remember(photo.cropMetadata) {
+                photo.cropMetadata?.let {
+                    try { org.json.JSONObject(it) } catch (_: Exception) { null }
+                }
+            }
+            val rot = ((cropMeta?.optInt("rotate", 0) ?: 0) % 360 + 360) % 360
+            val brightness = (cropMeta?.optDouble("brightness", 0.0) ?: 0.0).toFloat()
+
+            val thumbModifier = if (rot != 0) {
+                Modifier.fillMaxSize().graphicsLayer { rotationZ = rot.toFloat() }
+            } else {
+                Modifier.fillMaxSize()
+            }
+            val brightnessFilter = if (brightness != 0f) {
+                val b = 1f + brightness / 100f
+                ColorFilter.colorMatrix(ColorMatrix().apply { setToScale(b, b, b, 1f) })
+            } else null
+
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(imageModel)
@@ -545,7 +567,8 @@ private fun MediaTile(
                     .build(),
                 contentDescription = photo.filename,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                modifier = thumbModifier,
+                colorFilter = brightnessFilter
             )
             // Filename overlay — only shown for audio files (images/videos rely on visual thumbnail)
             if (photo.mediaType == "audio") {

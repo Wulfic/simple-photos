@@ -47,6 +47,9 @@ class PhotoRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     @ApplicationContext private val context: Context
 ) {
+    companion object {
+        private const val TAG = "PhotoRepository"
+    }
     /** Expose the API service for banner polling in the gallery. */
     val apiService: ApiService get() = api
 
@@ -189,7 +192,25 @@ class PhotoRepository @Inject constructor(
             val photoRes = api.uploadBlob(photoBody, mediaBlobType, encryptedPhoto.size.toString(), photoHash, contentHash)
             android.util.Log.d("PhotoRepository", "uploadPhoto: media uploaded, blobId=${photoRes.blobId}")
 
-            db.photoDao().markSynced(photo.localId, photoRes.blobId, thumbBlobId)
+            // Register the encrypted photo on the server to create a photos row
+            val regReq = com.simplephotos.data.remote.dto.RegisterEncryptedPhotoRequest(
+                filename = photo.filename,
+                mimeType = photo.mimeType,
+                mediaType = photo.mediaType,
+                width = photo.width,
+                height = photo.height,
+                durationSecs = photo.durationSecs?.toDouble(),
+                takenAt = java.time.Instant.ofEpochMilli(photo.takenAt).toString(),
+                latitude = photo.latitude,
+                longitude = photo.longitude,
+                encryptedBlobId = photoRes.blobId,
+                encryptedThumbBlobId = thumbBlobId,
+                photoHash = contentHash
+            )
+            val regRes = api.registerEncryptedPhoto(regReq)
+            android.util.Log.d("PhotoRepository", "uploadPhoto: registered photo, serverPhotoId=${regRes.photoId}, duplicate=${regRes.duplicate}")
+
+            db.photoDao().markSynced(photo.localId, regRes.photoId, photoRes.blobId, thumbBlobId, contentHash)
 
             // Cache uploaded thumbnail locally
             if (thumbnailData != null && thumbnailData.isNotEmpty()) {
@@ -340,7 +361,63 @@ class PhotoRepository @Inject constructor(
     // ── Sync from server ─────────────────────────────────────────────────
 
     /** Pull photos from the server (always encrypted). */
-    suspend fun syncFromServer(): Int = syncFromServerEncrypted()
+    suspend fun syncFromServer(): Int {
+        deduplicateLocalEntities()
+        val imported = syncFromServerEncrypted()
+        // Also pull crop_metadata updates for already-synced photos so
+        // non-destructive edits from web/other devices are reflected.
+        val cropUpdated = syncCropMetadata()
+        return imported + cropUpdated
+    }
+
+    /**
+     * One-time cleanup: find local entities (from MediaStore scan) that have
+     * a duplicate server-synced entity (from encrypted sync) and merge them.
+     * Keeps the local entity (which has localPath) and deletes the server-only duplicate.
+     */
+    private suspend fun deduplicateLocalEntities() {
+        try {
+            // Find server-synced entities (have serverPhotoId, no localPath)
+            // that overlap with local entities (have localPath, no serverPhotoId)
+            // by matching serverBlobId.
+            val allPhotos = db.photoDao().getAllPhotosSnapshot()
+            val serverOnly = allPhotos.filter { it.serverPhotoId != null && it.localPath == null }
+            val localOnly = allPhotos.filter { it.serverPhotoId == null && it.localPath != null }
+
+            if (serverOnly.isEmpty() || localOnly.isEmpty()) return
+
+            // Build lookup by photoHash and filename+takenAt
+            val localByHash = localOnly.filter { it.photoHash != null }
+                .associateBy { it.photoHash!! }
+            val localByKey = localOnly.associateBy { "${it.filename}|${it.takenAt}" }
+
+            var deduped = 0
+            for (serverEntity in serverOnly) {
+                val localMatch = serverEntity.photoHash?.let { localByHash[it] }
+                    ?: localByKey["${serverEntity.filename}|${serverEntity.takenAt}"]
+                    ?: continue
+
+                // Merge: update the local entity with server fields, delete server-only dup
+                db.photoDao().mergeServerPhoto(
+                    localId = localMatch.localId,
+                    serverPhotoId = serverEntity.serverPhotoId!!,
+                    blobId = serverEntity.serverBlobId ?: localMatch.serverBlobId ?: continue,
+                    thumbBlobId = serverEntity.thumbnailBlobId,
+                    cropMetadata = serverEntity.cropMetadata,
+                    photoHash = serverEntity.photoHash
+                )
+                // Delete the server-only duplicate and its thumbnail file
+                serverEntity.thumbnailPath?.let { File(it).delete() }
+                db.photoDao().deleteById(serverEntity.localId)
+                deduped++
+            }
+            if (deduped > 0) {
+                android.util.Log.i("PhotoRepository", "deduplicateLocalEntities: merged $deduped duplicate entries")
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PhotoRepository", "deduplicateLocalEntities failed: ${e.message}")
+        }
+    }
 
     /**
      * Pull encrypted-mode photos from the server using the lightweight sync
@@ -350,6 +427,7 @@ class PhotoRepository @Inject constructor(
      */
     private suspend fun syncFromServerEncrypted(): Int {
         var imported = 0
+        var merged = 0
         var after: String? = null
         android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: starting sync")
 
@@ -365,9 +443,33 @@ class PhotoRepository @Inject constructor(
                 // share the same encrypted_blob_id.
                 if (db.photoDao().getByServerPhotoId(photo.id) != null) continue
 
-                val localId = java.util.UUID.randomUUID().toString()
                 val serverTimestamp = photo.takenAt ?: photo.createdAt
                 val takenAtMs = parseIsoToEpochMs(serverTimestamp)
+
+                // ── Merge with existing local entity ─────────────────────
+                // When a photo was scanned from MediaStore and uploaded, the
+                // local entity has localPath + serverBlobId but no serverPhotoId.
+                // Instead of creating a duplicate, merge the server photo ID
+                // into the existing entity so edits use the server API.
+                val localMatch = photo.photoHash?.let { hash ->
+                    db.photoDao().getLocalByHash(hash)
+                } ?: db.photoDao().getLocalByFilenameAndDate(photo.filename, takenAtMs)
+
+                if (localMatch != null) {
+                    db.photoDao().mergeServerPhoto(
+                        localId = localMatch.localId,
+                        serverPhotoId = photo.id,
+                        blobId = blobId,
+                        thumbBlobId = photo.encryptedThumbBlobId,
+                        cropMetadata = photo.cropMetadata,
+                        photoHash = photo.photoHash
+                    )
+                    android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: merged server photo '${photo.filename}' (${photo.id}) into local entity ${localMatch.localId}")
+                    merged++
+                    continue
+                }
+
+                val localId = java.util.UUID.randomUUID().toString()
                 android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: importing '${photo.filename}' serverTs='$serverTimestamp' → takenAtMs=$takenAtMs blobId=$blobId")
 
                 // Download and decrypt thumbnail blob if available
@@ -428,8 +530,32 @@ class PhotoRepository @Inject constructor(
             after = result.nextCursor
         } while (result.nextCursor != null)
 
-        android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: finished — imported $imported photos")
-        return imported
+        android.util.Log.i("PhotoRepository", "syncFromServerEncrypted: finished — imported $imported, merged $merged photos")
+        return imported + merged
+    }
+
+    /**
+     * Pull crop_metadata updates from the server for photos that have already
+     * been synced.  The main encrypted-sync skips existing photos, so non-
+     * destructive edits made on another device would never arrive otherwise.
+     */
+    suspend fun syncCropMetadata(): Int {
+        var updated = 0
+        try {
+            val records = api.cropSync()
+            for (record in records) {
+                val existing = db.photoDao().getByServerPhotoId(record.id) ?: continue
+                if (existing.cropMetadata != record.cropMetadata) {
+                    db.photoDao().updateCropMetadata(existing.localId, record.cropMetadata)
+                    updated++
+                    android.util.Log.d("PhotoRepository",
+                        "syncCropMetadata: updated crop for ${record.id} (local=${existing.localId})")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PhotoRepository", "syncCropMetadata failed: ${e.message}")
+        }
+        return updated
     }
 
     /**
@@ -501,6 +627,7 @@ class PhotoRepository @Inject constructor(
 
     /** Persist crop/brightness/trim metadata on the server. */
     suspend fun setCropOnServer(photoId: String, cropMetadata: String?) {
+        android.util.Log.d(TAG, "[setCrop] photoId=$photoId, meta=$cropMetadata")
         api.setCrop(photoId, SetCropRequest(cropMetadata))
     }
 
@@ -508,8 +635,14 @@ class PhotoRepository @Inject constructor(
     suspend fun duplicatePhotoOnServer(
         photoId: String,
         cropMetadata: String?
-    ): DuplicatePhotoResponse =
-        api.duplicatePhoto(photoId, DuplicatePhotoRequest(cropMetadata))
+    ): DuplicatePhotoResponse {
+        android.util.Log.d(TAG, "[duplicate] photoId=$photoId, meta=$cropMetadata")
+        val res = api.duplicatePhoto(photoId, DuplicatePhotoRequest(cropMetadata))
+        android.util.Log.d(TAG, "[duplicate] Response: id=${res.id}, dims=${res.width}×${res.height}, " +
+            "blobId=${res.encryptedBlobId}, thumbBlobId=${res.encryptedThumbBlobId}, " +
+            "sizeBytes=${res.sizeBytes}, mime=${res.mimeType}")
+        return res
+    }
 
     // ── Diagnostic helpers (used by GalleryViewModel) ────────────────────
 

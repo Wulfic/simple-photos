@@ -16,6 +16,7 @@ import AppIcon from "../components/AppIcon";
 import AlbumTile from "../components/AlbumTile";
 import AddPhotosPanel from "../components/AddPhotosPanel";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
+import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
@@ -123,7 +124,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
         ) : (
           <JustifiedGrid
             items={filteredEncrypted}
-            getAspectRatio={(p) => (p.width && p.height) ? p.width / p.height : 1}
+            getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
             getKey={(p) => p.blobId}
             renderItem={(photo, idx) => (
               <AlbumTile
@@ -499,7 +500,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
       ) : (
         <JustifiedGrid
           items={albumPhotos}
-          getAspectRatio={(p) => (p.width && p.height) ? p.width / p.height : 1}
+          getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
           getKey={(p) => p.blobId}
           renderItem={(photo, idx) => (
             <AlbumTile

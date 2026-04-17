@@ -42,6 +42,12 @@ export const photosApi = {
       source_photo_id: string;
       filename: string;
       crop_metadata: object | null;
+      width: number;
+      height: number;
+      size_bytes: number;
+      mime_type: string;
+      media_type: string;
+      duration_secs: number | null;
       encrypted_blob_id: string | null;
       encrypted_thumb_blob_id: string | null;
     }>(

@@ -77,6 +77,24 @@ pub struct RegisterPhotoRequest {
     pub longitude: Option<f64>,
 }
 
+/// Request body for `POST /api/photos/register-encrypted`.
+/// Creates a photos record linked to already-uploaded encrypted blobs.
+#[derive(Debug, Deserialize)]
+pub struct RegisterEncryptedPhotoRequest {
+    pub filename: String,
+    pub mime_type: String,
+    pub media_type: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub duration_secs: Option<f64>,
+    pub taken_at: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub encrypted_blob_id: String,
+    pub encrypted_thumb_blob_id: Option<String>,
+    pub photo_hash: Option<String>,
+}
+
 /// Response for secure gallery listing.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SecureGalleryRecord {

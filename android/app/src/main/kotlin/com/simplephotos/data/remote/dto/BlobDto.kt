@@ -25,3 +25,23 @@ data class BlobRecord(
     @SerializedName("upload_time") val uploadTime: String,
     @SerializedName("content_hash") val contentHash: String? = null
 )
+
+data class RegisterEncryptedPhotoRequest(
+    val filename: String,
+    @SerializedName("mime_type") val mimeType: String,
+    @SerializedName("media_type") val mediaType: String,
+    val width: Int,
+    val height: Int,
+    @SerializedName("duration_secs") val durationSecs: Double? = null,
+    @SerializedName("taken_at") val takenAt: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    @SerializedName("encrypted_blob_id") val encryptedBlobId: String,
+    @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
+    @SerializedName("photo_hash") val photoHash: String? = null
+)
+
+data class RegisterEncryptedPhotoResponse(
+    @SerializedName("photo_id") val photoId: String,
+    val duplicate: Boolean? = null
+)

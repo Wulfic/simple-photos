@@ -1,5 +1,35 @@
 import type { CSSProperties } from "react";
 
+/**
+ * Return the effective visual aspect ratio (width / height) for a photo,
+ * accounting for crop and rotation in `cropData`.  When a 90°/270° rotation
+ * is stored in cropData, the visual aspect ratio is the inverse of the raw
+ * pixel aspect ratio.  Returns 1 when dimensions are unknown.
+ */
+export function getEffectiveAspectRatio(
+  width: number | undefined | null,
+  height: number | undefined | null,
+  cropData?: string | null,
+): number {
+  if (!width || !height) return 1;
+  let w = width;
+  let h = height;
+  if (cropData) {
+    try {
+      const c = JSON.parse(cropData);
+      const cropW = c.width || 1;
+      const cropH = c.height || 1;
+      w *= cropW;
+      h *= cropH;
+      const rot = ((c.rotate || 0) % 360 + 360) % 360;
+      if (rot % 180 !== 0) {
+        [w, h] = [h, w];
+      }
+    } catch { /* malformed JSON — ignore */ }
+  }
+  return w / h;
+}
+
 export function getThumbnailStyle(cropJson?: string | null): CSSProperties {
   if (!cropJson) return {};
   try {

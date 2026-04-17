@@ -138,14 +138,32 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                     exif_reader.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
                 {
                     if let Some(orient) = orient_field.value.get_uint(0) {
+                        tracing::debug!(
+                            "[metadata] EXIF orientation={} for {}, dims_before_swap={}×{}",
+                            orient,
+                            file_path.display(),
+                            width,
+                            height,
+                        );
                         if orient >= 5 && orient <= 8 {
                             std::mem::swap(&mut width, &mut height);
+                            tracing::info!(
+                                "[metadata] Swapped dims for EXIF orientation {}: \
+                                 now {}×{} for {}",
+                                orient, width, height,
+                                file_path.display(),
+                            );
                         }
                     }
                 }
             }
         }
     }
+
+    tracing::debug!(
+        "[metadata] Final metadata for {}: {}×{}, camera={:?}, taken_at={:?}",
+        file_path.display(), width, height, camera_model, taken_at,
+    );
 
     (width, height, camera_model, latitude, longitude, taken_at)
 }
@@ -307,10 +325,19 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
 
     if is_video {
         if let Some((pw, ph)) = probe_video_display_dimensions(&file_path).await {
+            tracing::info!(
+                "[metadata] Video ffprobe override for {}: imagesize={}×{} → ffprobe={}×{}",
+                file_path.display(), w, h, pw, ph,
+            );
             w = pw;
             h = ph;
         }
     }
+
+    tracing::info!(
+        "[metadata] extract_media_metadata_async result for {}: {}×{}, is_video={}",
+        file_path.display(), w, h, is_video,
+    );
 
     (w, h, cam, lat, lon, taken)
 }
@@ -336,6 +363,10 @@ async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, 
     .ok()?;
 
     let s = String::from_utf8_lossy(&output.stdout);
+    tracing::debug!(
+        "[metadata] ffprobe raw output for {}: {:?}",
+        path.display(), s.trim(),
+    );
     // Output may have multiple lines (stream info, side_data, format tags).
     // Collect all parts across lines.
     let all_text = s.trim().replace('\n', ",");
@@ -373,6 +404,10 @@ async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, 
         matches!(trimmed, "90" | "-90" | "270" | "-270")
     });
     if has_90_270_rotation {
+        tracing::info!(
+            "[metadata] Video has 90/270° rotation, swapping {}×{} → {}×{}",
+            display_w, display_h, display_h, display_w,
+        );
         std::mem::swap(&mut display_w, &mut display_h);
     }
 

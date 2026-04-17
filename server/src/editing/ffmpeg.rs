@@ -134,6 +134,13 @@ pub async fn run_ffmpeg_render(
     let args = build_ffmpeg_args(source, dest, media_type, meta, ext);
 
     tracing::info!("[editing/ffmpeg] args: {:?}", args);
+    tracing::info!(
+        "[editing/ffmpeg] Rendering: src={}, dst={}, media_type={}, \
+         has_crop={}, has_rotation={}, rotation={}°, has_brightness={}, has_trim={}",
+        source.display(), dest.display(), media_type,
+        meta.has_crop(), meta.has_rotation(), meta.rotation_degrees(),
+        meta.has_brightness(), meta.has_trim(),
+    );
 
     let mut cmd = Command::new("ffmpeg");
     cmd.args(&args);

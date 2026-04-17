@@ -178,16 +178,56 @@ internal fun VideoPlayerPage(
         val activeBrightness = if (editMode) editBrightness else savedBrightness
         val activeRotation = if (editMode) editRotation else savedRotation
 
+        // Track the actual video frame dimensions and any container rotation
+        // that the TextureView doesn't auto-apply (unlike PlayerView/SurfaceView).
+        var videoFrameW by remember { mutableIntStateOf(0) }
+        var videoFrameH by remember { mutableIntStateOf(0) }
+        var unappliedRotation by remember { mutableIntStateOf(0) }
+        DisposableEffect(sharedPlayer) {
+            val listener = object : androidx.media3.common.Player.Listener {
+                override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                    videoFrameW = videoSize.width
+                    videoFrameH = videoSize.height
+                    @Suppress("DEPRECATION")
+                    unappliedRotation = videoSize.unappliedRotationDegrees
+                }
+            }
+            sharedPlayer.addListener(listener)
+            // Check current state in case already ready
+            val sz = sharedPlayer.videoSize
+            if (sz.width > 0 && sz.height > 0) {
+                videoFrameW = sz.width
+                videoFrameH = sz.height
+                @Suppress("DEPRECATION")
+                unappliedRotation = sz.unappliedRotationDegrees
+            }
+            onDispose { sharedPlayer.removeListener(listener) }
+        }
+
+        // Combine user-requested rotation with any container rotation the
+        // decoder didn't handle (unappliedRotationDegrees from the container).
+        val totalRotation = (activeRotation + unappliedRotation) % 360
+
         // For 90/270 rotation, scale down so the rotated video fits the container.
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val containerW = constraints.maxWidth.toFloat()
             val containerH = constraints.maxHeight.toFloat()
-            val rot = activeRotation % 360
+            val rot = totalRotation % 360
             val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
-            val videoRotationModifier = if (activeRotation != 0) {
-                if (isSwapped && photoWidth > 0 && photoHeight > 0 && containerW > 0 && containerH > 0) {
+
+            // Use the ORIGINAL (pre-rotation) frame aspect for the TextureView
+            // because ExoPlayer delivers unrotated frames — the graphicsLayer
+            // rotation on the parent Box handles the visual transform.
+            val textureAspect = if (videoFrameW > 0 && videoFrameH > 0) {
+                videoFrameW.toFloat() / videoFrameH.toFloat()
+            } else if (photoWidth > 0 && photoHeight > 0) {
+                photoWidth.toFloat() / photoHeight.toFloat()
+            } else 0f
+
+            val videoRotationModifier = if (totalRotation != 0) {
+                if (isSwapped && videoFrameW > 0 && videoFrameH > 0 && containerW > 0 && containerH > 0) {
                     // Known media dimensions — precise scaling so the rotated video fits
-                    val origAspect = photoWidth.toFloat() / photoHeight.toFloat()
+                    val origAspect = videoFrameW.toFloat() / videoFrameH.toFloat()
                     val containerAspect = containerW / containerH
                     val origRendW: Float
                     val origRendH: Float
@@ -199,24 +239,33 @@ internal fun VideoPlayerPage(
                     val rotScale = minOf(containerW / origRendH, containerH / origRendW)
                     Modifier.graphicsLayer {
                         scaleX = rotScale; scaleY = rotScale
-                        rotationZ = activeRotation.toFloat()
+                        rotationZ = totalRotation.toFloat()
                     }
                 } else if (isSwapped && containerW > 0 && containerH > 0) {
                     // Unknown media dimensions — use container-based scale to prevent overflow
                     val rotScale = minOf(containerW / containerH, containerH / containerW)
                     Modifier.graphicsLayer {
                         scaleX = rotScale; scaleY = rotScale
-                        rotationZ = activeRotation.toFloat()
+                        rotationZ = totalRotation.toFloat()
                     }
                 } else {
-                    Modifier.graphicsLayer { rotationZ = activeRotation.toFloat() }
+                    Modifier.graphicsLayer { rotationZ = totalRotation.toFloat() }
                 }
             } else Modifier
+
+            // Constrain the TextureView to the video's original aspect ratio
+            // so it letterboxes correctly instead of stretching to fill.
+            val textureModifier = if (textureAspect > 0f) {
+                Modifier.aspectRatio(textureAspect, matchHeightConstraintsFirst = textureAspect < 1f)
+            } else {
+                Modifier.fillMaxSize()
+            }
 
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .then(videoRotationModifier)
+                    .then(videoRotationModifier),
+                contentAlignment = Alignment.Center
             ) {
                 // Use a raw TextureView instead of PlayerView's default SurfaceView.
                 // SurfaceView creates a separate window surface that doesn't support
@@ -230,7 +279,7 @@ internal fun VideoPlayerPage(
                 update = { view ->
                     sharedPlayer.setVideoTextureView(view)
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = textureModifier
             )
             // Brightness overlay: positive = brighten (white overlay),
             // negative = darken (black overlay). Matches CSS brightness() filter.
@@ -241,8 +290,7 @@ internal fun VideoPlayerPage(
                     Color.Black.copy(alpha = (-activeBrightness / 150f).coerceIn(0f, 0.7f))
                 }
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
+                    modifier = textureModifier
                         .background(overlayColor)
                 )
             }

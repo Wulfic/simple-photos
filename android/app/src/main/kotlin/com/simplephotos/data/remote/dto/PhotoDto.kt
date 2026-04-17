@@ -66,6 +66,13 @@ data class EncryptedSyncResponse(
     @SerializedName("next_cursor") val nextCursor: String?
 )
 
+// ── Crop-metadata sync (lightweight delta for non-destructive edits) ─────────
+
+data class CropSyncRecord(
+    val id: String,
+    @SerializedName("crop_metadata") val cropMetadata: String? = null
+)
+
 // ── Storage stats ────────────────────────────────────────────────────────────
 
 data class StorageStatsResponse(
@@ -170,6 +177,8 @@ data class DuplicatePhotoResponse(
     @SerializedName("mime_type") val mimeType: String? = null,
     @SerializedName("media_type") val mediaType: String? = null,
     @SerializedName("size_bytes") val sizeBytes: Long? = null,
+    @SerializedName("encrypted_blob_id") val encryptedBlobId: String? = null,
+    @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
 )
 
 // ── 2FA Status ───────────────────────────────────────────────────────────────

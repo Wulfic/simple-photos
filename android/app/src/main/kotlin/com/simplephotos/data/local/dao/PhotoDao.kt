@@ -16,6 +16,10 @@ interface PhotoDao {
     @Query("SELECT * FROM photos ORDER BY takenAt DESC, filename ASC")
     fun getAllPhotos(): Flow<List<PhotoEntity>>
 
+    /** Non-reactive snapshot of all photos (for dedup and batch operations). */
+    @Query("SELECT * FROM photos")
+    suspend fun getAllPhotosSnapshot(): List<PhotoEntity>
+
     @Query("SELECT * FROM photos WHERE localId = :id")
     suspend fun getById(id: String): PhotoEntity?
 
@@ -46,11 +50,23 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE photoHash = :hash AND syncStatus = 'SYNCED' LIMIT 1")
     suspend fun getSyncedByHash(hash: String): PhotoEntity?
 
-    @Query("UPDATE photos SET serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, syncStatus = 'SYNCED' WHERE localId = :localId")
-    suspend fun markSynced(localId: String, blobId: String, thumbBlobId: String?)
+    /** Find a local entity (has localPath, no serverPhotoId) matching by photoHash — for merge during sync. */
+    @Query("SELECT * FROM photos WHERE photoHash = :hash AND serverPhotoId IS NULL AND localPath IS NOT NULL LIMIT 1")
+    suspend fun getLocalByHash(hash: String): PhotoEntity?
+
+    /** Find a local entity (has localPath, no serverPhotoId) matching by filename + takenAt — fallback merge. */
+    @Query("SELECT * FROM photos WHERE filename = :filename AND takenAt = :takenAt AND serverPhotoId IS NULL AND localPath IS NOT NULL LIMIT 1")
+    suspend fun getLocalByFilenameAndDate(filename: String, takenAt: Long): PhotoEntity?
+
+    @Query("UPDATE photos SET serverPhotoId = :serverPhotoId, serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, photoHash = :photoHash, syncStatus = 'SYNCED' WHERE localId = :localId")
+    suspend fun markSynced(localId: String, serverPhotoId: String, blobId: String, thumbBlobId: String?, photoHash: String?)
 
     @Query("UPDATE photos SET serverPhotoId = :photoId, syncStatus = 'SYNCED' WHERE localId = :localId")
     suspend fun markSynced(localId: String, photoId: String)
+
+    /** Merge a server photo into an existing local entity — sets serverPhotoId, blobId, thumbBlobId, cropMetadata, photoHash. */
+    @Query("UPDATE photos SET serverPhotoId = :serverPhotoId, serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, cropMetadata = :cropMetadata, photoHash = :photoHash, syncStatus = 'SYNCED' WHERE localId = :localId")
+    suspend fun mergeServerPhoto(localId: String, serverPhotoId: String, blobId: String, thumbBlobId: String?, cropMetadata: String?, photoHash: String?)
 
     @Query("UPDATE photos SET thumbnailPath = :path WHERE localId = :id")
     suspend fun updateThumbnailPath(id: String, path: String)

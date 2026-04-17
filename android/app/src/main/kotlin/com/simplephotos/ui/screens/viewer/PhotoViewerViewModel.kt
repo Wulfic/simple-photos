@@ -14,8 +14,10 @@ import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.TagRepository
+import android.util.Log
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,6 +45,10 @@ class PhotoViewerViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
+    companion object {
+        private const val TAG = "PhotoViewerVM"
+    }
+
     private val initialPhotoId: String = savedStateHandle["photoId"] ?: ""
 
     /** Album context — non-null when viewer was opened from an album. */
@@ -64,6 +70,10 @@ class PhotoViewerViewModel @Inject constructor(
         private set
 
     var error by mutableStateOf<String?>(null)
+        private set
+
+    /** True while a server-side duplicate render (e.g. video re-encode) is in progress. */
+    var isRenderingCopy by mutableStateOf(false)
         private set
 
     /** Tags for the currently viewed photo. */
@@ -234,12 +244,16 @@ class PhotoViewerViewModel @Inject constructor(
 
     /** Save crop/brightness/trim metadata for a photo. */
     fun saveCropMetadata(photo: PhotoEntity, metadata: String?) {
+        Log.d(TAG, "[EDIT:saveEdit] photo=${photo.localId}, server=${photo.serverPhotoId}, " +
+            "dims=${photo.width}×${photo.height}, mediaType=${photo.mediaType}, " +
+            "hasMeta=${metadata != null}, meta=$metadata")
         viewModelScope.launch {
             try {
                 // Update local DB
                 withContext(Dispatchers.IO) {
                     photoRepository.updateCropMetadata(photo.localId, metadata)
                 }
+                Log.d(TAG, "[EDIT:saveEdit] Local DB updated for ${photo.localId}")
                 // Update in-memory list
                 val idx = allPhotos.indexOfFirst { it.localId == photo.localId }
                 if (idx >= 0) {
@@ -252,10 +266,15 @@ class PhotoViewerViewModel @Inject constructor(
                     withContext(Dispatchers.IO) {
                         try {
                             photoRepository.setCropOnServer(serverId, metadata)
-                        } catch (_: Exception) { /* non-fatal */ }
+                            Log.d(TAG, "[EDIT:saveEdit] Server sync OK for $serverId")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "[EDIT:saveEdit] Server sync failed for $serverId: ${e.message}")
+                        }
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "[EDIT:saveEdit] Failed: ${e.message}", e)
+            }
         }
     }
 
@@ -263,23 +282,18 @@ class PhotoViewerViewModel @Inject constructor(
      *  When the photo has a server record, calls the server duplicate
      *  endpoint which renders edits via ffmpeg into a fully independent file. */
     fun duplicatePhoto(photo: PhotoEntity, metadata: String?, onDone: () -> Unit = {}) {
+        Log.d(TAG, "[EDIT:saveCopy] Starting duplicate for photo=${photo.localId}, " +
+            "server=${photo.serverPhotoId}, dims=${photo.width}×${photo.height}, " +
+            "mediaType=${photo.mediaType}, mime=${photo.mimeType}, " +
+            "hasMeta=${metadata != null}, meta=$metadata")
+        // Exit edit mode and show rendering banner immediately so the user
+        // isn't stuck on the edit screen during a 60-90 s video re-encode.
+        onDone()
+        isRenderingCopy = true
+        Log.d(TAG, "[EDIT:saveCopy] isRenderingCopy set to TRUE")
         viewModelScope.launch {
             try {
                 val copyId = java.util.UUID.randomUUID().toString()
-
-                // Copy the local file if available, handling both content:// URIs
-                // and regular filesystem paths via PhotoRepository.copyLocalFile().
-                var newLocalPath: String? = null
-                photo.localPath?.let { oldPath ->
-                    val cacheDir = withContext(Dispatchers.IO) {
-                        photoRepository.getCacheDir()
-                    }
-                    val ext = photo.filename.substringAfterLast('.', "jpg")
-                    val destFile = java.io.File(cacheDir, "copy_${copyId}.$ext")
-                    newLocalPath = withContext(Dispatchers.IO) {
-                        photoRepository.copyLocalFile(oldPath, destFile)
-                    }
-                }
 
                 // If the photo has a server record, call the server's duplicate
                 // endpoint — it renders via ffmpeg and produces an independent file
@@ -288,9 +302,14 @@ class PhotoViewerViewModel @Inject constructor(
                 var serverWidth = photo.width
                 var serverHeight = photo.height
                 var serverDuration = photo.durationSecs
+                var serverBlobId: String? = null
+                var serverThumbBlobId: String? = null
                 photo.serverPhotoId?.let { serverId ->
                     try {
-                        val res = withContext(Dispatchers.IO) {
+                        // Use NonCancellable so the server render (which may
+                        // take 60-90 s for video re-encoding) finishes even if
+                        // the user navigates away from the viewer.
+                        val res = withContext(Dispatchers.IO + NonCancellable) {
                             photoRepository.duplicatePhotoOnServer(serverId, metadata)
                         }
                         serverCopyId = res.id
@@ -302,7 +321,37 @@ class PhotoViewerViewModel @Inject constructor(
                         if (res.durationSecs != null) {
                             serverDuration = res.durationSecs
                         }
-                    } catch (_: Exception) { /* proceed with local-only copy */ }
+                        serverBlobId = res.encryptedBlobId
+                        serverThumbBlobId = res.encryptedThumbBlobId
+                        Log.d(TAG, "[EDIT:saveCopy] Server duplicate OK: copyId=${res.id}, " +
+                            "dims=${res.width}×${res.height}, duration=${res.durationSecs}, " +
+                            "blobId=${res.encryptedBlobId}, thumbBlobId=${res.encryptedThumbBlobId}, " +
+                            "sizeBytes=${res.sizeBytes}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "[EDIT:saveCopy] Server duplicate failed: ${e.message}")
+                    }
+                }
+
+                // For local-only copies (no server), keep the original content URI
+                // so BackupWorker can upload it later. For server copies, make a
+                // cache copy for offline viewing.
+                var newLocalPath: String? = null
+                if (serverCopyId != null) {
+                    photo.localPath?.let { oldPath ->
+                        val cacheDir = withContext(Dispatchers.IO) {
+                            photoRepository.getCacheDir()
+                        }
+                        val ext = photo.filename.substringAfterLast('.', "jpg")
+                        val destFile = java.io.File(cacheDir, "copy_${copyId}.$ext")
+                        newLocalPath = withContext(Dispatchers.IO) {
+                            photoRepository.copyLocalFile(oldPath, destFile)
+                        }
+                        Log.d(TAG, "[EDIT:saveCopy] Local file copied: $oldPath → ${destFile.absolutePath}")
+                    }
+                } else {
+                    // Keep original content URI so BackupWorker can read it
+                    newLocalPath = photo.localPath
+                    Log.d(TAG, "[EDIT:saveCopy] Local-only copy, reusing original localPath: $newLocalPath")
                 }
 
                 val copyEntity = photo.copy(
@@ -311,26 +360,81 @@ class PhotoViewerViewModel @Inject constructor(
                     filename = if (photo.filename.startsWith("Copy of ")) photo.filename
                                else "Copy of ${photo.filename}",
                     // Server bakes edits into the file, so crop_metadata is NULL
-                    // when we have a server copy. For local-only copies, keep metadata.
+                    // when we have a server copy. For local-only copies, keep metadata
+                    // so the viewer renders edits client-side.
                     cropMetadata = if (serverCopyId != null) null else metadata,
                     width = serverWidth,
                     height = serverHeight,
                     durationSecs = serverDuration,
                     createdAt = System.currentTimeMillis(),
                     localPath = newLocalPath,
-                    syncStatus = if (serverCopyId != null) SyncStatus.SYNCED else SyncStatus.PENDING
+                    syncStatus = if (serverCopyId != null) SyncStatus.SYNCED else SyncStatus.PENDING,
+                    // Server copies use their own blob IDs. Local-only copies
+                    // must have null blob IDs so BackupWorker picks them up.
+                    serverBlobId = if (serverCopyId != null) serverBlobId else null,
+                    thumbnailBlobId = if (serverCopyId != null) serverThumbBlobId else null,
+                    // Clear content hash so BackupWorker doesn't dedup against original
+                    photoHash = null,
                 )
                 withContext(Dispatchers.IO) {
                     photoRepository.insertPhoto(copyEntity)
                 }
+                Log.d(TAG, "[EDIT:saveCopy] Copy inserted to DB: localId=$copyId, " +
+                    "serverPhotoId=$serverCopyId, dims=${copyEntity.width}×${copyEntity.height}, " +
+                    "blobId=${copyEntity.serverBlobId}, thumbBlobId=${copyEntity.thumbnailBlobId}, " +
+                    "syncStatus=${copyEntity.syncStatus}, cropMetadata=${copyEntity.cropMetadata}")
 
-                // Generate an edited thumbnail for the copy so the gallery
-                // reflects the crop/brightness/rotation at a glance.
-                withContext(Dispatchers.IO) {
-                    generateEditedThumbnail(photo, copyId, metadata)
+                // For server copies, prefer the server-generated thumbnail
+                // (correct orientation, edits baked in). Fall back to
+                // generating one locally from the original's thumbnail
+                // if the server thumbnail download fails.
+                if (serverCopyId != null) {
+                    var thumbSaved = false
+                    if (serverThumbBlobId != null) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                val thumbDecrypted = photoRepository.downloadAndDecryptBlob(serverThumbBlobId!!)
+                                val thumbPayload = org.json.JSONObject(String(thumbDecrypted, Charsets.UTF_8))
+                                val thumbBase64 = thumbPayload.optString("data", "")
+                                if (thumbBase64.isNotEmpty()) {
+                                    val thumbBytes = android.util.Base64.decode(thumbBase64, android.util.Base64.NO_WRAP)
+                                    val thumbPath = photoRepository.saveThumbnailToDisk(copyId, thumbBytes)
+                                    photoRepository.updateThumbnailPath(copyId, thumbPath)
+                                    Log.d(TAG, "[EDIT:thumb] Downloaded server thumbnail for copy $copyId (${thumbBytes.size} bytes)")
+                                    thumbSaved = true
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "[EDIT:thumb] Server thumbnail download failed, falling back to local: ${e.message}")
+                            }
+                        }
+                    }
+                    if (!thumbSaved) {
+                        withContext(Dispatchers.IO) {
+                            generateEditedThumbnail(photo, copyId, metadata)
+                        }
+                    }
+                } else {
+                    // Copy the original's thumbnail as-is for the local copy
+                    withContext(Dispatchers.IO) {
+                        val srcPath = photo.thumbnailPath
+                        if (srcPath != null) {
+                            try {
+                                val thumbBytes = java.io.File(srcPath).readBytes()
+                                val thumbPath = photoRepository.saveThumbnailToDisk(copyId, thumbBytes)
+                                photoRepository.updateThumbnailPath(copyId, thumbPath)
+                                Log.d(TAG, "[EDIT:thumb] Copied original thumbnail for local copy $copyId")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "[EDIT:thumb] Failed to copy thumbnail: ${e.message}")
+                            }
+                        }
+                    }
                 }
-                onDone()
-            } catch (_: Exception) {}
+                Log.d(TAG, "[EDIT:saveCopy] Duplicate complete, clearing rendering flag")
+                isRenderingCopy = false
+            } catch (e: Exception) {
+                Log.e(TAG, "[EDIT:saveCopy] Failed: ${e.message}", e)
+                isRenderingCopy = false
+            }
         }
     }
 
@@ -384,8 +488,15 @@ class PhotoViewerViewModel @Inject constructor(
         metadata: String?,
     ) {
         try {
-            val srcPath = original.thumbnailPath ?: return
-            val srcBitmap = android.graphics.BitmapFactory.decodeFile(srcPath) ?: return
+            val srcPath = original.thumbnailPath ?: run {
+                Log.d(TAG, "[EDIT:thumb] No thumbnail path for original ${original.localId}, skipping")
+                return
+            }
+            val srcBitmap = android.graphics.BitmapFactory.decodeFile(srcPath) ?: run {
+                Log.w(TAG, "[EDIT:thumb] Failed to decode thumbnail at $srcPath")
+                return
+            }
+            Log.d(TAG, "[EDIT:thumb] Source thumbnail: ${srcBitmap.width}×${srcBitmap.height}, path=$srcPath")
 
             // Parse crop metadata
             val meta = metadata?.let {
@@ -453,12 +564,16 @@ class PhotoViewerViewModel @Inject constructor(
                 matrix.postScale(scaleX, scaleY)
             }
 
-            // Extract cropped portion as a new bitmap
+            // Extract cropped portion as a new bitmap.
+            // createBitmap may share pixel data with the source when the crop
+            // covers the full image, so we must NOT recycle srcBitmap until
+            // after drawing is complete.
             val cropped = android.graphics.Bitmap.createBitmap(srcBitmap, sx, sy, sw, sh)
-            srcBitmap.recycle()
 
             canvas.drawBitmap(cropped, matrix, paint)
-            cropped.recycle()
+            // Now safe to recycle both — drawing is done
+            if (cropped !== srcBitmap) cropped.recycle()
+            srcBitmap.recycle()
 
             // Compress to JPEG and save
             val stream = java.io.ByteArrayOutputStream()
@@ -467,8 +582,10 @@ class PhotoViewerViewModel @Inject constructor(
 
             val thumbPath = photoRepository.saveThumbnailToDisk(copyId, stream.toByteArray())
             photoRepository.updateThumbnailPath(copyId, thumbPath)
+            Log.d(TAG, "[EDIT:thumb] Generated thumbnail for copy $copyId: ${outW}×${outH}, " +
+                "rotate=$rotateDeg, crop=($sx,$sy,${sw}×${sh}), path=$thumbPath")
         } catch (e: Exception) {
-            android.util.Log.w("PhotoViewerVM", "Failed to generate edited thumbnail: ${e.message}")
+            Log.w(TAG, "[EDIT:thumb] Failed to generate edited thumbnail: ${e.message}", e)
         }
     }
 }

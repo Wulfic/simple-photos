@@ -92,8 +92,23 @@ export default function useViewerActions({
     const isDefaultRotate = rotateValue === 0;
     const isDefaultTrim = trimStart <= 0.01 && (mediaDuration <= 0 || Math.abs(trimEnd - mediaDuration) < 0.5);
     const allDefault = isDefaultCrop && isDefaultBrightness && isDefaultRotate && isDefaultTrim;
+
+    console.log("[EDIT:buildMeta]", {
+      cropCorners: c,
+      isDefaultCrop,
+      brightness,
+      isDefaultBrightness,
+      rotateValue,
+      isDefaultRotate,
+      trimStart,
+      trimEnd,
+      mediaDuration,
+      isDefaultTrim,
+      allDefault,
+    });
+
     if (allDefault) return null;
-    return {
+    const meta = {
       x: Math.max(0, Math.min(1, c.x)),
       y: Math.max(0, Math.min(1, c.y)),
       width: Math.max(0.05, Math.min(1, c.w)),
@@ -102,12 +117,19 @@ export default function useViewerActions({
       brightness,
       ...((!isDefaultTrim) ? { trimStart, trimEnd } : {}),
     };
+    console.log("[EDIT:buildMeta] Result:", JSON.stringify(meta));
+    return meta;
   }, [cropCorners, brightness, rotateValue, trimStart, trimEnd, mediaDuration]);
 
   const handleSaveEdit = useCallback(async () => {
     if (!id) return;
     const meta = buildEditMetadata();
     const metaJson = meta ? JSON.stringify(meta) : null;
+    console.log("[EDIT:saveEdit] Saving edit for", id, {
+      hasMeta: !!meta,
+      metaJson,
+      mediaType,
+    });
     if (!meta) {
       // All defaults — clear metadata
       try {
@@ -147,6 +169,12 @@ export default function useViewerActions({
     if (!id) return;
     const meta = buildEditMetadata();
     const metaJson = meta ? JSON.stringify(meta) : null;
+    console.log("[EDIT:saveCopy] Starting save copy for", id, {
+      hasMeta: !!meta,
+      metaJson,
+      mediaType,
+      mimeType,
+    });
     try {
       // Read original data before leaving edit mode
       const original = await db.photos.get(id);
@@ -154,6 +182,19 @@ export default function useViewerActions({
         setError("Could not find photo data — try refreshing the page.");
         return;
       }
+
+      console.log("[EDIT:saveCopy] Original photo data:", {
+        blobId: id,
+        serverPhotoId: original.serverPhotoId,
+        width: original.width,
+        height: original.height,
+        filename: original.filename,
+        mediaType: original.mediaType,
+        mimeType: original.mimeType,
+        storageBlobId: original.storageBlobId,
+        cropData: original.cropData,
+        serverSide: original.serverSide,
+      });
 
       const copyFilename = original.filename.startsWith("Copy of ")
         ? original.filename
@@ -177,6 +218,17 @@ export default function useViewerActions({
 
         api.photos.duplicate(original.serverPhotoId, metaJson)
           .then(async (res) => {
+            console.log("[EDIT:saveCopy] Server duplicate response:", {
+              id: res.id,
+              width: res.width,
+              height: res.height,
+              size_bytes: res.size_bytes,
+              encrypted_blob_id: res.encrypted_blob_id,
+              encrypted_thumb_blob_id: res.encrypted_thumb_blob_id,
+              mime_type: res.mime_type,
+              media_type: res.media_type,
+              crop_metadata: res.crop_metadata,
+            });
             const serverCopyId = res.id;
             const copyShouldBeServerSide = !!(original.serverSide && serverCopyId);
             // Use the copy's own encrypted blob so the viewer fetches the
@@ -194,12 +246,15 @@ export default function useViewerActions({
               filename: copyFilename,
               cropData: serverCopyId ? undefined : (metaJson ?? undefined),
               takenAt: original.takenAt,
-              thumbnailData: original.thumbnailData,
+              thumbnailData: undefined,
               serverPhotoId: serverCopyId,
+              width: res.width ?? original.width,
+              height: res.height ?? original.height,
             });
             console.log("[Viewer:saveCopy] Copy saved to IDB:", {
               copyId, serverCopyId, copyShouldBeServerSide, filename: copyFilename,
               originalBlobId: id, originalServerSide: original.serverSide,
+              width: res.width, height: res.height,
             });
 
             // Trigger backup sync for the new copy
@@ -533,6 +588,7 @@ export default function useViewerActions({
     setShowLeavePrompt,
     saveCopySuccess,
     isRenderingVideo,
+    setIsRenderingVideo,
     showDownloadChoice,
     setShowDownloadChoice,
     buildEditMetadata,

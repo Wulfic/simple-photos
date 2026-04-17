@@ -162,26 +162,58 @@ class BackupWorker @AssistedInject constructor(
                         .take(6)
                         .joinToString("") { "%02x".format(it) }
 
-                    if (contentHash in uploadedHashes) {
-                        diag.debug(TAG, "Skipping ${photo.filename} — duplicate content hash in session", mapOf(
-                            "localId" to photo.localId,
-                            "contentHash" to contentHash
-                        ))
-                        db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
-                        skipped++
-                        continue
-                    }
-
-                    // Check against previously synced photos with the same hash
-                    val existingSynced = db.photoDao().getSyncedByHash(contentHash)
-                    if (existingSynced != null) {
-                        diag.debug(TAG, "Skipping ${photo.filename} — matches synced photo ${existingSynced.filename}", mapOf(
-                            "localId" to photo.localId,
-                            "matchedId" to existingSynced.localId,
-                            "contentHash" to contentHash
-                        ))
-                        db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
-                        skipped++
+                    val isDupSession = contentHash in uploadedHashes
+                    val existingSynced = if (!isDupSession) db.photoDao().getSyncedByHash(contentHash) else null
+                    if (isDupSession || existingSynced != null) {
+                        // Content already uploaded. If this entity has no server
+                        // photo record yet, register it reusing the existing blob
+                        // — this handles "Save Copy" duplicates that share the
+                        // same raw content but need their own serverPhotoId.
+                        val donor = existingSynced ?: db.photoDao().getSyncedByHash(contentHash)
+                        if (donor?.serverBlobId != null && photo.serverPhotoId == null) {
+                            try {
+                                val regReq = com.simplephotos.data.remote.dto.RegisterEncryptedPhotoRequest(
+                                    filename = photo.filename,
+                                    mimeType = photo.mimeType,
+                                    mediaType = photo.mediaType ?: "photo",
+                                    width = photo.width,
+                                    height = photo.height,
+                                    durationSecs = photo.durationSecs?.toDouble(),
+                                    takenAt = java.time.Instant.ofEpochMilli(photo.takenAt).toString(),
+                                    encryptedBlobId = donor.serverBlobId!!,
+                                    encryptedThumbBlobId = donor.thumbnailBlobId,
+                                    photoHash = contentHash
+                                )
+                                val regRes = api.registerEncryptedPhoto(regReq)
+                                db.photoDao().markSynced(
+                                    photo.localId, regRes.photoId,
+                                    donor.serverBlobId!!, donor.thumbnailBlobId, contentHash
+                                )
+                                diag.debug(TAG, "Registered copy via hash-dedup: ${photo.filename} → ${regRes.photoId}", mapOf(
+                                    "localId" to photo.localId,
+                                    "donorId" to donor.localId,
+                                    "contentHash" to contentHash
+                                ))
+                                uploaded++
+                            } catch (e: Exception) {
+                                diag.warn(TAG, "Failed to register hash-dedup copy: ${e.message}", mapOf(
+                                    "localId" to photo.localId,
+                                    "contentHash" to contentHash
+                                ))
+                                db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                                skipped++
+                            }
+                        } else {
+                            diag.debug(TAG, "Skipping ${photo.filename} — duplicate content hash", mapOf(
+                                "localId" to photo.localId,
+                                "contentHash" to contentHash
+                            ))
+                            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                            skipped++
+                        }
+                        if (photo.photoHash == null) {
+                            db.photoDao().update(photo.copy(photoHash = contentHash))
+                        }
                         continue
                     }
 

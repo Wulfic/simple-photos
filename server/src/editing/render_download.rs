@@ -108,6 +108,22 @@ pub async fn render_photo(
     let meta_str = req.crop_metadata.or_else(|| photo.crop_metadata.clone());
     let meta: Option<CropMeta> = meta_str.as_deref().and_then(CropMeta::from_json);
 
+    tracing::info!(
+        "[render] photo_id={}, media_type={}, dims={}×{}, \
+         has_meta={}, meta_str={:?}",
+        photo_id, media_type, photo.width, photo.height,
+        meta.is_some(),
+        meta_str.as_deref().unwrap_or("none"),
+    );
+    if let Some(ref m) = meta {
+        tracing::info!(
+            "[render] CropMeta: rotate={}°, has_crop={}, has_brightness={}, \
+             has_trim={}, swaps_dims={}",
+            m.rotation_degrees(), m.has_crop(), m.has_brightness(),
+            m.has_trim(), m.rotation_swaps_dimensions(),
+        );
+    }
+
     // ── Derive output extension from original filename ────────────────────────
     let ext = Path::new(&photo.filename)
         .extension()

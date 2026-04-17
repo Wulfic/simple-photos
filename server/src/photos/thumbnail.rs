@@ -79,8 +79,22 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
 
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let img = image::open(&input).map_err(|e| format!("Failed to open image: {}", e))?;
+        let raw_w = img.width();
+        let raw_h = img.height();
         let img = apply_exif_orientation(&input, img);
+        let exif_w = img.width();
+        let exif_h = img.height();
+        tracing::info!(
+            "[thumbnail] Static image: raw={}×{}, after_exif={}×{} (changed={}), src={}",
+            raw_w, raw_h, exif_w, exif_h,
+            raw_w != exif_w || raw_h != exif_h,
+            input.display(),
+        );
         let thumb = img.resize(512, 512, image::imageops::FilterType::Triangle);
+        tracing::info!(
+            "[thumbnail] Resized to {}×{}, saving to {}",
+            thumb.width(), thumb.height(), output.display(),
+        );
         thumb
             .save_with_format(&output, image::ImageFormat::Jpeg)
             .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
@@ -269,7 +283,7 @@ pub async fn generate_placeholder_thumbnail(output_path: &Path, color: [u8; 3]) 
 /// 6 = Rotate 90° CW       (most common portrait)
 /// 7 = Rotate 90° CCW + flip horizontal
 /// 8 = Rotate 90° CCW
-pub(super) fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> image::DynamicImage {
+pub(crate) fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> image::DynamicImage {
     let orientation = (|| -> Option<u32> {
         let file = std::fs::File::open(path).ok()?;
         let mut reader = std::io::BufReader::new(file);
@@ -277,6 +291,11 @@ pub(super) fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> i
         let field = exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?;
         field.value.get_uint(0)
     })();
+
+    tracing::debug!(
+        "[thumbnail] EXIF orientation for {}: {:?} (1=normal, 6=90°CW, 8=90°CCW)",
+        path.display(), orientation,
+    );
 
     match orientation {
         Some(2) => img.fliph(),
