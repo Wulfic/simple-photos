@@ -65,6 +65,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import coil.imageLoader
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.R
+import com.simplephotos.ui.components.RenderingCopyBanner
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -850,38 +851,14 @@ fun PhotoViewerScreen(
             }
         }
 
-        // ── Conversion banner (shown while server renders a copy) ─────
-        androidx.compose.animation.AnimatedVisibility(
-            visible = viewModel.isRenderingCopy,
-            enter = androidx.compose.animation.fadeIn(),
-            exit = androidx.compose.animation.fadeOut(),
+        // ── Rendering copy banner (shown while server renders an edited copy) ─
+        Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 110.dp)
-                .zIndex(10f)
+                .align(Alignment.BottomCenter)
+                .padding(start = 16.dp, end = 16.dp, bottom = 24.dp)
+                .zIndex(50f)
         ) {
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                color = Color.Black.copy(alpha = 0.8f),
-                modifier = Modifier.padding(horizontal = 16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
-                        strokeWidth = 2.dp,
-                        color = Color.White
-                    )
-                    Text(
-                        "Converting…",
-                        color = Color.White,
-                        fontSize = 13.sp
-                    )
-                }
-            }
+            RenderingCopyBanner(visible = viewModel.isRenderingCopy)
         }
 
         // ── Info panel (slide up from bottom) ─────────────────────────

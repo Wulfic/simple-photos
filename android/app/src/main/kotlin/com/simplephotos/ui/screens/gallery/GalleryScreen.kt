@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -239,10 +240,6 @@ fun GalleryScreen(
                     Text(err, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
                 }
 
-                // Conversion & encryption progress banners
-                ConversionBanner(api = viewModel.apiService)
-                EncryptionBanner(api = viewModel.apiService)
-
                 if (visiblePhotos.isEmpty() && !viewModel.isSyncing && viewModel.dataReady) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -342,6 +339,18 @@ fun GalleryScreen(
                 }
             }
             PullToRefreshContainer(state = pullToRefreshState, modifier = Modifier.align(Alignment.TopCenter))
+
+            // Floating progress banners — overlay at bottom, above FAB
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 16.dp, end = 16.dp, bottom = 80.dp)
+                    .zIndex(50f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ConversionBanner(api = viewModel.apiService)
+                EncryptionBanner(api = viewModel.apiService)
+            }
         }
     }
 
