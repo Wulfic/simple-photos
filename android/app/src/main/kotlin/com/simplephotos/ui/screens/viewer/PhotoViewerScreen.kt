@@ -29,7 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -718,7 +718,7 @@ fun PhotoViewerScreen(
                         if (currentPhoto.serverPhotoId != null) {
                             IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }, modifier = Modifier.size(40.dp)) {
                                 Icon(
-                                    imageVector = if (viewModel.isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
+                                    imageVector = if (viewModel.isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
                                     contentDescription = if (viewModel.isFavorite) "Unfavorite" else "Favorite",
                                     tint = if (viewModel.isFavorite) Color(0xFFFBBF24) else Color.White,
                                     modifier = Modifier.size(20.dp)
