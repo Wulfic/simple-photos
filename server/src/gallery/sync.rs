@@ -82,6 +82,7 @@ pub async fn encrypted_sync(
              WHERE user_id = ? \
              AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
              AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+             AND (encrypted_blob_id IS NULL OR encrypted_blob_id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
              AND (COALESCE(taken_at, created_at) < ? \
                   OR (COALESCE(taken_at, created_at) = ? AND id > ?)) \
              ORDER BY COALESCE(taken_at, created_at) DESC, id ASC \
@@ -103,6 +104,7 @@ pub async fn encrypted_sync(
              WHERE user_id = ? \
              AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
              AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL) \
+             AND (encrypted_blob_id IS NULL OR encrypted_blob_id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)) \
              ORDER BY COALESCE(taken_at, created_at) DESC, id ASC \
              LIMIT ?",
         )

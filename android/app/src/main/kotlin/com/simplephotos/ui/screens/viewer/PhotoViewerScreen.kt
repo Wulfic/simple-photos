@@ -706,32 +706,32 @@ fun PhotoViewerScreen(
                         .fillMaxWidth()
                         .windowInsetsPadding(WindowInsets.statusBars)
                         .padding(top = 12.dp) // extra padding below notch / camera cutout
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    IconButton(onClick = onBack, modifier = Modifier.size(32.dp)) {
-                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", tint = Color.White, modifier = Modifier.size(12.dp))
+                    IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
+                        Icon(painter = painterResource(R.drawable.ic_back_arrow), contentDescription = "Back", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                     Spacer(Modifier.weight(1f))
                     if (currentPhoto != null) {
                         if (currentPhoto.serverPhotoId != null) {
-                            IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }, modifier = Modifier.size(32.dp)) {
+                            IconButton(onClick = { viewModel.toggleFavorite(currentPhoto.serverPhotoId!!) }, modifier = Modifier.size(40.dp)) {
                                 Icon(
                                     imageVector = if (viewModel.isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
                                     contentDescription = if (viewModel.isFavorite) "Unfavorite" else "Favorite",
                                     tint = if (viewModel.isFavorite) Color(0xFFFBBF24) else Color.White,
-                                    modifier = Modifier.size(12.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
                         // Info button
-                        IconButton(onClick = { showInfoPanel = !showInfoPanel }, modifier = Modifier.size(32.dp)) {
+                        IconButton(onClick = { showInfoPanel = !showInfoPanel }, modifier = Modifier.size(40.dp)) {
                             Icon(
                                 imageVector = Icons.Default.Info,
                                 contentDescription = "Info",
                                 tint = if (showInfoPanel) Color(0xFF60A5FA) else Color.White,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                         // Tag button
@@ -741,24 +741,28 @@ fun PhotoViewerScreen(
                                 if (showTagPanel) {
                                     viewModel.loadTagsForPhoto(currentPhoto.serverPhotoId)
                                 }
-                            }, modifier = Modifier.size(32.dp)) {
+                            }, modifier = Modifier.size(40.dp)) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_tag),
                                     contentDescription = "Tags",
                                     tint = if (showTagPanel) Color(0xFF60A5FA) else Color.White,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
                         // Edit button — available for photos, videos, and audio
                         if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
-                            TextButton(onClick = {
-                                if (editMode) {
-                                    editMode = false
-                                } else {
-                                    enterEditMode()
-                                }
-                            }) {
+                            TextButton(
+                                onClick = {
+                                    if (editMode) {
+                                        editMode = false
+                                    } else {
+                                        enterEditMode()
+                                    }
+                                },
+                                modifier = Modifier.size(40.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
                                 Text(
                                     if (editMode) "Done" else "Edit",
                                     color = if (editMode) Color(0xFF60A5FA) else Color.White,
@@ -767,7 +771,7 @@ fun PhotoViewerScreen(
                             }
                         }
                         // Download button
-                        IconButton(modifier = Modifier.size(32.dp), onClick = {
+                        IconButton(modifier = Modifier.size(40.dp), onClick = {
                             val photo = currentPhoto ?: return@IconButton
                             scope.launch {
                                 try {
@@ -833,27 +837,27 @@ fun PhotoViewerScreen(
                                 painter = painterResource(R.drawable.ic_download),
                                 contentDescription = "Download",
                                 tint = Color.White,
-                                modifier = Modifier.size(12.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                         if (viewModel.albumId != null) {
                             // Album context: remove from album only (don't delete the photo)
-                            IconButton(onClick = { viewModel.removeFromAlbum(currentPhoto, onBack) }, modifier = Modifier.size(32.dp)) {
+                            IconButton(onClick = { viewModel.removeFromAlbum(currentPhoto, onBack) }, modifier = Modifier.size(40.dp)) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trashcan),
                                     contentDescription = "Remove from album",
                                     tint = Color(0xFFFFA500),
-                                    modifier = Modifier.size(12.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         } else {
                             // Gallery context: delete the photo
-                            IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }, modifier = Modifier.size(32.dp)) {
+                            IconButton(onClick = { viewModel.deletePhoto(currentPhoto, onBack) }, modifier = Modifier.size(40.dp)) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trashcan),
                                     contentDescription = "Delete",
                                     tint = Color.White,
-                                    modifier = Modifier.size(12.dp)
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }

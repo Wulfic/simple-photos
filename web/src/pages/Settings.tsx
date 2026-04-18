@@ -63,6 +63,7 @@ export default function Settings() {
   };
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [storageLoading, setStorageLoading] = useState(true);
+  const [showInstallInstructions, setShowInstallInstructions] = useState(false);
 
   // Load backup servers on mount
   const loadBackupServers = useCallback(async () => {
@@ -402,6 +403,63 @@ export default function Settings() {
             >
               📱 Download Android App (.apk)
             </button>
+
+            {/* Collapsible install instructions */}
+            <button
+              onClick={() => setShowInstallInstructions((v) => !v)}
+              className="mt-3 flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors"
+            >
+              <span className={`inline-block transition-transform ${showInstallInstructions ? "rotate-90" : ""}`}>▶</span>
+              Install Instructions
+            </button>
+            {showInstallInstructions && (
+              <div className="mt-3 bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
+                <h3 className="font-medium text-gray-800 dark:text-gray-200 text-sm mb-3">
+                  How to install (sideload):
+                </h3>
+                <ol className="text-sm text-gray-600 dark:text-gray-400 space-y-3">
+                  <li className="flex gap-3">
+                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">1</span>
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-300">Download the APK</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Click the button above or transfer the APK to your phone via USB/email.</p>
+                    </div>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">2</span>
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-300">Enable "Install unknown apps"</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Go to <strong>Settings → Apps → Special access → Install unknown apps</strong> and enable it for your file manager or browser.</p>
+                    </div>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">3</span>
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-300">Open the APK</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Tap the downloaded APK file and confirm the installation prompt.</p>
+                    </div>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">4</span>
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-300">Connect to your server</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Open the app, enter your server URL:</p>
+                      <code className="block mt-1 bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded text-xs text-gray-800 dark:text-gray-200 break-all">{window.location.origin}</code>
+                    </div>
+                  </li>
+                  <li className="flex gap-3">
+                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">5</span>
+                    <div>
+                      <p className="font-medium text-gray-700 dark:text-gray-300">Sign in & grant permissions</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Log in with your account and allow the app to access your photos and videos for automatic encrypted backup.</p>
+                    </div>
+                  </li>
+                </ol>
+                <div className="mt-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs text-amber-800 dark:text-amber-300">
+                  <strong>Note:</strong> Keep "Install unknown apps" disabled after installation for security. You can always re-enable it when updating the app.
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </section>

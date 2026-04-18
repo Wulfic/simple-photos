@@ -611,7 +611,7 @@ internal fun SecureItemTile(
     LaunchedEffect(item.blobId) {
         loading = true
         try {
-            val data = viewModel.downloadThumb(item.blobId)
+            val data = viewModel.downloadThumb(item.blobId, item.encryptedThumbBlobId)
             // Detect GIF by magic bytes (GIF87a / GIF89a)
             val isGif = data.size > 3 &&
                 data[0] == 0x47.toByte() && data[1] == 0x49.toByte() && data[2] == 0x46.toByte()
@@ -620,7 +620,8 @@ internal fun SecureItemTile(
             } else {
                 bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.e("SecureItemTile", "Failed to load thumb for blobId=${item.blobId}", e)
             bitmap = null
             gifBytes = null
         } finally {
@@ -765,7 +766,8 @@ internal fun SecurePhotoViewer(
                     } else {
                         bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    android.util.Log.e("SecurePhotoViewer", "Failed to decrypt blobId=${item.blobId}", e)
                     bitmap = null
                     gifBytes = null
                 } finally {

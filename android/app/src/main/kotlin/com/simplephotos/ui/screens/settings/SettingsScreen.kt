@@ -156,7 +156,7 @@ fun SettingsScreen(
             }
 
             // ── Biometric Lock ───────────────────────────────────────────
-            SettingsCard(title = "Security", iconPainter = painterResource(R.drawable.ic_lock)) {
+            SettingsCard(title = "Security", iconPainter = painterResource(R.drawable.ic_locks)) {
                 Text(
                     "Require fingerprint or face unlock to open the app.",
                     style = MaterialTheme.typography.bodySmall,
@@ -200,7 +200,7 @@ fun SettingsScreen(
                                 showBiometricPasswordDialog = false
                             }
                         },
-                        icon = { Icon(painter = painterResource(R.drawable.ic_lock), contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary) },
+                        icon = { Icon(painter = painterResource(R.drawable.ic_locks), contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary) },
                         title = { Text("Enable Biometric Lock") },
                         text = {
                             Column {
@@ -452,66 +452,6 @@ fun SettingsScreen(
             SettingsCard(title = "Active Server", icon = Icons.Default.Dns) {
                 SettingsRow("URL", viewModel.serverUrl)
                 SettingsRow("Status", "Connected")
-            }
-
-            // ── Scan for New Files (admin) ───────────────────────────────
-            if (viewModel.isAdmin) {
-                SettingsCard(title = "Scan for New Files", icon = Icons.Default.Radar) {
-                    Text(
-                        "Scan the server storage directory for files that were placed there manually and register them in the database.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = { viewModel.scanForNewFiles() },
-                        enabled = !viewModel.scanning,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (viewModel.scanning) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(8.dp))
-                        }
-                        Icon(Icons.Default.Radar, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Scan Now")
-                    }
-                    viewModel.scanResult?.let { result ->
-                        Spacer(Modifier.height(8.dp))
-                        Text(result, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
-            }
-
-
-
-
-
-
-
-            // ── SSL/TLS (admin) ──────────────────────────────────────────
-            if (viewModel.isAdmin) {
-                SettingsCard(title = "SSL / TLS", iconPainter = painterResource(R.drawable.ic_lock)) {
-                    if (viewModel.sslLoading) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (viewModel.sslEnabled) Icons.Default.CheckCircle else Icons.Default.Warning,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = if (viewModel.sslEnabled) Color(0xFF22C55E) else Color(0xFFF59E0B)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                if (viewModel.sslEnabled) "SSL/TLS is enabled"
-                                else "SSL/TLS is not enabled — connections are unencrypted",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (viewModel.sslEnabled) Color(0xFF22C55E) else Color(0xFFF59E0B)
-                            )
-                        }
-                    }
-                }
             }
 
             // ── Manage Users (admin) ─────────────────────────────────────

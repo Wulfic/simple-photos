@@ -7,6 +7,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.SearchResult
 import com.simplephotos.data.repository.AuthRepository
@@ -42,6 +43,9 @@ class SearchViewModel @Inject constructor(
         private set
     var username by mutableStateOf("")
         private set
+    /** Map of server photo ID → local PhotoEntity for cached thumbnail lookup */
+    var localPhotoMap by mutableStateOf<Map<String, PhotoEntity>>(emptyMap())
+        private set
 
     private var searchJob: Job? = null
 
@@ -60,6 +64,7 @@ class SearchViewModel @Inject constructor(
         searchJob?.cancel()
         if (newQuery.isBlank()) {
             results = emptyList()
+            localPhotoMap = emptyMap()
             searched = false
             return
         }
@@ -75,8 +80,20 @@ class SearchViewModel @Inject constructor(
         try {
             val response = withContext(Dispatchers.IO) { api.searchPhotos(q.trim()) }
             results = response.results
+
+            // Batch-load local photos for thumbnail resolution
+            if (response.results.isNotEmpty()) {
+                val ids = response.results.map { it.id }
+                val localPhotos = withContext(Dispatchers.IO) {
+                    photoRepository.getPhotosByServerPhotoIds(ids)
+                }
+                localPhotoMap = localPhotos.associateBy { it.serverPhotoId ?: "" }
+            } else {
+                localPhotoMap = emptyMap()
+            }
         } catch (_: Exception) {
             results = emptyList()
+            localPhotoMap = emptyMap()
         } finally {
             isLoading = false
         }

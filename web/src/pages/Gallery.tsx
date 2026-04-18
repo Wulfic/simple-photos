@@ -491,6 +491,7 @@ export default function Gallery() {
                     serverSide: photo.serverSide,
                     thumbnailData: photo.thumbnailData,
                     thumbnailMimeType: photo.thumbnailMimeType,
+                    encryptedThumbBlobId: photo.thumbnailBlobId,
                   };
                   return (
                     <ThumbnailTile

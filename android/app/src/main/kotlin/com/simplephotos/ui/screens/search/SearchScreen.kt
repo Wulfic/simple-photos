@@ -7,9 +7,6 @@ package com.simplephotos.ui.screens.search
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -23,9 +20,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -37,6 +34,7 @@ import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.HeaderNavigation
 import com.simplephotos.ui.theme.ThemeState
+import java.io.File
 
 // ── Screen ──────────────────────────────────────────────────────────────────
 
@@ -157,17 +155,30 @@ fun SearchScreen(
                 )
             }
 
-            // Results grid
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 100.dp),
-                contentPadding = PaddingValues(4.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(viewModel.results) { result ->
+            // Results grid — justified layout matching the gallery
+            if (viewModel.results.isNotEmpty()) {
+                val targetRowHeight = 120.dp
+                com.simplephotos.ui.components.JustifiedGrid(
+                    items = viewModel.results,
+                    getAspectRatio = { r ->
+                        val w = r.width ?: 0
+                        val h = r.height ?: 0
+                        if (w > 0 && h > 0) w.toFloat() / h.toFloat()
+                        else 1f
+                    },
+                    getKey = { it.id },
+                    targetRowHeight = targetRowHeight,
+                    gap = 2.dp,
+                ) { result, widthDp, heightDp ->
+                    val localPhoto = viewModel.localPhotoMap[result.id]
+                    val clickId = localPhoto?.localId ?: result.id
                     SearchResultTile(
                         result = result,
                         serverBaseUrl = viewModel.serverBaseUrl,
-                        onClick = { onPhotoClick(result.id) }
+                        localThumbnailPath = localPhoto?.thumbnailPath,
+                        onClick = { onPhotoClick(clickId) },
+                        widthDp = widthDp,
+                        heightDp = heightDp
                     )
                 }
             }
@@ -211,28 +222,45 @@ fun SearchScreen(
 private fun SearchResultTile(
     result: SearchResult,
     serverBaseUrl: String,
-    onClick: () -> Unit
+    localThumbnailPath: String?,
+    onClick: () -> Unit,
+    widthDp: Dp = 100.dp,
+    heightDp: Dp = 100.dp
 ) {
     val context = LocalContext.current
-    val thumbUrl = "$serverBaseUrl/api/photos/${result.id}/thumb"
+
+    // Prefer local cached thumbnail, fall back to server URL
+    val imageModel: Any? = when {
+        localThumbnailPath != null -> File(localThumbnailPath)
+        serverBaseUrl.isNotEmpty() -> "$serverBaseUrl/api/photos/${result.id}/thumb"
+        else -> null
+    }
 
     Box(
         modifier = Modifier
-            .padding(2.dp)
-            .aspectRatio(1f)
+            .size(widthDp, heightDp)
             .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(thumbUrl)
-                .crossfade(true)
-                .build(),
-            contentDescription = result.filename,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
-        )
+        if (imageModel != null) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(imageModel)
+                    .crossfade(true)
+                    .size(512)
+                    .build(),
+                contentDescription = result.filename,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(result.filename.take(8), style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, modifier = Modifier.padding(4.dp))
+                }
+            }
+        }
 
         // Video badge
         if (result.mediaType == "video") {

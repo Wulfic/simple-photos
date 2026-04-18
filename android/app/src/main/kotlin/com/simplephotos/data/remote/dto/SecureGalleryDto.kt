@@ -40,7 +40,11 @@ data class SecureGalleryUnlockResponse(
 data class SecureGalleryItem(
     val id: String,
     @SerializedName("blob_id") val blobId: String,
-    @SerializedName("added_at") val addedAt: String
+    @SerializedName("added_at") val addedAt: String,
+    @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    @SerializedName("media_type") val mediaType: String? = null
 )
 
 data class SecureGalleryItemsResponse(

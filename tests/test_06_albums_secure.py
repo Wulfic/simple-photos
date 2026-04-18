@@ -1244,3 +1244,61 @@ class TestSecureGalleryDecryption:
         assert enc_blob_id not in blob_ids, (
             f"Encrypted blob {enc_blob_id} leaked into backup list_blobs"
         )
+
+
+class TestSecureAddAlreadyEncrypted:
+    """Regression: adding an already-encrypted photo to a secure gallery.
+
+    When a photo has been server-side encrypted (file_path cleared,
+    encrypted_blob_id set), add_gallery_item must decrypt the encrypted
+    blob to produce the plaintext clone.  Previously it tried to read_blob
+    with an empty storage_path, resolving to the storage root directory
+    and failing with 'Is a directory (os error 21)'.
+    """
+
+    def test_add_already_encrypted_photo_to_secure_gallery(self, user_client):
+        """Upload a photo, wait for encryption to finish (file_path cleared),
+        then add to a secure gallery — must succeed (HTTP 201)."""
+        photo = user_client.upload_photo(unique_filename())
+        pid = photo["photo_id"]
+
+        # Wait for server-side encryption migration to finish so file_path
+        # is cleared and encrypted_blob_id is set.
+        wait_for_encryption(user_client, pid, max_wait=15)
+
+        # Now add the already-encrypted photo to a secure gallery
+        gallery = user_client.create_secure_gallery("Already Encrypted Test")
+        token = user_client.unlock_secure_gallery(USER_PASSWORD)["gallery_token"]
+        result = user_client.add_secure_gallery_item(
+            gallery["gallery_id"], pid, token,
+        )
+        assert "new_blob_id" in result, (
+            f"add_secure_gallery_item failed for already-encrypted photo {pid}"
+        )
+        clone_id = result["new_blob_id"]
+
+        # Wait for the clone to be encrypted too
+        time.sleep(3)
+
+        # Verify the item appears in the gallery and is decryptable
+        items = user_client.list_secure_gallery_items(gallery["gallery_id"], token)
+        assert len(items["items"]) == 1
+        item_blob_id = items["items"][0]["blob_id"]
+
+        resp = user_client.download_blob(item_blob_id)
+        assert resp.status_code == 200, (
+            f"Failed to download clone blob: HTTP {resp.status_code}"
+        )
+
+        # Must be valid AES-GCM ciphertext (not raw JPEG)
+        blob_data = resp.content
+        assert len(blob_data) >= NONCE_LENGTH + 16, (
+            f"Blob too short ({len(blob_data)} bytes) — likely a placeholder"
+        )
+        try:
+            plaintext = aes_gcm_decrypt(TEST_ENCRYPTION_KEY, blob_data)
+        except ValueError as e:
+            pytest.fail(
+                f"Clone blob is not valid AES-GCM ciphertext: {e}"
+            )
+        assert len(plaintext) > 0

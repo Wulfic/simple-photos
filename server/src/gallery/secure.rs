@@ -12,6 +12,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
+use crate::crypto;
 use crate::error::AppError;
 use crate::sanitize;
 use crate::state::AppState;
@@ -213,6 +214,7 @@ pub async fn add_gallery_item(
         crop_metadata: Option<String>,
         camera_model: Option<String>,
         photo_hash: Option<String>,
+        encrypted_blob_id: Option<String>,
     }
 
     // Full photo row needed for server-side clones
@@ -220,7 +222,7 @@ pub async fn add_gallery_item(
         sqlx::query_as::<_, PhotoRowFull>(
             "SELECT filename, mime_type, media_type, file_path, size_bytes, width, height, \
                  duration_secs, taken_at, latitude, longitude, thumb_path, created_at, \
-                 is_favorite, crop_metadata, camera_model, photo_hash \
+                 is_favorite, crop_metadata, camera_model, photo_hash, encrypted_blob_id \
                  FROM photos WHERE id = ? AND user_id = ?",
         )
         .bind(&req.blob_id)
@@ -263,10 +265,72 @@ pub async fn add_gallery_item(
         )
     };
 
-    // Clone: read the original file data from disk, write a new copy under a fresh ID
-    let blob_data = crate::blobs::storage::read_blob(&storage_root, &storage_path)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to read source blob: {}", e)))?;
+    // Clone: read the original file data from disk, write a new copy under a fresh ID.
+    // For photos that have been server-side encrypted (empty file_path), decrypt
+    // the encrypted blob to get the plaintext data.
+    let blob_data = if storage_path.is_empty() {
+        // Encrypted photo — decrypt from encrypted_blob_id
+        let enc_blob_id = photo_row_full
+            .as_ref()
+            .and_then(|p| p.encrypted_blob_id.as_deref())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest(
+                    "Photo has no file on disk and no encrypted blob".into(),
+                )
+            })?;
+
+        let enc_key = crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to load encryption key: {e}")))?;
+        let enc_key = enc_key
+            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+
+        let enc_sp: Option<(String,)> = sqlx::query_as(
+            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(enc_blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        let (enc_storage_path,) = enc_sp.ok_or_else(|| {
+            AppError::Internal(format!("Encrypted blob {} not found", enc_blob_id))
+        })?;
+
+        let enc_data =
+            crate::blobs::storage::read_blob(&storage_root, &enc_storage_path).await?;
+        let plaintext = {
+            let k = enc_key;
+            tokio::task::spawn_blocking(move || crypto::decrypt(&k, &enc_data))
+                .await
+                .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+                .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?
+        };
+
+        // Parse JSON envelope and extract the base64 "data" field
+        let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
+            .map_err(|e| AppError::Internal(format!("Invalid blob envelope JSON: {e}")))?;
+        let data_b64 = envelope["data"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
+        let raw_bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            data_b64,
+        )
+        .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
+
+        tracing::info!(
+            encrypted_blob_id = %enc_blob_id,
+            decrypted_size = raw_bytes.len(),
+            "[DIAG:SECURE_ADD] Decrypted encrypted photo for secure gallery clone"
+        );
+
+        raw_bytes
+    } else {
+        crate::blobs::storage::read_blob(&storage_root, &storage_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to read source blob: {}", e)))?
+    };
 
     let new_blob_id = Uuid::new_v4().to_string();
     let new_storage_path =
@@ -352,6 +416,32 @@ pub async fn add_gallery_item(
 
     let item_id = Uuid::new_v4().to_string();
 
+    // When the client sends an encrypted blob ID (Android: serverBlobId),
+    // resolve the owning photo so we can store the **photo ID** as
+    // original_blob_id.  This is critical because encrypted_sync hides
+    // photos by `photos.id NOT IN (original_blob_id)`, and the blob
+    // ID differs from the photo ID.
+    let (resolved_original_id, original_enc_thumb): (String, Option<String>) = if !is_server_side {
+        // The req.blob_id is a blobs-table ID.  Find the photo that owns it.
+        let owner: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT id, photo_hash, encrypted_thumb_blob_id \
+             FROM photos WHERE encrypted_blob_id = ? AND user_id = ?",
+        )
+        .bind(&req.blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?;
+
+        if let Some((photo_id, _hash, thumb)) = owner {
+            (photo_id, thumb)
+        } else {
+            // No owning photo found — fall back to blob ID
+            (req.blob_id.clone(), None)
+        }
+    } else {
+        (req.blob_id.clone(), None)
+    };
+
     // Store the original photo's content hash so autoscan (run after recovery)
     // can skip files whose content matches a gallery-hidden original — even if
     // the file has been renamed or moved.
@@ -367,11 +457,11 @@ pub async fn add_gallery_item(
         .flatten()
         .flatten()
     } else {
-        // Client-encrypted blob — try content_hash from blobs table
+        // Client-encrypted blob — use the resolved photo's hash
         sqlx::query_scalar::<_, Option<String>>(
-            "SELECT content_hash FROM blobs WHERE id = ? AND user_id = ?",
+            "SELECT photo_hash FROM photos WHERE id = ? AND user_id = ?",
         )
-        .bind(&req.blob_id)
+        .bind(&resolved_original_id)
         .bind(&auth.user_id)
         .fetch_optional(&state.pool)
         .await
@@ -381,21 +471,25 @@ pub async fn add_gallery_item(
     };
 
     sqlx::query(
-        "INSERT OR IGNORE INTO encrypted_gallery_items (id, gallery_id, blob_id, added_at, original_blob_id, original_photo_hash) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO encrypted_gallery_items \
+         (id, gallery_id, blob_id, added_at, original_blob_id, original_photo_hash, encrypted_blob_id, encrypted_thumb_blob_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&item_id)
     .bind(&gallery_id)
     .bind(&new_blob_id)
     .bind(&now)
-    .bind(&req.blob_id) // Track the original so it can be hidden from the main gallery
+    .bind(&resolved_original_id) // Photo ID — so encrypted_sync can hide the original
     .bind(&original_photo_hash)
+    .bind(if !is_server_side { Some(&new_blob_id) } else { None::<&String> }) // Clone of encrypted data is already "encrypted"
+    .bind(&original_enc_thumb) // Copy the original photo's encrypted thumb
     .execute(&state.pool)
     .await?;
 
     tracing::info!(
         gallery_id = %gallery_id,
-        original_blob_id = %req.blob_id,
+        original_blob_id = %resolved_original_id,
+        req_blob_id = %req.blob_id,
         new_blob_id = %new_blob_id,
         item_id = %item_id,
         blob_type = %blob_type,
@@ -549,12 +643,13 @@ pub async fn list_gallery_items(
         "SELECT gi.id, \
                 COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
                 gi.added_at, \
-                COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id) as encrypted_thumb_blob_id, \
-                p.width, \
-                p.height, \
-                p.media_type \
+                COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id, op.encrypted_thumb_blob_id) as encrypted_thumb_blob_id, \
+                COALESCE(p.width, op.width) as width, \
+                COALESCE(p.height, op.height) as height, \
+                COALESCE(p.media_type, op.media_type) as media_type \
          FROM encrypted_gallery_items gi \
          LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
+         LEFT JOIN photos op ON op.id = gi.original_blob_id \
          WHERE gi.gallery_id = ? \
          ORDER BY gi.added_at DESC",
     )

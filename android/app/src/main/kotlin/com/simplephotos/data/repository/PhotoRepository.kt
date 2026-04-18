@@ -93,6 +93,9 @@ class PhotoRepository @Inject constructor(
 
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
 
+    suspend fun getPhotosByServerPhotoIds(ids: List<String>): List<PhotoEntity> =
+        db.photoDao().getByServerPhotoIds(ids)
+
     suspend fun insertPhoto(photo: PhotoEntity) = db.photoDao().insert(photo)
 
     /**

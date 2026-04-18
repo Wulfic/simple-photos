@@ -2,7 +2,7 @@
 
 A self-hosted photo & video library with end-to-end encryption, multi-server backup & restore, and web + Android access.
 
-###Authors Note
+### Authors Note
 Simple Photos was born out of a desire for a secure, private, and user-friendly photo management solution that I could host myself. But found that other solutions lacked one critical thing, backup servers! Forcing users to choose between only having one backup target, or use multiple solutions; So I decided to build something from the ground up that met all my needs — and hopefully yours too!
 
 ## Features

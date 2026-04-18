@@ -4,6 +4,7 @@
  */
 package com.simplephotos.ui.screens.securegallery
 
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -22,7 +23,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
+
+private const val TAG = "SecureGalleryVM"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ViewModel
@@ -74,13 +78,16 @@ class SecureGalleryViewModel @Inject constructor(
             authLoading = true
             authError = null
             try {
+                Log.d(TAG, "Unlocking secure galleries…")
                 val res = withContext(Dispatchers.IO) {
                     secureGalleryRepository.unlock(password)
                 }
                 galleryToken = res.galleryToken
                 isAuthenticated = true
+                Log.i(TAG, "Unlock successful, token obtained")
                 loadGalleries()
             } catch (e: Exception) {
+                Log.e(TAG, "Unlock failed", e)
                 authError = e.message ?: "Invalid password"
             } finally {
                 authLoading = false
@@ -94,7 +101,9 @@ class SecureGalleryViewModel @Inject constructor(
             try {
                 val res = withContext(Dispatchers.IO) { secureGalleryRepository.listGalleries() }
                 galleries = res.galleries
+                Log.d(TAG, "Loaded ${galleries.size} galleries")
             } catch (e: Exception) {
+                Log.e(TAG, "Failed to load galleries", e)
                 error = "Failed to load galleries: ${e.message}"
             } finally {
                 galleriesLoading = false
@@ -103,6 +112,7 @@ class SecureGalleryViewModel @Inject constructor(
     }
 
     fun selectGallery(gallery: SecureGallery) {
+        Log.d(TAG, "selectGallery: id=${gallery.id} name=${gallery.name} items=${gallery.itemCount}")
         selectedGallery = gallery
         loadItems(gallery.id)
         loadPhotos()
@@ -121,7 +131,14 @@ class SecureGalleryViewModel @Inject constructor(
                     secureGalleryRepository.listItems(galleryId, galleryToken)
                 }
                 items = res.items
+                Log.d(TAG, "Loaded ${items.size} items for gallery $galleryId")
+                for (item in items) {
+                    Log.d(TAG, "  item id=${item.id} blobId=${item.blobId} " +
+                        "thumbBlobId=${item.encryptedThumbBlobId} " +
+                        "w=${item.width} h=${item.height} type=${item.mediaType}")
+                }
             } catch (e: Exception) {
+                Log.e(TAG, "Failed to load items for gallery $galleryId", e)
                 error = "Failed to load items: ${e.message}"
             } finally {
                 itemsLoading = false
@@ -135,7 +152,10 @@ class SecureGalleryViewModel @Inject constructor(
                 allPhotos = withContext(Dispatchers.IO) {
                     photoRepository.getAllPhotos().first()
                 }
-            } catch (_: Exception) {}
+                Log.d(TAG, "Loaded ${allPhotos.size} photos for picker")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to load photos for picker", e)
+            }
         }
     }
 
@@ -145,8 +165,10 @@ class SecureGalleryViewModel @Inject constructor(
                 withContext(Dispatchers.IO) {
                     secureGalleryRepository.createGallery(name)
                 }
+                Log.i(TAG, "Created gallery: $name")
                 loadGalleries()
             } catch (e: Exception) {
+                Log.e(TAG, "Create gallery failed: $name", e)
                 error = "Create failed: ${e.message}"
             }
         }
@@ -156,12 +178,14 @@ class SecureGalleryViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { secureGalleryRepository.deleteGallery(gallery.id) }
+                Log.i(TAG, "Deleted gallery: ${gallery.id}")
                 if (selectedGallery?.id == gallery.id) {
                     selectedGallery = null
                     items = emptyList()
                 }
                 loadGalleries()
             } catch (e: Exception) {
+                Log.e(TAG, "Delete gallery failed: ${gallery.id}", e)
                 error = "Delete failed: ${e.message}"
             }
         }
@@ -169,18 +193,24 @@ class SecureGalleryViewModel @Inject constructor(
 
     fun addPhotosToGallery(blobIds: List<String>) {
         val gallery = selectedGallery ?: return
+        Log.d(TAG, "addPhotosToGallery: ${blobIds.size} blobs → gallery ${gallery.id}")
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     coroutineScope {
                         blobIds.map { blobId ->
-                            async { secureGalleryRepository.addItem(gallery.id, blobId) }
+                            async {
+                                Log.d(TAG, "  adding blobId=$blobId")
+                                secureGalleryRepository.addItem(gallery.id, blobId)
+                            }
                         }.awaitAll()
                     }
                 }
+                Log.i(TAG, "Added ${blobIds.size} photos to gallery ${gallery.id}")
                 loadItems(gallery.id)
                 loadGalleries()
             } catch (e: Exception) {
+                Log.e(TAG, "Add photos failed", e)
                 error = "Add photos failed: ${e.message}"
             }
         }
@@ -188,27 +218,69 @@ class SecureGalleryViewModel @Inject constructor(
 
     /**
      * Download and decrypt an encrypted blob, returning the raw image bytes.
+     *
+     * Uses file-based streaming to avoid OOM on large blobs:
+     * encrypted blob → temp file → decrypt → stream-extract base64 → output file → read.
      */
     suspend fun downloadAndDecrypt(blobId: String): ByteArray = withContext(Dispatchers.IO) {
-        val decrypted = photoRepository.downloadAndDecryptBlob(blobId)
-        val payload = org.json.JSONObject(String(decrypted, Charsets.UTF_8))
-        val dataBase64 = payload.getString("data")
-        android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
+        Log.d(TAG, "downloadAndDecrypt: blobId=$blobId")
+        val outputFile = File.createTempFile("secure_dec_", ".tmp", photoRepository.getCacheDir())
+        try {
+            photoRepository.downloadAndDecryptBlobToFile(blobId, outputFile)
+            val bytes = outputFile.readBytes()
+            Log.d(TAG, "downloadAndDecrypt: blobId=$blobId → ${bytes.size} bytes decoded")
+            bytes
+        } catch (e: Exception) {
+            Log.e(TAG, "downloadAndDecrypt failed: blobId=$blobId", e)
+            throw e
+        } finally {
+            outputFile.delete()
+        }
     }
 
     /**
-     * Download a small encrypted thumbnail via `GET /api/blobs/{id}/thumb`.
-     * Falls back to full-blob download if no dedicated thumbnail exists.
+     * Download a small encrypted thumbnail for a secure gallery item.
+     *
+     * Resolution order:
+     * 1. If [encryptedThumbBlobId] is provided (from server item metadata),
+     *    download that blob directly — it's a small (~30 KB) thumbnail.
+     * 2. Otherwise fall back to `GET /api/blobs/{blobId}/thumb` which asks
+     *    the server to resolve the thumbnail from the photos table.
+     * 3. Last resort: download the full blob (may be large).
      */
-    suspend fun downloadThumb(blobId: String): ByteArray = withContext(Dispatchers.IO) {
-        // Try the dedicated thumbnail endpoint first (~30 KB vs. multi-MB full blob)
-        val thumbBytes = photoRepository.downloadAndDecryptThumbBlob(blobId)
-        if (thumbBytes != null) {
-            val payload = org.json.JSONObject(String(thumbBytes, Charsets.UTF_8))
-            val dataBase64 = payload.getString("data")
-            return@withContext android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
+    suspend fun downloadThumb(blobId: String, encryptedThumbBlobId: String? = null): ByteArray = withContext(Dispatchers.IO) {
+        // 1. Direct thumbnail blob download (most reliable for cloned/Android items)
+        if (encryptedThumbBlobId != null) {
+            Log.d(TAG, "downloadThumb: using encryptedThumbBlobId=$encryptedThumbBlobId for blobId=$blobId")
+            try {
+                val thumbBytes = photoRepository.downloadAndDecryptBlob(encryptedThumbBlobId)
+                val payload = org.json.JSONObject(String(thumbBytes, Charsets.UTF_8))
+                val dataBase64 = payload.getString("data")
+                val decoded = android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
+                Log.d(TAG, "downloadThumb: direct thumb success, ${decoded.size} bytes")
+                return@withContext decoded
+            } catch (e: Exception) {
+                Log.w(TAG, "downloadThumb: direct thumb download failed for $encryptedThumbBlobId, trying /thumb endpoint", e)
+            }
         }
-        // Fallback: download full blob (legacy encrypted photos without a thumb blob)
+
+        // 2. Server-resolved thumbnail endpoint
+        Log.d(TAG, "downloadThumb: trying /blobs/$blobId/thumb endpoint")
+        try {
+            val thumbBytes = photoRepository.downloadAndDecryptThumbBlob(blobId)
+            if (thumbBytes != null) {
+                val payload = org.json.JSONObject(String(thumbBytes, Charsets.UTF_8))
+                val dataBase64 = payload.getString("data")
+                val decoded = android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
+                Log.d(TAG, "downloadThumb: /thumb endpoint success, ${decoded.size} bytes")
+                return@withContext decoded
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "downloadThumb: /thumb endpoint failed for $blobId", e)
+        }
+
+        // 3. Fallback: download full blob via streaming (avoids OOM)
+        Log.w(TAG, "downloadThumb: falling back to full blob download for $blobId")
         downloadAndDecrypt(blobId)
     }
 }

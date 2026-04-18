@@ -1,5 +1,6 @@
 package com.simplephotos.ui.screens.securegallery
 
+import android.util.Log
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.runtime.*
@@ -43,16 +44,9 @@ fun SecureGalleryScreen(
     }
 
     val hasStoredPassword = remember {
-        encryptedPrefs?.getString("gallery_password", null) != null
-    }
-
-    var lastAttemptedPassword by remember { mutableStateOf<String?>(null) }
-
-    // Store password on successful authentication
-    LaunchedEffect(viewModel.isAuthenticated) {
-        if (viewModel.isAuthenticated && lastAttemptedPassword != null) {
-            encryptedPrefs?.edit()?.putString("gallery_password", lastAttemptedPassword)?.apply()
-        }
+        val has = encryptedPrefs?.getString("gallery_password", null) != null
+        Log.d("SecureGalleryBio", "canUseBiometric=$canUseBiometric hasStoredPassword=$has")
+        has
     }
 
     // Launch biometric prompt
@@ -60,10 +54,11 @@ fun SecureGalleryScreen(
         if (activity != null && canUseBiometric) {
             val storedPw = encryptedPrefs?.getString("gallery_password", null)
             if (storedPw != null) {
+                Log.d("SecureGalleryBio", "Launching biometric prompt (stored password available)")
                 val executor = ContextCompat.getMainExecutor(context)
                 val callback = object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                        lastAttemptedPassword = storedPw
+                        Log.i("SecureGalleryBio", "Biometric auth succeeded, unlocking")
                         viewModel.unlock(storedPw)
                     }
                 }
@@ -74,16 +69,20 @@ fun SecureGalleryScreen(
                     .setNegativeButtonText("Use Password")
                     .build()
                 prompt.authenticate(info)
+            } else {
+                Log.w("SecureGalleryBio", "Biometric requested but no stored password")
             }
+        } else {
+            Log.w("SecureGalleryBio", "Biometric requested but not available (activity=$activity canUseBiometric=$canUseBiometric)")
         }
     }
 
     // ── Password Gate ─────────────────────────────────
     if (!viewModel.isAuthenticated) {
+        Log.d("SecureGalleryBio", "Showing PasswordGate: canUseBiometric=${canUseBiometric && hasStoredPassword}")
         PasswordGate(
             onBack = onBack,
             onUnlock = { password ->
-                lastAttemptedPassword = password
                 viewModel.unlock(password)
             },
             isLoading = viewModel.authLoading,

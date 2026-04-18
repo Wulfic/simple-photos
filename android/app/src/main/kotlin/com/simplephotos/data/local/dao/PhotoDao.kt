@@ -83,6 +83,10 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE serverPhotoId = :photoId LIMIT 1")
     suspend fun getByServerPhotoId(photoId: String): PhotoEntity?
 
+    /** Batch lookup: get all photos whose serverPhotoId is in the given list. */
+    @Query("SELECT * FROM photos WHERE serverPhotoId IN (:photoIds)")
+    suspend fun getByServerPhotoIds(photoIds: List<String>): List<PhotoEntity>
+
     @Query("SELECT * FROM photos WHERE localPath = :path LIMIT 1")
     suspend fun getByLocalPath(path: String): PhotoEntity?
 
