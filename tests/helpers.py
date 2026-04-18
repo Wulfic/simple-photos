@@ -649,6 +649,30 @@ def generate_random_bytes(size: int = 1024) -> bytes:
     return os.urandom(size)
 
 
+def encrypt_blob_payload(raw_data: bytes, key_hex: str,
+                         filename: str = "test.jpg",
+                         mime_type: str = "image/jpeg") -> bytes:
+    """Create an encrypted blob matching the client wire format.
+
+    Builds the JSON envelope (``{"v":1, "data":"<base64>", ...}``),
+    encrypts it with AES-256-GCM, and returns ``nonce || ciphertext+tag``.
+    """
+    import base64
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    envelope = json.dumps({
+        "v": 1,
+        "filename": filename,
+        "mime_type": mime_type,
+        "data": base64.b64encode(raw_data).decode("ascii"),
+    })
+    key = bytes.fromhex(key_hex)
+    nonce = os.urandom(12)
+    aesgcm = AESGCM(key)
+    ciphertext = aesgcm.encrypt(nonce, envelope.encode("utf-8"), None)
+    return nonce + ciphertext
+
+
 def random_username(prefix: str = "testuser") -> str:
     suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
     return f"{prefix}{suffix}"

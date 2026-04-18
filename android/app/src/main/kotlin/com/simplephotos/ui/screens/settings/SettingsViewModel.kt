@@ -412,10 +412,31 @@ class SettingsViewModel @Inject constructor(
     fun calculateFreeableSpace() {
         viewModelScope.launch {
             try {
+                // Fetch confirmed server blob IDs so we only count photos
+                // whose backups are verified to exist on the server.
+                val serverBlobIds = mutableSetOf<String>()
+                var cursor: String? = null
+                do {
+                    val page = withContext(Dispatchers.IO) {
+                        api.encryptedSync(after = cursor, limit = 500)
+                    }
+                    for (record in page.photos) {
+                        val blobId = record.encryptedBlobId
+                        if (blobId != null) serverBlobIds.add(blobId)
+                    }
+                    cursor = page.nextCursor
+                } while (cursor != null)
+
                 val synced = withContext(Dispatchers.IO) {
                     db.photoDao().getByStatus(SyncStatus.SYNCED)
                 }
-                val withLocal = synced.filter { it.localPath != null }
+                // Only count photos that have a local file, a server blob ID,
+                // AND whose blob is confirmed to exist on the server.
+                val withLocal = synced.filter {
+                    it.localPath != null &&
+                    it.serverBlobId != null &&
+                    it.serverBlobId in serverBlobIds
+                }
                 freeableCount = withLocal.size
                 // Query actual on-device file sizes via ContentResolver
                 // instead of relying on sizeBytes (which may be null for
@@ -444,14 +465,84 @@ class SettingsViewModel @Inject constructor(
             freeUpLoading = true
             var deleted = 0
             try {
+                // Step 1: Fetch all photos from the server to build a set of
+                // confirmed server blob IDs. This ensures we only delete local
+                // files whose blobs are verified to exist on the server.
+                val serverBlobIds = mutableSetOf<String>()
+                val serverHashes = mutableMapOf<String, String>() // blobId → photoHash
+                var cursor: String? = null
+                do {
+                    val page = withContext(Dispatchers.IO) {
+                        api.encryptedSync(after = cursor, limit = 500)
+                    }
+                    for (record in page.photos) {
+                        val blobId = record.encryptedBlobId
+                        if (blobId != null) {
+                            serverBlobIds.add(blobId)
+                            if (record.photoHash != null) {
+                                serverHashes[blobId] = record.photoHash
+                            }
+                        }
+                    }
+                    cursor = page.nextCursor
+                } while (cursor != null)
+
+                android.util.Log.i("FreeUpSpace", "Server has ${serverBlobIds.size} blobs, verifying local SYNCED photos")
+
                 val synced = withContext(Dispatchers.IO) {
                     db.photoDao().getByStatus(SyncStatus.SYNCED)
                 }
                 val withLocal = synced.filter { it.localPath != null }
 
+                var skippedNoBlob = 0
+                var skippedNotOnServer = 0
+                var skippedHashMismatch = 0
+
                 for (photo in withLocal) {
                     try {
+                        // Verify 1: photo must have a server blob ID
+                        if (photo.serverBlobId == null) {
+                            android.util.Log.w("FreeUpSpace", "Skipping ${photo.filename}: no serverBlobId despite SYNCED status")
+                            skippedNoBlob++
+                            continue
+                        }
+
+                        // Verify 2: blob ID must exist on the server
+                        if (photo.serverBlobId !in serverBlobIds) {
+                            android.util.Log.w("FreeUpSpace", "Skipping ${photo.filename}: serverBlobId=${photo.serverBlobId} not found on server")
+                            skippedNotOnServer++
+                            continue
+                        }
+
+                        // Verify 3: re-compute local content hash and compare
+                        // to stored hash to catch data corruption / stale entries
                         val uri = android.net.Uri.parse(photo.localPath)
+                        val localHash = withContext(Dispatchers.IO) {
+                            try {
+                                context.contentResolver.openInputStream(uri)?.use { input ->
+                                    val bytes = input.readBytes()
+                                    java.security.MessageDigest.getInstance("SHA-256")
+                                        .digest(bytes)
+                                        .take(6)
+                                        .joinToString("") { "%02x".format(it) }
+                                }
+                            } catch (_: Exception) { null }
+                        }
+
+                        if (localHash != null && photo.photoHash != null && localHash != photo.photoHash) {
+                            android.util.Log.w("FreeUpSpace", "Skipping ${photo.filename}: local hash $localHash != stored hash ${photo.photoHash}")
+                            skippedHashMismatch++
+                            continue
+                        }
+
+                        // Also verify against server-side hash if available
+                        val serverHash = serverHashes[photo.serverBlobId]
+                        if (localHash != null && serverHash != null && localHash != serverHash) {
+                            android.util.Log.w("FreeUpSpace", "Skipping ${photo.filename}: local hash $localHash != server hash $serverHash")
+                            skippedHashMismatch++
+                            continue
+                        }
+
                         val rows = withContext(Dispatchers.IO) {
                             context.contentResolver.delete(uri, null, null)
                         }
@@ -466,7 +557,13 @@ class SettingsViewModel @Inject constructor(
                         // Some URIs may not be deletable (permission denied)
                     }
                 }
-                message = "Freed up space from $deleted photos"
+
+                val totalSkipped = skippedNoBlob + skippedNotOnServer + skippedHashMismatch
+                android.util.Log.i("FreeUpSpace", "Deleted $deleted, skipped $totalSkipped (noBlob=$skippedNoBlob, notOnServer=$skippedNotOnServer, hashMismatch=$skippedHashMismatch)")
+                message = if (totalSkipped > 0)
+                    "Freed up space from $deleted photos ($totalSkipped skipped — not verified on server)"
+                else
+                    "Freed up space from $deleted photos"
                 calculateFreeableSpace()
             } catch (e: Exception) {
                 error = "Failed to free up space: ${e.message}"

@@ -175,14 +175,30 @@ async fn do_export(
             }
         };
 
-        // Decrypt blob data
-        let data = match crate::crypto::decrypt(&encryption_key, &encrypted_data) {
+        // Decrypt blob data — yields the JSON envelope containing
+        // base64-encoded media in its "data" field.
+        let decrypted_envelope = match crate::crypto::decrypt(&encryption_key, &encrypted_data) {
             Ok(d) => d,
             Err(e) => {
                 decrypt_failures += 1;
                 tracing::warn!(
                     job_id = %job_id, blob_id = %blob_id, error = %e,
                     "Failed to decrypt blob, skipping"
+                );
+                continue;
+            }
+        };
+
+        // Extract the raw media bytes from the JSON envelope.
+        // The envelope is: {"v":1,"filename":"...","data":"<base64>", ...}
+        // We parse the JSON and base64-decode the "data" field to recover
+        // the original file bytes.
+        let data = match extract_media_from_envelope(&decrypted_envelope) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(
+                    job_id = %job_id, blob_id = %blob_id, error = %e,
+                    "Failed to extract media from envelope, skipping"
                 );
                 continue;
             }
@@ -371,4 +387,32 @@ async fn register_zip_file(
     .await?;
 
     Ok(())
+}
+
+/// Extract the raw media bytes from a decrypted JSON envelope.
+///
+/// The envelope format is:
+/// ```json
+/// {"v":1,"filename":"IMG_001.jpg","taken_at":"...","mime_type":"...","data":"<base64>"}
+/// ```
+///
+/// For non-media blobs (album manifests, thumbnails) that use a similar
+/// envelope, the same extraction applies — the "data" field holds the
+/// base64-encoded payload.
+fn extract_media_from_envelope(decrypted: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+    let json_str = std::str::from_utf8(decrypted)
+        .map_err(|e| anyhow::anyhow!("Decrypted blob is not valid UTF-8: {e}"))?;
+
+    let envelope: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| anyhow::anyhow!("Decrypted blob is not valid JSON: {e}"))?;
+
+    let data_b64 = envelope
+        .get("data")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("No \"data\" field in decrypted envelope"))?;
+
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(data_b64)
+        .map_err(|e| anyhow::anyhow!("Failed to base64-decode \"data\" field: {e}"))
 }

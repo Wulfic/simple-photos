@@ -19,10 +19,14 @@ import zipfile
 import pytest
 from helpers import (
     APIClient,
+    encrypt_blob_payload,
     generate_random_bytes,
     generate_test_jpeg,
     unique_filename,
 )
+
+# Must match conftest.py TEST_ENCRYPTION_KEY
+_TEST_KEY_HEX = "a" * 64
 
 
 class TestLibraryExport:
@@ -41,15 +45,19 @@ class TestLibraryExport:
         assert data["files"] == []
 
     def test_start_export_with_blobs(self, user_client):
-        """Upload blobs, start export, poll to completion, download & verify."""
-        # 1. Upload a few blobs so there's content to export
+        """Upload encrypted blobs, start export, poll to completion, download & verify."""
+        # 1. Upload encrypted blobs (matching the real client workflow)
         blob_ids = []
-        blob_contents = {}  # blob_id -> raw bytes for integrity check
+        raw_contents = {}  # blob_id -> original raw bytes
+        filenames = {}     # blob_id -> filename used in envelope
         for i in range(3):
-            content = generate_random_bytes(2048 + i)  # unique sizes to avoid dedup
-            blob = user_client.upload_blob("photo", content)
+            raw_data = generate_random_bytes(2048 + i)
+            fname = f"test_photo_{i}.jpg"
+            encrypted = encrypt_blob_payload(raw_data, _TEST_KEY_HEX, filename=fname)
+            blob = user_client.upload_blob("photo", encrypted)
             blob_ids.append(blob["blob_id"])
-            blob_contents[blob["blob_id"]] = content
+            raw_contents[blob["blob_id"]] = raw_data
+            filenames[blob["blob_id"]] = fname
 
         assert len(blob_ids) == 3
 
@@ -79,7 +87,6 @@ class TestLibraryExport:
             final_status = data["job"]["status"]
             if final_status in ("completed", "failed"):
                 break
-            # While still running, files list should stay empty
             if final_status in ("pending", "running"):
                 assert data["files"] == [], \
                     "Files appeared in status response before job completed"
@@ -103,7 +110,6 @@ class TestLibraryExport:
 
         zip_data = io.BytesIO(r.content)
         with zipfile.ZipFile(zip_data, "r") as zf:
-            # testzip() returns None if every file CRC is OK
             bad_file = zf.testzip()
             assert bad_file is None, f"Zip integrity check failed on: {bad_file}"
 
@@ -117,18 +123,22 @@ class TestLibraryExport:
             assert manifest["blob_count"] == 3
             assert len(manifest["blobs"]) == 3
 
-            # Should contain all 3 blob files
-            blob_files = [n for n in names if n.startswith("blobs/")]
-            assert len(blob_files) == 3, \
-                f"Expected 3 blob files in zip, found {len(blob_files)}: {blob_files}"
+            # Should contain photo files under photos/ directory
+            photo_files = [n for n in names if n.startswith("photos/")]
+            assert len(photo_files) == 3, \
+                f"Expected 3 photo files in zip, found {len(photo_files)}: {photo_files}"
 
-            # Verify each blob's content matches the original upload
-            for blob_id, original_content in blob_contents.items():
-                zip_entry = f"blobs/photo/{blob_id}.bin"
-                assert zip_entry in names, f"Missing blob entry: {zip_entry}"
+            # Verify each exported file contains the RAW media bytes
+            # (not the JSON envelope or base64 data)
+            for blob_id, raw_data in raw_contents.items():
+                # The export uses the blob_id + extension as filename
+                # (since no photos-table entry exists for these test blobs)
+                zip_entry = f"photos/{blob_id}.jpg"
+                assert zip_entry in names, \
+                    f"Missing photo entry: {zip_entry}. Found: {names}"
                 extracted = zf.read(zip_entry)
-                assert extracted == original_content, \
-                    f"Blob {blob_id} content mismatch: expected {len(original_content)} bytes, got {len(extracted)}"
+                assert extracted == raw_data, \
+                    f"Blob {blob_id} content mismatch: expected {len(raw_data)} bytes, got {len(extracted)}"
 
         # 6. GET /api/export/files also returns the files
         r = user_client.get("/api/export/files")
@@ -147,9 +157,10 @@ class TestLibraryExport:
 
     def test_export_conflict_when_running(self, user_client):
         """Cannot start a second export while one is pending/running."""
-        # Upload at least one blob
+        # Upload at least one encrypted blob
         content = generate_random_bytes(1024)
-        user_client.upload_blob("photo", content)
+        encrypted = encrypt_blob_payload(content, _TEST_KEY_HEX)
+        user_client.upload_blob("photo", encrypted)
 
         # Start first export
         r = user_client.post("/api/export", json_data={
@@ -197,7 +208,8 @@ class TestExportIsolation:
         """User cannot see or download another user's export files."""
         # User uploads and exports
         content = generate_random_bytes(1024)
-        user_client.upload_blob("photo", content)
+        encrypted = encrypt_blob_payload(content, _TEST_KEY_HEX)
+        user_client.upload_blob("photo", encrypted)
 
         r = user_client.post("/api/export", json_data={
             "size_limit": 10_737_418_240,
