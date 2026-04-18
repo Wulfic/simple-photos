@@ -89,3 +89,33 @@ auto_scan_interval_secs = 300
 enabled = false
 # cert_path = "/path/to/fullchain.pem"
 # key_path = "/path/to/privkey.pem"
+
+[ai]
+# AI face & object recognition. Requires ONNX model files in model_dir.
+# When enabled, the server detects faces/objects in photos, clusters faces
+# into person identities, and auto-applies tags (person:name, object:class).
+# GPU acceleration (CUDA) is used when available, falls back to CPU.
+enabled = false
+# gpu_preferred = true
+# batch_size = 8                  # images per inference batch
+# threads = 0                     # 0 = auto-detect (physical cores)
+# photos_per_minute = 60          # rate limit for background processing
+# face_confidence = 0.5           # minimum face detection confidence
+# object_confidence = 0.4         # minimum object detection confidence
+# face_similarity_threshold = 0.6 # cosine distance for face clustering
+# model_dir = "models"            # directory containing ONNX models
+
+[geo]
+# Geolocation & timestamp smart albums. Resolves GPS coordinates to
+# city/country using an offline GeoNames dataset and generates smart
+# albums by location and timeline.
+enabled = false
+# dataset_path = "data/geonames/cities500.txt"  # GeoNames cities file
+# batch_size = 100                               # photos per geocoding batch
+
+[transcode]
+# GPU-accelerated video transcoding. Auto-detects NVIDIA NVENC, Intel QSV,
+# VAAPI, or AMD AMF at startup. Falls back to CPU (libx264) seamlessly.
+gpu_enabled = true
+gpu_fallback_to_cpu = true
+# gpu_device = ""  # specific GPU device path (empty = auto-detect)

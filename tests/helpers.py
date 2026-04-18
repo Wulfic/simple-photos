@@ -402,6 +402,139 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    # ── AI recognition helpers ───────────────────────────────────────
+
+    def ai_status(self) -> dict:
+        r = self.get("/api/ai/status")
+        r.raise_for_status()
+        return r.json()
+
+    def ai_toggle(self, enabled: bool) -> requests.Response:
+        return self.post("/api/ai/toggle", json_data={"enabled": enabled})
+
+    def ai_reprocess(self, photo_ids: list = None) -> dict:
+        body = {}
+        if photo_ids is not None:
+            body["photo_ids"] = photo_ids
+        r = self.post("/api/ai/reprocess", json_data=body)
+        r.raise_for_status()
+        return r.json()
+
+    def ai_list_face_clusters(self) -> list:
+        r = self.get("/api/ai/faces")
+        r.raise_for_status()
+        return r.json()
+
+    def ai_list_cluster_photos(self, cluster_id: int) -> list:
+        r = self.get(f"/api/ai/faces/{cluster_id}/photos")
+        r.raise_for_status()
+        return r.json()
+
+    def ai_rename_face_cluster(self, cluster_id: int, name: str) -> requests.Response:
+        return self.put(f"/api/ai/faces/{cluster_id}/name", json_data={"name": name})
+
+    def ai_merge_face_clusters(self, cluster_ids: list) -> dict:
+        r = self.post("/api/ai/faces/merge", json_data={"cluster_ids": cluster_ids})
+        r.raise_for_status()
+        return r.json()
+
+    def ai_split_face_cluster(self, detection_ids: list) -> dict:
+        r = self.post("/api/ai/faces/split", json_data={"detection_ids": detection_ids})
+        r.raise_for_status()
+        return r.json()
+
+    def ai_list_object_classes(self) -> list:
+        r = self.get("/api/ai/objects")
+        r.raise_for_status()
+        return r.json()
+
+    def ai_list_object_photos(self, class_name: str) -> list:
+        r = self.get(f"/api/ai/objects/{class_name}/photos")
+        r.raise_for_status()
+        return r.json()
+
+    # ── Geolocation helpers ──────────────────────────────────────────
+
+    def geo_settings(self) -> dict:
+        r = self.get("/api/settings/geo")
+        r.raise_for_status()
+        return r.json()
+
+    def geo_update_settings(self, **kwargs) -> requests.Response:
+        return self.post("/api/settings/geo", json_data=kwargs)
+
+    def geo_locations(self) -> list:
+        r = self.get("/api/geo/locations")
+        r.raise_for_status()
+        return r.json()
+
+    def geo_location_photos(self, country_code: str, city: str) -> list:
+        r = self.get(f"/api/geo/locations/{country_code}/{city}")
+        r.raise_for_status()
+        return r.json()
+
+    def geo_countries(self) -> list:
+        r = self.get("/api/geo/countries")
+        r.raise_for_status()
+        return r.json()
+
+    def geo_map_photos(self) -> list:
+        r = self.get("/api/geo/map")
+        r.raise_for_status()
+        return r.json()
+
+    def geo_timeline(self) -> list:
+        r = self.get("/api/geo/timeline")
+        r.raise_for_status()
+        return r.json()
+
+    def geo_timeline_year(self, year: int) -> list:
+        r = self.get(f"/api/geo/timeline/{year}")
+        r.raise_for_status()
+        return r.json()
+
+    def geo_timeline_month_photos(self, year: int, month: int) -> list:
+        r = self.get(f"/api/geo/timeline/{year}/{month}")
+        r.raise_for_status()
+        return r.json()
+
+    def geo_scrub(self, confirm: bool = True) -> dict:
+        r = self.post("/api/geo/scrub", json_data={"confirm": confirm})
+        r.raise_for_status()
+        return r.json()
+
+    # ── Metadata editing helpers ─────────────────────────────────────
+
+    def metadata_update(self, photo_id: str, **fields) -> dict:
+        """PATCH /api/photos/{id}/metadata — update metadata fields."""
+        r = self.patch(f"/api/photos/{photo_id}/metadata", json_data=fields)
+        r.raise_for_status()
+        return r.json()
+
+    def metadata_update_raw(self, photo_id: str, **fields) -> 'requests.Response':
+        """PATCH /api/photos/{id}/metadata — return raw response (for error testing)."""
+        return self.patch(f"/api/photos/{photo_id}/metadata", json_data=fields)
+
+    def metadata_get_full(self, photo_id: str) -> dict:
+        """GET /api/photos/{id}/metadata/full — full metadata including EXIF."""
+        r = self.get(f"/api/photos/{photo_id}/metadata/full")
+        r.raise_for_status()
+        return r.json()
+
+    def metadata_write_exif(self, photo_id: str) -> dict:
+        """POST /api/photos/{id}/metadata/write-exif — write DB metadata to file EXIF."""
+        r = self.post(f"/api/photos/{photo_id}/metadata/write-exif")
+        r.raise_for_status()
+        return r.json()
+
+    # ── Transcode helpers ──────────────────────────────────────────
+
+    def transcode_status(self) -> dict:
+        """GET /api/transcode/status — GPU transcode status."""
+        r = self.get("/api/transcode/status")
+        r.raise_for_status()
+        return r.json()
+
     # ── Admin helpers ────────────────────────────────────────────────
 
     def admin_create_user(self, username: str, password: str, role: str = "user") -> dict:
@@ -647,6 +780,95 @@ def generate_test_bmp(width: int = 8, height: int = 8) -> bytes:
 def generate_random_bytes(size: int = 1024) -> bytes:
     """Generate random bytes for blob uploads."""
     return os.urandom(size)
+
+
+def generate_test_jpeg_with_gps(lat: float, lon: float,
+                                date_str: str = "2024:07:15 10:30:00",
+                                width: int = 4, height: int = 4) -> bytes:
+    """Generate a JPEG with EXIF GPS coordinates and DateTimeOriginal.
+
+    Builds a manual APP1 EXIF segment with GPS IFD entries.
+    """
+    from PIL import Image as _PILImage
+    import io as _io, struct
+
+    img = _PILImage.new("RGB", (width, height), (64, 128, 32))
+    jpeg_buf = _io.BytesIO()
+    img.save(jpeg_buf, format="JPEG", quality=95)
+    jpeg_data = jpeg_buf.getvalue()
+
+    # ── Build EXIF APP1 with GPS + DateTimeOriginal ──────────────────
+    def _dms_rationals(decimal_degrees: float):
+        dd = abs(decimal_degrees)
+        d = int(dd)
+        m = int((dd - d) * 60)
+        s = (dd - d - m / 60.0) * 3600.0
+        return ((d, 1), (m, 1), (int(round(s * 100)), 100))
+
+    lat_dms = _dms_rationals(lat)
+    lon_dms = _dms_rationals(lon)
+    lat_ref = b"S\x00" if lat < 0 else b"N\x00"
+    lon_ref = b"W\x00" if lon < 0 else b"E\x00"
+
+    # TIFF header (little-endian)
+    tiff_hdr = b"II" + struct.pack("<HI", 42, 8)
+
+    # IFD0: 2 entries -> ExifIFD pointer + GPSInfo pointer
+    ifd0_count = 2
+    ifd0_size = 2 + ifd0_count * 12 + 4
+
+    ifd0_start = 8
+    exif_ifd_offset = ifd0_start + ifd0_size
+    exif_ifd_count = 1
+    exif_ifd_size = 2 + exif_ifd_count * 12 + 4
+
+    gps_ifd_offset = exif_ifd_offset + exif_ifd_size
+    gps_ifd_count = 4
+    gps_ifd_size = 2 + gps_ifd_count * 12 + 4
+
+    data_offset = gps_ifd_offset + gps_ifd_size
+
+    dto_bytes = date_str.encode("ascii") + b"\x00"
+    dto_offset = data_offset
+    data_offset += len(dto_bytes)
+
+    lat_data_offset = data_offset
+    lat_data = b""
+    for num, den in lat_dms:
+        lat_data += struct.pack("<II", num, den)
+    data_offset += len(lat_data)
+
+    lon_data_offset = data_offset
+    lon_data = b""
+    for num, den in lon_dms:
+        lon_data += struct.pack("<II", num, den)
+    data_offset += len(lon_data)
+
+    # Build IFD0
+    ifd0 = struct.pack("<H", ifd0_count)
+    ifd0 += struct.pack("<HHII", 0x8769, 4, 1, exif_ifd_offset)  # ExifIFD
+    ifd0 += struct.pack("<HHII", 0x8825, 4, 1, gps_ifd_offset)   # GPSInfo
+    ifd0 += struct.pack("<I", 0)
+
+    # Build Exif sub-IFD
+    exif_ifd = struct.pack("<H", exif_ifd_count)
+    exif_ifd += struct.pack("<HHII", 0x9003, 2, len(dto_bytes), dto_offset)
+    exif_ifd += struct.pack("<I", 0)
+
+    # Build GPS IFD
+    gps_ifd = struct.pack("<H", gps_ifd_count)
+    gps_ifd += struct.pack("<HHI", 1, 2, 2) + lat_ref + b"\x00\x00"  # LatRef
+    gps_ifd += struct.pack("<HHII", 2, 5, 3, lat_data_offset)         # Lat
+    gps_ifd += struct.pack("<HHI", 3, 2, 2) + lon_ref + b"\x00\x00"  # LonRef
+    gps_ifd += struct.pack("<HHII", 4, 5, 3, lon_data_offset)         # Lon
+    gps_ifd += struct.pack("<I", 0)
+
+    tiff_body = tiff_hdr + ifd0 + exif_ifd + gps_ifd + dto_bytes + lat_data + lon_data
+
+    app1_payload = b"Exif\x00\x00" + tiff_body
+    app1 = struct.pack(">HH", 0xFFE1, len(app1_payload) + 2) + app1_payload
+
+    return jpeg_data[:2] + app1 + jpeg_data[2:]
 
 
 def encrypt_blob_payload(raw_data: bytes, key_hex: str,

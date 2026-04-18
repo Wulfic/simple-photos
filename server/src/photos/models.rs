@@ -28,6 +28,9 @@ pub struct Photo {
     pub crop_metadata: Option<String>,
     pub camera_model: Option<String>,
     pub photo_hash: Option<String>,
+    pub photo_subtype: Option<String>,
+    pub burst_id: Option<String>,
+    pub motion_video_blob_id: Option<String>,
 }
 
 /// Paginated list of photos returned by `GET /api/photos`.
@@ -58,6 +61,12 @@ pub struct PhotoRecord {
     pub crop_metadata: Option<String>,
     pub camera_model: Option<String>,
     pub photo_hash: Option<String>,
+    pub photo_subtype: Option<String>,
+    pub burst_id: Option<String>,
+    pub motion_video_blob_id: Option<String>,
+    /// Number of photos in this burst group. Populated when `collapse_bursts=true`;
+    /// NULL otherwise.
+    pub burst_count: Option<i64>,
 }
 
 /// Request body for `POST /api/photos/register`.
@@ -93,6 +102,9 @@ pub struct RegisterEncryptedPhotoRequest {
     pub encrypted_blob_id: String,
     pub encrypted_thumb_blob_id: Option<String>,
     pub photo_hash: Option<String>,
+    pub photo_subtype: Option<String>,
+    pub burst_id: Option<String>,
+    pub motion_video_blob_id: Option<String>,
 }
 
 /// Response for secure gallery listing.

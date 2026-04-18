@@ -21,6 +21,12 @@ pub struct AppConfig {
     pub tls: TlsConfig,
     #[serde(default)]
     pub scan: ScanConfig,
+    #[serde(default)]
+    pub ai: AiConfig,
+    #[serde(default)]
+    pub geo: GeoConfig,
+    #[serde(default)]
+    pub transcode: TranscodeConfig,
 }
 
 /// HTTP(S) listener settings.
@@ -206,6 +212,135 @@ pub struct TlsConfig {
     pub key_path: Option<String>,
 }
 
+/// AI face & object recognition configuration.
+///
+/// When `enabled = true`, the server spawns a background processor that
+/// detects faces and objects in photos, clusters faces into identities,
+/// and auto-applies tags. GPU acceleration is used when available.
+#[derive(Debug, Deserialize, Clone)]
+pub struct AiConfig {
+    /// Master toggle. Also controllable at runtime via `POST /api/settings/ai`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Prefer GPU execution provider (CUDA/TensorRT) if available.
+    #[serde(default = "AiConfig::default_gpu_preferred")]
+    pub gpu_preferred: bool,
+    /// Number of images per inference batch.
+    #[serde(default = "AiConfig::default_batch_size")]
+    pub batch_size: usize,
+    /// Number of threads for CPU inference. 0 = auto-detect.
+    #[serde(default)]
+    pub threads: usize,
+    /// Maximum photos processed per minute (rate limit for background task).
+    #[serde(default = "AiConfig::default_photos_per_minute")]
+    pub photos_per_minute: u32,
+    /// Minimum face detection confidence (0.0–1.0).
+    #[serde(default = "AiConfig::default_face_confidence")]
+    pub face_confidence: f32,
+    /// Minimum object detection confidence (0.0–1.0).
+    #[serde(default = "AiConfig::default_object_confidence")]
+    pub object_confidence: f32,
+    /// Cosine distance threshold for face clustering (0.0–1.0).
+    /// Lower = stricter matching, higher = more permissive grouping.
+    #[serde(default = "AiConfig::default_face_similarity_threshold")]
+    pub face_similarity_threshold: f32,
+    /// Directory containing ONNX model files.
+    #[serde(default = "AiConfig::default_model_dir")]
+    pub model_dir: String,
+}
+
+impl AiConfig {
+    fn default_gpu_preferred() -> bool { true }
+    fn default_batch_size() -> usize { 8 }
+    fn default_photos_per_minute() -> u32 { 60 }
+    fn default_face_confidence() -> f32 { 0.5 }
+    fn default_object_confidence() -> f32 { 0.4 }
+    fn default_face_similarity_threshold() -> f32 { 0.6 }
+    fn default_model_dir() -> String { "models".into() }
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            gpu_preferred: true,
+            batch_size: 8,
+            threads: 0,
+            photos_per_minute: 60,
+            face_confidence: 0.5,
+            object_confidence: 0.4,
+            face_similarity_threshold: 0.6,
+            model_dir: "models".into(),
+        }
+    }
+}
+
+/// Geolocation & timestamp smart album configuration.
+///
+/// When `enabled = true`, the server resolves GPS coordinates to city/country
+/// using an offline reverse geocoder and generates smart albums by location
+/// and timeline. Geo-scrubbing strips GPS data on upload or retroactively.
+#[derive(Debug, Deserialize, Clone)]
+pub struct GeoConfig {
+    /// Master toggle for geolocation features.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to the GeoNames cities dataset file (cities500.txt).
+    #[serde(default = "GeoConfig::default_dataset_path")]
+    pub dataset_path: String,
+    /// Maximum photos to geocode per batch.
+    #[serde(default = "GeoConfig::default_batch_size")]
+    pub batch_size: usize,
+}
+
+impl GeoConfig {
+    fn default_dataset_path() -> String { "data/geonames/cities500.txt".into() }
+    fn default_batch_size() -> usize { 100 }
+}
+
+impl Default for GeoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dataset_path: Self::default_dataset_path(),
+            batch_size: 100,
+        }
+    }
+}
+
+/// GPU-accelerated video transcoding configuration.
+///
+/// When `gpu_enabled = true` (the default), the server probes FFmpeg for
+/// hardware acceleration at startup and uses GPU encoding for video
+/// conversions when available.  Falls back to CPU seamlessly.
+#[derive(Debug, Deserialize, Clone)]
+pub struct TranscodeConfig {
+    /// Allow GPU acceleration for video transcoding.
+    #[serde(default = "TranscodeConfig::default_gpu_enabled")]
+    pub gpu_enabled: bool,
+    /// Retry with CPU if GPU transcode fails.
+    #[serde(default = "TranscodeConfig::default_gpu_fallback_to_cpu")]
+    pub gpu_fallback_to_cpu: bool,
+    /// Specific GPU device path (empty = auto-detect).
+    #[serde(default)]
+    pub gpu_device: String,
+}
+
+impl TranscodeConfig {
+    fn default_gpu_enabled() -> bool { true }
+    fn default_gpu_fallback_to_cpu() -> bool { true }
+}
+
+impl Default for TranscodeConfig {
+    fn default() -> Self {
+        Self {
+            gpu_enabled: true,
+            gpu_fallback_to_cpu: true,
+            gpu_device: String::new(),
+        }
+    }
+}
+
 impl AppConfig {
     /// Load configuration from TOML file, then apply env var overrides.
     ///
@@ -317,6 +452,14 @@ impl AppConfig {
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_KEY_PATH") {
             config.tls.key_path = Some(v);
+        }
+
+        // AI
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AI_ENABLED") {
+            config.ai.enabled = v.to_lowercase() == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_AI_MODEL_DIR") {
+            config.ai.model_dir = v;
         }
 
         // ── Startup validation ───────────────────────────────────────────

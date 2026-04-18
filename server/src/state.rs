@@ -5,6 +5,7 @@
 
 use crate::config::AppConfig;
 use crate::ratelimit::RateLimiters;
+use crate::transcode::HwAccelCapability;
 use arc_swap::ArcSwap;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
@@ -62,6 +63,9 @@ pub struct AppState {
     /// performing I/O to return 503 immediately rather than hanging on a
     /// stale mount.
     pub storage_available: Arc<AtomicBool>,
+    /// Detected GPU hardware acceleration capability for video transcoding.
+    /// Probed once at startup from FFmpeg and cached for the process lifetime.
+    pub hw_accel: Arc<HwAccelCapability>,
 }
 
 impl AppState {

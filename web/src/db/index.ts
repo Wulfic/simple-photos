@@ -48,6 +48,12 @@ export interface CachedPhoto {
    *  pipeline). The Viewer should fetch it via the photos API (`/photos/:id/file`)
    *  instead of downloading and decrypting an encrypted blob. */
   serverSide?: boolean;
+  /** Photo subtype: "motion", "panorama", "equirectangular", "hdr", "burst" */
+  photoSubtype?: string;
+  /** Burst group identifier (shared across all shots in a burst sequence) */
+  burstId?: string;
+  /** Blob ID of the extracted motion video (motion photos only) */
+  motionVideoBlobId?: string;
 }
 
 export interface CachedAlbum {

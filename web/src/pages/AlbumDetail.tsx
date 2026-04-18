@@ -20,6 +20,8 @@ import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
+import useSlideshow from "../hooks/useSlideshow";
+import Slideshow from "../components/viewer/Slideshow";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
@@ -97,6 +99,18 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
 
   const photoCount = filteredEncrypted.length;
 
+  // Slideshow
+  const blobIds = useMemo(() => filteredEncrypted.map((p) => p.blobId), [filteredEncrypted]);
+  const mediaTypeMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of filteredEncrypted) m.set(p.blobId, p.mediaType);
+    return m;
+  }, [filteredEncrypted]);
+  const slideshow = useSlideshow(blobIds, mediaTypeMap);
+  const hasPhotosForSlideshow = filteredEncrypted.some(
+    (p) => p.mediaType === "photo" || p.mediaType === "gif",
+  );
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <AppHeader />
@@ -113,6 +127,17 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
           </button>
           <h2 className="text-xl font-semibold truncate">{def.label}</h2>
           <span className="text-gray-400 text-sm shrink-0">{photoCount} items</span>
+          {hasPhotosForSlideshow && (
+            <button
+              onClick={() => slideshow.start(0)}
+              className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              title="Start Slideshow"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -146,6 +171,26 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
           />
         )}
       </main>
+
+      {slideshow.isActive && (
+        <Slideshow
+          currentBlobId={slideshow.currentBlobId}
+          isPlaying={slideshow.isPlaying}
+          currentSlide={slideshow.currentSlide}
+          totalSlides={slideshow.totalSlides}
+          shuffleEnabled={slideshow.shuffleEnabled}
+          intervalMs={slideshow.intervalMs}
+          transition={slideshow.transition}
+          direction={slideshow.direction}
+          onTogglePlay={slideshow.togglePlay}
+          onNext={slideshow.next}
+          onPrev={slideshow.prev}
+          onToggleShuffle={slideshow.toggleShuffle}
+          onSetSpeed={slideshow.setSpeed}
+          onSetTransition={slideshow.setTransition}
+          onExit={slideshow.stop}
+        />
+      )}
     </div>
   );
 }
@@ -197,6 +242,18 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
     const idSet = new Set(album.photoBlobIds);
     return allPhotos.filter((p) => !idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
   }, [album, allPhotos, secureBlobIds]);
+
+  // Slideshow
+  const albumBlobIds = useMemo(() => albumPhotos.map((p) => p.blobId), [albumPhotos]);
+  const albumMediaTypeMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of albumPhotos) m.set(p.blobId, p.mediaType);
+    return m;
+  }, [albumPhotos]);
+  const slideshow = useSlideshow(albumBlobIds, albumMediaTypeMap);
+  const hasPhotosForSlideshow = albumPhotos.some(
+    (p) => p.mediaType === "photo" || p.mediaType === "gif",
+  );
 
   if (!albumId) {
     return <p className="p-4 text-red-600 dark:text-red-400">Invalid album ID</p>;
@@ -419,6 +476,17 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
             </button>
             <h2 className="text-xl font-semibold truncate">{album.name}</h2>
             <span className="text-gray-400 text-sm shrink-0">{album.photoBlobIds.length} items</span>
+            {hasPhotosForSlideshow && (
+              <button
+                onClick={() => slideshow.start(0)}
+                className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+                title="Start Slideshow"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </button>
+            )}
           </div>
 
           {/* Action buttons */}
@@ -527,6 +595,26 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
         />
       )}
       </main>
+
+      {slideshow.isActive && (
+        <Slideshow
+          currentBlobId={slideshow.currentBlobId}
+          isPlaying={slideshow.isPlaying}
+          currentSlide={slideshow.currentSlide}
+          totalSlides={slideshow.totalSlides}
+          shuffleEnabled={slideshow.shuffleEnabled}
+          intervalMs={slideshow.intervalMs}
+          transition={slideshow.transition}
+          direction={slideshow.direction}
+          onTogglePlay={slideshow.togglePlay}
+          onNext={slideshow.next}
+          onPrev={slideshow.prev}
+          onToggleShuffle={slideshow.toggleShuffle}
+          onSetSpeed={slideshow.setSpeed}
+          onSetTransition={slideshow.setTransition}
+          onExit={slideshow.stop}
+        />
+      )}
     </div>
   );
 }

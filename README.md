@@ -2,6 +2,9 @@
 
 A self-hosted photo & video library with end-to-end encryption, multi-server backup & restore, and web + Android access.
 
+### PROJECT STATUS: ALPHA
+This project is in early development and not yet recommended for production use. Expect breaking changes, missing features, and rough edges. Feedback and contributions are very welcome! I expect to have a beta release with a stable API and COMPLETE feature set by early summer 2026. Once this reaches beta, I don't anticipate any new features for a long time, and will primarily be focused on bug fixes, performance improvements, and polish. That being said I dont have access to apple hardware for testing, so if anyone wants to help with the apple side of things (Live Photo support, HEIC conversion, iOS app development, etc) that would be a huge help!
+
 ### Authors Note
 Simple Photos was born out of a desire for a secure, private, and user-friendly photo management solution that I could host myself. But found that other solutions lacked one critical thing, backup servers! Forcing users to choose between only having one backup target, or use multiple solutions; So I decided to build something from the ground up that met all my needs — and hopefully yours too!
 
@@ -14,8 +17,12 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **Multi-user** — multiple accounts with per-user storage, shared albums, and admin controls
 - **Themes** — full light/dark theme support
 - **Google Cast Support** — cast photos and videos to compatible devices
+- **Face and object recognition** — optional AI module for automatic face clustering and object tagging (runs locally)
+- **Metadata editing** — view and edit photo metadata (EXIF, IPTC, XMP) with support for custom metadata fields
+- **Geolocation support** — optional geolocation module for automatic location tagging.
+- **Geolocation Stripping** — option to remove geolocation metadata during import for privacy
+- **GPU acceleration** — optional GPU-accelerated media processing and AI inference for faster performance on supported hardware
 ### Media
-
 - **Supported Photo, video, and audio formats** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
 - **Media conversion** — automatic FFmpeg-based conversion of non-native formats (I.E HEIC → JPEG, MKV → MP4, WMA → MP3) during import and scan
 - **Photo/Video/Audio editing** — crop, rotate, adjust brightness, and trim videos/audio using non-destructive edits stored as metadata or rendered into a saved copy.  
@@ -23,11 +30,13 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **Panoramic photos** — 360° panoramic photo viewer 
 - **HDR support** — view and manage HDR photos and videos
 - **Burst photo support** — view and manage burst photo sequences as grouped albums
+- **Slideshows! WOW!*** - view photos as slideshows with optional shuffle
 
 ### Organization
 
 - **Albums** — organize photos into albums with optional sharing between users
-- **Secure albums** — password-protected encrypted galleries for sensitive content, with support for multiple albums
+- **Secure Galleries** — password-protected encrypted galleries for sensitive content, with support for multiple albums
+- **Smart albums** — dynamic albums based on people, places, and things (optional modules required)
 - **Trash** — 30-day soft-delete with restore
 - **Tags & search** — tag photos and search across your library
 - **Favorites** — mark and filter favorite photos
@@ -37,7 +46,7 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 ### Backup & Sync
 
 - **Backup sync** — automatic server-to-server backup replication with support for multiple backup targets, including remote servers
-- **Backup recovery** — restore a primary server from any backup with full data integrity (photos, blobs, albums, secure galleries, trash, metadata)
+- **Backup recovery** — restore a primary server from any backup server with full data integrity (photos, albums, secure galleries, trash, metadata, accounts, etc.)
 
 ### Security
 
@@ -117,21 +126,16 @@ The install scripts handle everything — building the server, web frontend, and
 
 All prerequisites are handled automatically by the install scripts, minus docker installation on Windows (which requires manual setup).
 
+#### GPU Acceleration (automatic)
+
+GPU acceleration for AI inference and video transcoding is **auto-detected at runtime** — no manual configuration required. If a supported GPU is present (NVIDIA CUDA, Intel QSV/VA-API, AMD AMF), the server uses it automatically. Otherwise it falls back to CPU. The same binary works on any machine.
+
 The built web frontend is served by the Rust server from the configured `static_root`. The Android APK is available at `android/app/build/outputs/apk/debug/app-debug.apk` and served by the server at `/api/downloads/android` (a download button is available in settings).
 
 ## API
 
 See [API_REFERENCE.md](API_REFERENCE.md) for the full REST API documentation.
 
-## Testing
-
-The project includes a comprehensive end-to-end test suite covering authentication, media workflows, backup/recovery, multi-user scenarios, and more.
-
-```bash
-python3 -m pytest tests/ -v --tb=short
-```
-
-See [tests/README.md](tests/README.md) for details.
 
 ## Credits
 

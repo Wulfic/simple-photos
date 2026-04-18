@@ -45,6 +45,9 @@ pub struct EncryptedSyncRecord {
     /// Non-null when this photo was converted from a non-native format.
     /// Contains the relative path to the original file on disk.
     pub source_path: Option<String>,
+    pub photo_subtype: Option<String>,
+    pub burst_id: Option<String>,
+    pub motion_video_blob_id: Option<String>,
 }
 
 /// Paginated response from `GET /api/photos/encrypted-sync`.
@@ -77,7 +80,8 @@ pub async fn encrypted_sync(
         sqlx::query_as::<_, EncryptedSyncRecord>(
             "SELECT id, filename, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
-             is_favorite, crop_metadata, photo_hash, source_path \
+             is_favorite, crop_metadata, photo_hash, source_path, \
+             photo_subtype, burst_id, motion_video_blob_id \
              FROM photos \
              WHERE user_id = ? \
              AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
@@ -99,7 +103,8 @@ pub async fn encrypted_sync(
         sqlx::query_as::<_, EncryptedSyncRecord>(
             "SELECT id, filename, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
-             is_favorite, crop_metadata, photo_hash, source_path \
+             is_favorite, crop_metadata, photo_hash, source_path, \
+             photo_subtype, burst_id, motion_video_blob_id \
              FROM photos \
              WHERE user_id = ? \
              AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \

@@ -19,6 +19,9 @@ import UserManagement from "../components/settings/UserManagement";
 import SslSettings from "../components/settings/SslSettings";
 import AccountSection from "../components/settings/AccountSection";
 import BackupRecoverySection from "../components/settings/BackupRecoverySection";
+import AiRecognitionSection from "../components/settings/AiRecognitionSection";
+import GeolocationSection from "../components/settings/GeolocationSection";
+import TranscodeSection from "../components/settings/TranscodeSection";
 // Migration is now fully server-side — no browser-based worker needed
 import { getErrorMessage } from "../utils/formatters";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
@@ -368,6 +371,25 @@ export default function Settings() {
           loadBackupServers={loadBackupServers}
         />
       )}
+
+      {/* ── AI Recognition ────────────────────────────────────────── */}
+      <AiRecognitionSection
+        error={error}
+        setError={setError}
+        success={success}
+        setSuccess={setSuccess}
+      />
+
+      {/* ── Geolocation ───────────────────────────────────────────── */}
+      <GeolocationSection
+        error={error}
+        setError={setError}
+        success={success}
+        setSuccess={setSuccess}
+      />
+
+      {/* ── Video Transcoding ─────────────────────────────────────── */}
+      <TranscodeSection />
 
       {/* ── Apps (hidden on backup servers — Android clients connect to primary) ── */}
       {!isBackupMode && (

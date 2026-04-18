@@ -494,3 +494,82 @@ pub async fn serve_source_file(
 
     Ok(resp)
 }
+
+/// GET /api/photos/{id}/motion-video
+/// Serve the embedded MP4 video extracted from a motion photo.
+///
+/// For photos with `motion_video_blob_id` set, serves the blob.
+/// Otherwise, extracts the video trailer on-the-fly from the JPEG
+/// using the XMP-specified offset.
+pub async fn serve_motion_video(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(photo_id): Path<String>,
+) -> Result<Response, AppError> {
+    if !state.is_storage_available() {
+        return Err(AppError::StorageUnavailable);
+    }
+
+    // Check that the photo exists, belongs to user, and is a motion photo
+    let row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT file_path, motion_video_blob_id, photo_subtype \
+         FROM photos WHERE id = ? AND user_id = ?",
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.read_pool)
+    .await?;
+
+    let (file_path, motion_blob_id, subtype) = row.ok_or(AppError::NotFound)?;
+
+    if subtype.as_deref() != Some("motion") {
+        return Err(AppError::BadRequest(
+            "Photo is not a motion photo".to_string(),
+        ));
+    }
+
+    // If a motion video blob is already stored separately, serve it
+    if let Some(ref blob_id) = motion_blob_id {
+        let storage_root = (**state.storage_root.load()).clone();
+        let blob_path = crate::blobs::storage::blob_path(&storage_root, &auth.user_id, blob_id);
+        if tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
+            let meta = tokio::fs::metadata(&blob_path).await.map_err(|e| {
+                AppError::Internal(format!("Failed to read motion video blob: {}", e))
+            })?;
+            let data = tokio::fs::read(&blob_path).await.map_err(|e| {
+                AppError::Internal(format!("Failed to read motion video blob: {}", e))
+            })?;
+            return Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "video/mp4")
+                .header("Content-Length", meta.len())
+                .body(Body::from(data))
+                .map_err(|e| AppError::Internal(format!("Response build: {}", e)))?);
+        }
+    }
+
+    // Extract on-the-fly from the JPEG file using XMP offset
+    let storage_root = (**state.storage_root.load()).clone();
+    let full_path = storage_root.join(&file_path);
+
+    let data = tokio::fs::read(&full_path).await.map_err(|e| {
+        AppError::Internal(format!("Failed to read photo file for motion video: {}", e))
+    })?;
+
+    let subtype_info = super::metadata::extract_xmp_subtype(&data);
+    let offset = subtype_info
+        .motion_video_offset
+        .ok_or_else(|| AppError::BadRequest("Motion video offset not found in XMP".to_string()))?;
+
+    let video_bytes = super::metadata::extract_motion_video(&data, offset).ok_or_else(|| {
+        AppError::Internal("Failed to extract motion video from JPEG".to_string())
+    })?;
+
+    let len = video_bytes.len();
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "video/mp4")
+        .header("Content-Length", len)
+        .body(Body::from(video_bytes))
+        .map_err(|e| AppError::Internal(format!("Response build: {}", e)))?)
+}

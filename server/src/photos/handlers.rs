@@ -31,6 +31,10 @@ pub struct PhotoListQuery {
     pub media_type: Option<String>,
     /// When `true`, return only favorited photos.
     pub favorites_only: Option<bool>,
+    /// Filter by photo subtype: "motion", "panorama", "equirectangular", "hdr", "burst".
+    pub subtype: Option<String>,
+    /// When `true`, collapse burst sequences to show only the representative photo.
+    pub collapse_bursts: Option<bool>,
 }
 
 /// GET /api/photos
@@ -43,19 +47,49 @@ pub async fn list_photos(
     let limit = params.limit.unwrap_or(100).min(500);
     let fav_only = params.favorites_only.unwrap_or(false);
 
+    let collapse = params.collapse_bursts.unwrap_or(false);
+
     // Build dynamic query
-    let mut sql = String::from(
-        "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
-         duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, crop_metadata, camera_model, photo_hash \
-         FROM photos WHERE user_id = ? \
-         AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-         AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)"
-    );
+    let mut sql = if collapse {
+        // When collapsing bursts, use a window function to pick the first photo
+        // in each burst group and count the group size.
+        String::from(
+            "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
+             duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, \
+             crop_metadata, camera_model, photo_hash, photo_subtype, burst_id, motion_video_blob_id, \
+             burst_count FROM (\
+             SELECT *, \
+             CASE WHEN burst_id IS NOT NULL THEN \
+               (SELECT COUNT(*) FROM photos p2 WHERE p2.user_id = photos.user_id AND p2.burst_id = photos.burst_id) \
+             ELSE NULL END AS burst_count, \
+             CASE WHEN burst_id IS NOT NULL THEN \
+               ROW_NUMBER() OVER (PARTITION BY burst_id ORDER BY COALESCE(taken_at, created_at) ASC) \
+             ELSE 1 END AS rn \
+             FROM photos WHERE user_id = ? \
+             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+             AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)",
+        )
+    } else {
+        String::from(
+            "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
+             duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, \
+             crop_metadata, camera_model, photo_hash, photo_subtype, burst_id, motion_video_blob_id, \
+             NULL AS burst_count \
+             FROM photos WHERE user_id = ? \
+             AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
+             AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)",
+        )
+    };
     let mut binds: Vec<String> = vec![auth.user_id.clone()];
 
     if let Some(ref mt) = params.media_type {
         sql.push_str(" AND media_type = ?");
         binds.push(mt.clone());
+    }
+
+    if let Some(ref st) = params.subtype {
+        sql.push_str(" AND photo_subtype = ?");
+        binds.push(st.clone());
     }
 
     if fav_only {
@@ -67,7 +101,11 @@ pub async fn list_photos(
         binds.push(after.clone());
     }
 
-    sql.push_str(" ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?");
+    if collapse {
+        sql.push_str(") WHERE rn = 1 ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?");
+    } else {
+        sql.push_str(" ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?");
+    }
     binds.push((limit + 1).to_string());
 
     let mut query = sqlx::query_as::<_, PhotoRecord>(&sql);
@@ -321,8 +359,9 @@ pub async fn register_encrypted_photo(
     sqlx::query(
         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
          size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
-         thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, photo_hash) \
-         VALUES (?, ?, ?, '', ?, ?, 0, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)",
+         thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, photo_hash, \
+         photo_subtype, burst_id, motion_video_blob_id) \
+         VALUES (?, ?, ?, '', ?, ?, 0, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
@@ -339,6 +378,9 @@ pub async fn register_encrypted_photo(
     .bind(&req.encrypted_blob_id)
     .bind(&req.encrypted_thumb_blob_id)
     .bind(&req.photo_hash)
+    .bind(&req.photo_subtype)
+    .bind(&req.burst_id)
+    .bind(&req.motion_video_blob_id)
     .execute(&state.pool)
     .await?;
 
@@ -502,4 +544,33 @@ pub async fn batch_update_dimensions(
     }
 
     Ok(Json(serde_json::json!({ "updated": updated })))
+}
+
+// ── Burst photo listing ───────────────────────────────────────────────────────
+
+/// GET /api/photos/burst/{burst_id}
+/// Returns all photos in a burst sequence, ordered by taken_at ascending.
+pub async fn list_burst_photos(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(burst_id): Path<String>,
+) -> Result<Json<Vec<PhotoRecord>>, AppError> {
+    let photos = sqlx::query_as::<_, PhotoRecord>(
+        "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
+         duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, \
+         crop_metadata, camera_model, photo_hash, photo_subtype, burst_id, motion_video_blob_id, \
+         (SELECT COUNT(*) FROM photos p2 WHERE p2.user_id = photos.user_id AND p2.burst_id = photos.burst_id) AS burst_count \
+         FROM photos WHERE user_id = ? AND burst_id = ? \
+         ORDER BY COALESCE(taken_at, created_at) ASC",
+    )
+    .bind(&auth.user_id)
+    .bind(&burst_id)
+    .fetch_all(&state.read_pool)
+    .await?;
+
+    if photos.is_empty() {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(Json(photos))
 }

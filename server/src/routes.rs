@@ -26,6 +26,8 @@ pub fn api_routes() -> Router<AppState> {
         .merge(client_log_routes())
         .merge(diagnostics_routes())
         .merge(export_routes())
+        .merge(ai_routes())
+        .merge(geo_routes())
 }
 
 // ── Setup & first-run ────────────────────────────────────────────────
@@ -177,6 +179,14 @@ fn photo_routes() -> Router<AppState> {
         )
         .route("/photos/{id}/web", get(crate::photos::serve::serve_web))
         .route(
+            "/photos/{id}/motion-video",
+            get(crate::photos::serve::serve_motion_video),
+        )
+        .route(
+            "/photos/burst/{burst_id}",
+            get(crate::photos::handlers::list_burst_photos),
+        )
+        .route(
             "/photos/{id}/favorite",
             put(crate::photos::handlers::toggle_favorite),
         )
@@ -207,6 +217,8 @@ fn photo_routes() -> Router<AppState> {
         .route("/admin/photos/scan", post(crate::photos::scan::scan_and_register))
         // Conversion progress
         .route("/admin/conversion-status", get(crate::conversion::conversion_status))
+        // Transcode GPU status
+        .route("/transcode/status", get(crate::transcode::handlers::transcode_status))
         // Encryption key storage
         .route(
             "/admin/encryption/store-key",
@@ -216,6 +228,19 @@ fn photo_routes() -> Router<AppState> {
         .route(
             "/settings/storage-stats",
             get(crate::photos::storage_stats::get_storage_stats),
+        )
+        // Metadata editing
+        .route(
+            "/photos/{id}/metadata",
+            patch(crate::photos::metadata_edit::update_metadata),
+        )
+        .route(
+            "/photos/{id}/metadata/full",
+            get(crate::photos::metadata_edit::get_full_metadata),
+        )
+        .route(
+            "/photos/{id}/metadata/write-exif",
+            post(crate::photos::metadata_edit::write_exif_to_file),
         )
 }
 
@@ -526,4 +551,43 @@ fn export_routes() -> Router<AppState> {
             "/export/{job_id}",
             delete(crate::export::handlers::delete_export),
         )
+}
+
+// ── AI recognition ───────────────────────────────────────────────────
+
+fn ai_routes() -> Router<AppState> {
+    Router::new()
+        // Status & control
+        .route("/ai/status", get(crate::ai::handlers::ai_status))
+        .route("/ai/toggle", post(crate::ai::handlers::ai_toggle))
+        .route("/ai/reprocess", post(crate::ai::handlers::ai_reprocess))
+        // Face clusters
+        .route("/ai/faces", get(crate::ai::handlers::list_face_clusters))
+        .route("/ai/faces/merge", post(crate::ai::handlers::merge_face_clusters))
+        .route("/ai/faces/split", post(crate::ai::handlers::split_face_cluster))
+        .route("/ai/faces/{cluster_id}/photos", get(crate::ai::handlers::list_cluster_photos))
+        .route("/ai/faces/{cluster_id}/name", put(crate::ai::handlers::rename_face_cluster))
+        // Object detections
+        .route("/ai/objects", get(crate::ai::handlers::list_object_classes))
+        .route("/ai/objects/{class_name}/photos", get(crate::ai::handlers::list_object_photos))
+}
+
+// ── Geolocation & timeline ──────────────────────────────────────────
+
+fn geo_routes() -> Router<AppState> {
+    Router::new()
+        // Settings
+        .route("/settings/geo", get(crate::geo::handlers::get_geo_settings))
+        .route("/settings/geo", post(crate::geo::handlers::update_geo_settings))
+        // Locations
+        .route("/geo/locations", get(crate::geo::handlers::list_locations))
+        .route("/geo/locations/{country}/{city}", get(crate::geo::handlers::list_location_photos))
+        .route("/geo/countries", get(crate::geo::handlers::list_countries))
+        .route("/geo/map", get(crate::geo::handlers::list_map_photos))
+        // Timeline
+        .route("/geo/timeline", get(crate::geo::handlers::list_timeline))
+        .route("/geo/timeline/{year}", get(crate::geo::handlers::list_timeline_year))
+        .route("/geo/timeline/{year}/{month}", get(crate::geo::handlers::list_timeline_month_photos))
+        // Scrub
+        .route("/geo/scrub", post(crate::geo::handlers::scrub_geo_data))
 }

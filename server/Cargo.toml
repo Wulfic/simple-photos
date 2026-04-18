@@ -40,6 +40,7 @@ num_cpus = "1"
 async-stream = "0.3"
 arc-swap = "1"
 http-body-util = "0.1"
+byteorder = "1"
 futures-util = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 

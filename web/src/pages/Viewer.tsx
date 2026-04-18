@@ -5,9 +5,10 @@
  * photo preloading, crop/brightness/rotation editing, favorites,
  * and prev/next navigation via photoIds passed through location.state.
  */
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { db } from "../db";
+import { useLiveQuery } from "dexie-react-hooks";
 import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
 import TagPanel from "../components/viewer/TagPanel";
 import ViewerEditPanel from "../components/viewer/ViewerEditPanel";
@@ -23,6 +24,8 @@ import useViewerActions from "../hooks/useViewerActions";
 import useViewerEdit from "../hooks/useViewerEdit";
 import useSwipeNavigation from "../hooks/useSwipeNavigation";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import useSlideshow from "../hooks/useSlideshow";
+import Slideshow from "../components/viewer/Slideshow";
 import { diagnosticLogger } from "../utils/diagnosticLogger";
 import type { PhotoInfoData } from "../hooks/useViewerMedia";
 
@@ -105,6 +108,19 @@ export default function Viewer() {
   const { preloadCache, preloadAdjacentPhotos } = usePhotoPreload(
     photoIds, currentIndex,
   );
+
+  // ── Slideshow ─────────────────────────────────────────────────────────
+  const allPhotos = useLiveQuery(() => db.photos.toArray(), []);
+  const viewerMediaTypeMap = useMemo(() => {
+    const m = new Map<string, string>();
+    if (allPhotos) for (const p of allPhotos) m.set(p.blobId, p.mediaType);
+    return m;
+  }, [allPhotos]);
+  const slideshow = useSlideshow(photoIds, viewerMediaTypeMap);
+  const hasSlideshow = photoIds ? photoIds.some((id) => {
+    const mt = viewerMediaTypeMap.get(id);
+    return !mt || mt === "photo" || mt === "gif";
+  }) : false;
 
   // ── Media loading (from hook) ──────────────────────────────────────────
   const {
@@ -288,6 +304,8 @@ export default function Viewer() {
         onDownload={handleDownload}
         onDelete={handleDelete}
         onRemoveFromAlbum={handleRemoveFromAlbum}
+        onStartSlideshow={() => slideshow.start(currentIndex)}
+        hasSlideshow={hasSlideshow}
       />
 
       {/* Converting banner — shown while ffmpeg renders a video/audio file */}
@@ -613,7 +631,7 @@ export default function Viewer() {
       )}
 
       {/* Photo info panel */}
-      <PhotoInfoPanel show={showInfoPanel} onClose={() => setShowInfoPanel(false)} photoInfo={photoInfo} />
+      <PhotoInfoPanel show={showInfoPanel} onClose={() => setShowInfoPanel(false)} photoId={id} photoInfo={photoInfo} />
 
       {/* Tag panel */}
       <TagPanel show={showTagPanel} onClose={() => setShowTagPanel(false)} photoId={id} />
@@ -633,6 +651,27 @@ export default function Viewer() {
         <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-fade-in">
           Copy saved ✓
         </div>
+      )}
+
+      {/* Slideshow overlay */}
+      {slideshow.isActive && (
+        <Slideshow
+          currentBlobId={slideshow.currentBlobId}
+          isPlaying={slideshow.isPlaying}
+          currentSlide={slideshow.currentSlide}
+          totalSlides={slideshow.totalSlides}
+          shuffleEnabled={slideshow.shuffleEnabled}
+          intervalMs={slideshow.intervalMs}
+          transition={slideshow.transition}
+          direction={slideshow.direction}
+          onTogglePlay={slideshow.togglePlay}
+          onNext={slideshow.next}
+          onPrev={slideshow.prev}
+          onToggleShuffle={slideshow.toggleShuffle}
+          onSetSpeed={slideshow.setSpeed}
+          onSetTransition={slideshow.setTransition}
+          onExit={slideshow.stop}
+        />
       )}
 
     </div>

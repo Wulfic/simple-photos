@@ -20,6 +20,7 @@
 pub mod encryption;
 pub mod handlers;
 pub mod metadata;
+pub mod metadata_edit;
 pub mod models;
 pub mod scan;
 pub mod serve;

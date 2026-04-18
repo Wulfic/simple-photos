@@ -18,6 +18,10 @@ import { backupApi } from "./backup";
 import { sharingApi } from "./sharing";
 import { tagsApi, searchApi } from "./tags";
 import { exportApi } from "./export";
+import { aiApi } from "./ai";
+import { geoApi } from "./geo";
+import { metadataApi } from "./metadata";
+import { transcodeApi } from "./transcode";
 
 // Re-export all types for backward compatibility
 export type {
@@ -55,4 +59,8 @@ export const api = {
   search: searchApi,
   diagnostics: diagnosticsApi,
   export: exportApi,
+  ai: aiApi,
+  geo: geoApi,
+  metadata: metadataApi,
+  transcode: transcodeApi,
 };

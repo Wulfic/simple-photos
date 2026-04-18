@@ -289,6 +289,30 @@ export default function Albums() {
           coverPhoto={smartAlbumCovers.audio}
           onClick={() => navigate("/albums/smart-audio")}
         />
+        <SmartAlbumCard
+          label="People"
+          count={0}
+          coverPhoto={undefined}
+          onClick={() => navigate("/albums/smart-people")}
+        />
+        <SmartAlbumCard
+          label="Objects"
+          count={0}
+          coverPhoto={undefined}
+          onClick={() => navigate("/albums/smart-objects")}
+        />
+        <SmartAlbumCard
+          label="Places"
+          count={0}
+          coverPhoto={undefined}
+          onClick={() => navigate("/albums/smart-places")}
+        />
+        <SmartAlbumCard
+          label="Timeline"
+          count={0}
+          coverPhoto={undefined}
+          onClick={() => navigate("/albums/smart-timeline")}
+        />
 
         {/* ── User-created albums ───────────────────────────────────────── */}
         {loading && (!albums || albums.length === 0) && (

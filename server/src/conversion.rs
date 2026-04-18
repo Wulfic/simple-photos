@@ -11,12 +11,34 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicI64, AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 use axum::Json;
 use serde::Serialize;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
+use crate::transcode::{HwAccelCapability, HwAccelType};
+
+// ── GPU acceleration config (set once at startup) ────────────────────────────
+
+/// Cached GPU hardware acceleration capability, set by `init_gpu_config()`.
+static GPU_CONFIG: OnceLock<GpuConversionConfig> = OnceLock::new();
+
+struct GpuConversionConfig {
+    hwaccel: HwAccelCapability,
+    fallback_to_cpu: bool,
+}
+
+/// Initialize GPU conversion config. Called once from main.rs at startup.
+pub fn init_gpu_config(hwaccel: HwAccelCapability, fallback_to_cpu: bool) {
+    let _ = GPU_CONFIG.set(GpuConversionConfig { hwaccel, fallback_to_cpu });
+}
+
+/// Get the current GPU config, or None if not initialized.
+fn gpu_config() -> Option<&'static GpuConversionConfig> {
+    GPU_CONFIG.get()
+}
 
 // ── Conversion progress tracking ─────────────────────────────────────────────
 
@@ -184,6 +206,9 @@ pub fn media_type_str(cat: MediaCategory) -> &'static str {
 ///
 /// Falls back to ImageMagick for images if FFmpeg fails (e.g. RAW formats
 /// that require specific decoders).
+///
+/// For video conversions, uses GPU-accelerated encoding when available
+/// (configured via `init_gpu_config()` at startup).
 pub async fn convert_file(
     input: &Path,
     output: &Path,
@@ -200,7 +225,15 @@ pub async fn convert_file(
 
     let success = match target.category {
         MediaCategory::Image => convert_image(input_str, output_str).await,
-        MediaCategory::Video => convert_video(input_str, output_str).await,
+        MediaCategory::Video => {
+            let gpu = gpu_config();
+            convert_video(
+                input_str,
+                output_str,
+                gpu.map(|g| &g.hwaccel),
+                gpu.map(|g| g.fallback_to_cpu).unwrap_or(true),
+            ).await
+        }
         MediaCategory::Audio => convert_audio(input_str, output_str).await,
     };
 
@@ -262,11 +295,56 @@ async fn convert_image(input: &str, output: &str) -> bool {
 }
 
 /// Video → MP4 (H.264 + AAC).  Quality-tuned for clarity at reasonable sizes.
-/// The `scale=iw*sar:ih,setsar=1` filter chain rescales non-square pixel
-/// videos to their correct display dimensions with square pixels.
-/// For videos already having square pixels (SAR=1:1), `iw*sar` equals `iw`
-/// so no rescaling occurs.
-async fn convert_video(input: &str, output: &str) -> bool {
+/// When a GPU `hwaccel` capability is provided, uses hardware-accelerated
+/// encoding.  Falls back to CPU (libx264) if the GPU transcode fails and
+/// `fallback_to_cpu` is true.
+async fn convert_video(
+    input: &str,
+    output: &str,
+    hwaccel: Option<&HwAccelCapability>,
+    fallback_to_cpu: bool,
+) -> bool {
+    // Try GPU path first if available
+    if let Some(hw) = hwaccel {
+        if hw.is_gpu() {
+            let args = crate::transcode::ffmpeg_gpu::build_video_transcode_args(input, output, hw);
+            let mut cmd = tokio::process::Command::new("nice");
+            let mut nice_args = vec!["-n".to_string(), "19".to_string(), "ffmpeg".to_string()];
+            nice_args.extend(args);
+            cmd.args(&nice_args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped());
+            let result = crate::process::status_with_timeout(
+                &mut cmd,
+                std::time::Duration::from_secs(600),
+            ).await;
+
+            if matches!(result, Ok(s) if s.success()) {
+                tracing::info!(
+                    encoder = %hw.video_encoder,
+                    "GPU video transcode succeeded"
+                );
+                return true;
+            }
+
+            if !fallback_to_cpu {
+                tracing::error!(
+                    encoder = %hw.video_encoder,
+                    "GPU video transcode failed and CPU fallback disabled"
+                );
+                return false;
+            }
+
+            tracing::warn!(
+                encoder = %hw.video_encoder,
+                "GPU video transcode failed, retrying with CPU (libx264)"
+            );
+            // Remove partial output before retry
+            let _ = tokio::fs::remove_file(output).await;
+        }
+    }
+
+    // CPU fallback (original path)
     let mut cmd = tokio::process::Command::new("nice");
     cmd.args([
             "-n", "19",

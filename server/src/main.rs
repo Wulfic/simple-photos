@@ -16,6 +16,7 @@
 //! 5. Bind to HTTP or HTTPS (if TLS configured) and start accepting
 //!    connections
 
+mod ai;
 mod audit;
 mod auth;
 mod backup;
@@ -31,6 +32,7 @@ mod editing;
 mod error;
 mod export;
 mod gallery;
+mod geo;
 mod health;
 mod http_utils;
 mod import;
@@ -47,6 +49,7 @@ mod sharing;
 mod state;
 mod tags;
 mod tasks;
+mod transcode;
 mod trash;
 
 /// Server version, read from `Cargo.toml` at compile time.
@@ -132,6 +135,17 @@ async fn main() -> anyhow::Result<()> {
     let storage_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
     tasks::spawn_all(&pool, &config, &storage_root_swap, &scan_lock, &audit_tx, &storage_available);
 
+    // Probe GPU hardware acceleration for video transcoding.
+    let hw_accel = Arc::new(transcode::gpu_probe::probe_hwaccel(
+        config.transcode.gpu_enabled,
+    ));
+
+    // Initialize global GPU config for the conversion pipeline.
+    conversion::init_gpu_config(
+        (*hw_accel).clone(),
+        config.transcode.gpu_fallback_to_cpu,
+    );
+
     // Build shared application state — cloned (via Arc) into every Axum handler.
     let state = AppState {
         pool,
@@ -142,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
         scan_lock,
         audit_tx,
         storage_available,
+        hw_accel,
     };
 
     let mut app = Router::new()

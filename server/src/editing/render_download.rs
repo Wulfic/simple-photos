@@ -76,7 +76,7 @@ pub async fn render_photo(
         "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, \
          width, height, duration_secs, taken_at, latitude, longitude, thumb_path, \
          created_at, encrypted_blob_id, encrypted_thumb_blob_id, is_favorite, \
-         crop_metadata, camera_model, photo_hash \
+         crop_metadata, camera_model, photo_hash, photo_subtype, burst_id, motion_video_blob_id \
          FROM photos WHERE id = ? AND user_id = ?",
     )
     .bind(&photo_id)

@@ -18,6 +18,18 @@ pub(crate) type MediaMetadata = (
     Option<String>,
 );
 
+/// Extended subtype information extracted from XMP metadata.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SubtypeInfo {
+    /// Photo subtype: "motion", "panorama", "equirectangular", "hdr", "burst"
+    pub photo_subtype: Option<String>,
+    /// Burst group identifier (shared across shots in a burst)
+    pub burst_id: Option<String>,
+    /// Byte offset from end-of-file to the start of the embedded MP4
+    /// (motion photos only — used to extract the video trailer)
+    pub motion_video_offset: Option<u64>,
+}
+
 /// Extract image dimensions, camera model, and GPS coordinates from a file.
 /// Returns (width, height, camera_model, latitude, longitude, taken_at).
 ///
@@ -512,4 +524,217 @@ pub async fn repair_orientation_dimensions(
     )
     .execute(pool)
     .await;
+}
+
+// ── XMP subtype extraction ──────────────────────────────────────────────────
+
+/// Extract photo subtype information from XMP metadata embedded in a JPEG.
+///
+/// Scans the first 128 KB of the file for an `<x:xmpmeta` block and looks
+/// for known XMP properties that indicate motion photos, panoramas, 360°
+/// equirectangular projections, HDR Gainmaps, and burst sequences.
+pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
+    let mut info = SubtypeInfo::default();
+
+    // Read up to 128 KB — XMP is typically within the first few KB
+    let search_len = data.len().min(128 * 1024);
+    let chunk = &data[..search_len];
+
+    // Try to find XMP as a UTF-8 string in the file header
+    let text = match std::str::from_utf8(chunk) {
+        Ok(s) => s.to_string(),
+        Err(_) => String::from_utf8_lossy(chunk).to_string(),
+    };
+
+    // ── Motion Photo detection ──────────────────────────────────────────
+    // Old schema: Camera:MicroVideo="1" + Camera:MicroVideoOffset
+    // New schema: GCamera:MotionPhoto="1" + GCamera:MotionVideoOffset (or MicroVideoOffset)
+    let is_motion = text.contains("MicroVideo=\"1\"")
+        || text.contains("MotionPhoto=\"1\"")
+        || text.contains("MicroVideo=\"1\"")
+        || text.contains("MotionPhoto=\"1\"");
+
+    if is_motion {
+        info.photo_subtype = Some("motion".to_string());
+
+        // Extract video offset — try both attribute names
+        if let Some(offset) = extract_xmp_int_attr(&text, "MicroVideoOffset")
+            .or_else(|| extract_xmp_int_attr(&text, "MotionVideoOffset"))
+        {
+            info.motion_video_offset = Some(offset);
+        }
+
+        tracing::debug!(
+            "[xmp] Detected motion photo, video_offset={:?}",
+            info.motion_video_offset
+        );
+        return info;
+    }
+
+    // ── Panorama / 360° detection ───────────────────────────────────────
+    // XMP: GPano:ProjectionType="equirectangular" or "cylindrical"
+    if let Some(proj) = extract_xmp_str_attr(&text, "ProjectionType") {
+        let proj_lower = proj.to_ascii_lowercase();
+        if proj_lower == "equirectangular" {
+            info.photo_subtype = Some("equirectangular".to_string());
+            tracing::debug!("[xmp] Detected equirectangular (360°) photo");
+            return info;
+        } else if proj_lower == "cylindrical" {
+            info.photo_subtype = Some("panorama".to_string());
+            tracing::debug!("[xmp] Detected cylindrical panorama");
+            return info;
+        }
+    }
+
+    // ── HDR Gainmap detection ───────────────────────────────────────────
+    // Ultra HDR: hdrgm:Version present in XMP
+    if text.contains("hdrgm:Version") || text.contains("HDRGainMap") {
+        info.photo_subtype = Some("hdr".to_string());
+        tracing::debug!("[xmp] Detected HDR Gainmap photo");
+        return info;
+    }
+
+    // ── Burst detection ─────────────────────────────────────────────────
+    // Google: GCamera:BurstID or com.google.photos.burst.id
+    if let Some(bid) = extract_xmp_str_attr(&text, "BurstID") {
+        info.photo_subtype = Some("burst".to_string());
+        info.burst_id = Some(bid);
+        tracing::debug!("[xmp] Detected burst photo, burst_id={:?}", info.burst_id);
+        return info;
+    }
+
+    info
+}
+
+/// Extract photo subtype from a file on disk (reads first 128 KB).
+pub(crate) fn extract_xmp_subtype_from_file(path: &std::path::Path) -> SubtypeInfo {
+    match std::fs::read(path) {
+        Ok(data) => extract_xmp_subtype(&data),
+        Err(e) => {
+            tracing::warn!("[xmp] Failed to read file for XMP extraction: {}", e);
+            SubtypeInfo::default()
+        }
+    }
+}
+
+/// Async wrapper for file-based XMP extraction.
+pub(crate) async fn extract_xmp_subtype_async(path: std::path::PathBuf) -> SubtypeInfo {
+    tokio::task::spawn_blocking(move || extract_xmp_subtype_from_file(&path))
+        .await
+        .unwrap_or_default()
+}
+
+/// Extract the embedded MP4 trailer from a motion photo JPEG.
+///
+/// The MP4 starts at `file_size - offset` bytes from the end of the file.
+/// Returns the raw MP4 bytes, or `None` if extraction fails.
+pub(crate) fn extract_motion_video(data: &[u8], offset: u64) -> Option<Vec<u8>> {
+    let offset = offset as usize;
+    if offset == 0 || offset > data.len() {
+        tracing::warn!(
+            "[xmp] Invalid motion video offset: {} (file size: {})",
+            offset,
+            data.len()
+        );
+        return None;
+    }
+
+    let start = data.len() - offset;
+    let video_bytes = data[start..].to_vec();
+
+    // Sanity check: MP4 files start with a box header — the fourth through
+    // eighth bytes should be "ftyp" for a valid ISO base media file.
+    if video_bytes.len() >= 8 && &video_bytes[4..8] == b"ftyp" {
+        tracing::debug!(
+            "[xmp] Extracted motion video: {} bytes (ftyp confirmed)",
+            video_bytes.len()
+        );
+        Some(video_bytes)
+    } else if video_bytes.len() >= 8 {
+        // Some motion photos have a different box first — still try
+        tracing::warn!(
+            "[xmp] Motion video does not start with ftyp box (got {:?}), returning anyway",
+            &video_bytes[4..8.min(video_bytes.len())]
+        );
+        Some(video_bytes)
+    } else {
+        tracing::warn!(
+            "[xmp] Motion video too small: {} bytes",
+            video_bytes.len()
+        );
+        None
+    }
+}
+
+/// Async extraction of motion video from a file on disk.
+pub(crate) async fn extract_motion_video_from_file(
+    path: &std::path::Path,
+    offset: u64,
+) -> Option<Vec<u8>> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        match std::fs::read(&path) {
+            Ok(data) => extract_motion_video(&data, offset),
+            Err(e) => {
+                tracing::warn!("[xmp] Failed to read file for motion video: {}", e);
+                None
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+// ── XMP helpers ─────────────────────────────────────────────────────────────
+
+/// Extract an integer attribute value from XMP text.
+/// Looks for patterns like `AttrName="12345"` or `AttrName='12345'`.
+fn extract_xmp_int_attr(text: &str, attr_name: &str) -> Option<u64> {
+    // Try pattern: AttrName="value"
+    let pattern = format!("{}=\"", attr_name);
+    if let Some(pos) = text.find(&pattern) {
+        let start = pos + pattern.len();
+        let rest = &text[start..];
+        if let Some(end) = rest.find('"') {
+            return rest[..end].trim().parse().ok();
+        }
+    }
+    // Try pattern: AttrName='value'
+    let pattern = format!("{}='", attr_name);
+    if let Some(pos) = text.find(&pattern) {
+        let start = pos + pattern.len();
+        let rest = &text[start..];
+        if let Some(end) = rest.find('\'') {
+            return rest[..end].trim().parse().ok();
+        }
+    }
+    None
+}
+
+/// Extract a string attribute value from XMP text.
+fn extract_xmp_str_attr(text: &str, attr_name: &str) -> Option<String> {
+    let pattern = format!("{}=\"", attr_name);
+    if let Some(pos) = text.find(&pattern) {
+        let start = pos + pattern.len();
+        let rest = &text[start..];
+        if let Some(end) = rest.find('"') {
+            let val = rest[..end].trim().to_string();
+            if !val.is_empty() {
+                return Some(val);
+            }
+        }
+    }
+    let pattern = format!("{}='", attr_name);
+    if let Some(pos) = text.find(&pattern) {
+        let start = pos + pattern.len();
+        let rest = &text[start..];
+        if let Some(end) = rest.find('\'') {
+            let val = rest[..end].trim().to_string();
+            if !val.is_empty() {
+                return Some(val);
+            }
+        }
+    }
+    None
 }

@@ -83,7 +83,7 @@ rm -f "$SERVER_DIR/data/db/"*
 
 # ── Clean server-managed storage dirs ────────────────────────────────────────
 echo "Cleaning internal storage (server-managed dirs only)..."
-for subdir in blobs metadata logs .thumbnails; do
+for subdir in blobs metadata logs .thumbnails .renders .tmp .web_previews .converted uploads .ai_data .geo_cache; do
     if [[ -d "$SERVER_DIR/data/storage/$subdir" ]]; then
         echo "  Removing $SERVER_DIR/data/storage/$subdir/..."
         rm -rf "$SERVER_DIR/data/storage/$subdir"
@@ -98,7 +98,7 @@ if [[ -f "$CONFIG_FILE" ]]; then
 fi
 if [[ -n "$STORAGE_ROOT" && -d "$STORAGE_ROOT" ]]; then
     echo "Cleaning storage root subdirectories in: $STORAGE_ROOT"
-    for subdir in blobs metadata logs .thumbnails; do
+    for subdir in blobs metadata logs .thumbnails .renders .tmp .web_previews .converted uploads .ai_data .geo_cache; do
         if [[ -d "$STORAGE_ROOT/$subdir" ]]; then
             echo "  Removing $STORAGE_ROOT/$subdir/..."
             rm -rf "$STORAGE_ROOT/$subdir"

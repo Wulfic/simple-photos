@@ -13,9 +13,10 @@ use crate::media::{is_supported_extension, mime_from_extension};
 use crate::sanitize;
 use crate::state::AppState;
 
-use super::metadata::{extract_media_metadata_async, extract_media_metadata_from_bytes_async};
+use super::metadata::{extract_media_metadata_async, extract_media_metadata_from_bytes_async, extract_xmp_subtype, extract_motion_video};
 use super::thumbnail::generate_thumbnail_file;
 use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
+use chrono::Utc;
 
 /// POST /api/photos/upload
 /// Upload a photo/video/GIF file from a mobile client.
@@ -239,14 +240,30 @@ pub async fn upload_photo(
             extract_media_metadata_async(file_path.clone()).await
         };
 
+    // ── XMP subtype detection ───────────────────────────────────────────
+    // Read original file bytes to detect motion photo, panorama, 360, HDR,
+    // or burst subtype from embedded XMP metadata.
+    let xmp_data = tokio::fs::read(&file_path).await.unwrap_or_default();
+    let subtype_info = extract_xmp_subtype(&xmp_data);
+
     let final_taken_at = exif_taken
         .map(|t| normalize_iso_timestamp(&t))
         .unwrap_or_else(|| now.clone());
 
+    // ── Geo scrubbing ───────────────────────────────────────────────────
+    // If the user has geo-scrubbing enabled, null out GPS coordinates before
+    // storing in the database.
+    let (insert_lat, insert_lon) = if crate::geo::scrub::is_scrub_enabled(&state.pool, &auth.user_id).await {
+        (None, None)
+    } else {
+        (exif_lat, exif_lon)
+    };
+
     sqlx::query(
         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         size_bytes, width, height, taken_at, latitude, longitude, camera_model, \
+         thumb_path, created_at, photo_hash, photo_subtype, burst_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
@@ -258,14 +275,71 @@ pub async fn upload_photo(
     .bind(img_w)
     .bind(img_h)
     .bind(&final_taken_at)
-    .bind(exif_lat)
-    .bind(exif_lon)
+    .bind(insert_lat)
+    .bind(insert_lon)
     .bind(&cam_model)
     .bind(&thumb_rel)
     .bind(&now)
     .bind(&photo_hash)
+    .bind(&subtype_info.photo_subtype)
+    .bind(&subtype_info.burst_id)
     .execute(&state.pool)
     .await?;
+
+    // ── Inline geo & timeline backfill ──────────────────────────────────
+    // Set photo_year/photo_month from taken_at timestamp
+    let _ = crate::geo::processor::set_photo_year_month(&state.pool, &photo_id, &final_taken_at).await;
+
+    // ── Extract and store motion video blob ─────────────────────────────
+    // If the photo is a motion photo with an embedded MP4 trailer, extract it
+    // and store it as a separate blob for efficient serving.
+    if subtype_info.photo_subtype.as_deref() == Some("motion") {
+        if let Some(offset) = subtype_info.motion_video_offset {
+            if let Some(video_bytes) = extract_motion_video(&xmp_data, offset) {
+                let blob_id = Uuid::new_v4().to_string();
+                let blob_storage_dir = storage_root.join("blobs");
+                let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
+                let blob_rel = format!("blobs/{}.mp4", blob_id);
+                let blob_abs = storage_root.join(&blob_rel);
+
+                if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {
+                    let blob_size = video_bytes.len() as i64;
+                    let blob_now = Utc::now().to_rfc3339();
+
+                    let insert_ok = sqlx::query(
+                        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+                         VALUES (?, ?, 'motion_video', ?, ?, ?)",
+                    )
+                    .bind(&blob_id)
+                    .bind(&auth.user_id)
+                    .bind(blob_size)
+                    .bind(&blob_now)
+                    .bind(&blob_rel)
+                    .execute(&state.pool)
+                    .await;
+
+                    if insert_ok.is_ok() {
+                        let _ = sqlx::query(
+                            "UPDATE photos SET motion_video_blob_id = ? WHERE id = ?",
+                        )
+                        .bind(&blob_id)
+                        .bind(&photo_id)
+                        .execute(&state.pool)
+                        .await;
+
+                        tracing::info!(
+                            photo_id = %photo_id,
+                            blob_id = %blob_id,
+                            size = blob_size,
+                            "Extracted and stored motion video blob"
+                        );
+                    } else {
+                        let _ = tokio::fs::remove_file(&blob_abs).await;
+                    }
+                }
+            }
+        }
+    }
 
     // Generate thumbnail immediately so it's available for the first gallery load.
     // Runs in the background — the upload response isn't delayed if this is slow.

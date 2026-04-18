@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
-use crate::photos::metadata::extract_media_metadata_async;
+use crate::photos::metadata::{extract_media_metadata_async, extract_xmp_subtype_async};
 use crate::photos::thumbnail::generate_thumbnail_file;
 use crate::photos::utils::compute_photo_hash_streaming;
 use crate::state::AppState;
@@ -366,6 +366,9 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
                         extract_media_metadata_async(abs_path.clone()).await;
 
+                    // Extract XMP subtype (motion, panorama, 360, HDR, burst)
+                    let subtype_info = extract_xmp_subtype_async(abs_path.clone()).await;
+
                     let final_taken_at = exif_taken
                         .map(|t| crate::photos::utils::normalize_iso_timestamp(&t))
                         .or(modified);
@@ -385,8 +388,9 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
 
                     let insert_result = sqlx::query(
                         "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
+                         created_at, photo_hash, photo_subtype, burst_id) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(&photo_id)
                     .bind(&admin_id)
@@ -404,6 +408,8 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     .bind(&thumb_rel)
                     .bind(&now)
                     .bind(&photo_hash)
+                    .bind(&subtype_info.photo_subtype)
+                    .bind(&subtype_info.burst_id)
                     .execute(pool)
                     .await;
 
