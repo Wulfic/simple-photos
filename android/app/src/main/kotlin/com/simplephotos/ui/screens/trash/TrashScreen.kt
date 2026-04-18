@@ -9,9 +9,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +23,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -35,6 +33,7 @@ import com.simplephotos.data.remote.dto.TrashItemDto
 import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.HeaderNavigation
+import com.simplephotos.ui.components.JustifiedGrid
 import com.simplephotos.ui.theme.ThemeState
 import com.simplephotos.R
 import androidx.compose.ui.res.painterResource
@@ -216,26 +215,31 @@ fun TrashScreen(
             }
             // ── Grid ────────────────────────────────────────────────
             else {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(100.dp),
-                    contentPadding = PaddingValues(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    items(viewModel.items, key = { it.id }) { item ->
-                        TrashTile(
-                            item = item,
-                            serverBaseUrl = viewModel.serverBaseUrl,
-                            isSelectionMode = viewModel.isSelectionMode,
-                            isSelected = item.id in viewModel.selectedIds,
-                            onLongPress = { viewModel.enterSelectionMode(item.id) },
-                            onTap = {
-                                if (viewModel.isSelectionMode) {
-                                    viewModel.toggleSelect(item.id)
-                                }
+                JustifiedGrid(
+                    items = viewModel.items,
+                    getAspectRatio = { item ->
+                        if (item.width > 0 && item.height > 0) item.width.toFloat() / item.height.toFloat()
+                        else 1f
+                    },
+                    getKey = { it.id },
+                    targetRowHeight = 180.dp,
+                    gap = 2.dp,
+                ) { item, widthDp, heightDp ->
+                    TrashTile(
+                        item = item,
+                        serverBaseUrl = viewModel.serverBaseUrl,
+                        decryptedThumbPath = viewModel.decryptedThumbPaths[item.id],
+                        isSelectionMode = viewModel.isSelectionMode,
+                        isSelected = item.id in viewModel.selectedIds,
+                        onLongPress = { viewModel.enterSelectionMode(item.id) },
+                        onTap = {
+                            if (viewModel.isSelectionMode) {
+                                viewModel.toggleSelect(item.id)
                             }
-                        )
-                    }
+                        },
+                        widthDp = widthDp,
+                        heightDp = heightDp,
+                    )
                 }
             }
         }
@@ -277,16 +281,26 @@ fun TrashScreen(
 private fun TrashTile(
     item: TrashItemDto,
     serverBaseUrl: String,
+    decryptedThumbPath: String?,
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onLongPress: () -> Unit,
     onTap: () -> Unit,
+    widthDp: Dp,
+    heightDp: Dp,
 ) {
-    val thumbUrl = "$serverBaseUrl/api/trash/${item.id}/thumb"
+    // For encrypted items, use the locally decrypted thumbnail file.
+    // For unencrypted items, load from the server trash thumbnail endpoint.
+    val thumbSource: Any = if (decryptedThumbPath != null) {
+        java.io.File(decryptedThumbPath)
+    } else {
+        "$serverBaseUrl/api/trash/${item.id}/thumb"
+    }
 
     Box(
         modifier = Modifier
-            .aspectRatio(1f)
+            .width(widthDp)
+            .height(heightDp)
             .clip(MaterialTheme.shapes.small)
             .combinedClickable(
                 onClick = onTap,
@@ -296,7 +310,7 @@ private fun TrashTile(
         // Thumbnail
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
-                .data(thumbUrl)
+                .data(thumbSource)
                 .crossfade(true)
                 .size(256)
                 .build(),

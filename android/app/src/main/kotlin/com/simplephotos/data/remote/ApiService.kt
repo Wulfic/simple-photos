@@ -116,6 +116,12 @@ interface ApiService {
     @DELETE("api/blobs/{id}")
     suspend fun deleteBlob(@Path("id") blobId: String): Response<Unit>
 
+    @POST("api/blobs/{id}/trash")
+    suspend fun softDeleteBlob(
+        @Path("id") blobId: String,
+        @Body request: SoftDeleteBlobRequest
+    ): SoftDeleteBlobResponse
+
     // ── Register encrypted photo ─────────────────────────────────────────
     @POST("api/photos/register-encrypted")
     suspend fun registerEncryptedPhoto(
@@ -199,6 +205,10 @@ interface ApiService {
 
     @POST("api/trash/{id}/restore")
     suspend fun restoreFromTrash(@Path("id") id: String): Response<Unit>
+
+    @GET("api/trash/{id}/thumb")
+    @Streaming
+    suspend fun trashThumbnail(@Path("id") trashId: String): ResponseBody
 
     // ── Health ────────────────────────────────────────────────────────────
     @GET("health")

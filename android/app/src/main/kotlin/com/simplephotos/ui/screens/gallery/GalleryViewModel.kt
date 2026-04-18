@@ -186,11 +186,16 @@ class GalleryViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val toDelete = allPhotos.filter { it.localId in selectedIds }
+                android.util.Log.i("GalleryViewModel", "deleteSelectedPhotos: deleting ${toDelete.size} items")
                 for (p in toDelete) {
+                    android.util.Log.d("GalleryViewModel", "deleteSelectedPhotos: deleting '${p.filename}' " +
+                            "(localId=${p.localId}, serverBlobId=${p.serverBlobId})")
                     withContext(Dispatchers.IO) { photoRepository.deletePhoto(p) }
                 }
+                android.util.Log.i("GalleryViewModel", "deleteSelectedPhotos: completed successfully")
                 clearSelection()
             } catch (e: Exception) {
+                android.util.Log.e("GalleryViewModel", "deleteSelectedPhotos: failed: ${e.message}", e)
                 error = "Delete failed: ${e.message}"
             }
         }
@@ -408,11 +413,7 @@ class GalleryViewModel @Inject constructor(
 
                     val thumbBytes = if (mediaType != "video") {
                         withContext(Dispatchers.IO) {
-                            val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                            android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, opts)
-                            val scaleFactor = maxOf(opts.outWidth, opts.outHeight) / 256
-                            val opts2 = android.graphics.BitmapFactory.Options().apply { inSampleSize = maxOf(1, scaleFactor) }
-                            var bitmap = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size, opts2)
+                            var bitmap = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size)
                             // Apply EXIF rotation so portrait thumbnails are correct
                             try {
                                 val exif = androidx.exifinterface.media.ExifInterface(java.io.ByteArrayInputStream(data))
@@ -436,6 +437,20 @@ class GalleryViewModel @Inject constructor(
                                     bitmap = rotated
                                 }
                             } catch (_: Exception) {}
+                            // Scale to 512px max edge (matching BackupWorker quality)
+                            bitmap?.let { bmp ->
+                                val w = bmp.width; val h = bmp.height
+                                if (w > 0 && h > 0) {
+                                    val scale = 512f / maxOf(w, h)
+                                    if (scale < 1f) {
+                                        val tw = (w * scale).toInt().coerceAtLeast(1)
+                                        val th = (h * scale).toInt().coerceAtLeast(1)
+                                        val scaled = android.graphics.Bitmap.createScaledBitmap(bmp, tw, th, true)
+                                        if (scaled !== bmp) bmp.recycle()
+                                        bitmap = scaled
+                                    }
+                                }
+                            }
                             val stream = java.io.ByteArrayOutputStream()
                             bitmap?.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, stream)
                             bitmap?.recycle()

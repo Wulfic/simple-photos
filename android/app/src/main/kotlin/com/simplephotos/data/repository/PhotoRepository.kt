@@ -107,16 +107,54 @@ class PhotoRepository @Inject constructor(
     }
 
     suspend fun deletePhoto(photo: PhotoEntity) {
-        // Delete encrypted blobs from server
-        photo.serverBlobId?.let { blobId ->
-            try { api.deleteBlob(blobId) } catch (_: Exception) {}
+        android.util.Log.i(TAG, "deletePhoto: starting soft-delete for '${photo.filename}' " +
+                "(localId=${photo.localId}, serverBlobId=${photo.serverBlobId}, " +
+                "serverPhotoId=${photo.serverPhotoId}, thumbBlobId=${photo.thumbnailBlobId})")
+
+        // ── Soft-delete on server (move to trash with 30-day recovery) ──
+        val blobId = photo.serverBlobId
+        if (blobId != null) {
+            val takenAtIso = try {
+                java.time.Instant.ofEpochMilli(photo.takenAt).toString()
+            } catch (_: Exception) { null }
+
+            val request = com.simplephotos.data.remote.dto.SoftDeleteBlobRequest(
+                thumbnailBlobId = photo.thumbnailBlobId,
+                filename = photo.filename,
+                mimeType = photo.mimeType,
+                mediaType = photo.mediaType,
+                sizeBytes = photo.sizeBytes,
+                width = photo.width,
+                height = photo.height,
+                durationSecs = photo.durationSecs?.toDouble(),
+                takenAt = takenAtIso,
+            )
+            try {
+                val resp = api.softDeleteBlob(blobId, request)
+                android.util.Log.i(TAG, "deletePhoto: blob $blobId moved to trash " +
+                        "(trashId=${resp.trashId}, expiresAt=${resp.expiresAt})")
+            } catch (e: Exception) {
+                // If the blob is already gone (404), continue with local cleanup.
+                // Any other error should propagate so the user knows it failed.
+                val is404 = e is retrofit2.HttpException && e.code() == 404
+                if (is404) {
+                    android.util.Log.w(TAG, "deletePhoto: blob $blobId not found on server (already deleted?), continuing local cleanup")
+                } else {
+                    android.util.Log.e(TAG, "deletePhoto: soft-delete failed for blob $blobId: ${e.message}")
+                    throw e
+                }
+            }
+        } else {
+            android.util.Log.w(TAG, "deletePhoto: no serverBlobId — local-only item, skipping server call")
         }
-        photo.thumbnailBlobId?.let { blobId ->
-            try { api.deleteBlob(blobId) } catch (_: Exception) {}
+
+        // ── Local cleanup ───────────────────────────────────────────────
+        photo.thumbnailPath?.let { path ->
+            val deleted = File(path).delete()
+            android.util.Log.d(TAG, "deletePhoto: local thumbnail $path deleted=$deleted")
         }
-        // Delete cached thumbnail
-        photo.thumbnailPath?.let { File(it).delete() }
         db.photoDao().delete(photo)
+        android.util.Log.i(TAG, "deletePhoto: removed from local DB (localId=${photo.localId})")
     }
 
     // ── Encrypted upload ─────────────────────────────────────────────────
@@ -367,11 +405,64 @@ class PhotoRepository @Inject constructor(
     suspend fun syncFromServer(): Int {
         deduplicateLocalEntities()
         val imported = syncFromServerEncrypted()
+        // Remove local entries for photos that were deleted on server
+        // (e.g. trashed from web or another device).
+        reconcileServerDeletions()
         // Also pull crop_metadata updates for already-synced photos so
         // non-destructive edits from web/other devices are reflected.
         val cropUpdated = syncCropMetadata()
         val favUpdated = syncFavorites()
         return imported + cropUpdated + favUpdated
+    }
+
+    /**
+     * Detect photos deleted on the server (via web or another device) and
+     * remove them from the local DB. Compares local SYNCED entries that have
+     * a serverPhotoId against the server's encrypted-sync manifest.
+     *
+     * Only removes entries that:
+     * 1. Have a serverPhotoId (were synced from server)
+     * 2. Don't have a localPath (not locally-captured photos)
+     *
+     * This ensures locally-captured photos that haven't been uploaded yet
+     * are never deleted during reconciliation.
+     */
+    private suspend fun reconcileServerDeletions() {
+        try {
+            // Collect ALL server photo IDs from the encrypted-sync endpoint
+            val serverPhotoIds = mutableSetOf<String>()
+            var after: String? = null
+            do {
+                val result = api.encryptedSync(after = after, limit = 500)
+                for (photo in result.photos) {
+                    serverPhotoIds.add(photo.id)
+                }
+                after = result.nextCursor
+            } while (result.nextCursor != null)
+
+            // Find local entries synced from server that no longer exist there
+            val localSynced = db.photoDao().getByStatus(SyncStatus.SYNCED)
+            val serverOnlyLocal = localSynced.filter { it.serverPhotoId != null && it.localPath == null }
+
+            var removed = 0
+            for (photo in serverOnlyLocal) {
+                if (photo.serverPhotoId!! !in serverPhotoIds) {
+                    android.util.Log.i(TAG, "reconcileServerDeletions: removing '${photo.filename}' " +
+                            "(serverPhotoId=${photo.serverPhotoId}) — no longer on server")
+                    photo.thumbnailPath?.let { File(it).delete() }
+                    db.photoDao().delete(photo)
+                    removed++
+                }
+            }
+
+            if (removed > 0) {
+                android.util.Log.i(TAG, "reconcileServerDeletions: removed $removed orphaned entries")
+            } else {
+                android.util.Log.d(TAG, "reconcileServerDeletions: all entries in sync")
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "reconcileServerDeletions: failed — ${e.message}")
+        }
     }
 
     /**

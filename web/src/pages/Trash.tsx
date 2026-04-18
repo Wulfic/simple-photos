@@ -11,6 +11,8 @@ import { formatBytes, getErrorMessage } from "../utils/formatters";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import { decrypt } from "../crypto/crypto";
+import { downloadRaw } from "../api/core";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -85,6 +87,7 @@ export default function Trash() {
       const resp = await api.trash.list({ limit: 500 });
 
       // For encrypted items, load cached thumbnails from local Dexie trash table
+      // or download + decrypt from the server if no local cache exists
       const enriched: TrashItem[] = [];
       for (const item of resp.items) {
         if (item.encrypted_blob_id) {
@@ -95,6 +98,25 @@ export default function Trash() {
               type: mime,
             });
             (item as TrashItem)._localThumbUrl = URL.createObjectURL(blob);
+          } else {
+            // No local cache — download the encrypted thumbnail from the
+            // trash thumb endpoint, decrypt and display
+            try {
+              const encData = await downloadRaw(api.trash.thumbUrl(item.id));
+              const plaintext = await decrypt(encData);
+              const json = JSON.parse(new TextDecoder().decode(plaintext));
+              const b64 = json.data as string;
+              if (b64) {
+                const binary = atob(b64);
+                const bytes = new Uint8Array(binary.length);
+                for (let k = 0; k < binary.length; k++) bytes[k] = binary.charCodeAt(k);
+                const mime = json.mime_type || "image/jpeg";
+                const thumbBlob = new Blob([bytes], { type: mime });
+                (item as TrashItem)._localThumbUrl = URL.createObjectURL(thumbBlob);
+              }
+            } catch (e) {
+              console.warn(`[TRASH] Failed to decrypt thumbnail for ${item.id}:`, e);
+            }
           }
         }
         enriched.push(item as TrashItem);
