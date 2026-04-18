@@ -13,13 +13,16 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **End-to-end encryption** — always-on AES-256-GCM encryption with client-side key management, so only you can access your photos. Even if the server is compromised, your data remains secure.
 - **Multi-user** — multiple accounts with per-user storage, shared albums, and admin controls
 - **Themes** — full light/dark theme support
-
+- **Google Cast Support** — cast photos and videos to compatible devices
 ### Media
 
 - **Supported Photo, video, and audio formats** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
 - **Media conversion** — automatic FFmpeg-based conversion of non-native formats (I.E HEIC → JPEG, MKV → MP4, WMA → MP3) during import and scan
 - **Photo/Video/Audio editing** — crop, rotate, adjust brightness, and trim videos/audio using non-destructive edits stored as metadata or rendered into a saved copy.  
-
+- **Android Motion Photos support** — view and manage Motion Photos, with future support for apple's Live Photos planned
+- **Panoramic photos** — 360° panoramic photo viewer 
+- **HDR support** — view and manage HDR photos and videos
+- **Burst photo support** — view and manage burst photo sequences as grouped albums
 
 ### Organization
 
