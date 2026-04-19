@@ -5,12 +5,14 @@
 //! subset so callers can `use crate::gallery::models::*` when convenient.
 
 // ── Secure gallery models (from photos) ──────────────────────────────────
+#[allow(unused_imports)]
 pub use crate::photos::models::{
     SecureGalleryRecord, SecureGalleryListResponse,
     CreateSecureGalleryRequest, UnlockSecureGalleryRequest, SecureGalleryUnlockResponse,
 };
 
 // ── Shared album models (from sharing) ───────────────────────────────────
+#[allow(unused_imports)]
 pub use crate::sharing::models::{
     SharedAlbumInfo, SharedAlbumMember, SharedAlbumPhoto,
     CreateSharedAlbumRequest, AddMemberRequest, AddPhotoRequest,

@@ -18,6 +18,7 @@ pub struct FaceDetection {
     pub bbox: BoundingBox,
     pub confidence: f32,
     /// Embedding vector (populated after embedding extraction).
+    #[allow(dead_code)] // Populated in pipeline, stored to DB
     pub embedding: Vec<f32>,
 }
 

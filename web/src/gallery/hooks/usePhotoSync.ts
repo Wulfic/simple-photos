@@ -138,6 +138,12 @@ export function usePhotoSync(): PhotoSyncResult {
           if (serverBlobIdVal && existing.storageBlobId !== serverBlobIdVal) updates.storageBlobId = serverBlobIdVal;
           const serverSourcePath = photo.source_path ?? undefined;
           if (existing.sourcePath !== serverSourcePath) updates.sourcePath = serverSourcePath;
+          const serverSubtype = photo.photo_subtype ?? undefined;
+          if (existing.photoSubtype !== serverSubtype) updates.photoSubtype = serverSubtype;
+          const serverBurstId = photo.burst_id ?? undefined;
+          if (existing.burstId !== serverBurstId) updates.burstId = serverBurstId;
+          const serverMotionBlob = photo.motion_video_blob_id ?? undefined;
+          if (existing.motionVideoBlobId !== serverMotionBlob) updates.motionVideoBlobId = serverMotionBlob;
           const serverCrop = photo.crop_metadata ?? undefined;
           if (existing.cropData !== serverCrop) updates.cropData = serverCrop;
 
@@ -250,6 +256,9 @@ export function usePhotoSync(): PhotoSyncResult {
           isFavorite: photo.is_favorite ?? false,
           serverPhotoId: photo.id,
           sourcePath: photo.source_path ?? undefined,
+          photoSubtype: photo.photo_subtype ?? undefined,
+          burstId: photo.burst_id ?? undefined,
+          motionVideoBlobId: photo.motion_video_blob_id ?? undefined,
         });
       }
 

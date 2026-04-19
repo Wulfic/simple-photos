@@ -247,16 +247,30 @@ pub struct AiConfig {
     /// Directory containing ONNX model files.
     #[serde(default = "AiConfig::default_model_dir")]
     pub model_dir: String,
+    /// Detection quality preset: "fast", "balanced", or "high".
+    /// Higher quality is slower but more accurate.
+    #[serde(default = "AiConfig::default_quality")]
+    pub quality: String,
 }
 
 impl AiConfig {
     fn default_gpu_preferred() -> bool { true }
     fn default_batch_size() -> usize { 8 }
     fn default_photos_per_minute() -> u32 { 60 }
-    fn default_face_confidence() -> f32 { 0.5 }
-    fn default_object_confidence() -> f32 { 0.4 }
+    fn default_face_confidence() -> f32 { 0.6 }
+    fn default_object_confidence() -> f32 { 0.5 }
     fn default_face_similarity_threshold() -> f32 { 0.6 }
     fn default_model_dir() -> String { "models".into() }
+    fn default_quality() -> String { "high".into() }
+
+    /// Parse the quality string into a DetectionQuality enum.
+    pub fn detection_quality(&self) -> crate::ai::object::DetectionQuality {
+        match self.quality.to_lowercase().as_str() {
+            "fast" => crate::ai::object::DetectionQuality::Fast,
+            "balanced" => crate::ai::object::DetectionQuality::Balanced,
+            _ => crate::ai::object::DetectionQuality::High,
+        }
+    }
 }
 
 impl Default for AiConfig {
@@ -267,10 +281,11 @@ impl Default for AiConfig {
             batch_size: 8,
             threads: 0,
             photos_per_minute: 60,
-            face_confidence: 0.5,
-            object_confidence: 0.4,
+            face_confidence: 0.6,
+            object_confidence: 0.5,
             face_similarity_threshold: 0.6,
             model_dir: "models".into(),
+            quality: "high".into(),
         }
     }
 }

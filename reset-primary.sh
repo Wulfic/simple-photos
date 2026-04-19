@@ -73,6 +73,13 @@ else
 fi
 echo "Server binary built."
 
+# Clean up Rust debug artifacts — the reset always uses the release binary;
+# debug/ accumulates from development builds and can consume 10+ GB.
+if [[ -d "$SERVER_DIR/target/debug" ]]; then
+    echo "Cleaning Rust debug build artifacts..."
+    rm -rf "$SERVER_DIR/target/debug"
+fi
+
 # ── Stop primary server ──────────────────────────────────────────────────────
 echo "Stopping server..."
 pkill -9 -f simple-photos-server 2>/dev/null && sleep 2 || true

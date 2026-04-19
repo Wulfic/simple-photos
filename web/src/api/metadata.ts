@@ -13,6 +13,27 @@ export interface MetadataUpdateRequest {
   longitude?: number;
   camera_model?: string;
   clear_gps?: boolean;
+  camera_make?: string;
+  lens_model?: string;
+  iso_speed?: number;
+  f_number?: number;
+  exposure_time?: string;
+  focal_length?: number;
+  flash?: string;
+  white_balance?: string;
+  exposure_program?: string;
+  metering_mode?: string;
+  orientation?: number;
+  software?: string;
+  artist?: string;
+  copyright?: string;
+  description?: string;
+  user_comment?: string;
+  color_space?: string;
+  exposure_bias?: number;
+  scene_type?: string;
+  digital_zoom?: number;
+  exif_overrides?: Record<string, string>;
 }
 
 export interface MetadataUpdateResponse {
@@ -41,6 +62,27 @@ export interface FullMetadataResponse {
   photo_year: number | null;
   photo_month: number | null;
   created_at: string;
+  camera_make: string | null;
+  lens_model: string | null;
+  iso_speed: number | null;
+  f_number: number | null;
+  exposure_time: string | null;
+  focal_length: number | null;
+  flash: string | null;
+  white_balance: string | null;
+  exposure_program: string | null;
+  metering_mode: string | null;
+  orientation: number | null;
+  software: string | null;
+  artist: string | null;
+  copyright: string | null;
+  description: string | null;
+  user_comment: string | null;
+  color_space: string | null;
+  exposure_bias: number | null;
+  scene_type: string | null;
+  digital_zoom: number | null;
+  exif_overrides: Record<string, string> | null;
   exif_tags: Record<string, string> | null;
 }
 

@@ -138,6 +138,7 @@ async fn main() -> anyhow::Result<()> {
     // Probe GPU hardware acceleration for video transcoding.
     let hw_accel = Arc::new(transcode::gpu_probe::probe_hwaccel(
         config.transcode.gpu_enabled,
+        &config.transcode.gpu_device,
     ));
 
     // Initialize global GPU config for the conversion pipeline.

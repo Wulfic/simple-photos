@@ -17,6 +17,7 @@
 //! - [`metadata`]        — EXIF extraction (dimensions, GPS, camera model, date).
 //! - [`utils`]           — Timestamp normalization and content hashing.
 
+pub mod burst;
 pub mod encryption;
 pub mod handlers;
 pub mod metadata;

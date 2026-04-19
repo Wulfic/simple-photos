@@ -53,6 +53,10 @@ export interface ThumbnailTileProps {
   cropData?: string | null;
   /** Video/audio duration in seconds */
   duration?: number;
+  /** Photo subtype: "burst", "motion", "panorama", "equirectangular", "hdr" */
+  photoSubtype?: string;
+  /** Number of photos in a burst stack (only set on the representative frame) */
+  burstCount?: number;
   /** Tile click handler */
   onClick: () => void;
   /** Long-press handler (selection mode) */

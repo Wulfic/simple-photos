@@ -246,6 +246,26 @@ pub async fn upload_photo(
     let xmp_data = tokio::fs::read(&file_path).await.unwrap_or_default();
     let subtype_info = extract_xmp_subtype(&xmp_data);
 
+    match &subtype_info.photo_subtype {
+        Some(subtype) => {
+            tracing::info!(
+                user_id = %auth.user_id,
+                filename = %final_filename,
+                photo_subtype = %subtype,
+                burst_id = ?subtype_info.burst_id,
+                motion_video_offset = ?subtype_info.motion_video_offset,
+                "Upload: special photo subtype detected"
+            );
+        }
+        None => {
+            tracing::debug!(
+                user_id = %auth.user_id,
+                filename = %final_filename,
+                "Upload: no XMP subtype detected (standard photo)"
+            );
+        }
+    }
+
     let final_taken_at = exif_taken
         .map(|t| normalize_iso_timestamp(&t))
         .unwrap_or_else(|| now.clone());

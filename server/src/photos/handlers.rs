@@ -574,3 +574,18 @@ pub async fn list_burst_photos(
 
     Ok(Json(photos))
 }
+
+/// POST /api/photos/detect-bursts
+/// Manually trigger timestamp-based burst detection for the current user.
+pub async fn detect_bursts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let groups = crate::photos::burst::detect_bursts_for_user(&state.pool, &auth.user_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("Burst detection failed: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "burst_groups_created": groups,
+    })))
+}

@@ -304,6 +304,139 @@ pub async fn list_timeline_month_photos(
     Ok(Json(photos))
 }
 
+// ── Memories (auto-generated photo clusters by location + date) ──────
+
+/// A Memory represents a group of photos taken at a specific location
+/// during a contiguous period (same day or within a few days).
+#[derive(Serialize)]
+pub struct Memory {
+    pub id: String,
+    pub name: String,
+    pub city: String,
+    pub country: String,
+    pub date_label: String,
+    pub photo_count: i64,
+    pub first_photo_id: Option<String>,
+    pub first_thumb_path: Option<String>,
+}
+
+/// GET /api/geo/memories — auto-generated smart albums from location + date clusters.
+///
+/// Groups photos that share the same city and were taken on the same date.
+/// Returns them sorted by most recent first with descriptive names.
+pub async fn list_memories(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Memory>>, AppError> {
+    // Group photos by city + date, returning the count, first photo ID, and thumb path
+    let rows: Vec<(String, String, String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT geo_city, geo_country, geo_country_code, DATE(taken_at) as photo_date, \
+                COUNT(*) as cnt, \
+                MIN(id) as first_id, \
+                (SELECT thumb_path FROM photos p2 WHERE p2.user_id = photos.user_id \
+                 AND p2.geo_city = photos.geo_city AND DATE(p2.taken_at) = DATE(photos.taken_at) \
+                 AND p2.thumb_path IS NOT NULL LIMIT 1) as thumb \
+         FROM photos \
+         WHERE user_id = ?1 AND geo_city IS NOT NULL AND taken_at IS NOT NULL \
+         GROUP BY geo_city, geo_country, DATE(taken_at) \
+         HAVING cnt >= 3 \
+         ORDER BY photo_date DESC \
+         LIMIT 100"
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let memories = rows.into_iter().map(|(city, country, _code, date_str, count, first_id, thumb)| {
+        // Format a human-readable date label
+        let date_label = format_memory_date(&date_str);
+        let name = format!("{} on {}", city, date_label);
+        let id = format!("{}_{}", city.to_lowercase().replace(' ', "-"), date_str);
+
+        Memory {
+            id,
+            name,
+            city,
+            country,
+            date_label,
+            photo_count: count,
+            first_photo_id: first_id,
+            first_thumb_path: thumb,
+        }
+    }).collect();
+
+    Ok(Json(memories))
+}
+
+/// GET /api/geo/memories/:id/photos — photos in a specific memory cluster.
+pub async fn list_memory_photos(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(memory_id): Path<String>,
+) -> Result<Json<Vec<PhotoSummary>>, AppError> {
+    // Parse memory_id back into city + date components
+    // Format: "city-name_YYYY-MM-DD"
+    let parts: Vec<&str> = memory_id.rsplitn(2, '_').collect();
+    if parts.len() != 2 {
+        return Err(AppError::BadRequest("Invalid memory ID format".into()));
+    }
+    let date_str = parts[0];
+    let city_slug = parts[1];
+
+    // Look up the actual city name by matching the slug
+    let city_row: Option<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT geo_city FROM photos \
+         WHERE user_id = ?1 AND geo_city IS NOT NULL AND \
+               LOWER(REPLACE(geo_city, ' ', '-')) = ?2 \
+         LIMIT 1"
+    )
+    .bind(&auth.user_id)
+    .bind(city_slug)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let city = city_row
+        .map(|(c,)| c)
+        .ok_or_else(|| AppError::NotFound)?;
+
+    let rows: Vec<(String, String, Option<String>, Option<String>, Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT id, filename, thumb_path, taken_at, latitude, longitude \
+         FROM photos WHERE user_id = ?1 AND geo_city = ?2 AND DATE(taken_at) = ?3 \
+         ORDER BY taken_at ASC"
+    )
+    .bind(&auth.user_id)
+    .bind(&city)
+    .bind(date_str)
+    .fetch_all(&state.pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Err(AppError::NotFound);
+    }
+
+    let photos = rows.into_iter().map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
+        id, filename, thumb_path: thumb, taken_at: taken, latitude: lat, longitude: lon,
+    }).collect();
+
+    Ok(Json(photos))
+}
+
+/// Format a date string (YYYY-MM-DD) into a readable label like "Jun 6, 2025".
+fn format_memory_date(date_str: &str) -> String {
+    let parts: Vec<&str> = date_str.split('-').collect();
+    if parts.len() != 3 {
+        return date_str.to_string();
+    }
+    let month = match parts[1] {
+        "01" => "Jan", "02" => "Feb", "03" => "Mar", "04" => "Apr",
+        "05" => "May", "06" => "Jun", "07" => "Jul", "08" => "Aug",
+        "09" => "Sep", "10" => "Oct", "11" => "Nov", "12" => "Dec",
+        _ => parts[1],
+    };
+    let day = parts[2].trim_start_matches('0');
+    format!("{} {}, {}", month, day, parts[0])
+}
+
 // ── Scrub ────────────────────────────────────────────────────────────
 
 /// POST /api/geo/scrub — scrub all geolocation data for this user.

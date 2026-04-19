@@ -130,15 +130,15 @@ export default function GeolocationSection({
       </div>
 
       {/* Scrub on upload toggle */}
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-2">
         <div>
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-            Strip GPS on Upload
+            Remove GPS from New Uploads
           </h3>
           <p className="text-xs text-gray-500 dark:text-gray-400">
             {status?.scrub_on_upload
-              ? "GPS coordinates are removed from new uploads."
-              : "GPS coordinates are preserved on upload."}
+              ? "New uploads will have GPS coordinates removed before saving."
+              : "New uploads will keep their original GPS coordinates."}
           </p>
         </div>
         <button
@@ -159,6 +159,10 @@ export default function GeolocationSection({
           />
         </button>
       </div>
+      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4 ml-1">
+        This only affects future uploads — photos already in your library are not changed.
+        Use &quot;Scrub All&quot; below to remove GPS from existing photos.
+      </p>
 
       {/* Status info */}
       {status && (

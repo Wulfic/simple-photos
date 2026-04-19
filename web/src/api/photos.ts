@@ -125,10 +125,26 @@ export const photosApi = {
         crop_metadata: string | null;
         photo_hash: string | null;
         source_path: string | null;
+        photo_subtype: string | null;
+        burst_id: string | null;
+        motion_video_blob_id: string | null;
       }>;
       next_cursor: string | null;
     }>(`/photos/encrypted-sync${qs ? `?${qs}` : ""}`);
   },
 
+  /** URL for serving the embedded motion video for a motion photo */
+  motionVideoUrl: (photoId: string) => `${BASE}/photos/${photoId}/motion-video`,
+
+  /** Fetch all frames in a burst group */
+  burstFrames: (burstId: string) =>
+    request<Array<{
+      id: string;
+      filename: string;
+      taken_at: string | null;
+      width: number;
+      height: number;
+      thumb_path: string | null;
+    }>>(`/photos/burst/${encodeURIComponent(burstId)}`),
 
 };

@@ -283,12 +283,14 @@ export default function Albums() {
           coverPhoto={smartAlbumCovers.videos}
           onClick={() => navigate("/albums/smart-videos")}
         />
-        <SmartAlbumCard
-          label="Audio"
-          count={encryptedPhotoCounts?.audio ?? 0}
-          coverPhoto={smartAlbumCovers.audio}
-          onClick={() => navigate("/albums/smart-audio")}
-        />
+        {(encryptedPhotoCounts?.audio ?? 0) > 0 && (
+          <SmartAlbumCard
+            label="Audio"
+            count={encryptedPhotoCounts?.audio ?? 0}
+            coverPhoto={smartAlbumCovers.audio}
+            onClick={() => navigate("/albums/smart-audio")}
+          />
+        )}
         <SmartAlbumCard
           label="People"
           count={0}
@@ -296,22 +298,10 @@ export default function Albums() {
           onClick={() => navigate("/albums/smart-people")}
         />
         <SmartAlbumCard
-          label="Objects"
+          label="Memories"
           count={0}
           coverPhoto={undefined}
-          onClick={() => navigate("/albums/smart-objects")}
-        />
-        <SmartAlbumCard
-          label="Places"
-          count={0}
-          coverPhoto={undefined}
-          onClick={() => navigate("/albums/smart-places")}
-        />
-        <SmartAlbumCard
-          label="Timeline"
-          count={0}
-          coverPhoto={undefined}
-          onClick={() => navigate("/albums/smart-timeline")}
+          onClick={() => navigate("/albums/smart-memories")}
         />
 
         {/* ── User-created albums ───────────────────────────────────────── */}

@@ -66,7 +66,10 @@ impl HwAccelCapability {
 /// Priority order: NVENC > QSV > VAAPI > AMF > CPU.
 /// Each candidate is verified by checking that the corresponding
 /// FFmpeg encoder is available.
-pub fn probe_hwaccel(gpu_enabled: bool) -> HwAccelCapability {
+///
+/// If `device_override` is non-empty, it is used as the GPU device path
+/// (e.g. "/dev/dri/renderD128") instead of auto-detection.
+pub fn probe_hwaccel(gpu_enabled: bool, device_override: &str) -> HwAccelCapability {
     if !gpu_enabled {
         tracing::info!("GPU transcoding disabled by config");
         return HwAccelCapability::cpu_fallback();
@@ -82,6 +85,18 @@ pub fn probe_hwaccel(gpu_enabled: bool) -> HwAccelCapability {
     };
 
     let encoders = run_ffmpeg_encoders().unwrap_or_default();
+
+    tracing::debug!(
+        hwaccels = %hwaccels.lines().take(20).collect::<Vec<_>>().join(", "),
+        "GPU probe: available FFmpeg hardware accelerators"
+    );
+    tracing::debug!(
+        has_h264_nvenc = encoders.contains("h264_nvenc"),
+        has_h264_qsv = encoders.contains("h264_qsv"),
+        has_h264_vaapi = encoders.contains("h264_vaapi"),
+        has_h264_amf = encoders.contains("h264_amf"),
+        "GPU probe: hardware encoder availability"
+    );
 
     // Priority: NVENC > QSV > VAAPI > AMF
     if hwaccels.contains("cuda") && encoders.contains("h264_nvenc") {
@@ -103,11 +118,19 @@ pub fn probe_hwaccel(gpu_enabled: bool) -> HwAccelCapability {
     }
 
     if hwaccels.contains("vaapi") && encoders.contains("h264_vaapi") {
-        // Find the render device
-        let device = find_vaapi_device();
+        // Use configured device or auto-detect
+        let device = if !device_override.is_empty() {
+            tracing::info!(
+                device = %device_override,
+                "GPU transcode: using configured VAAPI device"
+            );
+            Some(device_override.to_string())
+        } else {
+            find_vaapi_device()
+        };
         tracing::info!(
-            "GPU transcode: detected VAAPI (h264_vaapi), device: {:?}",
-            device
+            device = ?device,
+            "GPU transcode: detected VAAPI (h264_vaapi)"
         );
         return HwAccelCapability {
             accel_type: HwAccelType::Vaapi,

@@ -6,7 +6,8 @@
 //!
 //! Rate-limited by `photos_per_minute` config to avoid overwhelming the CPU.
 
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tokio::time;
@@ -20,17 +21,16 @@ use crate::ai::tagging;
 use crate::config::AiConfig;
 
 /// Spawn the background AI processor task.
-pub fn spawn_ai_processor(pool: SqlitePool, config: AiConfig) {
-    if !config.enabled {
-        tracing::info!("AI processing is disabled by config");
-        return;
-    }
-
+///
+/// Always spawns the processor regardless of `config.enabled`. The processor
+/// checks per-user `ai_enabled` settings each cycle, using `config.enabled`
+/// as the default for users who haven't explicitly toggled. This allows the
+/// runtime toggle (`POST /api/ai/toggle`) to actually work.
+pub fn spawn_ai_processor(pool: SqlitePool, config: AiConfig, storage_root: PathBuf) {
     let engine = AiEngine::new(&config);
     if !engine.has_any_capability() {
         tracing::warn!(
-            "AI processing is enabled but no models are available. \
-             Place ONNX models in '{}' to enable AI features. \
+            "AI processor: no ONNX models found in '{}'. \
              Using fallback heuristic detectors.",
             config.model_dir
         );
@@ -44,14 +44,15 @@ pub fn spawn_ai_processor(pool: SqlitePool, config: AiConfig) {
         let interval = Duration::from_secs(60 / photos_per_minute as u64);
 
         tracing::info!(
-            "AI processor started: {} photos/min, batch_size={}, provider={}",
+            "AI processor started: {} photos/min, batch_size={}, provider={}, config_default={}",
             photos_per_minute,
             config.batch_size,
-            engine.provider()
+            engine.provider(),
+            if config.enabled { "enabled" } else { "disabled" }
         );
 
         loop {
-            if let Err(e) = process_batch(&pool, &engine, &config).await {
+            if let Err(e) = process_batch(&pool, &engine, &config, &storage_root).await {
                 tracing::error!("AI processor error: {}", e);
             }
 
@@ -65,32 +66,32 @@ async fn process_batch(
     pool: &SqlitePool,
     engine: &AiEngine,
     config: &AiConfig,
+    storage_root: &PathBuf,
 ) -> anyhow::Result<()> {
-    // Check if AI is still enabled (could be toggled via user_settings)
-    let enabled: Option<(String,)> = sqlx::query_as(
-        "SELECT value FROM user_settings WHERE key = 'ai_enabled' LIMIT 1"
-    )
-    .fetch_optional(pool)
-    .await?;
+    // Find unprocessed photos only for users who have AI enabled.
+    // - Users who explicitly set ai_enabled = 'true' → included
+    // - Users who explicitly set ai_enabled = 'false' → excluded
+    // - Users with no setting → included only if config.enabled is true
+    let config_default_enabled = if config.enabled { 1i32 } else { 0i32 };
 
-    if let Some((val,)) = &enabled {
-        if val == "false" {
-            return Ok(());
-        }
-    }
-
-    // Find unprocessed photos (photos not in ai_processed_photos)
     let unprocessed: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT p.id, p.user_id, p.filename FROM photos p \
          WHERE NOT EXISTS ( \
              SELECT 1 FROM ai_processed_photos ap \
              WHERE ap.photo_id = p.id AND ap.user_id = p.user_id \
          ) \
-         AND p.encrypted_blob_id IS NULL \
+         AND p.file_path IS NOT NULL \
+         AND ( \
+             EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'ai_enabled' AND us.value = 'true') \
+             OR ( \
+                 ?2 = 1 AND NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'ai_enabled') \
+             ) \
+         ) \
          ORDER BY p.created_at DESC \
          LIMIT ?1"
     )
     .bind(config.batch_size as i64)
+    .bind(config_default_enabled)
     .fetch_all(pool)
     .await?;
 
@@ -98,15 +99,51 @@ async fn process_batch(
         return Ok(());
     }
 
-    tracing::debug!("AI processor: processing {} photos", unprocessed.len());
+    tracing::info!(
+        "AI processor: batch of {} photo(s) queued for recognition [provider={}]",
+        unprocessed.len(),
+        engine.provider()
+    );
+
+    let batch_start = Instant::now();
+    let mut total_faces = 0usize;
+    let mut total_objects = 0usize;
 
     for (photo_id, user_id, filename) in &unprocessed {
-        if let Err(e) = process_single_photo(pool, engine, config, photo_id, user_id, &filename).await {
-            tracing::warn!("AI processor: failed to process photo {}: {}", photo_id, e);
-            // Mark as processed anyway to avoid infinite retry loops
-            mark_processed(pool, photo_id, user_id).await?;
+        let photo_start = Instant::now();
+        match process_single_photo(pool, engine, config, storage_root, photo_id, user_id, filename).await {
+            Ok((nf, no)) => {
+                total_faces += nf;
+                total_objects += no;
+                tracing::info!(
+                    photo_id = %photo_id,
+                    filename = %filename,
+                    faces = nf,
+                    objects = no,
+                    elapsed_ms = photo_start.elapsed().as_millis(),
+                    "AI processor: photo processed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    photo_id = %photo_id,
+                    filename = %filename,
+                    error = %e,
+                    "AI processor: failed to process photo — marking done to skip retry"
+                );
+                // Mark as processed anyway to avoid infinite retry loops
+                mark_processed(pool, photo_id, user_id).await?;
+            }
         }
     }
+
+    tracing::info!(
+        photos = unprocessed.len(),
+        faces_found = total_faces,
+        objects_found = total_objects,
+        elapsed_ms = batch_start.elapsed().as_millis(),
+        "AI processor: batch complete"
+    );
 
     // After processing a batch, re-run clustering for any users that had new detections
     let users_with_new: Vec<(String,)> = sqlx::query_as(
@@ -125,14 +162,16 @@ async fn process_batch(
 }
 
 /// Process a single photo: detect faces and objects, save to DB.
+/// Returns (face_count, object_count) on success.
 async fn process_single_photo(
     pool: &SqlitePool,
     _engine: &AiEngine,
     config: &AiConfig,
+    storage_root: &PathBuf,
     photo_id: &str,
     user_id: &str,
     filename: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<(usize, usize)> {
     // Load the photo file
     let file_path: Option<(String,)> = sqlx::query_as(
         "SELECT file_path FROM photos WHERE id = ?1 AND user_id = ?2"
@@ -145,49 +184,78 @@ async fn process_single_photo(
     let file_path = match file_path {
         Some((p,)) => p,
         None => {
-            tracing::debug!("AI: photo {} not found in DB, skipping", photo_id);
+            tracing::debug!(photo_id = %photo_id, "AI: photo not found in DB, skipping");
             mark_processed(pool, photo_id, user_id).await?;
-            return Ok(());
+            return Ok((0, 0));
         }
     };
 
+    // Resolve relative file_path against storage root
+    let abs_path = storage_root.join(&file_path);
+
     // Read the image bytes
-    let image_bytes = match tokio::fs::read(&file_path).await {
+    let image_bytes = match tokio::fs::read(&abs_path).await {
         Ok(bytes) => bytes,
         Err(e) => {
-            tracing::debug!("AI: cannot read {}: {}", file_path, e);
+            tracing::debug!(file_path = %file_path, abs_path = ?abs_path, error = %e, "AI: cannot read photo file, skipping");
             mark_processed(pool, photo_id, user_id).await?;
-            return Ok(());
+            return Ok((0, 0));
         }
     };
+
+    tracing::debug!(
+        photo_id = %photo_id,
+        filename = %filename,
+        size_bytes = image_bytes.len(),
+        "AI: starting recognition"
+    );
 
     // Skip very small files (probably thumbnails)
     if image_bytes.len() < 1000 {
+        tracing::debug!(photo_id = %photo_id, size_bytes = image_bytes.len(), "AI: file too small, skipping");
         mark_processed(pool, photo_id, user_id).await?;
-        return Ok(());
+        return Ok((0, 0));
     }
 
     // Decode image once for both pipelines
     let img = match image::load_from_memory(&image_bytes) {
         Ok(img) => img,
         Err(e) => {
-            tracing::debug!("AI: cannot decode {}: {}", filename, e);
+            tracing::debug!(filename = %filename, error = %e, "AI: cannot decode image, skipping");
             mark_processed(pool, photo_id, user_id).await?;
-            return Ok(());
+            return Ok((0, 0));
         }
     };
+    tracing::debug!(
+        photo_id = %photo_id,
+        width = img.width(),
+        height = img.height(),
+        "AI: image decoded, running detection pipelines"
+    );
 
     // Clear any previous AI tags before re-processing
     tagging::clear_ai_tags(pool, user_id, photo_id).await?;
 
     // Face detection
+    let face_start = Instant::now();
     let face_detections = face::detect_faces_from_image(&img, config.face_confidence)?;
     tracing::debug!(
-        "AI: {} faces detected in {} ({})",
-        face_detections.len(),
-        filename,
-        photo_id
+        photo_id = %photo_id,
+        filename = %filename,
+        faces = face_detections.len(),
+        confidence_threshold = config.face_confidence,
+        elapsed_ms = face_start.elapsed().as_millis(),
+        "AI: face detection complete"
     );
+    for (i, det) in face_detections.iter().enumerate() {
+        tracing::debug!(
+            photo_id = %photo_id,
+            face_index = i,
+            confidence = format!("{:.3}", det.confidence),
+            bbox = format!("x={:.3} y={:.3} w={:.3} h={:.3}", det.bbox.x, det.bbox.y, det.bbox.w, det.bbox.h),
+            "AI: face detected"
+        );
+    }
 
     for det in &face_detections {
         // Extract embedding for clustering
@@ -215,13 +283,25 @@ async fn process_single_photo(
     }
 
     // Object detection
-    let obj_detections = object::detect_objects_from_image(&img, config.object_confidence)?;
+    let obj_start = Instant::now();
+    let quality = config.detection_quality();
+    let obj_detections = object::detect_objects_with_quality(&img, config.object_confidence, quality)?;
     tracing::debug!(
-        "AI: {} objects detected in {} ({})",
-        obj_detections.len(),
-        filename,
-        photo_id
+        photo_id = %photo_id,
+        filename = %filename,
+        objects = obj_detections.len(),
+        confidence_threshold = config.object_confidence,
+        elapsed_ms = obj_start.elapsed().as_millis(),
+        "AI: object detection complete"
     );
+    for det in &obj_detections {
+        tracing::debug!(
+            photo_id = %photo_id,
+            class = %det.class_name,
+            confidence = format!("{:.3}", det.confidence),
+            "AI: object detected"
+        );
+    }
 
     for det in &obj_detections {
         sqlx::query(
@@ -246,7 +326,7 @@ async fn process_single_photo(
 
     mark_processed(pool, photo_id, user_id).await?;
 
-    Ok(())
+    Ok((face_detections.len(), obj_detections.len()))
 }
 
 /// Mark a photo as AI-processed.
@@ -284,6 +364,13 @@ async fn run_clustering(
         return Ok(());
     }
 
+    tracing::info!(
+        user_id = %user_id,
+        embeddings = rows.len(),
+        threshold = similarity_threshold,
+        "AI clustering: running agglomerative clustering"
+    );
+
     // Convert embeddings from bytes to f32 vectors
     let faces: Vec<(i64, Vec<f32>)> = rows
         .into_iter()
@@ -302,6 +389,7 @@ async fn run_clustering(
     // Run clustering
     let assignments = clustering::cluster_faces(&faces, similarity_threshold);
 
+    let cluster_start = Instant::now();
     // Map cluster assignments to database cluster IDs.
     // First, get existing clusters for this user.
     let existing_clusters: Vec<(i64,)> = sqlx::query_as(
@@ -317,7 +405,10 @@ async fn run_clustering(
     unique_clusters.dedup();
 
     // Create new clusters in the database for clusters that don't have a mapping
+    let existing_count = existing_clusters.len();
     let mut cluster_id_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut new_clusters_created = 0usize;
+    let mut clusters_updated = 0usize;
 
     for cluster_idx in &unique_clusters {
         // Count faces in this cluster
@@ -353,6 +444,7 @@ async fn run_clustering(
                 .bind(cid)
                 .execute(pool)
                 .await?;
+                clusters_updated += 1;
                 cid
             }
             None => {
@@ -365,6 +457,7 @@ async fn run_clustering(
                 .bind(count as i64)
                 .execute(pool)
                 .await?;
+                new_clusters_created += 1;
                 result.last_insert_rowid()
             }
         };
@@ -404,10 +497,14 @@ async fn run_clustering(
     }
 
     tracing::info!(
-        "AI clustering: assigned {} faces to {} clusters for user {}",
-        assignments.len(),
-        unique_clusters.len(),
-        user_id
+        user_id = %user_id,
+        faces_assigned = assignments.len(),
+        total_clusters = unique_clusters.len(),
+        existing_clusters = existing_count,
+        new_clusters = new_clusters_created,
+        updated_clusters = clusters_updated,
+        elapsed_ms = cluster_start.elapsed().as_millis(),
+        "AI clustering: complete"
     );
 
     Ok(())

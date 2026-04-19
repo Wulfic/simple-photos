@@ -28,7 +28,7 @@ tower = "0.5"
 tokio-util = { version = "0.7", features = ["io"] }
 dashmap = "6"
 subtle = "2"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 percent-encoding = "2"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 imagesize = "0.13"
@@ -43,6 +43,7 @@ http-body-util = "0.1"
 byteorder = "1"
 futures-util = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+tract-onnx = "0.22.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

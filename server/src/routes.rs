@@ -187,6 +187,10 @@ fn photo_routes() -> Router<AppState> {
             get(crate::photos::handlers::list_burst_photos),
         )
         .route(
+            "/photos/detect-bursts",
+            post(crate::photos::handlers::detect_bursts),
+        )
+        .route(
             "/photos/{id}/favorite",
             put(crate::photos::handlers::toggle_favorite),
         )
@@ -588,6 +592,9 @@ fn geo_routes() -> Router<AppState> {
         .route("/geo/timeline", get(crate::geo::handlers::list_timeline))
         .route("/geo/timeline/{year}", get(crate::geo::handlers::list_timeline_year))
         .route("/geo/timeline/{year}/{month}", get(crate::geo::handlers::list_timeline_month_photos))
+        // Memories (auto-generated smart albums)
+        .route("/geo/memories", get(crate::geo::handlers::list_memories))
+        .route("/geo/memories/{memory_id}/photos", get(crate::geo::handlers::list_memory_photos))
         // Scrub
         .route("/geo/scrub", post(crate::geo::handlers::scrub_geo_data))
 }

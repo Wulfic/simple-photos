@@ -48,7 +48,7 @@ pub async fn ai_status(
     .await?;
 
     let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM photos WHERE user_id = ?1 AND encrypted_blob_id IS NULL"
+        "SELECT COUNT(*) FROM photos WHERE user_id = ?1 AND file_path IS NOT NULL"
     )
     .bind(&auth.user_id)
     .fetch_one(&state.pool)
@@ -152,6 +152,14 @@ pub async fn ai_reprocess(
                 // Clear AI tags
                 tagging::clear_ai_tags(&state.pool, &auth.user_id, id).await?;
             }
+            // Clean up orphaned face clusters (clusters with no remaining detections)
+            sqlx::query(
+                "DELETE FROM face_clusters WHERE user_id = ?1 AND id NOT IN \
+                 (SELECT DISTINCT cluster_id FROM face_detections WHERE user_id = ?1 AND cluster_id IS NOT NULL)"
+            )
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
             count
         }
         _ => {
@@ -162,6 +170,12 @@ pub async fn ai_reprocess(
                 .await?;
 
             sqlx::query("DELETE FROM object_detections WHERE user_id = ?1")
+                .bind(&auth.user_id)
+                .execute(&state.pool)
+                .await?;
+
+            // Clear face clusters to prevent orphaned cluster data
+            sqlx::query("DELETE FROM face_clusters WHERE user_id = ?1")
                 .bind(&auth.user_id)
                 .execute(&state.pool)
                 .await?;

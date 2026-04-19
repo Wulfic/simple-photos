@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
-use crate::transcode::{HwAccelCapability, HwAccelType};
+use crate::transcode::HwAccelCapability;
 
 // ── GPU acceleration config (set once at startup) ────────────────────────────
 
@@ -261,6 +261,7 @@ pub async fn convert_file(
 
 /// Image → JPEG.  Tries FFmpeg first, falls back to ImageMagick.
 async fn convert_image(input: &str, output: &str) -> bool {
+    tracing::debug!(input = %input, output = %output, "Image conversion: starting JPEG conversion");
     // FFmpeg: high-quality JPEG output (-q:v 2 ≈ 92% quality).
     let mut cmd = tokio::process::Command::new("nice");
     cmd.args(["-n", "19", "ffmpeg", "-y", "-i", input, "-q:v", "2", output])
@@ -272,10 +273,12 @@ async fn convert_image(input: &str, output: &str) -> bool {
     ).await;
 
     if matches!(ffmpeg, Ok(s) if s.success()) {
+        tracing::debug!(input = %input, "Image conversion: FFmpeg JPEG conversion succeeded");
         return true;
     }
 
     // Fallback: ImageMagick `convert` (handles RAW, PSD, SVG, etc.)
+    tracing::debug!(input = %input, "Image conversion: FFmpeg failed, trying ImageMagick");
     let mut cmd = tokio::process::Command::new("convert");
     cmd.args([
             &format!("{}[0]", input), // [0] = first frame/page
@@ -291,7 +294,13 @@ async fn convert_image(input: &str, output: &str) -> bool {
         std::time::Duration::from_secs(600),
     ).await;
 
-    matches!(magick, Ok(s) if s.success())
+    let magick_ok = matches!(magick, Ok(s) if s.success());
+    if magick_ok {
+        tracing::debug!(input = %input, "Image conversion: ImageMagick conversion succeeded");
+    } else {
+        tracing::warn!(input = %input, "Image conversion: both FFmpeg and ImageMagick failed");
+    }
+    magick_ok
 }
 
 /// Video → MP4 (H.264 + AAC).  Quality-tuned for clarity at reasonable sizes.
@@ -308,6 +317,19 @@ async fn convert_video(
     if let Some(hw) = hwaccel {
         if hw.is_gpu() {
             let args = crate::transcode::ffmpeg_gpu::build_video_transcode_args(input, output, hw);
+            tracing::info!(
+                encoder = %hw.video_encoder,
+                accel = %hw.accel_type,
+                device = ?hw.device,
+                input = %input,
+                output = %output,
+                "GPU transcode: starting hardware-accelerated video conversion"
+            );
+            tracing::debug!(
+                ffmpeg_args = ?args,
+                "GPU transcode: FFmpeg command arguments"
+            );
+            let gpu_start = std::time::Instant::now();
             let mut cmd = tokio::process::Command::new("nice");
             let mut nice_args = vec!["-n".to_string(), "19".to_string(), "ffmpeg".to_string()];
             nice_args.extend(args);
@@ -322,7 +344,9 @@ async fn convert_video(
             if matches!(result, Ok(s) if s.success()) {
                 tracing::info!(
                     encoder = %hw.video_encoder,
-                    "GPU video transcode succeeded"
+                    elapsed_ms = gpu_start.elapsed().as_millis(),
+                    input = %input,
+                    "GPU transcode: hardware-accelerated conversion succeeded"
                 );
                 return true;
             }
@@ -330,14 +354,16 @@ async fn convert_video(
             if !fallback_to_cpu {
                 tracing::error!(
                     encoder = %hw.video_encoder,
-                    "GPU video transcode failed and CPU fallback disabled"
+                    elapsed_ms = gpu_start.elapsed().as_millis(),
+                    "GPU transcode: hardware conversion failed and CPU fallback is disabled"
                 );
                 return false;
             }
 
             tracing::warn!(
                 encoder = %hw.video_encoder,
-                "GPU video transcode failed, retrying with CPU (libx264)"
+                elapsed_ms = gpu_start.elapsed().as_millis(),
+                "GPU transcode: hardware conversion failed — retrying with CPU libx264"
             );
             // Remove partial output before retry
             let _ = tokio::fs::remove_file(output).await;
@@ -345,6 +371,13 @@ async fn convert_video(
     }
 
     // CPU fallback (original path)
+    tracing::info!(
+        input = %input,
+        output = %output,
+        encoder = "libx264",
+        "GPU transcode: running CPU software encoding"
+    );
+    let cpu_start = std::time::Instant::now();
     let mut cmd = tokio::process::Command::new("nice");
     cmd.args([
             "-n", "19",
@@ -365,12 +398,27 @@ async fn convert_video(
         &mut cmd,
         std::time::Duration::from_secs(600),
     ).await;
-
-    matches!(status, Ok(s) if s.success())
+    let ok = matches!(status, Ok(s) if s.success());
+    if ok {
+        tracing::info!(
+            input = %input,
+            elapsed_ms = cpu_start.elapsed().as_millis(),
+            "GPU transcode: CPU software encoding succeeded"
+        );
+    } else {
+        tracing::error!(
+            input = %input,
+            elapsed_ms = cpu_start.elapsed().as_millis(),
+            "GPU transcode: CPU software encoding failed"
+        );
+    }
+    ok
 }
 
 /// Audio → MP3 (LAME).
 async fn convert_audio(input: &str, output: &str) -> bool {
+    tracing::debug!(input = %input, output = %output, "Audio conversion: starting MP3 conversion");
+    tracing::debug!(input = %input, output = %output, "Audio conversion: starting MP3 conversion");
     let mut cmd = tokio::process::Command::new("nice");
     cmd.args([
             "-n", "19",

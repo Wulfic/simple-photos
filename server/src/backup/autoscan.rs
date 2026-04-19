@@ -369,6 +369,16 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     // Extract XMP subtype (motion, panorama, 360, HDR, burst)
                     let subtype_info = extract_xmp_subtype_async(abs_path.clone()).await;
 
+                    if let Some(ref st) = subtype_info.photo_subtype {
+                        tracing::info!(
+                            file = %rel_path,
+                            photo_subtype = %st,
+                            burst_id = ?subtype_info.burst_id,
+                            motion_video_offset = ?subtype_info.motion_video_offset,
+                            "[DIAG:AUTOSCAN] Special photo subtype detected"
+                        );
+                    }
+
                     let final_taken_at = exif_taken
                         .map(|t| crate::photos::utils::normalize_iso_timestamp(&t))
                         .or(modified);

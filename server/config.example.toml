@@ -91,19 +91,21 @@ enabled = false
 # key_path = "/path/to/privkey.pem"
 
 [ai]
-# AI face & object recognition. Requires ONNX model files in model_dir.
-# When enabled, the server detects faces/objects in photos, clusters faces
-# into person identities, and auto-applies tags (person:name, object:class).
+# AI face & object recognition. Without ONNX models, uses advanced
+# colour/texture/edge heuristic analysis to classify scenes and content
+# into 25+ categories (landscape, sunset, food, architecture, etc).
+# With ONNX model files in model_dir, uses ML models for higher accuracy.
 # GPU acceleration (CUDA) is used when available, falls back to CPU.
 enabled = false
 # gpu_preferred = true
 # batch_size = 8                  # images per inference batch
 # threads = 0                     # 0 = auto-detect (physical cores)
 # photos_per_minute = 60          # rate limit for background processing
-# face_confidence = 0.5           # minimum face detection confidence
-# object_confidence = 0.4         # minimum object detection confidence
+# face_confidence = 0.6           # minimum face detection confidence
+# object_confidence = 0.5         # minimum object detection confidence
 # face_similarity_threshold = 0.6 # cosine distance for face clustering
 # model_dir = "models"            # directory containing ONNX models
+# quality = "high"                # "fast", "balanced", or "high" — higher = slower but more accurate
 
 [geo]
 # Geolocation & timestamp smart albums. Resolves GPS coordinates to

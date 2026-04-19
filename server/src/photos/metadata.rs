@@ -564,42 +564,57 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
             info.motion_video_offset = Some(offset);
         }
 
+        let has_micro = text.contains("MicroVideo=\"1\"");
+        let has_gcam = text.contains("MotionPhoto=\"1\"");
         tracing::debug!(
-            "[xmp] Detected motion photo, video_offset={:?}",
-            info.motion_video_offset
+            has_microvideo_attr = has_micro,
+            has_motionphoto_attr = has_gcam,
+            video_offset = ?info.motion_video_offset,
+            "[xmp] Motion/live photo detected"
         );
         return info;
     }
 
-    // ── Panorama / 360° detection ───────────────────────────────────────
+    // ── Panorama / 360° detection ──────────────────────────────────────────────────
     // XMP: GPano:ProjectionType="equirectangular" or "cylindrical"
     if let Some(proj) = extract_xmp_str_attr(&text, "ProjectionType") {
         let proj_lower = proj.to_ascii_lowercase();
         if proj_lower == "equirectangular" {
             info.photo_subtype = Some("equirectangular".to_string());
-            tracing::debug!("[xmp] Detected equirectangular (360°) photo");
+            tracing::debug!(projection = %proj, "[xmp] Panorama detected: equirectangular (360°)");
             return info;
         } else if proj_lower == "cylindrical" {
             info.photo_subtype = Some("panorama".to_string());
-            tracing::debug!("[xmp] Detected cylindrical panorama");
+            tracing::debug!(projection = %proj, "[xmp] Panorama detected: cylindrical");
             return info;
+        } else {
+            tracing::debug!(projection = %proj, "[xmp] GPano:ProjectionType found but unrecognised, ignoring");
         }
     }
 
-    // ── HDR Gainmap detection ───────────────────────────────────────────
+    // ── HDR Gainmap detection ──────────────────────────────────────────────────
     // Ultra HDR: hdrgm:Version present in XMP
     if text.contains("hdrgm:Version") || text.contains("HDRGainMap") {
         info.photo_subtype = Some("hdr".to_string());
-        tracing::debug!("[xmp] Detected HDR Gainmap photo");
+        let has_version = text.contains("hdrgm:Version");
+        let has_gainmap = text.contains("HDRGainMap");
+        tracing::debug!(
+            has_hdrgm_version = has_version,
+            has_hdr_gainmap = has_gainmap,
+            "[xmp] HDR Gainmap (Ultra HDR) photo detected"
+        );
         return info;
     }
 
-    // ── Burst detection ─────────────────────────────────────────────────
+    // ── Burst detection ─────────────────────────────────────────────────────────────
     // Google: GCamera:BurstID or com.google.photos.burst.id
     if let Some(bid) = extract_xmp_str_attr(&text, "BurstID") {
         info.photo_subtype = Some("burst".to_string());
-        info.burst_id = Some(bid);
-        tracing::debug!("[xmp] Detected burst photo, burst_id={:?}", info.burst_id);
+        info.burst_id = Some(bid.clone());
+        tracing::debug!(
+            burst_id = %bid,
+            "[xmp] Burst photo detected"
+        );
         return info;
     }
 
@@ -664,26 +679,6 @@ pub(crate) fn extract_motion_video(data: &[u8], offset: u64) -> Option<Vec<u8>> 
         );
         None
     }
-}
-
-/// Async extraction of motion video from a file on disk.
-pub(crate) async fn extract_motion_video_from_file(
-    path: &std::path::Path,
-    offset: u64,
-) -> Option<Vec<u8>> {
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        match std::fs::read(&path) {
-            Ok(data) => extract_motion_video(&data, offset),
-            Err(e) => {
-                tracing::warn!("[xmp] Failed to read file for motion video: {}", e);
-                None
-            }
-        }
-    })
-    .await
-    .ok()
-    .flatten()
 }
 
 // ── XMP helpers ─────────────────────────────────────────────────────────────

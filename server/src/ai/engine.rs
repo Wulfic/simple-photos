@@ -31,6 +31,7 @@ pub struct AiEngine {
     inner: Arc<AiEngineInner>,
 }
 
+#[allow(dead_code)] // Fields used once ONNX model loading is active
 struct AiEngineInner {
     provider: ExecutionProvider,
     config: AiConfig,
@@ -54,8 +55,6 @@ impl AiEngine {
 
         // Detect execution provider
         let provider = if config.gpu_preferred {
-            // Check for CUDA availability via environment heuristics.
-            // Actual ONNX Runtime GPU init would happen here with the `ort` crate.
             if Self::detect_cuda() {
                 tracing::info!("AI engine: CUDA GPU detected, using GPU acceleration");
                 ExecutionProvider::Cuda
@@ -68,8 +67,12 @@ impl AiEngine {
             ExecutionProvider::Cpu
         };
 
+        // Initialise face model (downloads if needed, loads via tract)
+        crate::ai::face::init_face_model(&config.model_dir);
+
         // Check for model files
-        let has_face_det = model_dir.join("face_detection.onnx").exists();
+        let has_face_det = model_dir.join("face_detection.onnx").exists()
+            || model_dir.join("ultraface-RFB-320.onnx").exists();
         let has_face_emb = model_dir.join("face_embedding.onnx").exists();
         let has_obj_det = model_dir.join("object_detection.onnx").exists();
 
@@ -113,6 +116,7 @@ impl AiEngine {
     }
 
     /// Whether GPU is being used.
+    #[allow(dead_code)] // Ready for ONNX integration
     pub fn is_gpu(&self) -> bool {
         self.inner.provider == ExecutionProvider::Cuda
     }
@@ -123,6 +127,7 @@ impl AiEngine {
     }
 
     /// Whether face embedding is available (model loaded).
+    #[allow(dead_code)] // Ready for ONNX integration
     pub fn has_face_embedding(&self) -> bool {
         self.inner.has_face_embedding_model
     }
@@ -138,16 +143,19 @@ impl AiEngine {
     }
 
     /// The AI config.
+    #[allow(dead_code)] // Ready for ONNX integration
     pub fn config(&self) -> &AiConfig {
         &self.inner.config
     }
 
     /// Number of inference threads.
+    #[allow(dead_code)] // Ready for ONNX integration
     pub fn num_threads(&self) -> usize {
         self.inner.num_threads
     }
 
     /// Path to the model directory.
+    #[allow(dead_code)] // Ready for ONNX integration
     pub fn model_dir(&self) -> &Path {
         &self.inner.model_dir
     }

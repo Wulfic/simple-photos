@@ -60,12 +60,33 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
   const [fullMeta, setFullMeta] = useState<FullMetadataResponse | null>(null);
   const [showExif, setShowExif] = useState(false);
 
-  // Edit form state
+  // Edit form state — basic
   const [editFilename, setEditFilename] = useState("");
   const [editTakenAt, setEditTakenAt] = useState("");
   const [editLat, setEditLat] = useState("");
   const [editLon, setEditLon] = useState("");
   const [editCamera, setEditCamera] = useState("");
+  // Edit form state — extended EXIF
+  const [editCameraMake, setEditCameraMake] = useState("");
+  const [editLens, setEditLens] = useState("");
+  const [editIso, setEditIso] = useState("");
+  const [editFNumber, setEditFNumber] = useState("");
+  const [editExposureTime, setEditExposureTime] = useState("");
+  const [editFocalLength, setEditFocalLength] = useState("");
+  const [editFlash, setEditFlash] = useState("");
+  const [editWhiteBalance, setEditWhiteBalance] = useState("");
+  const [editExposureProgram, setEditExposureProgram] = useState("");
+  const [editMeteringMode, setEditMeteringMode] = useState("");
+  const [editOrientation, setEditOrientation] = useState("");
+  const [editSoftware, setEditSoftware] = useState("");
+  const [editArtist, setEditArtist] = useState("");
+  const [editCopyright, setEditCopyright] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editUserComment, setEditUserComment] = useState("");
+  const [editColorSpace, setEditColorSpace] = useState("");
+  const [editExposureBias, setEditExposureBias] = useState("");
+  const [editSceneType, setEditSceneType] = useState("");
+  const [editDigitalZoom, setEditDigitalZoom] = useState("");
 
   const loadFullMetadata = useCallback(async () => {
     if (!photoId) return;
@@ -94,6 +115,27 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
     setEditLat(photoInfo?.latitude != null ? String(photoInfo.latitude) : "");
     setEditLon(photoInfo?.longitude != null ? String(photoInfo.longitude) : "");
     setEditCamera(photoInfo?.cameraModel ?? "");
+    // Populate extended fields from fullMeta
+    setEditCameraMake(fullMeta?.camera_make ?? "");
+    setEditLens(fullMeta?.lens_model ?? "");
+    setEditIso(fullMeta?.iso_speed != null ? String(fullMeta.iso_speed) : "");
+    setEditFNumber(fullMeta?.f_number != null ? String(fullMeta.f_number) : "");
+    setEditExposureTime(fullMeta?.exposure_time ?? "");
+    setEditFocalLength(fullMeta?.focal_length != null ? String(fullMeta.focal_length) : "");
+    setEditFlash(fullMeta?.flash ?? "");
+    setEditWhiteBalance(fullMeta?.white_balance ?? "");
+    setEditExposureProgram(fullMeta?.exposure_program ?? "");
+    setEditMeteringMode(fullMeta?.metering_mode ?? "");
+    setEditOrientation(fullMeta?.orientation != null ? String(fullMeta.orientation) : "");
+    setEditSoftware(fullMeta?.software ?? "");
+    setEditArtist(fullMeta?.artist ?? "");
+    setEditCopyright(fullMeta?.copyright ?? "");
+    setEditDescription(fullMeta?.description ?? "");
+    setEditUserComment(fullMeta?.user_comment ?? "");
+    setEditColorSpace(fullMeta?.color_space ?? "");
+    setEditExposureBias(fullMeta?.exposure_bias != null ? String(fullMeta.exposure_bias) : "");
+    setEditSceneType(fullMeta?.scene_type ?? "");
+    setEditDigitalZoom(fullMeta?.digital_zoom != null ? String(fullMeta.digital_zoom) : "");
     setEditing(true);
     setError(null);
   };
@@ -143,6 +185,46 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
           patch.longitude = lon;
         }
       }
+
+      // Helper to set string field only if changed
+      const diffStr = (editVal: string, origVal: string | null | undefined, key: keyof MetadataUpdateRequest) => {
+        if (editVal !== (origVal ?? "")) {
+          (patch as Record<string, unknown>)[key] = editVal || undefined;
+        }
+      };
+      // Helper to set numeric field only if changed
+      const diffNum = (editVal: string, origVal: number | null | undefined, key: keyof MetadataUpdateRequest) => {
+        const origStr = origVal != null ? String(origVal) : "";
+        if (editVal !== origStr) {
+          if (editVal.trim() === "") {
+            // Clear the field — send empty string to let the server handle it
+          } else {
+            const num = parseFloat(editVal);
+            if (!isNaN(num)) (patch as Record<string, unknown>)[key] = num;
+          }
+        }
+      };
+
+      diffStr(editCameraMake, fullMeta?.camera_make, "camera_make");
+      diffStr(editLens, fullMeta?.lens_model, "lens_model");
+      diffNum(editIso, fullMeta?.iso_speed, "iso_speed");
+      diffNum(editFNumber, fullMeta?.f_number, "f_number");
+      diffStr(editExposureTime, fullMeta?.exposure_time, "exposure_time");
+      diffNum(editFocalLength, fullMeta?.focal_length, "focal_length");
+      diffStr(editFlash, fullMeta?.flash, "flash");
+      diffStr(editWhiteBalance, fullMeta?.white_balance, "white_balance");
+      diffStr(editExposureProgram, fullMeta?.exposure_program, "exposure_program");
+      diffStr(editMeteringMode, fullMeta?.metering_mode, "metering_mode");
+      diffNum(editOrientation, fullMeta?.orientation, "orientation");
+      diffStr(editSoftware, fullMeta?.software, "software");
+      diffStr(editArtist, fullMeta?.artist, "artist");
+      diffStr(editCopyright, fullMeta?.copyright, "copyright");
+      diffStr(editDescription, fullMeta?.description, "description");
+      diffStr(editUserComment, fullMeta?.user_comment, "user_comment");
+      diffStr(editColorSpace, fullMeta?.color_space, "color_space");
+      diffNum(editExposureBias, fullMeta?.exposure_bias, "exposure_bias");
+      diffStr(editSceneType, fullMeta?.scene_type, "scene_type");
+      diffNum(editDigitalZoom, fullMeta?.digital_zoom, "digital_zoom");
 
       if (Object.keys(patch).length > 0) {
         await metadataApi.update(photoId, patch);
@@ -210,15 +292,61 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
           {photoInfo ? (
             editing ? (
               <>
+                {/* ── Basic ── */}
+                <div className="text-gray-500 text-[10px] uppercase tracking-wider pt-1">File</div>
                 <EditRow label="Filename" value={editFilename} onChange={setEditFilename} />
                 <EditRow label="Date Taken" value={editTakenAt} onChange={setEditTakenAt}
                   placeholder="2024-01-15T14:30:00Z" />
+                <EditRow label="Description" value={editDescription} onChange={setEditDescription} />
+                <EditRow label="Comment" value={editUserComment} onChange={setEditUserComment} />
+
+                {/* ── GPS ── */}
+                <div className="text-gray-500 text-[10px] uppercase tracking-wider pt-3">Location</div>
                 <EditRow label="Latitude" value={editLat} onChange={setEditLat}
                   placeholder="-90 to 90" type="number" />
                 <EditRow label="Longitude" value={editLon} onChange={setEditLon}
                   placeholder="-180 to 180" type="number" />
-                <EditRow label="Camera" value={editCamera} onChange={setEditCamera} />
-                <div className="flex gap-2 pt-2">
+
+                {/* ── Camera / Lens ── */}
+                <div className="text-gray-500 text-[10px] uppercase tracking-wider pt-3">Camera / Lens</div>
+                <EditRow label="Camera Model" value={editCamera} onChange={setEditCamera} />
+                <EditRow label="Camera Make" value={editCameraMake} onChange={setEditCameraMake} />
+                <EditRow label="Lens" value={editLens} onChange={setEditLens} />
+
+                {/* ── Exposure settings ── */}
+                <div className="text-gray-500 text-[10px] uppercase tracking-wider pt-3">Exposure</div>
+                <EditRow label="ISO" value={editIso} onChange={setEditIso} type="number" />
+                <EditRow label="F-Number" value={editFNumber} onChange={setEditFNumber}
+                  placeholder="e.g. 2.8" type="number" />
+                <EditRow label="Exposure Time" value={editExposureTime} onChange={setEditExposureTime}
+                  placeholder="e.g. 1/250" />
+                <EditRow label="Focal Length" value={editFocalLength} onChange={setEditFocalLength}
+                  placeholder="mm" type="number" />
+                <EditRow label="Exposure Bias" value={editExposureBias} onChange={setEditExposureBias}
+                  placeholder="EV" type="number" />
+                <EditRow label="Exposure Prog" value={editExposureProgram} onChange={setEditExposureProgram}
+                  placeholder="e.g. Aperture priority" />
+                <EditRow label="Metering" value={editMeteringMode} onChange={setEditMeteringMode}
+                  placeholder="e.g. Multi-segment" />
+                <EditRow label="Flash" value={editFlash} onChange={setEditFlash}
+                  placeholder="e.g. No Flash" />
+                <EditRow label="White Balance" value={editWhiteBalance} onChange={setEditWhiteBalance}
+                  placeholder="e.g. Auto" />
+
+                {/* ── Other metadata ── */}
+                <div className="text-gray-500 text-[10px] uppercase tracking-wider pt-3">Other</div>
+                <EditRow label="Orientation" value={editOrientation} onChange={setEditOrientation}
+                  placeholder="1-8" type="number" />
+                <EditRow label="Color Space" value={editColorSpace} onChange={setEditColorSpace}
+                  placeholder="e.g. sRGB" />
+                <EditRow label="Scene Type" value={editSceneType} onChange={setEditSceneType} />
+                <EditRow label="Digital Zoom" value={editDigitalZoom} onChange={setEditDigitalZoom}
+                  type="number" />
+                <EditRow label="Software" value={editSoftware} onChange={setEditSoftware} />
+                <EditRow label="Artist" value={editArtist} onChange={setEditArtist} />
+                <EditRow label="Copyright" value={editCopyright} onChange={setEditCopyright} />
+
+                <div className="flex gap-2 pt-3">
                   <button
                     onClick={saveEdit}
                     disabled={saving}
@@ -254,9 +382,54 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
                 {photoInfo.durationSecs != null && (
                   <InfoRow label="Duration" value={`${photoInfo.durationSecs.toFixed(1)}s`} />
                 )}
-                {photoInfo.cameraModel && (
-                  <InfoRow label="Device" value={photoInfo.cameraModel} />
+                {fullMeta?.description && (
+                  <InfoRow label="Description" value={fullMeta.description} />
                 )}
+
+                {/* Camera/Lens section */}
+                {(photoInfo.cameraModel || fullMeta?.camera_make || fullMeta?.lens_model) && (
+                  <div className="pt-2 border-t border-white/10 space-y-1">
+                    {photoInfo.cameraModel && (
+                      <InfoRow label="Camera" value={
+                        fullMeta?.camera_make
+                          ? `${fullMeta.camera_make} ${photoInfo.cameraModel}`
+                          : photoInfo.cameraModel
+                      } />
+                    )}
+                    {fullMeta?.lens_model && (
+                      <InfoRow label="Lens" value={fullMeta.lens_model} />
+                    )}
+                  </div>
+                )}
+
+                {/* Exposure section */}
+                {(fullMeta?.iso_speed != null || fullMeta?.f_number != null || fullMeta?.exposure_time || fullMeta?.focal_length != null) && (
+                  <div className="pt-2 border-t border-white/10 space-y-1">
+                    {fullMeta?.iso_speed != null && (
+                      <InfoRow label="ISO" value={String(fullMeta.iso_speed)} />
+                    )}
+                    {fullMeta?.f_number != null && (
+                      <InfoRow label="Aperture" value={`f/${fullMeta.f_number}`} />
+                    )}
+                    {fullMeta?.exposure_time && (
+                      <InfoRow label="Shutter" value={fullMeta.exposure_time} />
+                    )}
+                    {fullMeta?.focal_length != null && (
+                      <InfoRow label="Focal Length" value={`${fullMeta.focal_length}mm`} />
+                    )}
+                    {fullMeta?.flash && (
+                      <InfoRow label="Flash" value={fullMeta.flash} />
+                    )}
+                    {fullMeta?.white_balance && (
+                      <InfoRow label="White Balance" value={fullMeta.white_balance} />
+                    )}
+                    {fullMeta?.metering_mode && (
+                      <InfoRow label="Metering" value={fullMeta.metering_mode} />
+                    )}
+                  </div>
+                )}
+
+                {/* Location section */}
                 {fullMeta?.geo_city && (
                   <InfoRow label="Location" value={
                     [fullMeta.geo_city, fullMeta.geo_state, fullMeta.geo_country]
@@ -276,6 +449,16 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
                     </a>
                   </div>
                 )}
+
+                {/* Other metadata */}
+                {(fullMeta?.artist || fullMeta?.copyright || fullMeta?.software) && (
+                  <div className="pt-2 border-t border-white/10 space-y-1">
+                    {fullMeta?.artist && <InfoRow label="Artist" value={fullMeta.artist} />}
+                    {fullMeta?.copyright && <InfoRow label="Copyright" value={fullMeta.copyright} />}
+                    {fullMeta?.software && <InfoRow label="Software" value={fullMeta.software} />}
+                  </div>
+                )}
+
                 {photoInfo.albumNames && photoInfo.albumNames.length > 0 && (
                   <InfoRow label="Albums" value={photoInfo.albumNames.join(", ")} />
                 )}

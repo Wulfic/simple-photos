@@ -5,7 +5,7 @@
 //! - `POST /api/photos/{id}/metadata/write-exif` — write DB metadata back to file EXIF
 
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::HeaderMap;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,29 @@ pub struct MetadataUpdateRequest {
     /// Explicitly clear GPS coordinates when set to `true`.
     #[serde(default)]
     pub clear_gps: bool,
+    // ── Extended EXIF fields ──────────────────────────────────────
+    pub camera_make: Option<String>,
+    pub lens_model: Option<String>,
+    pub iso_speed: Option<i64>,
+    pub f_number: Option<f64>,
+    pub exposure_time: Option<String>,
+    pub focal_length: Option<f64>,
+    pub flash: Option<String>,
+    pub white_balance: Option<String>,
+    pub exposure_program: Option<String>,
+    pub metering_mode: Option<String>,
+    pub orientation: Option<i64>,
+    pub software: Option<String>,
+    pub artist: Option<String>,
+    pub copyright: Option<String>,
+    pub description: Option<String>,
+    pub user_comment: Option<String>,
+    pub color_space: Option<String>,
+    pub exposure_bias: Option<f64>,
+    pub scene_type: Option<String>,
+    pub digital_zoom: Option<f64>,
+    /// Arbitrary EXIF tag overrides (tag name → value).
+    pub exif_overrides: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Current metadata for a photo (DB + optional raw EXIF).
@@ -52,6 +75,28 @@ pub struct FullMetadataResponse {
     pub photo_year: Option<i64>,
     pub photo_month: Option<i64>,
     pub created_at: String,
+    // ── Extended EXIF fields ──────────────────────────────────────
+    pub camera_make: Option<String>,
+    pub lens_model: Option<String>,
+    pub iso_speed: Option<i64>,
+    pub f_number: Option<f64>,
+    pub exposure_time: Option<String>,
+    pub focal_length: Option<f64>,
+    pub flash: Option<String>,
+    pub white_balance: Option<String>,
+    pub exposure_program: Option<String>,
+    pub metering_mode: Option<String>,
+    pub orientation: Option<i64>,
+    pub software: Option<String>,
+    pub artist: Option<String>,
+    pub copyright: Option<String>,
+    pub description: Option<String>,
+    pub user_comment: Option<String>,
+    pub color_space: Option<String>,
+    pub exposure_bias: Option<f64>,
+    pub scene_type: Option<String>,
+    pub digital_zoom: Option<f64>,
+    pub exif_overrides: Option<std::collections::HashMap<String, String>>,
     /// Raw EXIF tags extracted from the file (key → display value).
     pub exif_tags: Option<std::collections::HashMap<String, String>>,
 }
@@ -221,6 +266,64 @@ pub async fn update_metadata(
         updated_fields.push("camera_model".to_string());
     }
 
+    // ── Extended EXIF field updates ──────────────────────────────
+    macro_rules! update_text_field {
+        ($field:ident, $col:expr) => {
+            if let Some(ref val) = req.$field {
+                sqlx::query(&format!("UPDATE photos SET {} = ?1 WHERE id = ?2", $col))
+                    .bind(val)
+                    .bind(&photo_id)
+                    .execute(&state.pool)
+                    .await?;
+                updated_fields.push($col.to_string());
+            }
+        };
+    }
+    macro_rules! update_num_field {
+        ($field:ident, $col:expr) => {
+            if let Some(val) = req.$field {
+                sqlx::query(&format!("UPDATE photos SET {} = ?1 WHERE id = ?2", $col))
+                    .bind(val)
+                    .bind(&photo_id)
+                    .execute(&state.pool)
+                    .await?;
+                updated_fields.push($col.to_string());
+            }
+        };
+    }
+
+    update_text_field!(camera_make, "camera_make");
+    update_text_field!(lens_model, "lens_model");
+    update_num_field!(iso_speed, "iso_speed");
+    update_num_field!(f_number, "f_number");
+    update_text_field!(exposure_time, "exposure_time");
+    update_num_field!(focal_length, "focal_length");
+    update_text_field!(flash, "flash");
+    update_text_field!(white_balance, "white_balance");
+    update_text_field!(exposure_program, "exposure_program");
+    update_text_field!(metering_mode, "metering_mode");
+    update_num_field!(orientation, "orientation");
+    update_text_field!(software, "software");
+    update_text_field!(artist, "artist");
+    update_text_field!(copyright, "copyright");
+    update_text_field!(description, "description");
+    update_text_field!(user_comment, "user_comment");
+    update_text_field!(color_space, "color_space");
+    update_num_field!(exposure_bias, "exposure_bias");
+    update_text_field!(scene_type, "scene_type");
+    update_num_field!(digital_zoom, "digital_zoom");
+
+    if let Some(ref overrides) = req.exif_overrides {
+        let json = serde_json::to_string(overrides)
+            .map_err(|e| AppError::BadRequest(format!("Invalid exif_overrides: {}", e)))?;
+        sqlx::query("UPDATE photos SET exif_overrides = ?1 WHERE id = ?2")
+            .bind(&json)
+            .bind(&photo_id)
+            .execute(&state.pool)
+            .await?;
+        updated_fields.push("exif_overrides".to_string());
+    }
+
     // Audit log
     crate::audit::log(
         &state,
@@ -307,6 +410,52 @@ pub async fn get_full_metadata(
     .fetch_one(&state.read_pool)
     .await?;
 
+    // Third query: extended EXIF columns
+    let exif_ext: (
+        Option<String>,  // camera_make
+        Option<String>,  // lens_model
+        Option<i64>,     // iso_speed
+        Option<f64>,     // f_number
+        Option<String>,  // exposure_time
+        Option<f64>,     // focal_length
+        Option<String>,  // flash
+        Option<String>,  // white_balance
+        Option<String>,  // exposure_program
+        Option<String>,  // metering_mode
+        Option<i64>,     // orientation
+        Option<String>,  // software
+        Option<String>,  // artist
+        Option<String>,  // copyright
+        Option<String>,  // description
+        Option<String>,  // user_comment
+    ) = sqlx::query_as(
+        "SELECT camera_make, lens_model, iso_speed, f_number, exposure_time, \
+         focal_length, flash, white_balance, exposure_program, metering_mode, \
+         orientation, software, artist, copyright, description, user_comment \
+         FROM photos WHERE id = ?1",
+    )
+    .bind(&photo_id)
+    .fetch_one(&state.read_pool)
+    .await?;
+
+    // Fourth query: remaining extended EXIF columns
+    let exif_ext2: (
+        Option<String>,  // color_space
+        Option<f64>,     // exposure_bias
+        Option<String>,  // scene_type
+        Option<f64>,     // digital_zoom
+        Option<String>,  // exif_overrides (JSON)
+    ) = sqlx::query_as(
+        "SELECT color_space, exposure_bias, scene_type, digital_zoom, exif_overrides \
+         FROM photos WHERE id = ?1",
+    )
+    .bind(&photo_id)
+    .fetch_one(&state.read_pool)
+    .await?;
+
+    let exif_overrides_parsed: Option<std::collections::HashMap<String, String>> =
+        exif_ext2.4.as_ref().and_then(|s| serde_json::from_str(s).ok());
+
     // Try to extract EXIF tags from the file on disk
     let exif_tags = if !file_path.is_empty() {
         let storage_root = (**state.storage_root.load()).clone();
@@ -344,6 +493,27 @@ pub async fn get_full_metadata(
         photo_year: geo.4,
         photo_month: geo.5,
         created_at,
+        camera_make: exif_ext.0,
+        lens_model: exif_ext.1,
+        iso_speed: exif_ext.2,
+        f_number: exif_ext.3,
+        exposure_time: exif_ext.4,
+        focal_length: exif_ext.5,
+        flash: exif_ext.6,
+        white_balance: exif_ext.7,
+        exposure_program: exif_ext.8,
+        metering_mode: exif_ext.9,
+        orientation: exif_ext.10,
+        software: exif_ext.11,
+        artist: exif_ext.12,
+        copyright: exif_ext.13,
+        description: exif_ext.14,
+        user_comment: exif_ext.15,
+        color_space: exif_ext2.0,
+        exposure_bias: exif_ext2.1,
+        scene_type: exif_ext2.2,
+        digital_zoom: exif_ext2.3,
+        exif_overrides: exif_overrides_parsed,
         exif_tags,
     }))
 }
@@ -358,7 +528,7 @@ pub async fn write_exif_to_file(
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Json<WriteExifResponse>, AppError> {
-    // Fetch photo record
+    // Fetch photo record — core fields
     let row: Option<(
         String,          // file_path
         String,          // mime_type
@@ -398,15 +568,66 @@ pub async fn write_exif_to_file(
         return Err(AppError::NotFound);
     }
 
-    // Write EXIF using exiftool (if available) or img_parts for minimal EXIF
-    let taken_at = row.2.clone();
-    let latitude = row.3;
-    let longitude = row.4;
-    let camera_model = row.5.clone();
+    // Fetch extended EXIF fields
+    let ext: (
+        Option<String>, Option<String>, Option<i64>, Option<f64>,
+        Option<String>, Option<f64>, Option<String>, Option<String>,
+        Option<String>, Option<String>, Option<i64>, Option<String>,
+        Option<String>, Option<String>, Option<String>, Option<String>,
+    ) = sqlx::query_as(
+        "SELECT camera_make, lens_model, iso_speed, f_number, exposure_time, \
+         focal_length, flash, white_balance, exposure_program, metering_mode, \
+         orientation, software, artist, copyright, description, user_comment \
+         FROM photos WHERE id = ?1",
+    )
+    .bind(&photo_id)
+    .fetch_one(&state.read_pool)
+    .await?;
+
+    let ext2: (Option<String>, Option<f64>, Option<String>, Option<f64>, Option<String>) =
+        sqlx::query_as(
+            "SELECT color_space, exposure_bias, scene_type, digital_zoom, exif_overrides \
+             FROM photos WHERE id = ?1",
+        )
+        .bind(&photo_id)
+        .fetch_one(&state.read_pool)
+        .await?;
+
+    let exif_overrides: Option<std::collections::HashMap<String, String>> =
+        ext2.4.as_ref().and_then(|s| serde_json::from_str(s).ok());
+
+    // Build the full EXIF write fields struct
+    let write_fields = ExifWriteFields {
+        taken_at: row.2.clone(),
+        latitude: row.3,
+        longitude: row.4,
+        camera_model: row.5.clone(),
+        camera_make: ext.0,
+        lens_model: ext.1,
+        iso_speed: ext.2,
+        f_number: ext.3,
+        exposure_time: ext.4,
+        focal_length: ext.5,
+        flash: ext.6,
+        white_balance: ext.7,
+        exposure_program: ext.8,
+        metering_mode: ext.9,
+        orientation: ext.10,
+        software: ext.11,
+        artist: ext.12,
+        copyright: ext.13,
+        description: ext.14,
+        user_comment: ext.15,
+        color_space: ext2.0,
+        exposure_bias: ext2.1,
+        scene_type: ext2.2,
+        digital_zoom: ext2.3,
+        exif_overrides,
+    };
 
     let path_clone = abs_path.clone();
     let write_result = tokio::task::spawn_blocking(move || {
-        write_exif_fields(&path_clone, taken_at, latitude, longitude, camera_model)
+        write_exif_fields_full(&path_clone, &write_fields)
     })
     .await
     .map_err(|e| AppError::Internal(format!("EXIF write task failed: {}", e)))?;
@@ -482,20 +703,43 @@ fn extract_exif_tags(
 
 // ── EXIF writing helper ──────────────────────────────────────────────
 
-/// Write metadata fields to a JPEG file's EXIF using little_exif.
-/// This reads the file, updates EXIF data, and writes it back.
-fn write_exif_fields(
-    file_path: &std::path::Path,
+/// All metadata fields that can be written to EXIF.
+struct ExifWriteFields {
     taken_at: Option<String>,
     latitude: Option<f64>,
     longitude: Option<f64>,
     camera_model: Option<String>,
+    camera_make: Option<String>,
+    lens_model: Option<String>,
+    iso_speed: Option<i64>,
+    f_number: Option<f64>,
+    exposure_time: Option<String>,
+    focal_length: Option<f64>,
+    flash: Option<String>,
+    white_balance: Option<String>,
+    exposure_program: Option<String>,
+    metering_mode: Option<String>,
+    orientation: Option<i64>,
+    software: Option<String>,
+    artist: Option<String>,
+    copyright: Option<String>,
+    description: Option<String>,
+    user_comment: Option<String>,
+    color_space: Option<String>,
+    exposure_bias: Option<f64>,
+    scene_type: Option<String>,
+    digital_zoom: Option<f64>,
+    exif_overrides: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Write all metadata fields to a JPEG file's EXIF using exiftool.
+fn write_exif_fields_full(
+    file_path: &std::path::Path,
+    fields: &ExifWriteFields,
 ) -> Result<(), String> {
-    // Use exiftool if available, otherwise fall back to manual approach
     let mut args = vec!["-overwrite_original".to_string()];
 
-    if let Some(ref dt) = taken_at {
-        // Convert ISO 8601 to EXIF format: "2024:01:15 14:30:00"
+    if let Some(ref dt) = fields.taken_at {
         let exif_dt = dt
             .replace('-', ":")
             .replace('T', " ")
@@ -504,7 +748,7 @@ fn write_exif_fields(
         args.push(format!("-DateTimeOriginal={}", exif_dt));
     }
 
-    if let (Some(lat), Some(lon)) = (latitude, longitude) {
+    if let (Some(lat), Some(lon)) = (fields.latitude, fields.longitude) {
         let lat_ref = if lat >= 0.0 { "N" } else { "S" };
         let lon_ref = if lon >= 0.0 { "E" } else { "W" };
         args.push(format!("-GPSLatitude={}", lat.abs()));
@@ -513,8 +757,56 @@ fn write_exif_fields(
         args.push(format!("-GPSLongitudeRef={}", lon_ref));
     }
 
-    if let Some(ref model) = camera_model {
-        args.push(format!("-Model={}", model));
+    macro_rules! push_str_tag {
+        ($field:expr, $tag:expr) => {
+            if let Some(ref val) = $field {
+                if !val.is_empty() {
+                    args.push(format!("-{}={}", $tag, val));
+                }
+            }
+        };
+    }
+    macro_rules! push_num_tag {
+        ($field:expr, $tag:expr) => {
+            if let Some(val) = $field {
+                args.push(format!("-{}={}", $tag, val));
+            }
+        };
+    }
+
+    push_str_tag!(fields.camera_model, "Model");
+    push_str_tag!(fields.camera_make, "Make");
+    push_str_tag!(fields.lens_model, "LensModel");
+    push_num_tag!(fields.iso_speed, "ISO");
+    push_num_tag!(fields.f_number, "FNumber");
+    push_str_tag!(fields.exposure_time, "ExposureTime");
+    push_num_tag!(fields.focal_length, "FocalLength");
+    push_str_tag!(fields.flash, "Flash");
+    push_str_tag!(fields.white_balance, "WhiteBalance");
+    push_str_tag!(fields.exposure_program, "ExposureProgram");
+    push_str_tag!(fields.metering_mode, "MeteringMode");
+    push_num_tag!(fields.orientation, "Orientation");
+    push_str_tag!(fields.software, "Software");
+    push_str_tag!(fields.artist, "Artist");
+    push_str_tag!(fields.copyright, "Copyright");
+    push_str_tag!(fields.description, "ImageDescription");
+    push_str_tag!(fields.user_comment, "UserComment");
+    push_str_tag!(fields.color_space, "ColorSpace");
+    push_num_tag!(fields.exposure_bias, "ExposureCompensation");
+    push_str_tag!(fields.scene_type, "SceneCaptureType");
+    push_num_tag!(fields.digital_zoom, "DigitalZoomRatio");
+
+    // Apply arbitrary overrides
+    if let Some(ref overrides) = fields.exif_overrides {
+        for (tag, val) in overrides {
+            // Sanitise tag name: only allow alphanumeric + underscore
+            let clean_tag: String = tag.chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !clean_tag.is_empty() && !val.is_empty() {
+                args.push(format!("-{}={}", clean_tag, val));
+            }
+        }
     }
 
     if args.len() <= 1 {

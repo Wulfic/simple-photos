@@ -17,6 +17,9 @@ import CropOverlay from "../components/viewer/CropOverlay";
 import VideoControls from "../components/viewer/VideoControls";
 import ViewerTopBar from "../components/viewer/ViewerTopBar";
 import DownloadChoiceModal from "../components/viewer/DownloadChoiceModal";
+import BurstStrip from "../components/viewer/BurstStrip";
+import MotionVideoOverlay from "../components/viewer/MotionVideoOverlay";
+import PanoramaViewer from "../components/viewer/PanoramaViewer";
 import useZoomPan from "../hooks/useZoomPan";
 import usePhotoPreload from "../hooks/usePhotoPreload";
 import useViewerMedia from "../hooks/useViewerMedia";
@@ -74,6 +77,12 @@ export default function Viewer() {
   const [showOverlay, setShowOverlay] = useState(true);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
 
+  // ── Photo subtype state (burst, motion, panorama) ─────────────────────
+  const [photoSubtype, setPhotoSubtype] = useState<string | undefined>();
+  const [burstId, setBurstId] = useState<string | undefined>();
+  const [motionServerPhotoId, setMotionServerPhotoId] = useState<string | undefined>();
+  const [panoImageDims, setPanoImageDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
   // ── Edit state (from hook) ─────────────────────────────────────────────
   const {
     editMode, setEditMode,
@@ -117,7 +126,8 @@ export default function Viewer() {
     return m;
   }, [allPhotos]);
   const slideshow = useSlideshow(photoIds, viewerMediaTypeMap);
-  const hasSlideshow = photoIds ? photoIds.some((id) => {
+  // Only show slideshow when opened from an album context
+  const hasSlideshow = !!albumId && photoIds ? photoIds.some((id) => {
     const mt = viewerMediaTypeMap.get(id);
     return !mt || mt === "photo" || mt === "gif";
   }) : false;
@@ -160,9 +170,22 @@ export default function Viewer() {
   useEffect(() => {
     if (!id) return;
     setIsFavorite(false);
+    setPhotoSubtype(undefined);
+    setBurstId(undefined);
+    setMotionServerPhotoId(undefined);
+    setPanoImageDims({ width: 0, height: 0 });
     db.photos.get(id).then(async (cached) => {
       if (cached) {
         setIsFavorite(cached.isFavorite ?? false);
+        // Set subtype state
+        setPhotoSubtype(cached.photoSubtype);
+        setBurstId(cached.burstId);
+        if (cached.photoSubtype === "motion" && cached.serverPhotoId) {
+          setMotionServerPhotoId(cached.serverPhotoId);
+        }
+        if ((cached.photoSubtype === "panorama" || cached.photoSubtype === "equirectangular") && cached.width && cached.height) {
+          setPanoImageDims({ width: cached.width, height: cached.height });
+        }
         const allAlbums = await db.albums.toArray();
         const albumNames = allAlbums.filter((a) => a.photoBlobIds.includes(id!)).map((a) => a.name);
         setPhotoInfo({
@@ -371,12 +394,25 @@ export default function Viewer() {
           const rot = inEdit ? ((rotateValue % 360) + 360) % 360 : 0;
           const isSwapped = rot === 90 || rot === 270;
 
+          // Panorama/360° photos use a dedicated viewer (non-edit mode only)
+          const isPano = !inEdit && (photoSubtype === "panorama" || photoSubtype === "equirectangular");
+          if (isPano) {
+            return (
+              <PanoramaViewer
+                mediaUrl={mediaUrl}
+                subtype={photoSubtype as "panorama" | "equirectangular"}
+                imageWidth={panoImageDims.width}
+                imageHeight={panoImageDims.height}
+              />
+            );
+          }
+
           return (
             <div
               ref={cropContainerRef}
               className={inEdit
                 ? "relative w-full h-full flex items-center justify-center overflow-hidden"
-                : "w-full h-full flex items-center justify-center"
+                : "relative w-full h-full flex items-center justify-center"
               }
               onPointerMove={inEdit && editTab === "crop" ? (e: React.PointerEvent) => handleCornerPointerMove(e, mediaType) : undefined}
               onPointerUp={inEdit && editTab === "crop" ? handleCornerPointerUp : undefined}
@@ -411,6 +447,13 @@ export default function Viewer() {
                   }),
                 }}
               />
+              {/* Motion photo video overlay — auto-plays embedded video */}
+              {!inEdit && photoSubtype === "motion" && motionServerPhotoId && (
+                <MotionVideoOverlay
+                  serverPhotoId={motionServerPhotoId}
+                  visible={!editMode}
+                />
+              )}
               {inEdit && editTab === "crop" && cropImageRef.current && cropContainerRef.current && (
                 <CropOverlay
                   mediaRect={cropImageRef.current.getBoundingClientRect()}
@@ -615,6 +658,23 @@ export default function Viewer() {
           </div>
         )}
         </div>{/* end slide animation wrapper */}
+
+        {/* Burst photo filmstrip — scroll through burst frames */}
+        {burstId && !editMode && (
+          <BurstStrip
+            burstId={burstId}
+            currentPhotoId={id!}
+            visible={showOverlay}
+            onSelectFrame={(frameId) => {
+              // Navigate to the selected burst frame
+              if (frameId === id) return;
+              navigate(`/photo/${frameId}`, {
+                replace: true,
+                state: { photoIds, currentIndex, albumId, secureGallery } satisfies ViewerLocationState,
+              });
+            }}
+          />
+        )}
       </div>
 
       {/* Edit panel */}

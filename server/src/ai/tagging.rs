@@ -8,6 +8,8 @@
 
 use sqlx::SqlitePool;
 
+use tracing;
+
 /// Apply a face cluster label as a tag to a photo.
 ///
 /// Creates a tag with the `person:` prefix. If the cluster has no label
@@ -34,6 +36,13 @@ pub async fn apply_face_tag(
     .execute(pool)
     .await?;
 
+    tracing::debug!(
+        photo_id = %photo_id,
+        tag = %tag_name,
+        cluster_id = cluster_id,
+        "AI tagging: applied face tag"
+    );
+
     Ok(())
 }
 
@@ -57,6 +66,13 @@ pub async fn apply_object_tag(
     .execute(pool)
     .await?;
 
+    tracing::debug!(
+        photo_id = %photo_id,
+        class = %class_name,
+        tag = %tag_name,
+        "AI tagging: applied object tag"
+    );
+
     Ok(())
 }
 
@@ -75,6 +91,11 @@ pub async fn clear_ai_tags(
     .bind(user_id)
     .execute(pool)
     .await?;
+
+    tracing::debug!(
+        photo_id = %photo_id,
+        "AI tagging: cleared existing AI tags before re-processing"
+    );
 
     Ok(())
 }

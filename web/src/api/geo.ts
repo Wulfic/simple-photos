@@ -49,6 +49,17 @@ export interface PhotoSummary {
   longitude: number | null;
 }
 
+export interface Memory {
+  id: string;
+  name: string;
+  city: string;
+  country: string;
+  date_label: string;
+  photo_count: number;
+  first_photo_id: string | null;
+  first_thumb_path: string | null;
+}
+
 export const geoApi = {
   /** Get geo settings for current user */
   getSettings: () => request<GeoStatus>("/settings/geo"),
@@ -90,4 +101,11 @@ export const geoApi = {
       method: "POST",
       body: JSON.stringify({ confirm: true }),
     }),
+
+  /** List auto-generated memories (photo clusters by location + date) */
+  listMemories: () => request<Memory[]>("/geo/memories"),
+
+  /** List photos in a specific memory */
+  listMemoryPhotos: (memoryId: string) =>
+    request<PhotoSummary[]>(`/geo/memories/${encodeURIComponent(memoryId)}/photos`),
 };

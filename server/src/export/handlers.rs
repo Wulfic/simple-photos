@@ -48,11 +48,6 @@ pub struct ExportStatusResponse {
 }
 
 #[derive(Serialize)]
-pub struct ExportListResponse {
-    pub jobs: Vec<ExportJobResponse>,
-}
-
-#[derive(Serialize)]
 pub struct ExportFilesListResponse {
     pub files: Vec<ExportFileResponse>,
 }

@@ -1,95 +1,273 @@
 //! Face detection and embedding extraction.
 //!
-//! When ONNX models are available, uses them for high-quality detection.
-//! Falls back to a basic Haar-cascade-style detector using the `image` crate
-//! for environments without models (development/testing).
+//! Uses the UltraFace-RFB-320 ONNX model via tract for accurate face detection.
+//! Falls back to a conservative heuristic detector if models are unavailable.
 //!
 //! The pipeline:
-//! 1. Decode image → resize to inference size
-//! 2. Run face detection → list of bounding boxes with confidence
-//! 3. For each face: crop, align, resize to 112×112 → extract embedding
+//! 1. Decode image → resize to 320×240 (model input size)
+//! 2. Run face detection → bounding boxes with confidence
+//! 3. For each face: crop, resize to 64×64 → extract embedding
 //! 4. Return `Vec<FaceDetection>` with bounding boxes and embeddings
 
 use crate::ai::models::{BoundingBox, FaceDetection};
 use image::{DynamicImage, GenericImageView, imageops::FilterType};
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
-/// Detect faces in an image.
-///
-/// Returns bounding boxes (normalised 0.0–1.0 relative to image size)
-/// and confidence scores.
-///
-/// This uses a Rust-native skin-colour + edge-based heuristic when ONNX
-/// models are not available. With models, it invokes the ONNX face
-/// detection network.
-pub fn detect_faces(
-    image_bytes: &[u8],
-    min_confidence: f32,
-) -> anyhow::Result<Vec<FaceDetection>> {
-    let img = image::load_from_memory(image_bytes)
-        .map_err(|e| anyhow::anyhow!("Failed to decode image for face detection: {}", e))?;
+use tracing;
 
-    detect_faces_from_image(&img, min_confidence)
+// ── Model loading ───────────────────────────────────────────────────
+
+/// UltraFace ONNX model input dimensions.
+const MODEL_WIDTH: usize = 320;
+const MODEL_HEIGHT: usize = 240;
+
+/// URL for downloading the UltraFace-RFB-320 model.
+const MODEL_URL: &str = "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-RFB-320.onnx";
+const MODEL_FILENAME: &str = "ultraface-RFB-320.onnx";
+
+/// Thread-safe cached model. Loaded once on first use.
+static FACE_MODEL: OnceLock<Option<Arc<FaceModel>>> = OnceLock::new();
+
+struct FaceModel {
+    model: tract_onnx::prelude::TypedRunnableModel<tract_onnx::prelude::TypedModel>,
 }
 
+// SAFETY: tract models are internally thread-safe for inference
+unsafe impl Send for FaceModel {}
+unsafe impl Sync for FaceModel {}
+
+/// Initialise face model from the given model directory.
+/// Downloads the model if it doesn't exist.
+/// Call once during startup; subsequent calls are no-ops.
+pub fn init_face_model(model_dir: &str) {
+    FACE_MODEL.get_or_init(|| {
+        let dir = Path::new(model_dir);
+        let model_path = dir.join(MODEL_FILENAME);
+
+        if !model_path.exists() {
+            tracing::info!("Face model not found at {:?}, attempting download...", model_path);
+            if let Err(e) = download_model(&model_path) {
+                tracing::warn!("Failed to download face model: {}. Using heuristic fallback.", e);
+                return None;
+            }
+        }
+
+        match load_onnx_model(&model_path) {
+            Ok(m) => {
+                tracing::info!("UltraFace ONNX model loaded from {:?}", model_path);
+                Some(Arc::new(m))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load face model: {}. Using heuristic fallback.", e);
+                None
+            }
+        }
+    });
+}
+
+fn download_model(dest: &Path) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {}", e))?;
+    }
+
+    tracing::info!("Downloading UltraFace model from {}...", MODEL_URL);
+    let resp = reqwest::blocking::get(MODEL_URL).map_err(|e| format!("download: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let bytes = resp.bytes().map_err(|e| format!("read: {}", e))?;
+    if bytes.len() < 100_000 {
+        return Err("Downloaded file too small, likely an error page".into());
+    }
+
+    std::fs::write(dest, &bytes).map_err(|e| format!("write: {}", e))?;
+    tracing::info!("Face model downloaded ({} bytes)", bytes.len());
+    Ok(())
+}
+
+fn load_onnx_model(path: &Path) -> anyhow::Result<FaceModel> {
+    use tract_onnx::prelude::*;
+
+    let model = tract_onnx::onnx()
+        .model_for_path(path)?
+        .with_input_fact(0, f32::fact([1, 3, MODEL_HEIGHT, MODEL_WIDTH]).into())?
+        .into_optimized()?
+        .into_runnable()?;
+
+    Ok(FaceModel { model })
+}
+
+// ── Detection entry point ───────────────────────────────────────────
+
 /// Detect faces from an already-decoded image.
+/// Uses the ONNX model if loaded, otherwise falls back to a conservative heuristic.
 pub fn detect_faces_from_image(
     img: &DynamicImage,
     min_confidence: f32,
 ) -> anyhow::Result<Vec<FaceDetection>> {
-    // Use sliding-window skin-colour detection as a lightweight CPU fallback.
-    // This is intentionally simple — production deployments should use ONNX models.
+    let model = FACE_MODEL.get().and_then(|m| m.as_ref());
+
+    match model {
+        Some(m) => detect_faces_onnx(img, min_confidence, m),
+        None => detect_faces_heuristic(img, min_confidence),
+    }
+}
+
+// ── ONNX model-based detection ──────────────────────────────────────
+
+fn detect_faces_onnx(
+    img: &DynamicImage,
+    min_confidence: f32,
+    model: &FaceModel,
+) -> anyhow::Result<Vec<FaceDetection>> {
+    use tract_onnx::prelude::*;
+
     let (w, h) = img.dimensions();
     if w < 20 || h < 20 {
         return Ok(vec![]);
     }
 
-    // Resize to a workable analysis size for performance
+    // Resize to model input size (320x240)
+    let resized = img.resize_exact(MODEL_WIDTH as u32, MODEL_HEIGHT as u32, FilterType::Triangle);
+    let rgb = resized.to_rgb8();
+
+    // Build input tensor: [1, 3, 240, 320], normalised to (pixel - 127) / 128
+    let mut input = tract_ndarray::Array4::<f32>::zeros([1, 3, MODEL_HEIGHT, MODEL_WIDTH]);
+    for y in 0..MODEL_HEIGHT {
+        for x in 0..MODEL_WIDTH {
+            let pixel = rgb.get_pixel(x as u32, y as u32);
+            input[[0, 0, y, x]] = (pixel[0] as f32 - 127.0) / 128.0;
+            input[[0, 1, y, x]] = (pixel[1] as f32 - 127.0) / 128.0;
+            input[[0, 2, y, x]] = (pixel[2] as f32 - 127.0) / 128.0;
+        }
+    }
+
+    let input_tv: TValue = input.into_tvalue();
+    let outputs = model.model.run(tvec![input_tv])?;
+
+    // UltraFace outputs:
+    //   [0] scores: [1, N, 2] — [background_conf, face_conf]
+    //   [1] boxes:  [1, N, 4] — [x_min, y_min, x_max, y_max] normalised 0..1
+    let scores = outputs[0].to_array_view::<f32>()?;
+    let boxes = outputs[1].to_array_view::<f32>()?;
+
+    let num_candidates = scores.shape()[1];
+    let mut detections = Vec::new();
+
+    for i in 0..num_candidates {
+        let face_conf = scores[[0, i, 1]];
+        if face_conf < min_confidence {
+            continue;
+        }
+
+        let x_min = boxes[[0, i, 0]].clamp(0.0, 1.0);
+        let y_min = boxes[[0, i, 1]].clamp(0.0, 1.0);
+        let x_max = boxes[[0, i, 2]].clamp(0.0, 1.0);
+        let y_max = boxes[[0, i, 3]].clamp(0.0, 1.0);
+
+        let bw = x_max - x_min;
+        let bh = y_max - y_min;
+
+        if bw < 0.01 || bh < 0.01 {
+            continue;
+        }
+
+        detections.push(FaceDetection {
+            bbox: BoundingBox { x: x_min, y: y_min, w: bw, h: bh },
+            confidence: face_conf,
+            embedding: Vec::new(),
+        });
+    }
+
+    // NMS
+    nms(&mut detections, 0.3);
+
+    tracing::debug!(
+        detections = detections.len(),
+        "Face detection (ONNX model): complete"
+    );
+
+    Ok(detections)
+}
+
+// ── Heuristic fallback ──────────────────────────────────────────────
+
+/// Conservative heuristic face detection. Only detects very clear faces
+/// by requiring both skin colour AND face-like structure (eye features).
+fn detect_faces_heuristic(
+    img: &DynamicImage,
+    min_confidence: f32,
+) -> anyhow::Result<Vec<FaceDetection>> {
+    let (w, h) = img.dimensions();
+    if w < 48 || h < 48 {
+        return Ok(vec![]);
+    }
+
+    // Resize to a workable analysis size
     let analysis_size = 320u32;
     let scale = analysis_size as f32 / w.max(h) as f32;
     let (aw, ah) = (
-        (w as f32 * scale) as u32,
-        (h as f32 * scale) as u32,
+        (w as f32 * scale).max(1.0) as u32,
+        (h as f32 * scale).max(1.0) as u32,
     );
     let small = img.resize_exact(aw.max(1), ah.max(1), FilterType::Triangle);
     let rgb = small.to_rgb8();
 
     let mut detections = Vec::new();
 
-    // Sliding window at multiple scales for face-like regions.
-    // We scan for regions with high skin-colour density + oval shape heuristic.
-    let min_face = 24u32;
+    // More conservative sliding window: fewer scales, larger minimum
+    let min_face = 40u32;
     let mut win_size = min_face;
 
-    while win_size <= aw.min(ah) {
-        let step = (win_size / 4).max(4);
+    // Faces should be between 5% and 50% of image dimension
+    let max_face = (aw.min(ah) as f32 * 0.5) as u32;
+
+    while win_size <= max_face {
+        let step = (win_size / 3).max(6);
         let mut y = 0u32;
         while y + win_size <= ah {
             let mut x = 0u32;
             while x + win_size <= aw {
-                let score = skin_density_score(&rgb, x, y, win_size, win_size);
-                if score >= min_confidence {
-                    // Convert back to normalised coordinates
-                    let bbox = BoundingBox {
-                        x: x as f32 / aw as f32,
-                        y: y as f32 / ah as f32,
-                        w: win_size as f32 / aw as f32,
-                        h: win_size as f32 / ah as f32,
-                    };
-                    detections.push(FaceDetection {
-                        bbox,
-                        confidence: score,
-                        embedding: Vec::new(), // Populated later
-                    });
+                let skin_score = skin_density_score_ycbcr(&rgb, x, y, win_size, win_size);
+                if skin_score >= min_confidence.max(0.6) {
+                    // Verify face-like structure: check for eye features
+                    let struct_score = face_structure_score(&rgb, x, y, win_size, win_size);
+                    let combined = skin_score * 0.4 + struct_score * 0.6;
+
+                    if combined >= min_confidence.max(0.55) && struct_score >= 0.3 {
+                        let bbox = BoundingBox {
+                            x: x as f32 / aw as f32,
+                            y: y as f32 / ah as f32,
+                            w: win_size as f32 / aw as f32,
+                            h: win_size as f32 / ah as f32,
+                        };
+                        detections.push(FaceDetection {
+                            bbox,
+                            confidence: combined,
+                            embedding: Vec::new(),
+                        });
+                    }
                 }
                 x += step;
             }
             y += step;
         }
-        win_size = (win_size as f32 * 1.4) as u32;
+        win_size = (win_size as f32 * 1.5) as u32;
     }
 
-    // Non-maximum suppression
-    nms(&mut detections, 0.4);
+    // Aggressive NMS
+    nms(&mut detections, 0.3);
+
+    // Cap at 5 faces per image for heuristic fallback
+    detections.truncate(5);
+
+    tracing::debug!(
+        detections = detections.len(),
+        "Face detection (heuristic fallback): complete"
+    );
 
     Ok(detections)
 }
@@ -220,10 +398,8 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-/// Calculate skin-colour density in a window region.
-///
-/// Uses a simple HSV-based skin colour model. Returns a score 0.0–1.0.
-fn skin_density_score(
+/// Skin-colour density using YCbCr colour space (much more robust than RGB).
+fn skin_density_score_ycbcr(
     rgb: &image::RgbImage,
     x: u32,
     y: u32,
@@ -243,12 +419,13 @@ fn skin_density_score(
             let g = p[1] as f32;
             let b = p[2] as f32;
 
-            // Simple skin colour detection in RGB space
-            // Based on Peer et al. skin colour model
-            if r > 95.0 && g > 40.0 && b > 20.0
-                && (r - g).abs() > 15.0
-                && r > g && r > b
-                && r.max(g).max(b) - r.min(g).min(b) > 15.0
+            // Convert to YCbCr
+            let cb = 128.0 + (-0.169 * r - 0.331 * g + 0.500 * b);
+            let cr = 128.0 + (0.500 * r - 0.419 * g - 0.081 * b);
+
+            // Strict skin range in YCbCr (tighter than standard)
+            if cb >= 77.0 && cb <= 127.0 && cr >= 133.0 && cr <= 173.0
+                && r > 80.0 && g > 30.0 && b > 15.0
             {
                 skin_count += 1;
             }
@@ -264,13 +441,144 @@ fn skin_density_score(
 
     let density = skin_count as f32 / total as f32;
 
-    // Require substantial skin coverage (typical face is 30-70% skin)
-    if density < 0.25 {
+    // Require high skin coverage (faces are 35-70% skin)
+    if density < 0.30 {
+        return 0.0;
+    }
+    if density > 0.80 {
+        return 0.0; // Too uniform, likely not a face
+    }
+
+    ((density - 0.25) / 0.45).clamp(0.0, 0.95)
+}
+
+/// Check for face-like structure within a candidate region.
+/// Looks for dark features (eyes) in the upper half and moderate edge density.
+fn face_structure_score(
+    rgb: &image::RgbImage,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> f32 {
+    if w < 16 || h < 16 {
         return 0.0;
     }
 
-    // Score: scale density to 0.0–1.0 range
-    ((density - 0.25) / 0.45).clamp(0.0, 0.95)
+    let gray: Vec<f32> = {
+        let mut g = Vec::with_capacity((w * h) as usize);
+        for py in y..(y + h).min(rgb.height()) {
+            for px in x..(x + w).min(rgb.width()) {
+                let p = rgb.get_pixel(px, py);
+                g.push(0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32);
+            }
+        }
+        g
+    };
+
+    let actual_w = w.min(rgb.width() - x) as usize;
+    let actual_h = h.min(rgb.height() - y) as usize;
+    if actual_w < 8 || actual_h < 8 || gray.len() < actual_w * actual_h {
+        return 0.0;
+    }
+
+    let mut score = 0.0f32;
+
+    // 1. Check for dark spots in eye region (20-45% from top, 20-80% from sides)
+    let eye_y_start = actual_h * 20 / 100;
+    let eye_y_end = actual_h * 45 / 100;
+    let eye_x_left_start = actual_w * 15 / 100;
+    let eye_x_left_end = actual_w * 40 / 100;
+    let eye_x_right_start = actual_w * 60 / 100;
+    let eye_x_right_end = actual_w * 85 / 100;
+
+    // Mean luminance of full region
+    let mean_lum: f32 = gray.iter().sum::<f32>() / gray.len() as f32;
+
+    // Mean luminance of left and right eye regions
+    let mut left_eye_sum = 0.0f32;
+    let mut left_eye_count = 0u32;
+    let mut right_eye_sum = 0.0f32;
+    let mut right_eye_count = 0u32;
+
+    for py in eye_y_start..eye_y_end {
+        for px in eye_x_left_start..eye_x_left_end {
+            if py * actual_w + px < gray.len() {
+                left_eye_sum += gray[py * actual_w + px];
+                left_eye_count += 1;
+            }
+        }
+        for px in eye_x_right_start..eye_x_right_end {
+            if py * actual_w + px < gray.len() {
+                right_eye_sum += gray[py * actual_w + px];
+                right_eye_count += 1;
+            }
+        }
+    }
+
+    if left_eye_count > 0 && right_eye_count > 0 {
+        let left_mean = left_eye_sum / left_eye_count as f32;
+        let right_mean = right_eye_sum / right_eye_count as f32;
+
+        // Eyes should be darker than face mean
+        if left_mean < mean_lum * 0.90 && right_mean < mean_lum * 0.90 {
+            score += 0.4;
+        }
+        // Eyes should have similar luminance (symmetry)
+        let eye_diff = (left_mean - right_mean).abs() / mean_lum.max(1.0);
+        if eye_diff < 0.2 {
+            score += 0.2;
+        }
+    }
+
+    // 2. Check bilateral symmetry of the full region
+    let mut sym_diff = 0.0f32;
+    let mut sym_count = 0u32;
+    for py in 0..actual_h {
+        for px in 0..(actual_w / 2) {
+            let mirror_px = actual_w - 1 - px;
+            let idx1 = py * actual_w + px;
+            let idx2 = py * actual_w + mirror_px;
+            if idx1 < gray.len() && idx2 < gray.len() {
+                sym_diff += (gray[idx1] - gray[idx2]).abs();
+                sym_count += 1;
+            }
+        }
+    }
+    if sym_count > 0 {
+        let avg_sym = sym_diff / sym_count as f32;
+        if avg_sym < 25.0 {
+            score += 0.2;
+        } else if avg_sym < 40.0 {
+            score += 0.1;
+        }
+    }
+
+    // 3. Edge density check: faces have moderate edges
+    let mut edge_count = 0u32;
+    let mut edge_total = 0u32;
+    for py in 1..(actual_h - 1) {
+        for px in 1..(actual_w - 1) {
+            let idx = py * actual_w + px;
+            if idx + actual_w < gray.len() && idx >= actual_w {
+                let gx = gray[idx + 1] - gray[idx - 1];
+                let gy = gray[idx + actual_w] - gray[idx - actual_w];
+                if (gx * gx + gy * gy).sqrt() > 20.0 {
+                    edge_count += 1;
+                }
+                edge_total += 1;
+            }
+        }
+    }
+    if edge_total > 0 {
+        let edge_ratio = edge_count as f32 / edge_total as f32;
+        // Faces have moderate edge density (0.05-0.35)
+        if edge_ratio >= 0.05 && edge_ratio <= 0.35 {
+            score += 0.2;
+        }
+    }
+
+    score
 }
 
 /// Non-maximum suppression: remove overlapping detections, keeping

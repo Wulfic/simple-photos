@@ -79,6 +79,13 @@ else
 fi
 echo "Server binary built."
 
+# Clean up Rust debug artifacts — the reset always uses the release binary;
+# debug/ accumulates from development builds and can consume 10+ GB.
+if [[ -d "$SERVER_DIR/target/debug" ]]; then
+    echo "Cleaning Rust debug build artifacts..."
+    rm -rf "$SERVER_DIR/target/debug"
+fi
+
 # Kill any running server (root or user-owned)
 echo "Stopping server..."
 pkill -9 -f simple-photos-server 2>/dev/null && sleep 2 || true
@@ -129,7 +136,11 @@ if [[ -d "$DOCKER_DIR" ]]; then
     echo "Resetting Docker backup instance..."
     BACKUP_DATA="$DOCKER_DIR/backup-1/data"
     if [[ -d "$BACKUP_DATA" ]]; then
-        rm -rf "$BACKUP_DATA/db/"* "$BACKUP_DATA/storage/"* 2>/dev/null || true
+        rm -rf "$BACKUP_DATA/db/"* 2>/dev/null || true
+        # storage/ files are owned by Docker's container user (uid 999) — needs sudo
+        if [[ -d "$BACKUP_DATA/storage" ]]; then
+            sudo rm -rf "$BACKUP_DATA/storage" 2>/dev/null || rm -rf "$BACKUP_DATA/storage" 2>/dev/null || true
+        fi
         # The container runs as appuser (uid 999). Ensure the bind-mounted
         # data dirs are writable after the wipe recreates them as the host user.
         mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"

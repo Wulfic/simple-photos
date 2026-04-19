@@ -423,6 +423,30 @@ pub async fn scan_and_register(
         });
     }
 
+    // Run burst detection for all users after new photos are registered.
+    if new_count > 0 {
+        let pool_clone = state.pool.clone();
+        tokio::spawn(async move {
+            let users: Vec<(String,)> = match sqlx::query_as(
+                "SELECT DISTINCT user_id FROM photos"
+            )
+            .fetch_all(&pool_clone)
+            .await
+            {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!("Burst detection: failed to list users: {}", e);
+                    return;
+                }
+            };
+            for (user_id,) in &users {
+                if let Err(e) = super::burst::detect_bursts_for_user(&pool_clone, user_id).await {
+                    tracing::warn!("Burst detection failed for user {}: {}", user_id, e);
+                }
+            }
+        });
+    }
+
     Ok(Json(serde_json::json!({
         "registered": new_count,
         "metadata_updated": fixed_count,

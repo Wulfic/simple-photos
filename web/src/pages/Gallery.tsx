@@ -171,6 +171,32 @@ export default function Gallery() {
     ? encryptedPhotos?.filter((p) => !secureBlobIds.has(p.blobId))
     : encryptedPhotos;
 
+  // ── Collapse burst stacks (group by burstId, keep first frame) ─────────
+  const collapsedPhotos = (() => {
+    if (!filteredPhotos) return undefined;
+    const burstGroups = new Map<string, CachedPhoto[]>();
+    const result: (CachedPhoto & { _burstCount?: number })[] = [];
+    for (const photo of filteredPhotos) {
+      if (photo.burstId) {
+        if (!burstGroups.has(photo.burstId)) {
+          burstGroups.set(photo.burstId, []);
+        }
+        burstGroups.get(photo.burstId)!.push(photo);
+      } else {
+        result.push(photo);
+      }
+    }
+    // For each burst group, pick the first frame as representative
+    for (const [, frames] of burstGroups) {
+      const representative = frames[0];
+      (representative as CachedPhoto & { _burstCount?: number })._burstCount = frames.length;
+      result.push(representative as CachedPhoto & { _burstCount?: number });
+    }
+    // Re-sort by takenAt descending to maintain display order
+    result.sort((a, b) => b.takenAt - a.takenAt);
+    return result;
+  })();
+
   // ── Group photos by day for date separators ─────────────────────────────
   // Matches the Android app's "EEEE, MMMM d, yyyy" format
   const dateFormatter = new Intl.DateTimeFormat("en-US", {
@@ -192,11 +218,11 @@ export default function Gallery() {
   }
 
   // Group encrypted photos by day
-  type EncryptedDayGroup = { key: string; label: string; photos: CachedPhoto[] };
+  type EncryptedDayGroup = { key: string; label: string; photos: (CachedPhoto & { _burstCount?: number })[] };
   const encryptedDayGroups: EncryptedDayGroup[] = (() => {
-    if (!filteredPhotos || filteredPhotos.length === 0) return [];
+    if (!collapsedPhotos || collapsedPhotos.length === 0) return [];
     const groups = new Map<string, EncryptedDayGroup>();
-    for (const photo of filteredPhotos) {
+    for (const photo of collapsedPhotos) {
       const dk = dayKey(photo.takenAt);
       if (!groups.has(dk)) {
         groups.set(dk, { key: dk, label: dayLabel(photo.takenAt), photos: [] });
@@ -223,7 +249,7 @@ export default function Gallery() {
   })();
 
   const activeBackupServer = backupServers.find((s) => s.id === activeBackupServerId);
-  const hasContent = filteredPhotos && filteredPhotos.length > 0;
+  const hasContent = collapsedPhotos && collapsedPhotos.length > 0;
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -500,12 +526,14 @@ export default function Gallery() {
                       filename={photo.filename}
                       cropData={photo.cropData}
                       duration={photo.duration}
+                      photoSubtype={photo.photoSubtype}
+                      burstCount={(photo as CachedPhoto & { _burstCount?: number })._burstCount}
                       selectionMode={selectionMode}
                       isSelected={selectedIds.has(photo.blobId)}
                       onClick={() => {
                         if (selectionMode) toggleSelect(photo.blobId);
                         else navigate(`/photo/${photo.blobId}`, {
-                          state: { photoIds: filteredPhotos!.map(p => p.blobId), currentIndex: globalIdx },
+                          state: { photoIds: collapsedPhotos!.map(p => p.blobId), currentIndex: globalIdx },
                         });
                       }}
                       onLongPress={() => {

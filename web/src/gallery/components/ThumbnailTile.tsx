@@ -22,6 +22,8 @@ export default function ThumbnailTile({
   filename,
   cropData,
   duration,
+  photoSubtype,
+  burstCount,
   onClick,
   onLongPress,
   selectionMode,
@@ -148,6 +150,29 @@ export default function ThumbnailTile({
         <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
           <span>♫</span>
           {duration ? <span>{formatDuration(duration)}</span> : null}
+        </div>
+      )}
+
+      {/* Photo subtype badges */}
+      {photoSubtype === "burst" && (
+        <div className="absolute top-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16" />
+          </svg>
+          {burstCount && burstCount > 1 ? <span>{burstCount}</span> : null}
+        </div>
+      )}
+      {photoSubtype === "motion" && (
+        <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+          LIVE
+        </div>
+      )}
+      {(photoSubtype === "panorama" || photoSubtype === "equirectangular") && (
+        <div className="absolute top-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6.115 5.19l.319 1.913A6 6 0 008.11 10.36L9.75 12l-.387.775c-.217.433-.132.956.21 1.298l1.348 1.348c.21.21.329.497.329.795v1.089c0 .426.24.815.622 1.006l.153.076c.433.217.956.132 1.298-.21l.723-.723a8.7 8.7 0 002.288-4.042 1.087 1.087 0 00-.358-1.099l-1.33-1.108c-.251-.21-.582-.299-.905-.245l-1.17.195a1.125 1.125 0 01-.98-.314l-.295-.295a1.125 1.125 0 010-1.591l.13-.132a1.125 1.125 0 011.3-.21l.603.302a.809.809 0 001.086-1.086L14.25 7.5l1.256-.837a4.5 4.5 0 001.528-1.732l.146-.292M6.115 5.19A9 9 0 1017.18 4.64M6.115 5.19A8.965 8.965 0 0112 3c1.929 0 3.716.607 5.18 1.64" />
+          </svg>
+          {photoSubtype === "equirectangular" ? "360°" : "PANO"}
         </div>
       )}
 

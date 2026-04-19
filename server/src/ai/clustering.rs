@@ -6,6 +6,8 @@
 
 use crate::ai::face::cosine_similarity;
 
+use tracing;
+
 /// A cluster assignment: (face_detection_id, cluster_id).
 pub type ClusterAssignment = (i64, i64);
 
@@ -27,6 +29,11 @@ pub fn cluster_faces(
     }
 
     let n = faces.len();
+    tracing::debug!(
+        face_count = n,
+        threshold = threshold,
+        "Face clustering: beginning agglomerative pass"
+    );
 
     // Start with each face in its own cluster
     let mut cluster_ids: Vec<usize> = (0..n).collect();
@@ -48,7 +55,13 @@ pub fn cluster_faces(
     // Sort by similarity descending
     similarities.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
 
+    tracing::debug!(
+        candidate_pairs = similarities.len(),
+        "Face clustering: similarity pairs computed"
+    );
+
     // Merge clusters greedily (single-linkage)
+    let mut merges = 0usize;
     for (i, j, sim) in &similarities {
         if *sim < threshold {
             break;
@@ -64,6 +77,7 @@ pub fn cluster_faces(
                     cluster_ids[k] = target;
                 }
             }
+            merges += 1;
         }
     }
 
@@ -72,7 +86,7 @@ pub fn cluster_faces(
         std::collections::HashMap::new();
     let mut next_id: i64 = 1;
 
-    faces
+    let result: Vec<ClusterAssignment> = faces
         .iter()
         .enumerate()
         .map(|(idx, (face_id, _))| {
@@ -84,7 +98,17 @@ pub fn cluster_faces(
             });
             (*face_id, cid)
         })
-        .collect()
+        .collect();
+
+    let unique_output_clusters = cluster_map.len();
+    tracing::debug!(
+        input_faces = n,
+        merges_performed = merges,
+        output_clusters = unique_output_clusters,
+        "Face clustering: agglomerative pass complete"
+    );
+
+    result
 }
 
 /// Find the root cluster for an element (path compression style but iterative).
@@ -96,6 +120,7 @@ fn find_root(clusters: &[usize], mut idx: usize) -> usize {
 }
 
 /// Compute the average (centroid) embedding for a group of face embeddings.
+#[allow(dead_code)] // Part of planned incremental clustering enhancement
 pub fn centroid_embedding(embeddings: &[&[f32]]) -> Vec<f32> {
     if embeddings.is_empty() {
         return vec![];
@@ -127,6 +152,7 @@ pub fn centroid_embedding(embeddings: &[&[f32]]) -> Vec<f32> {
 
 /// Determine if a face embedding is close enough to an existing cluster
 /// (represented by its centroid) to be assigned to that cluster.
+#[allow(dead_code)] // Part of planned incremental clustering enhancement
 pub fn should_assign_to_cluster(
     face_embedding: &[f32],
     cluster_centroid: &[f32],

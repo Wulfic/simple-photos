@@ -14,17 +14,17 @@ use super::geocoder::ReverseGeocoder;
 
 /// Spawn the background geo-processor task.
 ///
+/// Always spawns regardless of `config.enabled`. The processor checks
+/// per-user `geo_enabled` settings each cycle, using `config.enabled`
+/// as the default for users who haven't explicitly toggled. This allows
+/// the runtime toggle (`POST /api/settings/geo`) to work correctly.
+///
 /// This task:
 /// 1. Loads the GeoNames dataset (blocking I/O in spawn_blocking)
 /// 2. Backfills geo columns for photos with lat/lon but no geo_city
 /// 3. Backfills photo_year/photo_month for photos with taken_at but no year
 /// 4. Sleeps and re-checks periodically for newly uploaded photos
 pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
-    if !config.enabled {
-        tracing::info!("Geo processing disabled in config");
-        return;
-    }
-
     tokio::spawn(async move {
         // Load the dataset in a blocking task (file I/O + parsing)
         let dataset_path = config.dataset_path.clone();
@@ -52,6 +52,7 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
 
         tracing::info!(
             cities = geocoder.city_count(),
+            config_default = if config.enabled { "enabled" } else { "disabled" },
             "Geo processor started"
         );
 
@@ -64,7 +65,7 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
 
             // ── Backfill geo location from lat/lon ──────────────────────
             if geocoder.is_loaded() {
-                if let Err(e) = backfill_geo_locations(&pool, &geocoder, batch_size).await {
+                if let Err(e) = backfill_geo_locations(&pool, &geocoder, batch_size, &config).await {
                     tracing::warn!(error = %e, "Geo backfill cycle failed");
                 }
             }
@@ -79,20 +80,32 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
 
 /// Backfill geo_city/geo_state/geo_country/geo_country_code for photos
 /// that have latitude/longitude but no resolved city yet.
+/// Only processes photos for users who have geo enabled (per-user setting
+/// or config default).
 async fn backfill_geo_locations(
     pool: &SqlitePool,
     geocoder: &Arc<ReverseGeocoder>,
     batch_size: i64,
+    config: &GeoConfig,
 ) -> Result<(), sqlx::Error> {
+    let config_default_enabled = if config.enabled { 1i32 } else { 0i32 };
+
     loop {
-        // Fetch a batch of un-resolved photos
+        // Fetch a batch of un-resolved photos for users who have geo enabled
         let rows: Vec<(String, f64, f64)> = sqlx::query_as(
-            "SELECT id, latitude, longitude FROM photos \
-             WHERE latitude IS NOT NULL AND longitude IS NOT NULL \
-             AND geo_city IS NULL \
+            "SELECT p.id, p.latitude, p.longitude FROM photos p \
+             WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
+             AND p.geo_city IS NULL \
+             AND ( \
+                 EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'geo_enabled' AND us.value = 'true') \
+                 OR ( \
+                     ?2 = 1 AND NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'geo_enabled') \
+                 ) \
+             ) \
              LIMIT ?1"
         )
         .bind(batch_size)
+        .bind(config_default_enabled)
         .fetch_all(pool)
         .await?;
 
@@ -168,6 +181,12 @@ async fn backfill_year_month(
 
 /// Resolve geo location for a single photo inline (during upload).
 /// Called when a photo is inserted with GPS coordinates and geo is enabled.
+///
+/// Note: Currently the geocoder is only available inside the background
+/// geo-processor task.  This function is ready for use once the geocoder
+/// is exposed via AppState.  Until then, newly uploaded photos are
+/// geo-resolved by the periodic backfill cycle (every 5 minutes).
+#[allow(dead_code)]
 pub async fn resolve_photo_geo(
     pool: &SqlitePool,
     geocoder: &ReverseGeocoder,

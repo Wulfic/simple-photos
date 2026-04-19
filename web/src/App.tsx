@@ -208,6 +208,7 @@ export default function App() {
           <Route path="/gallery" element={<Gallery />} />
           <Route path="/albums" element={<Albums />} />
           <Route path="/albums/:albumId" element={<AlbumDetail />} />
+          <Route path="/albums/:albumId/:subId" element={<AlbumDetail />} />
           <Route path="/photo/:id" element={<Viewer />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/trash" element={<Trash />} />

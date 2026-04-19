@@ -7,8 +7,10 @@ use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
+use base64::Engine as _;
 
 use crate::auth::middleware::AuthUser;
+use crate::blobs::storage;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -160,21 +162,71 @@ pub async fn serve_photo(
         return Err(AppError::StorageUnavailable);
     }
 
-    let (file_path, mime_type, size_bytes): (String, String, i64) = sqlx::query_as(
-        "SELECT file_path, mime_type, size_bytes FROM photos WHERE id = ? AND user_id = ?",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or_else(|| {
-        tracing::warn!(
-            user_id = %auth.user_id,
-            photo_id = %photo_id,
-            "serve_photo: photo not found in database"
-        );
-        AppError::NotFound
-    })?;
+    let (file_path, mime_type, size_bytes, enc_blob_id): (String, String, i64, String) =
+        sqlx::query_as(
+            "SELECT file_path, mime_type, size_bytes, COALESCE(encrypted_blob_id, '') \
+             FROM photos WHERE id = ? AND user_id = ?",
+        )
+        .bind(&photo_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.read_pool)
+        .await?
+        .ok_or_else(|| {
+            tracing::warn!(
+                user_id = %auth.user_id,
+                photo_id = %photo_id,
+                "serve_photo: photo not found in database"
+            );
+            AppError::NotFound
+        })?;
+
+    // ── Encrypted blob fallback (blob-only photos, e.g. rendered duplicates) ─
+    if file_path.is_empty() {
+        if enc_blob_id.is_empty() {
+            return Err(AppError::NotFound);
+        }
+        let storage_root = (**state.storage_root.load()).clone();
+        let key = crate::crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
+            .await
+            .map_err(|e| AppError::Internal(format!("Key load: {e}")))?            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+        let (blob_storage_path,): (String,) = sqlx::query_as(
+            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(&enc_blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.read_pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+        let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
+        let plaintext = tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
+            .await
+            .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?            .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
+        let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
+            .map_err(|e| AppError::Internal(format!("Blob envelope JSON: {e}")))?;
+        let data_b64 = envelope["data"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
+        let raw_bytes =
+            base64::engine::general_purpose::STANDARD
+                .decode(data_b64)
+                .map_err(|e| AppError::Internal(format!("Base64 decode: {e}")))?;
+        let etag = format!("\"{}-enc-{}\"", photo_id, raw_bytes.len());
+        if let Some(not_modified) = check_etag(&headers, &etag) {
+            return Ok(not_modified);
+        }
+        let ct = HeaderValue::from_str(&mime_type)
+            .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+        let len = raw_bytes.len();
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", ct)
+            .header("Content-Length", HeaderValue::from(len))
+            .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+            .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+            .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
+            .body(Body::from(raw_bytes))
+            .map_err(|e| AppError::Internal(e.to_string()))?);
+    }
 
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
@@ -302,15 +354,67 @@ pub async fn serve_thumbnail(
         return Err(AppError::StorageUnavailable);
     }
 
-    let thumb_path: Option<String> =
-        sqlx::query_scalar("SELECT thumb_path FROM photos WHERE id = ? AND user_id = ?")
-            .bind(&photo_id)
-            .bind(&auth.user_id)
-            .fetch_optional(&state.read_pool)
-            .await?
-            .ok_or(AppError::NotFound)?;
+    let (thumb_path_opt, enc_thumb_blob_id): (Option<String>, String) = sqlx::query_as(
+        "SELECT thumb_path, COALESCE(encrypted_thumb_blob_id, '') \
+         FROM photos WHERE id = ? AND user_id = ?",
+    )
+    .bind(&photo_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.read_pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
 
-    let thumb_path = thumb_path.ok_or(AppError::NotFound)?;
+    // ── Encrypted thumbnail fallback (blob-only duplicates) ──────────────────
+    if thumb_path_opt.is_none() {
+        if enc_thumb_blob_id.is_empty() {
+            return Err(AppError::NotFound);
+        }
+        let storage_root = (**state.storage_root.load()).clone();
+        let key = crate::crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
+            .await
+            .map_err(|e| AppError::Internal(format!("Key load: {e}")))?            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+        let (blob_storage_path,): (String,) = sqlx::query_as(
+            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(&enc_thumb_blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.read_pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+        let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
+        let plaintext = tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
+            .await
+            .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?            .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
+        let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
+            .map_err(|e| AppError::Internal(format!("Thumb envelope JSON: {e}")))?;
+        let data_b64 = envelope["data"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("Missing 'data' in thumb envelope".into()))?;
+        let raw_bytes =
+            base64::engine::general_purpose::STANDARD
+                .decode(data_b64)
+                .map_err(|e| AppError::Internal(format!("Base64 decode thumb: {e}")))?;
+        let etag = format!("\"{}-enc-thumb-{}\"", photo_id, raw_bytes.len());
+        if let Some(not_modified) = check_etag(&headers, &etag) {
+            return Ok(not_modified);
+        }
+        let content_type = if enc_thumb_blob_id.ends_with(".gif") {
+            "image/gif"
+        } else {
+            "image/jpeg"
+        };
+        let len = raw_bytes.len();
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", HeaderValue::from_static(content_type))
+            .header("Content-Length", HeaderValue::from(len))
+            .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
+            .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
+            .body(Body::from(raw_bytes))
+            .map_err(|e| AppError::Internal(e.to_string()))?);
+    }
+
+    let thumb_path = thumb_path_opt.ok_or(AppError::NotFound)?;
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&thumb_path);
