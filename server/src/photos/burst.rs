@@ -25,10 +25,14 @@ pub async fn detect_bursts_for_user(
     pool: &SqlitePool,
     user_id: &str,
 ) -> anyhow::Result<u64> {
-    // Fetch all photos without burst_id, ordered by taken_at
+    // Fetch photos eligible for timestamp-based burst grouping.
+    // Exclude photos that already have a burst_id (already grouped) or a
+    // photo_subtype (already categorised as motion/panorama/hdr/etc. —
+    // overwriting their subtype would be incorrect).
     let photos: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "SELECT id, taken_at, camera_model FROM photos \
-         WHERE user_id = ?1 AND burst_id IS NULL AND taken_at IS NOT NULL \
+         WHERE user_id = ?1 AND burst_id IS NULL AND photo_subtype IS NULL \
+         AND taken_at IS NOT NULL \
          AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
          ORDER BY COALESCE(camera_model, ''), taken_at ASC"
     )

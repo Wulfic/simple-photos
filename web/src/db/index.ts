@@ -198,6 +198,15 @@ class SimplePhotosDB extends Dexie {
       fullPhotos: "photoId, cachedAt",
       editCopies: "copyId, photoBlobId, createdAt",
     });
+
+    // v8 — added serverPhotoId index for AI people/face cluster lookups
+    this.version(8).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash, serverPhotoId",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+      fullPhotos: "photoId, cachedAt",
+      editCopies: "copyId, photoBlobId, createdAt",
+    });
   }
 }
 

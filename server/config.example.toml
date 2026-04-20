@@ -101,7 +101,7 @@ enabled = false
 # batch_size = 8                  # images per inference batch
 # threads = 0                     # 0 = auto-detect (physical cores)
 # photos_per_minute = 60          # rate limit for background processing
-# face_confidence = 0.6           # minimum face detection confidence
+# face_confidence = 0.7           # minimum face detection confidence
 # object_confidence = 0.5         # minimum object detection confidence
 # face_similarity_threshold = 0.6 # cosine distance for face clustering
 # model_dir = "models"            # directory containing ONNX models

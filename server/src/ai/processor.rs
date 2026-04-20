@@ -26,7 +26,12 @@ use crate::config::AiConfig;
 /// checks per-user `ai_enabled` settings each cycle, using `config.enabled`
 /// as the default for users who haven't explicitly toggled. This allows the
 /// runtime toggle (`POST /api/ai/toggle`) to actually work.
-pub fn spawn_ai_processor(pool: SqlitePool, config: AiConfig, storage_root: PathBuf) {
+pub fn spawn_ai_processor(
+    pool: SqlitePool,
+    config: AiConfig,
+    storage_root: PathBuf,
+    jwt_secret: String,
+) {
     let engine = AiEngine::new(&config);
     if !engine.has_any_capability() {
         tracing::warn!(
@@ -52,7 +57,7 @@ pub fn spawn_ai_processor(pool: SqlitePool, config: AiConfig, storage_root: Path
         );
 
         loop {
-            if let Err(e) = process_batch(&pool, &engine, &config, &storage_root).await {
+            if let Err(e) = process_batch(&pool, &engine, &config, &storage_root, &jwt_secret).await {
                 tracing::error!("AI processor error: {}", e);
             }
 
@@ -67,6 +72,7 @@ async fn process_batch(
     engine: &AiEngine,
     config: &AiConfig,
     storage_root: &PathBuf,
+    jwt_secret: &str,
 ) -> anyhow::Result<()> {
     // Find unprocessed photos only for users who have AI enabled.
     // - Users who explicitly set ai_enabled = 'true' → included
@@ -80,7 +86,10 @@ async fn process_batch(
              SELECT 1 FROM ai_processed_photos ap \
              WHERE ap.photo_id = p.id AND ap.user_id = p.user_id \
          ) \
-         AND p.file_path IS NOT NULL \
+         AND ( \
+             (p.file_path IS NOT NULL AND p.file_path != '') \
+             OR p.encrypted_blob_id IS NOT NULL \
+         ) \
          AND ( \
              EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'ai_enabled' AND us.value = 'true') \
              OR ( \
@@ -111,7 +120,7 @@ async fn process_batch(
 
     for (photo_id, user_id, filename) in &unprocessed {
         let photo_start = Instant::now();
-        match process_single_photo(pool, engine, config, storage_root, photo_id, user_id, filename).await {
+        match process_single_photo(pool, engine, config, storage_root, jwt_secret, photo_id, user_id, filename).await {
             Ok((nf, no)) => {
                 total_faces += nf;
                 total_objects += no;
@@ -168,21 +177,22 @@ async fn process_single_photo(
     _engine: &AiEngine,
     config: &AiConfig,
     storage_root: &PathBuf,
+    jwt_secret: &str,
     photo_id: &str,
     user_id: &str,
     filename: &str,
 ) -> anyhow::Result<(usize, usize)> {
-    // Load the photo file
-    let file_path: Option<(String,)> = sqlx::query_as(
-        "SELECT file_path FROM photos WHERE id = ?1 AND user_id = ?2"
+    // Load the photo file (plain or encrypted)
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT file_path, encrypted_blob_id FROM photos WHERE id = ?1 AND user_id = ?2"
     )
     .bind(photo_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
 
-    let file_path = match file_path {
-        Some((p,)) => p,
+    let (file_path, encrypted_blob_id) = match row {
+        Some(r) => r,
         None => {
             tracing::debug!(photo_id = %photo_id, "AI: photo not found in DB, skipping");
             mark_processed(pool, photo_id, user_id).await?;
@@ -190,17 +200,35 @@ async fn process_single_photo(
         }
     };
 
-    // Resolve relative file_path against storage root
-    let abs_path = storage_root.join(&file_path);
-
-    // Read the image bytes
-    let image_bytes = match tokio::fs::read(&abs_path).await {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::debug!(file_path = %file_path, abs_path = ?abs_path, error = %e, "AI: cannot read photo file, skipping");
-            mark_processed(pool, photo_id, user_id).await?;
-            return Ok((0, 0));
+    // Read the image bytes: either from plain file or from encrypted blob
+    let image_bytes = if !file_path.is_empty() {
+        let abs_path = storage_root.join(&file_path);
+        match tokio::fs::read(&abs_path).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::debug!(file_path = %file_path, abs_path = ?abs_path, error = %e, "AI: cannot read photo file, skipping");
+                mark_processed(pool, photo_id, user_id).await?;
+                return Ok((0, 0));
+            }
         }
+    } else if let Some(enc_blob_id) = encrypted_blob_id.as_ref() {
+        match load_encrypted_photo_bytes(pool, storage_root, jwt_secret, enc_blob_id, user_id).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::debug!(
+                    photo_id = %photo_id,
+                    encrypted_blob_id = %enc_blob_id,
+                    error = %e,
+                    "AI: cannot read encrypted photo, skipping"
+                );
+                mark_processed(pool, photo_id, user_id).await?;
+                return Ok((0, 0));
+            }
+        }
+    } else {
+        tracing::debug!(photo_id = %photo_id, "AI: photo has neither file_path nor encrypted_blob_id, skipping");
+        mark_processed(pool, photo_id, user_id).await?;
+        return Ok((0, 0));
     };
 
     tracing::debug!(
@@ -226,6 +254,10 @@ async fn process_single_photo(
             return Ok((0, 0));
         }
     };
+    // Apply EXIF orientation so face/object detection sees the image upright.
+    // `image::load_from_memory` ignores EXIF; SCRFD only detects upright faces,
+    // so rotated selfies would otherwise be missed entirely.
+    let img = crate::photos::thumbnail::apply_exif_orientation_from_bytes(&image_bytes, img);
     tracing::debug!(
         photo_id = %photo_id,
         width = img.width(),
@@ -258,8 +290,13 @@ async fn process_single_photo(
     }
 
     for det in &face_detections {
-        // Extract embedding for clustering
-        let embedding = face::extract_face_embedding(&img, &det.bbox);
+        // Use embedding from detection (SCRFD+ArcFace populates this),
+        // fall back to extract_face_embedding for legacy paths.
+        let embedding = if !det.embedding.is_empty() {
+            det.embedding.clone()
+        } else {
+            face::extract_face_embedding(&img, &det.bbox)
+        };
         let embedding_bytes: Vec<u8> = embedding
             .iter()
             .flat_map(|f| f.to_le_bytes())
@@ -341,6 +378,55 @@ async fn mark_processed(pool: &SqlitePool, photo_id: &str, user_id: &str) -> any
     .await?;
 
     Ok(())
+}
+
+/// Load the decrypted plaintext image bytes for a server-side-encrypted photo.
+///
+/// The blob on disk is an AEAD-encrypted JSON envelope of the form
+/// `{"data": "<base64 raw image bytes>"}`. We load the wrapped key, decrypt,
+/// parse the envelope, and return the raw image bytes.
+async fn load_encrypted_photo_bytes(
+    pool: &SqlitePool,
+    storage_root: &PathBuf,
+    jwt_secret: &str,
+    encrypted_blob_id: &str,
+    user_id: &str,
+) -> anyhow::Result<Vec<u8>> {
+    use base64::Engine;
+
+    let key = crate::crypto::load_wrapped_key(pool, jwt_secret)
+        .await
+        .map_err(|e| anyhow::anyhow!("load wrapped key: {e}"))?
+        .ok_or_else(|| anyhow::anyhow!("no encryption key configured"))?;
+
+    let (blob_storage_path,): (String,) = sqlx::query_as(
+        "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+    )
+    .bind(encrypted_blob_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("encrypted blob row not found: {}", encrypted_blob_id))?;
+
+    let enc_data = crate::blobs::storage::read_blob(storage_root.as_path(), &blob_storage_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("read encrypted blob: {e}"))?;
+
+    let plaintext = tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
+        .await
+        .map_err(|e| anyhow::anyhow!("decrypt panicked: {e}"))?
+        .map_err(|e| anyhow::anyhow!("decrypt failed: {e}"))?;
+
+    let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
+        .map_err(|e| anyhow::anyhow!("blob envelope JSON: {e}"))?;
+    let data_b64 = envelope["data"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing 'data' field in blob envelope"))?;
+    let raw_bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64)
+        .map_err(|e| anyhow::anyhow!("base64 decode: {e}"))?;
+
+    Ok(raw_bytes)
 }
 
 /// Run face clustering for a user.

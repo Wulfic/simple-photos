@@ -257,7 +257,7 @@ impl AiConfig {
     fn default_gpu_preferred() -> bool { true }
     fn default_batch_size() -> usize { 8 }
     fn default_photos_per_minute() -> u32 { 60 }
-    fn default_face_confidence() -> f32 { 0.6 }
+    fn default_face_confidence() -> f32 { 0.7 }
     fn default_object_confidence() -> f32 { 0.5 }
     fn default_face_similarity_threshold() -> f32 { 0.6 }
     fn default_model_dir() -> String { "models".into() }
@@ -281,7 +281,7 @@ impl Default for AiConfig {
             batch_size: 8,
             threads: 0,
             photos_per_minute: 60,
-            face_confidence: 0.6,
+            face_confidence: 0.7,
             object_confidence: 0.5,
             face_similarity_threshold: 0.6,
             model_dir: "models".into(),

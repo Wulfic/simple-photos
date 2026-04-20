@@ -44,6 +44,11 @@ pub fn cluster_faces(
     let mut similarities: Vec<(usize, usize, f32)> = Vec::new();
     for i in 0..n {
         for j in (i + 1)..n {
+            // Skip comparing embeddings of different dimensionality
+            // (e.g. 512-dim ArcFace vs 128-dim histogram fallback)
+            if faces[i].1.len() != faces[j].1.len() {
+                continue;
+            }
             let sim = cosine_similarity(&faces[i].1, &faces[j].1);
             if sim >= threshold * 0.8 {
                 // Only store pairs that might merge

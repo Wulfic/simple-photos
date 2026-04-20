@@ -314,7 +314,7 @@ pub(crate) fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> i
 /// Same rotation/flip logic as [`apply_exif_orientation`] but reads the
 /// EXIF tag from a byte slice instead of a file path.  Used by the
 /// encryption migration pipeline where the file data is already in memory.
-pub(super) fn apply_exif_orientation_from_bytes(data: &[u8], img: image::DynamicImage) -> image::DynamicImage {
+pub(crate) fn apply_exif_orientation_from_bytes(data: &[u8], img: image::DynamicImage) -> image::DynamicImage {
     let orientation = (|| -> Option<u32> {
         let mut cursor = std::io::Cursor::new(data);
         let exif = exif::Reader::new().read_from_container(&mut cursor).ok()?;

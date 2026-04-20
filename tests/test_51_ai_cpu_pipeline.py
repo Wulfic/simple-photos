@@ -110,7 +110,7 @@ class TestAiCpuPipeline:
         )
 
     def test_object_detection_green_scene(self, user_client: APIClient):
-        """Green-dominant photo triggers 'potted plant' object detection."""
+        """Green-dominant photo triggers 'plant' object detection."""
         # Enable AI first
         user_client.ai_toggle(True)
 
@@ -124,8 +124,8 @@ class TestAiCpuPipeline:
         # Check object detections exist
         classes = user_client.ai_list_object_classes()
         class_names = [c["class_name"] for c in classes]
-        assert "potted plant" in class_names, (
-            f"Expected 'potted plant' in detected classes, got: {class_names}"
+        assert "plant" in class_names, (
+            f"Expected 'plant' in detected classes, got: {class_names}"
         )
 
     def test_object_detection_blue_scene(self, user_client: APIClient):

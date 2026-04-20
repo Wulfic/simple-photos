@@ -18,8 +18,9 @@
 server/target/
 # Use config.example.toml as the committed template; config.toml holds local secrets
 server/config.toml
-# Runtime DB, blob storage, and TLS certs (can be huge)
+# Runtime DB, blob storage, TLS certs, and AI models (can be huge)
 server/data/
+server/models/
 server/certs/
 **/*.rs.bk
 install.sh.bak
@@ -118,3 +119,4 @@ coverage/
 __pycache__/
 *.pyc
 downloads/simple-photos.apk
+references/

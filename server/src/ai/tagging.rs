@@ -28,7 +28,7 @@ pub async fn apply_face_tag(
 
     // Use INSERT OR IGNORE to avoid duplicates
     sqlx::query(
-        "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag) VALUES (?1, ?2, ?3)"
+        "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag, created_at) VALUES (?1, ?2, ?3, datetime('now'))"
     )
     .bind(photo_id)
     .bind(user_id)
@@ -58,7 +58,7 @@ pub async fn apply_object_tag(
     let tag_name = format!("object:{}", class_name);
 
     sqlx::query(
-        "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag) VALUES (?1, ?2, ?3)"
+        "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag, created_at) VALUES (?1, ?2, ?3, datetime('now'))"
     )
     .bind(photo_id)
     .bind(user_id)
@@ -153,7 +153,7 @@ pub async fn rename_cluster_tags(
                 }
             };
             sqlx::query(
-                "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag) VALUES (?1, ?2, ?3)"
+                "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag, created_at) VALUES (?1, ?2, ?3, datetime('now'))"
             )
             .bind(photo_id)
             .bind(user_id)

@@ -13,6 +13,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import type { FaceCluster } from "../api/ai";
 
 type SharedAlbumInfo = {
   id: string;
@@ -43,6 +44,18 @@ export default function Albums() {
   const [sharePickerAlbumId, setSharePickerAlbumId] = useState<string | null>(null);
   const [confirmDeleteSharedId, setConfirmDeleteSharedId] = useState<string | null>(null);
 
+  // People clusters
+  const [peopleClusters, setPeopleClusters] = useState<FaceCluster[]>([]);
+  const [peopleThumbUrls, setPeopleThumbUrls] = useState<Record<number, string>>({});
+
+  // Memories
+  const [memories, setMemories] = useState<Array<{
+    id: string; name: string; city: string; country: string;
+    date_label: string; photo_count: number;
+    first_photo_id: string | null; first_thumb_path: string | null;
+  }>>([]);
+  const [memoryThumbUrls, setMemoryThumbUrls] = useState<Record<string, string>>({});
+
   // Encrypted photos from IndexedDB (for smart album counts)
   const encryptedPhotos = useLiveQuery(() => db.photos.toArray());
 
@@ -51,7 +64,63 @@ export default function Albums() {
   useEffect(() => {
     loadAlbums();
     loadSharedAlbums();
+    loadPeopleClusters();
+    loadMemories();
   }, []);
+
+  async function loadPeopleClusters() {
+    try {
+      const data = await api.ai.listFaceClusters();
+      setPeopleClusters(data);
+    } catch { /* AI may not be enabled */ }
+  }
+
+  async function loadMemories() {
+    try {
+      const data = await api.geo.listMemories();
+      setMemories(data);
+    } catch { /* Geo may not be enabled */ }
+  }
+
+  // Load thumbnails for people clusters
+  useEffect(() => {
+    if (peopleClusters.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const urls: Record<number, string> = {};
+      for (const c of peopleClusters) {
+        if (!c.representative) continue;
+        const photo = await db.photos.where("serverPhotoId").equals(c.representative).first();
+        if (cancelled) return;
+        if (photo?.thumbnailData) {
+          const mime = photo.thumbnailMimeType || "image/jpeg";
+          urls[c.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        }
+      }
+      if (!cancelled) setPeopleThumbUrls(urls);
+    })();
+    return () => { cancelled = true; };
+  }, [peopleClusters]);
+
+  // Load thumbnails for memories
+  useEffect(() => {
+    if (memories.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const urls: Record<string, string> = {};
+      for (const m of memories) {
+        if (!m.first_photo_id) continue;
+        const photo = await db.photos.where("serverPhotoId").equals(m.first_photo_id).first();
+        if (cancelled) return;
+        if (photo?.thumbnailData) {
+          const mime = photo.thumbnailMimeType || "image/jpeg";
+          urls[m.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        }
+      }
+      if (!cancelled) setMemoryThumbUrls(urls);
+    })();
+    return () => { cancelled = true; };
+  }, [memories]);
 
   // Compute encrypted smart album counts + first thumbnails from IndexedDB
   const encryptedPhotoCounts = encryptedPhotos ? {
@@ -291,18 +360,6 @@ export default function Albums() {
             onClick={() => navigate("/albums/smart-audio")}
           />
         )}
-        <SmartAlbumCard
-          label="People"
-          count={0}
-          coverPhoto={undefined}
-          onClick={() => navigate("/albums/smart-people")}
-        />
-        <SmartAlbumCard
-          label="Memories"
-          count={0}
-          coverPhoto={undefined}
-          onClick={() => navigate("/albums/smart-memories")}
-        />
 
         {/* ── User-created albums ───────────────────────────────────────── */}
         {loading && (!albums || albums.length === 0) && (
@@ -437,6 +494,79 @@ export default function Albums() {
           ))}
         </div>
       </div>
+
+      {/* ── People ─────────────────────────────────────────────────────────── */}
+      {peopleClusters.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">People</h2>
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
+            {peopleClusters.map((cluster) => (
+              <div
+                key={cluster.id}
+                onClick={() => navigate(`/albums/smart-people/${cluster.id}`)}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
+              >
+                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
+                  {peopleThumbUrls[cluster.id] ? (
+                    <img
+                      src={peopleThumbUrls[cluster.id]}
+                      alt={cluster.label || "Unknown"}
+                      className="w-full h-full object-cover rounded-full"
+                    />
+                  ) : (
+                    <svg className="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+                    </svg>
+                  )}
+                </div>
+                <p className="font-medium text-center text-sm truncate">
+                  {cluster.label || "Unknown Person"}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                  {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Memories ───────────────────────────────────────────────────────── */}
+      {memories.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Memories</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            {memories.map((memory) => (
+              <div
+                key={memory.id}
+                onClick={() => navigate(`/albums/smart-memories/${memory.id}`)}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
+              >
+                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                  {memoryThumbUrls[memory.id] ? (
+                    <img
+                      src={memoryThumbUrls[memory.id]}
+                      alt={memory.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                    </svg>
+                  )}
+                </div>
+                <div className="p-3">
+                  <p className="font-medium text-sm truncate">{memory.name}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {memory.photo_count} photo{memory.photo_count !== 1 ? "s" : ""} · {memory.country}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       </main>
     </div>
   );

@@ -67,14 +67,21 @@ impl AiEngine {
             ExecutionProvider::Cpu
         };
 
-        // Initialise face model (downloads if needed, loads via tract)
+        // Initialise face models (downloads if needed, loads via onnxruntime)
         crate::ai::face::init_face_model(&config.model_dir);
 
-        // Check for model files
-        let has_face_det = model_dir.join("face_detection.onnx").exists()
-            || model_dir.join("ultraface-RFB-320.onnx").exists();
-        let has_face_emb = model_dir.join("face_embedding.onnx").exists();
-        let has_obj_det = model_dir.join("object_detection.onnx").exists();
+        // Initialise object classification model (MobileNetV2, downloads if needed)
+        crate::ai::object::init_classification_model(&config.model_dir);
+
+        // Check for model files (SCRFD or legacy UltraFace for detection,
+        // ArcFace w600k_r50 for recognition)
+        let has_face_det = model_dir.join("det_10g.onnx").exists()
+            || model_dir.join("ultraface-RFB-320.onnx").exists()
+            || model_dir.join("face_detection.onnx").exists();
+        let has_face_emb = model_dir.join("w600k_r50.onnx").exists()
+            || model_dir.join("face_embedding.onnx").exists();
+        let has_obj_det = model_dir.join("mobilenetv2-12.onnx").exists()
+            || model_dir.join("object_detection.onnx").exists();
 
         if !has_face_det {
             tracing::warn!("AI engine: face_detection.onnx not found in {:?}", model_dir);

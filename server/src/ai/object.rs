@@ -1,15 +1,207 @@
 //! Object detection and scene classification pipeline.
 //!
-//! With ONNX models, uses YOLOv8 or MobileNet-SSD for 80-class COCO detection.
-//! Without models, uses multi-pass colour histogram, texture, and edge-density
-//! analysis to classify content into ~25 categories. More sophisticated than
-//! simple colour thresholds — analyses spatial distribution, gradients,
-//! saturation patterns, and luminance statistics.
+//! Primary: MobileNetV2 ONNX model for 1000-class ImageNet classification.
+//! Fallback: Multi-pass colour histogram, texture, and edge-density analysis
+//! to classify content into ~25 categories.
+//!
+//! The MobileNetV2 model is automatically downloaded on first use (~14 MB).
+//! Results from both the model and heuristics are combined, with the model
+//! classes taking priority.
 
+use crate::ai::imagenet_labels::{self, IMAGENET_LABELS};
 use crate::ai::models::{BoundingBox, ObjectDetection};
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, imageops::FilterType};
+use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tracing;
+use ort::session::Session;
+
+/// Convert ort errors (which aren't Send+Sync) to anyhow errors.
+fn ort_err<R>(r: Result<R, impl std::fmt::Display>) -> anyhow::Result<R> {
+    r.map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+// ── MobileNetV2 model constants ─────────────────────────────────────
+
+/// MobileNetV2-12 for 1000-class ImageNet classification.
+/// Input: [1, 3, 224, 224] RGB normalised with ImageNet mean/std.
+/// Output: [1, 1000] logits (pre-softmax).
+const CLS_WIDTH: usize = 224;
+const CLS_HEIGHT: usize = 224;
+const CLS_MODEL_URL: &str =
+    "https://github.com/onnx/models/raw/refs/heads/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx";
+const CLS_MODEL_FILENAME: &str = "mobilenetv2-12.onnx";
+
+/// ImageNet normalisation constants.
+const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
+const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
+
+/// Number of top predictions to return from the model.
+const TOP_K: usize = 5;
+
+// ── Model singleton ─────────────────────────────────────────────────
+
+static CLS_MODEL: OnceLock<Option<Arc<Mutex<Session>>>> = OnceLock::new();
+
+// ── Initialisation ──────────────────────────────────────────────────
+
+/// Download and load the MobileNetV2 classification model.
+pub fn init_classification_model(model_dir: &str) {
+    let dir = Path::new(model_dir);
+
+    CLS_MODEL.get_or_init(|| {
+        let p = dir.join(CLS_MODEL_FILENAME);
+        if !p.exists() {
+            if !dir.is_dir() {
+                tracing::info!(
+                    "Model directory {:?} does not exist — heuristic-only object detection",
+                    dir
+                );
+                return None;
+            }
+            tracing::info!("MobileNetV2 model not found at {:?}, downloading…", p);
+            if let Err(e) = download_model(CLS_MODEL_URL, &p, 5_000_000) {
+                tracing::warn!("MobileNetV2 download failed: {}. Using heuristic fallback.", e);
+                return None;
+            }
+        }
+        match load_onnx_cls(&p) {
+            Ok(session) => {
+                tracing::info!("MobileNetV2 classification model loaded from {:?}", p);
+                Some(Arc::new(Mutex::new(session)))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load MobileNetV2: {}. Using heuristic fallback.", e);
+                None
+            }
+        }
+    });
+}
+
+fn download_model(url: &str, dest: &Path, min_size: usize) -> Result<(), String> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+    }
+    tracing::info!("Downloading model from {url}…");
+    let resp = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| format!("client: {e}"))?
+        .get(url)
+        .send()
+        .map_err(|e| format!("download: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().map_err(|e| format!("read: {e}"))?;
+    if bytes.len() < min_size {
+        return Err(format!(
+            "File too small ({} bytes), expected ≥{min_size}",
+            bytes.len()
+        ));
+    }
+    std::fs::write(dest, &bytes).map_err(|e| format!("write: {e}"))?;
+    tracing::info!("Model downloaded ({} bytes) → {:?}", bytes.len(), dest);
+    Ok(())
+}
+
+fn load_onnx_cls(path: &Path) -> anyhow::Result<Session> {
+    let session = ort_err(ort_err(Session::builder())?
+        .with_intra_threads(1))?
+        .commit_from_file(path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(session)
+}
+
+// ── MobileNetV2 classification ──────────────────────────────────────
+
+/// Run MobileNetV2 classification on an image.
+/// Returns top-K predictions above `min_confidence`, mapped to broad categories.
+fn classify_mobilenet(
+    img: &DynamicImage,
+    min_confidence: f32,
+    model: &mut Session,
+) -> anyhow::Result<Vec<ObjectDetection>> {
+    // Resize to 224×224 using bilinear interpolation
+    let resized = img.resize_exact(CLS_WIDTH as u32, CLS_HEIGHT as u32, FilterType::Triangle);
+    let rgb = resized.to_rgb8();
+
+    // Build [1, 3, 224, 224] tensor: RGB channels, normalised with ImageNet stats
+    let mut input = ndarray::Array4::<f32>::zeros((1, 3, CLS_HEIGHT, CLS_WIDTH));
+    for y in 0..CLS_HEIGHT {
+        for x in 0..CLS_WIDTH {
+            let pixel = rgb.get_pixel(x as u32, y as u32);
+            for c in 0..3 {
+                input[[0, c, y, x]] =
+                    (pixel[c] as f32 / 255.0 - IMAGENET_MEAN[c]) / IMAGENET_STD[c];
+            }
+        }
+    }
+
+    let input_tensor = ort_err(ort::value::Tensor::from_array(input))?;
+    let outputs = ort_err(model.run(ort::inputs![input_tensor]))?;
+
+    // Output shape: [1, 1000] logits → apply softmax
+    let (_logit_shape, logits_data) = ort_err(outputs[0].try_extract_tensor::<f32>())?;
+    let logits_slice: Vec<f32> = logits_data.to_vec();
+
+    // Softmax
+    let max_logit = logits_slice.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let exp_sum: f32 = logits_slice.iter().map(|&x| (x - max_logit).exp()).sum();
+    let probs: Vec<f32> = logits_slice
+        .iter()
+        .map(|&x| (x - max_logit).exp() / exp_sum)
+        .collect();
+
+    // Get top-K
+    let mut indexed: Vec<(usize, f32)> = probs.into_iter().enumerate().collect();
+    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.truncate(TOP_K);
+
+    let full_bbox = BoundingBox {
+        x: 0.0,
+        y: 0.0,
+        w: 1.0,
+        h: 1.0,
+    };
+
+    let mut detections = Vec::new();
+    let mut seen_categories = std::collections::HashSet::new();
+
+    for (idx, prob) in &indexed {
+        if *prob < min_confidence {
+            continue;
+        }
+
+        let raw_label = if *idx < IMAGENET_LABELS.len() {
+            IMAGENET_LABELS[*idx]
+        } else {
+            continue;
+        };
+
+        tracing::debug!(
+            index = idx,
+            label = raw_label,
+            probability = format!("{:.4}", prob),
+            "MobileNetV2 prediction"
+        );
+
+        // Map to a broad category for useful photo tags
+        if let Some(category) = imagenet_labels::label_category(*idx) {
+            if seen_categories.insert(category) {
+                detections.push(ObjectDetection {
+                    class_name: category.to_string(),
+                    confidence: *prob,
+                    bbox: full_bbox.clone(),
+                });
+            }
+        }
+    }
+
+    Ok(detections)
+}
 
 /// Quality preset for detection — higher quality = slower but more accurate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,9 +213,72 @@ pub enum DetectionQuality {
 
 /// Detect objects/scenes from an already-decoded image.
 ///
-/// Without ONNX models, this uses multi-pass colour histogram + texture +
-/// edge-density analysis. The `quality` parameter controls depth of analysis.
+/// Tries MobileNetV2 classification first for real object recognition.
+/// Always runs heuristic analysis for scene attributes (night, sunset, panoramic, etc.)
+/// that the ImageNet classifier doesn't cover well.
 pub fn detect_objects_with_quality(
+    img: &DynamicImage,
+    min_confidence: f32,
+    quality: DetectionQuality,
+) -> anyhow::Result<Vec<ObjectDetection>> {
+    let (w, h) = img.dimensions();
+    if w < 10 || h < 10 {
+        return Ok(vec![]);
+    }
+
+    let mut detections = Vec::new();
+
+    // ── Phase 1: MobileNetV2 classification (if model available) ─────
+    let model_used = if let Some(Some(model)) = CLS_MODEL.get() {
+        let mut session = model.lock().unwrap();
+        match classify_mobilenet(img, min_confidence, &mut session) {
+            Ok(model_dets) => {
+                tracing::debug!(
+                    count = model_dets.len(),
+                    classes = ?model_dets.iter().map(|d| &d.class_name).collect::<Vec<_>>(),
+                    "MobileNetV2 classification complete"
+                );
+                detections.extend(model_dets);
+                true
+            }
+            Err(e) => {
+                tracing::warn!("MobileNetV2 inference failed: {e}");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    // ── Phase 2: Heuristic scene classification ──────────────────────
+    // These scene tags complement model detections (night, sunset, snow, etc.)
+    let heuristic_dets = detect_scenes_heuristic(img, min_confidence, quality)?;
+
+    // Merge: model tags take priority; only add heuristic tags not already covered
+    let model_classes: std::collections::HashSet<String> =
+        detections.iter().map(|d| d.class_name.clone()).collect();
+    for det in heuristic_dets {
+        if !model_classes.contains(&det.class_name) {
+            detections.push(det);
+        }
+    }
+
+    if !model_used && detections.is_empty() {
+        tracing::debug!("No model and no heuristic detections for {}×{} image", w, h);
+    }
+
+    tracing::debug!(
+        total = detections.len(),
+        classes = ?detections.iter().map(|d| &d.class_name).collect::<Vec<_>>(),
+        model_used = model_used,
+        "Object detection: final results"
+    );
+
+    Ok(detections)
+}
+
+/// Heuristic scene classification using colour, texture, and spatial analysis.
+fn detect_scenes_heuristic(
     img: &DynamicImage,
     min_confidence: f32,
     quality: DetectionQuality,

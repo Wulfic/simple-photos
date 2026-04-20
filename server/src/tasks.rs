@@ -55,7 +55,12 @@ pub fn spawn_all(
     spawn_storage_health_monitor(storage_root_swap.clone(), storage_available.clone());
     spawn_dimension_repair(pool.clone(), config.storage.root.clone());
     spawn_thumbnail_orientation_repair(pool.clone(), config.storage.root.clone());
-    crate::ai::processor::spawn_ai_processor(pool.clone(), config.ai.clone(), config.storage.root.clone());
+    crate::ai::processor::spawn_ai_processor(
+        pool.clone(),
+        config.ai.clone(),
+        config.storage.root.clone(),
+        config.auth.jwt_secret.clone(),
+    );
     crate::geo::processor::spawn_geo_processor(pool.clone(), config.geo.clone());
 }
 

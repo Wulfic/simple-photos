@@ -26,9 +26,11 @@ use crate::media::{is_media_file, mime_from_extension};
 use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
-use super::metadata::extract_media_metadata_async;
+use super::metadata::{extract_media_metadata_async, extract_xmp_subtype, extract_motion_video};
 use super::thumbnail::generate_thumbnail_file;
 use super::utils::{compute_photo_hash_streaming, normalize_iso_timestamp, utc_now_iso};
+
+use chrono::Utc;
 
 /// Maximum concurrent file processing tasks during scan.
 const SCAN_PARALLELISM: usize = 4;
@@ -200,10 +202,15 @@ pub async fn scan_and_register(
             // Compute content-based hash using streaming I/O
             let photo_hash = compute_photo_hash_streaming(&candidate.abs_path).await;
 
+            // ── XMP subtype detection (motion, panorama, burst, HDR) ────
+            let file_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
+            let subtype_info = extract_xmp_subtype(&file_bytes);
+
             let insert_result = sqlx::query(
                 "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                 size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, created_at, photo_hash) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
+                 created_at, photo_hash, photo_subtype, burst_id) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&photo_id)
             .bind(&user_id)
@@ -221,6 +228,8 @@ pub async fn scan_and_register(
             .bind(&thumb_rel)
             .bind(&now)
             .bind(&photo_hash)
+            .bind(&subtype_info.photo_subtype)
+            .bind(&subtype_info.burst_id)
             .execute(&pool)
             .await;
 
@@ -234,6 +243,64 @@ pub async fn scan_and_register(
                     return;
                 }
                 Ok(_) => {}
+            }
+
+            // ── Extract and store motion video blob ─────────────────────
+            if subtype_info.photo_subtype.as_deref() == Some("motion") {
+                if let Some(offset) = subtype_info.motion_video_offset {
+                    if let Some(video_bytes) = extract_motion_video(&file_bytes, offset) {
+                        let blob_id = Uuid::new_v4().to_string();
+                        let blob_storage_dir = storage_root.join("blobs");
+                        let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
+                        let blob_rel = format!("blobs/{}.mp4", blob_id);
+                        let blob_abs = storage_root.join(&blob_rel);
+
+                        if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {
+                            let blob_size = video_bytes.len() as i64;
+                            let blob_now = Utc::now().to_rfc3339();
+
+                            let insert_ok = sqlx::query(
+                                "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+                                 VALUES (?, ?, 'motion_video', ?, ?, ?)",
+                            )
+                            .bind(&blob_id)
+                            .bind(&user_id)
+                            .bind(blob_size)
+                            .bind(&blob_now)
+                            .bind(&blob_rel)
+                            .execute(&pool)
+                            .await;
+
+                            if insert_ok.is_ok() {
+                                let _ = sqlx::query(
+                                    "UPDATE photos SET motion_video_blob_id = ? WHERE id = ?",
+                                )
+                                .bind(&blob_id)
+                                .bind(&photo_id)
+                                .execute(&pool)
+                                .await;
+
+                                tracing::info!(
+                                    photo_id = %photo_id,
+                                    blob_id = %blob_id,
+                                    size = blob_size,
+                                    "Scan: extracted and stored motion video blob"
+                                );
+                            } else {
+                                let _ = tokio::fs::remove_file(&blob_abs).await;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(ref st) = subtype_info.photo_subtype {
+                tracing::info!(
+                    file = %candidate.rel_path,
+                    photo_subtype = %st,
+                    burst_id = ?subtype_info.burst_id,
+                    "Scan: special photo subtype detected"
+                );
             }
 
             // Generate thumbnail
@@ -344,6 +411,116 @@ pub async fn scan_and_register(
 
     if fixed_count > 0 {
         tracing::info!("Updated metadata for {} existing photos", fixed_count);
+    }
+
+    // ── Retroactively fill missing XMP subtypes for existing photos ──────
+    // Detect motion, panorama, burst, HDR subtypes that were missed by
+    // earlier scan versions that didn't do XMP extraction.
+    let photos_needing_subtype: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, file_path FROM photos \
+         WHERE user_id = ? AND photo_subtype IS NULL AND file_path != ''",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await
+    .unwrap_or_default();
+
+    if !photos_needing_subtype.is_empty() {
+        tracing::info!(
+            "Checking {} existing photos for XMP subtypes",
+            photos_needing_subtype.len()
+        );
+        let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
+        let subtype_count = Arc::new(AtomicI64::new(0));
+        let mut handles = Vec::with_capacity(photos_needing_subtype.len());
+
+        for (pid, fpath) in photos_needing_subtype {
+            let abs = storage_root.join(&fpath);
+            if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
+                continue;
+            }
+            let sem = sem.clone();
+            let pool = state.pool.clone();
+            let user_id = auth.user_id.clone();
+            let storage_root = storage_root.clone();
+            let subtype_count = subtype_count.clone();
+
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                let file_bytes = tokio::fs::read(&abs).await.unwrap_or_default();
+                let sub = extract_xmp_subtype(&file_bytes);
+
+                if let Some(ref subtype) = sub.photo_subtype {
+                    sqlx::query(
+                        "UPDATE photos SET photo_subtype = ?, burst_id = COALESCE(burst_id, ?) WHERE id = ?",
+                    )
+                    .bind(subtype)
+                    .bind(&sub.burst_id)
+                    .bind(&pid)
+                    .execute(&pool)
+                    .await
+                    .ok();
+
+                    // Extract motion video blob if applicable
+                    if subtype == "motion" {
+                        if let Some(offset) = sub.motion_video_offset {
+                            if let Some(video_bytes) = extract_motion_video(&file_bytes, offset) {
+                                let blob_id = Uuid::new_v4().to_string();
+                                let blob_storage_dir = storage_root.join("blobs");
+                                let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
+                                let blob_rel = format!("blobs/{}.mp4", blob_id);
+                                let blob_abs = storage_root.join(&blob_rel);
+
+                                if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {
+                                    let blob_size = video_bytes.len() as i64;
+                                    let blob_now = Utc::now().to_rfc3339();
+
+                                    let insert_ok = sqlx::query(
+                                        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
+                                         VALUES (?, ?, 'motion_video', ?, ?, ?)",
+                                    )
+                                    .bind(&blob_id)
+                                    .bind(&user_id)
+                                    .bind(blob_size)
+                                    .bind(&blob_now)
+                                    .bind(&blob_rel)
+                                    .execute(&pool)
+                                    .await;
+
+                                    if insert_ok.is_ok() {
+                                        let _ = sqlx::query(
+                                            "UPDATE photos SET motion_video_blob_id = ? WHERE id = ?",
+                                        )
+                                        .bind(&blob_id)
+                                        .bind(&pid)
+                                        .execute(&pool)
+                                        .await;
+                                    } else {
+                                        let _ = tokio::fs::remove_file(&blob_abs).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    tracing::info!(
+                        photo_id = %pid,
+                        photo_subtype = %subtype,
+                        "Scan: retroactively detected XMP subtype"
+                    );
+                    subtype_count.fetch_add(1, Ordering::Relaxed);
+                }
+            }));
+        }
+
+        for h in handles {
+            let _ = h.await;
+        }
+
+        let sc = subtype_count.load(Ordering::Relaxed);
+        if sc > 0 {
+            tracing::info!("Retroactively detected {} photo subtypes", sc);
+        }
     }
 
     // ── Generate missing thumbnails for existing photos ──────────────────

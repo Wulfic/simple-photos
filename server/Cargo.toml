@@ -43,7 +43,8 @@ http-body-util = "0.1"
 byteorder = "1"
 futures-util = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-tract-onnx = "0.22.1"
+ort = { version = "2.0.0-rc.12", features = ["ndarray"] }
+ndarray = "0.17"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -12,6 +12,7 @@ pub mod clustering;
 pub mod engine;
 pub mod face;
 pub mod handlers;
+pub mod imagenet_labels;
 pub mod models;
 pub mod object;
 pub mod processor;
