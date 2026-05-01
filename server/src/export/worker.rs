@@ -189,18 +189,24 @@ async fn do_export(
             }
         };
 
-        // Extract the raw media bytes from the JSON envelope.
-        // The envelope is: {"v":1,"filename":"...","data":"<base64>", ...}
-        // We parse the JSON and base64-decode the "data" field to recover
-        // the original file bytes.
-        let data = match extract_media_from_envelope(&decrypted_envelope) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!(
-                    job_id = %job_id, blob_id = %blob_id, error = %e,
-                    "Failed to extract media from envelope, skipping"
-                );
-                continue;
+        // Extract the raw bytes from the decrypted blob.
+        // Media blobs (photo, gif, video, audio, thumbnail) use a JSON
+        // envelope: {"v":1,"filename":"...","data":"<base64>", ...}.
+        // Metadata blobs (album_manifest) are encrypted plain JSON without
+        // an envelope — for those we ship the decrypted bytes verbatim so
+        // the manifest is readable in the export.
+        let data = if blob_type == "album_manifest" {
+            decrypted_envelope
+        } else {
+            match extract_media_from_envelope(&decrypted_envelope) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(
+                        job_id = %job_id, blob_id = %blob_id, error = %e,
+                        "Failed to extract media from envelope, skipping"
+                    );
+                    continue;
+                }
             }
         };
 
