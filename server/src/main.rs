@@ -104,6 +104,25 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("Please set a real JWT secret. Generate one with: openssl rand -hex 32");
     }
 
+    // If `[storage.smb]` is configured, ensure the share is mounted before we
+    // touch the storage tree. A failure here is logged but non-fatal — the
+    // storage health monitor will mark the backend unavailable, the wizard
+    // and admin UI surface a clear error, and once the operator fixes the
+    // mount the server reconnects automatically.
+    if let Some(smb_cfg) = &config.storage.smb {
+        if let Err(e) = remount_smb_on_boot(smb_cfg, &config.auth.jwt_secret).await {
+            tracing::error!("SMB share remount failed: {}. Server will continue with the configured local path; \
+                              fix the share and restart, or reconfigure storage from the admin UI.", e);
+        } else {
+            tracing::info!(
+                "SMB share `{}` mounted at {} (storage root: {:?})",
+                smb_cfg.address,
+                smb_cfg.mount_point,
+                config.storage.root
+            );
+        }
+    }
+
     // Ensure storage directory tree exists (network mounts should already be present)
     tokio::fs::create_dir_all(&config.storage.root).await?;
     // Create organized subdirectories under the storage root
@@ -248,4 +267,37 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Remount a previously-configured SMB share at boot. Pulls the encrypted
+/// password from `config.toml` (`[storage.smb]`), decrypts it with the JWT
+/// secret, and runs the same `mount.cifs` logic the wizard uses.
+async fn remount_smb_on_boot(
+    cfg: &crate::setup::smb::SmbStoredConfig,
+    jwt_secret: &str,
+) -> Result<(), String> {
+    use crate::setup::smb;
+
+    let mount_point = std::path::PathBuf::from(&cfg.mount_point);
+    if smb::is_mounted(&mount_point).await {
+        return Ok(()); // already mounted (e.g. by systemd / fstab)
+    }
+
+    let mut target = smb::parse_smb_input(&cfg.address)?
+        .ok_or_else(|| "Stored SMB address is not parseable".to_string())?;
+    if !cfg.username.is_empty() {
+        target.username = Some(cfg.username.clone());
+    }
+    if !cfg.domain.is_empty() {
+        target.domain = Some(cfg.domain.clone());
+    }
+    if !cfg.password_enc.is_empty() {
+        let pw = smb::decrypt_password(&cfg.password_enc, jwt_secret)?;
+        target.password = Some(pw);
+    }
+
+    let creds_dir = std::path::PathBuf::from("data/smb-creds");
+    smb::mount_smb(&target, &mount_point, &creds_dir)
+        .await
+        .map(|_| ())
 }

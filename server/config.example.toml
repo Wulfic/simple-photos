@@ -54,6 +54,25 @@ default_quota_bytes = 10737418240   # 10 GB
 # Max size per single upload. 5 GiB default to support large video files.
 max_blob_size_bytes = 5368709120    # 5 GB
 
+# ── Optional: SMB / CIFS auto-mount ──────────────────────────────────────────
+# Normally written by the first-run wizard. When this section is present, the
+# server mounts the share at `mount_point` on every startup using mount.cifs
+# and uses `mount_point/subpath` as the storage root. Requires `cifs-utils`
+# with the SUID bit on `mount.cifs`, or a passwordless sudoers rule for
+# `/usr/sbin/mount.cifs` for the server user.
+#
+# `password_enc` is AES-256-GCM ciphertext, base64-encoded, with the key
+# derived from `auth.jwt_secret` — DO NOT edit by hand. Reconfigure via the
+# admin UI (`PUT /api/admin/storage` with `{ "smb": {...} }`) instead.
+#
+# [storage.smb]
+# address      = "smb://nas.local/photos/SimplePhotos"
+# username     = "photos-svc"
+# password_enc = "..."           # set by the wizard, leave empty for guest
+# domain       = ""
+# mount_point  = "data/mounts/nas.local__photos"
+# subpath      = "SimplePhotos"
+
 [auth]
 # IMPORTANT: Change this to a random 64-char hex string in production!
 # Generate with:

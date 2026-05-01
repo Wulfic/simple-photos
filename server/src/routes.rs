@@ -117,6 +117,10 @@ fn admin_routes() -> Router<AppState> {
         // Storage
         .route("/admin/storage", get(crate::setup::storage::get_storage))
         .route("/admin/storage", put(crate::setup::storage::update_storage))
+        .route(
+            "/admin/storage/test-smb",
+            post(crate::setup::storage::test_smb),
+        )
         .route("/admin/browse", get(crate::setup::storage::browse_directory))
         // Port
         .route("/admin/port", get(crate::setup::port::get_port))

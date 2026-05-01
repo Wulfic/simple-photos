@@ -17,5 +17,6 @@ pub mod import;
 pub mod pair;
 pub mod pair_helpers;
 pub mod port;
+pub mod smb;
 pub mod ssl;
 pub mod storage;

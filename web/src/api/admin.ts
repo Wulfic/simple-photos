@@ -74,6 +74,14 @@ export const adminApi = {
     request<{
       storage_path: string;
       message: string;
+      smb?: {
+        address: string;
+        username: string;
+        domain: string;
+        mount_point: string;
+        subpath: string;
+        mounted: boolean;
+      };
     }>("/admin/storage"),
 
   updateStorage: (path: string) =>
@@ -83,6 +91,47 @@ export const adminApi = {
     }>("/admin/storage", {
       method: "PUT",
       body: JSON.stringify({ path }),
+    }),
+
+  /**
+   * Configure an SMB / CIFS network share as the storage backend. The server
+   * will mount the share via `mount.cifs`, point storage at the resulting
+   * mount point, and persist the (encrypted) credentials so the share is
+   * remounted automatically on every restart.
+   */
+  configureSmbStorage: (smb: {
+    address: string;
+    username?: string;
+    password?: string;
+    domain?: string;
+    mount_point?: string;
+  }) =>
+    request<{
+      storage_path: string;
+      message: string;
+      smb?: {
+        address: string;
+        username: string;
+        domain: string;
+        mount_point: string;
+        subpath: string;
+        mounted: boolean;
+      };
+    }>("/admin/storage", {
+      method: "PUT",
+      body: JSON.stringify({ smb }),
+    }),
+
+  /** Dry-run an SMB connection without mounting (for the wizard's "Test" button). */
+  testSmbConnection: (smb: {
+    address: string;
+    username?: string;
+    password?: string;
+    domain?: string;
+  }) =>
+    request<{ ok: boolean; message: string }>("/admin/storage/test-smb", {
+      method: "POST",
+      body: JSON.stringify(smb),
     }),
 
   browseDirectory: (path?: string) =>

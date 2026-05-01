@@ -109,6 +109,15 @@ pub struct StorageConfig {
     /// Maximum size of a single upload in bytes.
     /// Default 5 GiB to accommodate large video files.
     pub max_blob_size_bytes: u64,
+
+    /// Optional SMB / CIFS network share configuration.
+    ///
+    /// When present, the server will mount this share at `mount_point` on
+    /// startup and use `mount_point/subpath` as the storage root. Configured
+    /// via the first-run wizard or `PUT /api/admin/storage`. See
+    /// [`crate::setup::smb`] for the lifecycle.
+    #[serde(default)]
+    pub smb: Option<crate::setup::smb::SmbStoredConfig>,
 }
 
 /// Authentication and token settings.

@@ -55,6 +55,20 @@ export default function ServerConfigStep({
   const [pathInput, setPathInput] = useState(storagePath || "");
   const [saving, setSaving] = useState(false);
 
+  // ── SMB / network-share state ───────────────────────────────────────────
+  // When the user types an SMB-style address into the storage path field
+  // (smb://host/share, \\host\share, or //host/share/sub) we don't treat it
+  // as a local path — instead we pop a small credentials modal so the wizard
+  // can collect the username / password / domain and then call
+  // `configureSmbStorage`, which mounts the share on the server side.
+  const [smbModalOpen, setSmbModalOpen] = useState(false);
+  const [smbUser, setSmbUser] = useState("");
+  const [smbPass, setSmbPass] = useState("");
+  const [smbDomain, setSmbDomain] = useState("");
+  const [smbAnonymous, setSmbAnonymous] = useState(false);
+  const [smbBusy, setSmbBusy] = useState(false);
+  const [smbStatus, setSmbStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+
   // ── Folder browser state ────────────────────────────────────────────────
   const [browserOpen, setBrowserOpen] = useState(false);
   const [browsePath, setBrowsePath] = useState("/");
@@ -96,6 +110,13 @@ export default function ServerConfigStep({
       setError("Please enter a storage path.");
       return;
     }
+    // SMB-style address? Pop the credentials modal instead of trying to
+    // treat the address as a local directory.
+    if (isSmbAddress(trimmed)) {
+      setSmbStatus(null);
+      setSmbModalOpen(true);
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -106,6 +127,61 @@ export default function ServerConfigStep({
       setError(getErrorMessage(err, "Failed to set storage path."));
     } finally {
       setSaving(false);
+    }
+  }
+
+  // ── SMB handlers ────────────────────────────────────────────────────────
+
+  function smbPayload() {
+    const trimmed = pathInput.trim();
+    if (!trimmed) {
+      throw new Error("Enter the SMB share address.");
+    }
+    return {
+      address: trimmed,
+      username: smbAnonymous ? undefined : smbUser.trim() || undefined,
+      password: smbAnonymous ? undefined : smbPass || undefined,
+      domain: smbAnonymous ? undefined : smbDomain.trim() || undefined,
+    };
+  }
+
+  async function handleTestSmb() {
+    setSmbBusy(true);
+    setSmbStatus(null);
+    setError("");
+    try {
+      const payload = smbPayload();
+      const res = await api.admin.testSmbConnection(payload);
+      setSmbStatus({ kind: "ok", msg: res.message });
+    } catch (err: unknown) {
+      setSmbStatus({ kind: "err", msg: getErrorMessage(err, "SMB test failed.") });
+    } finally {
+      setSmbBusy(false);
+    }
+  }
+
+  async function handleConnectSmb() {
+    setSmbBusy(true);
+    setSmbStatus(null);
+    setError("");
+    try {
+      const payload = smbPayload();
+      const res = await api.admin.configureSmbStorage(payload);
+      // The server has already swapped its storage root. Reflect that in the
+      // wizard state so the green "Storage path saved" panel renders.
+      setStoragePathDirect(res.storage_path);
+      setPathInput(res.storage_path);
+      handleSelectStoragePath();
+      setSmbStatus({ kind: "ok", msg: res.message });
+      setSmbModalOpen(false);
+      // Wipe credentials from React state once the share is mounted — they
+      // live encrypted in config.toml on the server now.
+      setSmbPass("");
+    } catch (err: unknown) {
+      const msg = getErrorMessage(err, "Failed to mount SMB share.");
+      setSmbStatus({ kind: "err", msg });
+    } finally {
+      setSmbBusy(false);
     }
   }
 
@@ -168,7 +244,11 @@ export default function ServerConfigStep({
       </h3>
       <p className="text-gray-500 dark:text-gray-400 text-xs mb-3">
         Enter the full path to where your photos and videos will be stored.
-        This can be a local folder, mounted network share, or external drive.
+        This can be a local folder, an external drive, or a network share —
+        for SMB, just type{" "}
+        <code className="font-mono text-[11px]">smb://host/share</code> or{" "}
+        <code className="font-mono text-[11px]">{"\\\\host\\share"}</code> and
+        we&apos;ll prompt for credentials.
       </p>
 
       {/* Current / selected path display */}
@@ -211,7 +291,11 @@ export default function ServerConfigStep({
           disabled={saving || !pathInput.trim()}
           className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
         >
-          {saving ? "Saving…" : "Set Path"}
+          {saving
+            ? "Saving…"
+            : isSmbAddress(pathInput)
+              ? "Connect…"
+              : "Set Path"}
         </button>
       </div>
 
@@ -260,6 +344,142 @@ export default function ServerConfigStep({
         browseLoading={browseLoading}
         browseDirectory={browseDirectory}
       />
+
+      {/* SMB credentials prompt — opens automatically when the user types
+          an SMB-style address into the storage path field and hits Set Path. */}
+      {smbModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !smbBusy) setSmbModalOpen(false);
+          }}
+        >
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">
+              Connect to network share
+            </h3>
+            <p className="font-mono text-xs text-gray-500 dark:text-gray-400 mb-4 break-all">
+              {pathInput.trim()}
+            </p>
+
+            <label className="flex items-center gap-2 mb-3 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={smbAnonymous}
+                onChange={(e) => setSmbAnonymous(e.target.checked)}
+                className="rounded"
+              />
+              Connect as guest (no credentials)
+            </label>
+
+            <div className={`space-y-3 ${smbAnonymous ? "opacity-50 pointer-events-none" : ""}`}>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={smbUser}
+                  onChange={(e) => setSmbUser(e.target.value)}
+                  autoComplete="off"
+                  autoFocus
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={smbPass}
+                  onChange={(e) => setSmbPass(e.target.value)}
+                  autoComplete="new-password"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !smbBusy) handleConnectSmb();
+                  }}
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                  Domain <span className="text-gray-400 font-normal">(optional, AD only)</span>
+                </label>
+                <input
+                  type="text"
+                  value={smbDomain}
+                  onChange={(e) => setSmbDomain(e.target.value)}
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                />
+              </div>
+            </div>
+
+            {smbStatus && (
+              <div
+                className={`mt-3 text-xs p-2 rounded-lg ${
+                  smbStatus.kind === "ok"
+                    ? "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300"
+                    : "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300"
+                }`}
+              >
+                {smbStatus.msg}
+              </div>
+            )}
+
+            <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-4 leading-snug">
+              The server stores the password encrypted at rest (AES-GCM keyed off
+              the JWT secret) and remounts the share on every restart. Requires{" "}
+              <code className="font-mono">cifs-utils</code> on the host.
+            </p>
+
+            <div className="flex gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => setSmbModalOpen(false)}
+                disabled={smbBusy}
+                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-sm font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleTestSmb}
+                disabled={smbBusy}
+                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-sm font-medium transition-colors"
+              >
+                {smbBusy ? "…" : "Test"}
+              </button>
+              <button
+                type="button"
+                onClick={handleConnectSmb}
+                disabled={smbBusy}
+                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+              >
+                {smbBusy ? "Mounting…" : "Connect"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/**
+ * Detect whether a path string looks like an SMB / network-share address.
+ * Matches the same three forms the server's parser accepts: `smb://...`,
+ * Windows UNC `\\host\share`, and `//host/share/...`.
+ */
+function isSmbAddress(raw: string): boolean {
+  const s = raw.trim();
+  if (!s) return false;
+  if (/^smb:\/\//i.test(s)) return true;
+  if (s.startsWith("\\\\")) return true;
+  // POSIX-style only counts when there's a host/share component (avoids
+  // false-positives on `//` typed by mistake).
+  if (s.startsWith("//") && s.length > 2 && !s.startsWith("///")) {
+    const rest = s.slice(2);
+    return rest.includes("/");
+  }
+  return false;
 }
