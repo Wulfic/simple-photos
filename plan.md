@@ -5,6 +5,41 @@
 > security findings currently flagged. Goal: get the tree back to a known-good,
 > security-clean state before tagging the next release.
 
+## Stabilization status (2026-04-30, branch `stabilize/post-stable`)
+
+**Done — Phase 1 P0 security fixes:**
+- SMB token validation tightened; `unsafe libc` calls replaced with `rustix` safe wrappers; credentials file cleaned up on mount failure; condensed errors now redact `password=`/`pass=`/`pwd=`/`credentials=` fragments before leaving the server.
+- EXIF write path: rejects `@`-prefix exiftool file-include; clear "exiftool not found" error; dynamic SQL replaced with compile-time `concat!()` (silences Semgrep `format-sql-string`).
+- Storage browser: `/proc`, `/sys`, `/dev` blocklist; canonical path re-checked after symlink resolution; audit logging on blocked attempts.
+- Web deps: vite ^5 → ^7 — `npm audit` clean (vite/esbuild/postcss advisories resolved).
+- Server deps: rustls-webpki 0.103.11 → 0.103.13 (RUSTSEC-2026-0098/-0099/-0104); remaining advisories are tracked in `deny.toml`.
+- AI: NaN-safe sort in `clustering.rs` and `face.rs`.
+
+**Done — Phase 2 P1 correctness:**
+- Renamed duplicate-numbered tests: 38 → 59 (ai_accuracy), 44 → 60 (motion_photo), 52 → 61 (geolocation_ddt).
+- Fixed export bug: `album_manifest` blobs now ship as readable JSON under `metadata/` in the export zip (was being dropped because envelope extraction failed for non-media JSON).
+- Fixed unused-variable lint in `editing/render_download.rs`.
+
+**Done — Phase 3 cleanup:**
+- `cargo clippy --fix` applied across server (94 → 42 warnings).
+
+**Verified test sweeps (against `target/release/simple-photos-server`):**
+- test_01: 23 / test_02-04: 65 / test_05-12: 148 / test_15-27+99: 25 / test_28-30: 36
+- test_31-36: 111 / test_37: 11 / test_38_ddt+40-43: 167 / test_44+45-47+57-61: 132 / test_50-56: 156 / test_55: 23
+
+**Commits on branch:**
+- `3af26d7` plan
+- `f28ef82` Phase 1 security pass (SMB, EXIF, browse, NaN sort, web deps, clippy)
+- `5c94717` export album_manifest fix
+- `52046d6` rustls-webpki bump
+- `7d3462b` compile-time SQL concat
+- `99faed7` SMB error redaction
+
+**Deferred to a follow-up release:**
+- Phase 1.1 HTTPS-only middleware for `/admin/storage*` (requires axum middleware refactor).
+- Phase 2.2 AI subsystem split (`face.rs` 1027 LOC) — large refactor, no functional bugs found in the sweep.
+- Phase 3 remaining ~40 clippy stylistic warnings (very-complex types, too-many-args).
+
 ## Status snapshot (recorded 2026-04-30)
 
 | Surface | Indicator | Result |
