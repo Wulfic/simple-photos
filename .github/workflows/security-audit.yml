@@ -111,7 +111,7 @@ jobs:
           echo "================================================================================" >> "$REPORT"
           echo "" >> "$REPORT"
           if [ -s /tmp/semgrep-text.txt ]; then
-            FINDING_COUNT=$(grep -c '^.*:.*:.*' /tmp/semgrep-text.txt 2>/dev/null || echo "0")
+            FINDING_COUNT=$(awk '/^.*:.*:.*/{n++} END{print n+0}' /tmp/semgrep-text.txt)
             echo "STATUS: FINDINGS DETECTED ($FINDING_COUNT potential issues)" >> "$REPORT"
             echo "" >> "$REPORT"
             cat /tmp/semgrep-text.txt >> "$REPORT"
@@ -346,8 +346,8 @@ jobs:
           echo "" >> "$REPORT"
           if command -v cargo-geiger &>/dev/null; then
             cargo geiger --all-features --output-format ascii 2>&1 | tee -a "$REPORT" || true
-            UNSAFE_COUNT=$(grep -c 'unsafe' "$REPORT" 2>/dev/null || echo "0")
-            sed -i "4a STATUS: REVIEW — $UNSAFE_COUNT lines reference unsafe code" "$REPORT"
+            UNSAFE_COUNT=$(awk '/unsafe/{n++} END{print n+0}' "$REPORT")
+            sed -i "4a STATUS: REVIEW — ${UNSAFE_COUNT} lines reference unsafe code" "$REPORT"
           else
             echo "STATUS: SKIPPED — cargo-geiger installation failed" >> "$REPORT"
           fi
@@ -660,12 +660,13 @@ jobs:
           # Count CVEs from table output
           CVE_COUNT=0
           if [ -f /tmp/trivy-image-table.txt ]; then
-            CVE_COUNT=$(grep -c 'CVE-' /tmp/trivy-image-table.txt 2>/dev/null || echo "0")
+            # grep -c returns exit 1 when no matches; use awk to always emit a single integer
+            CVE_COUNT=$(awk '/CVE-/{n++} END{print n+0}' /tmp/trivy-image-table.txt)
           fi
-          if [ "$CVE_COUNT" -eq 0 ]; then
+          if [ "${CVE_COUNT:-0}" -eq 0 ]; then
             sed -i '4a STATUS: PASS' "$REPORT"
           else
-            sed -i "4a STATUS: FAIL — $CVE_COUNT CVE(s) found (CRITICAL/HIGH)" "$REPORT"
+            sed -i "4a STATUS: FAIL — ${CVE_COUNT} CVE(s) found (CRITICAL/HIGH)" "$REPORT"
           fi
 
       - name: Upload SARIF
