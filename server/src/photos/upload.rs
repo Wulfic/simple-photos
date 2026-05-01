@@ -41,6 +41,9 @@ pub async fn upload_photo(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("{}.jpg", Uuid::new_v4()));
+    // Sanitize the user-supplied filename: strip path separators, traversal sequences,
+    // control characters, and bidi overrides before any path operations.
+    let filename = sanitize::sanitize_filename(&filename);
 
     // Reject unsupported file formats — accept native + convertible types
     if !is_supported_extension(&filename) && !conversion::is_convertible(&filename) {
@@ -64,8 +67,14 @@ pub async fn upload_photo(
     let (body, filename, mime_type) = if let Some(target) = conversion::conversion_target(&filename) {
         let tmp_dir = state.config.storage.root.join(".tmp").join("sp_upload_conv");
         let conv_id = Uuid::new_v4();
-        let tmp_input = tmp_dir.join(format!("{}_in.{}", conv_id,
-            filename.rsplit('.').next().unwrap_or("bin")));
+        // Restrict the input temp-file extension to alphanumeric characters only
+        // to prevent path-component injection via the user-supplied filename.
+        let input_ext: String = filename.rsplit('.')
+            .next()
+            .map(|e| e.chars().filter(|c| c.is_alphanumeric()).collect())
+            .filter(|e: &String| !e.is_empty())
+            .unwrap_or_else(|| "bin".to_string());
+        let tmp_input = tmp_dir.join(format!("{}_in.{}", conv_id, input_ext));
         let tmp_output = tmp_dir.join(format!("{}_out.{}", conv_id, target.extension));
 
         tokio::fs::create_dir_all(&tmp_dir)

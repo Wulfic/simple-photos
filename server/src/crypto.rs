@@ -73,7 +73,7 @@ use sha2::{Digest, Sha256};
 /// Derive a 32-byte wrapping key from the JWT secret.
 fn derive_wrapping_key(jwt_secret: &str) -> [u8; 32] {
     let hash = Sha256::digest(format!("simple-photos-key-wrap:{}", jwt_secret).as_bytes());
-    let mut key = [0u8; 32];
+    let mut key = [0u8; 32]; // codeql[rust/hard-coded-cryptographic-value] -- zero-init buffer, immediately overwritten with JWT-derived hash
     key.copy_from_slice(&hash);
     key
 }
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let key = [0x42u8; 32];
+        let key = [0x42u8; 32]; // codeql[rust/hard-coded-cryptographic-value] -- test-only fixture key
         let plaintext = b"Hello, simple-photos!";
         let encrypted = encrypt(&key, plaintext).unwrap();
         assert!(encrypted.len() > plaintext.len());

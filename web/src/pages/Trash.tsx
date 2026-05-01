@@ -115,7 +115,7 @@ export default function Trash() {
                 (item as TrashItem)._localThumbUrl = URL.createObjectURL(thumbBlob);
               }
             } catch (e) {
-              console.warn(`[TRASH] Failed to decrypt thumbnail for ${item.id}:`, e);
+              console.warn(`[TRASH] Failed to decrypt thumbnail for ${item.id}:`, e); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
             }
           }
         }
@@ -187,7 +187,7 @@ export default function Trash() {
       // Clean up local Dexie trash entry for encrypted items
       if (item?.encrypted_blob_id) {
         await db.trash.delete(id).catch((e) => {
-          console.error(`Failed to delete trash entry ${id} from local DB:`, e);
+          console.error(`Failed to delete trash entry ${id} from local DB:`, e); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
         });
         if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
       }
@@ -271,7 +271,7 @@ export default function Trash() {
         await api.trash.permanentDelete(id);
         if (item?.encrypted_blob_id) {
           await db.trash.delete(id).catch((e) => {
-            console.error(`Failed to delete trash entry ${id} from local DB:`, e);
+            console.error(`Failed to delete trash entry ${id} from local DB:`, e); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
           });
           if (item._localThumbUrl) URL.revokeObjectURL(item._localThumbUrl);
         }

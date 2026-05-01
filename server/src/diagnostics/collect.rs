@@ -50,12 +50,12 @@ pub async fn collect_server_info(config: &AppConfig, storage_root: &Path) -> Ser
 
 /// Collect SQLite database statistics (file sizes, PRAGMAs, table row counts).
 pub async fn collect_database_stats(pool: &SqlitePool, db_path: &Path) -> DatabaseStats {
-    let db_size = tokio::fs::metadata(db_path)
+    let db_size = tokio::fs::metadata(db_path) // codeql[rust/path-injection] -- path from server config, not user input
         .await
         .map(|m| m.len())
         .unwrap_or(0);
     let wal_path = db_path.with_extension("db-wal");
-    let wal_size = tokio::fs::metadata(&wal_path)
+    let wal_size = tokio::fs::metadata(&wal_path) // codeql[rust/path-injection] -- path derived from server config
         .await
         .map(|m| m.len())
         .unwrap_or(0);

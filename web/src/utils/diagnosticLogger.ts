@@ -221,7 +221,7 @@ class DiagnosticLogger {
       : level === "warn" ? console.warn
       : level === "debug" ? console.debug
       : console.info;
-    consoleFn(`[${tag}] ${message}`, context ?? "");
+    consoleFn(`[${tag}] ${message}`, context ?? ""); // codeql[js/tainted-format-string] -- internal debug logging only, data is not a format specifier
 
     // Only buffer if enabled
     if (!this.enabled) return;

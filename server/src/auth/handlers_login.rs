@@ -118,15 +118,14 @@ pub async fn login(
         Some(u) => u,
         None => {
             // Timing-safe: always do a password check even if user doesn't exist.
-            // Offloaded to blocking threadpool.
+            // The hash below is a deliberately-published dummy bcrypt digest used only
+            // to keep the failure path's runtime equivalent to the success path. It is
+            // not a credential.
+            // nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
+            const DUMMY_BCRYPT: &str = "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK";
             let pw = req.password.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                bcrypt::verify(
-                    &pw,
-                    "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK",
-                )
-            })
-            .await;
+            let _ = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, DUMMY_BCRYPT))
+                .await;
             audit::log(
                 &state,
                 AuditEvent::LoginFailure,

@@ -20,6 +20,10 @@ if [[ -z "$CARGO_BIN" || ! -x "$CARGO_BIN" ]]; then
     CARGO_BIN="cargo"  # last resort: hope it's on PATH
 fi
 
+# Read the configured port from config.toml (falls back to 8080)
+SERVER_PORT=$(grep -E '^port\s*=' "$SERVER_DIR/config.toml" 2>/dev/null | head -1 | awk -F'=' '{print $2}' | tr -d ' ')
+SERVER_PORT=${SERVER_PORT:-8080}
+
 echo "=== Simple Photos Server Reset ==="
 
 # ── Rebuild web frontend ─────────────────────────────────────────────────────
@@ -48,7 +52,9 @@ ANDROID_DIR="$SCRIPT_DIR/android"
 DOWNLOADS_DIR="$SCRIPT_DIR/downloads"
 if [[ -d "$ANDROID_DIR" ]]; then
     mkdir -p "$DOWNLOADS_DIR"
-    BUILD_CMD="cd '$ANDROID_DIR' && ./gradlew assembleDebug"
+    # Resolve ANDROID_HOME — prefer env var, then the default install location
+    RESOLVED_ANDROID_HOME="${ANDROID_HOME:-$(eval echo ~$RUN_USER)/android-sdk}"
+    BUILD_CMD="export ANDROID_HOME='$RESOLVED_ANDROID_HOME'; cd '$ANDROID_DIR' && ./gradlew assembleDebug"
     if [[ "$RUN_USER" != "$(id -un)" ]]; then
         sudo -u "$RUN_USER" bash -c "$BUILD_CMD" \
             || { echo "WARNING: Android APK build failed — continuing without APK"; }
@@ -88,7 +94,10 @@ fi
 
 # Kill any running server (root or user-owned)
 echo "Stopping server..."
-pkill -9 -f simple-photos-server 2>/dev/null && sleep 2 || true
+if systemctl is-active simple-photos.service &>/dev/null 2>&1; then
+    sudo systemctl stop simple-photos.service
+fi
+pkill -9 -f simple-photos-server 2>/dev/null && sleep 1 || true
 
 # Wipe database
 echo "Wiping database..."
@@ -181,7 +190,9 @@ fi
 # Restart server as the real user (not root)
 LOG_FILE="${TMPDIR:-/tmp}/simple-photos-server.log"
 echo "Starting server as $RUN_USER (log: $LOG_FILE)..."
-if [[ "$RUN_USER" != "$(id -un)" ]]; then
+if systemctl is-enabled simple-photos.service &>/dev/null 2>&1; then
+    sudo systemctl restart simple-photos.service
+elif [[ "$RUN_USER" != "$(id -un)" ]]; then
     # We're root via sudo — drop privileges and cd to SERVER_DIR so relative
     # config paths (./data/db/...) resolve correctly.
     sudo -u "$RUN_USER" bash -c "cd '$SERVER_DIR' && setsid nohup ./target/release/simple-photos-server > '$LOG_FILE' 2>&1 &"
@@ -194,7 +205,7 @@ fi
 # Wait for server to become responsive (up to 10 seconds)
 echo -n "Waiting for server"
 for i in $(seq 1 10); do
-    if curl -sf http://localhost:8080/api/setup/status > /dev/null 2>&1; then
+    if curl -sf "http://localhost:${SERVER_PORT}/api/setup/status" > /dev/null 2>&1; then
         echo " ready!"
         break
     fi
@@ -203,7 +214,7 @@ for i in $(seq 1 10); do
 done
 
 # Verify setup state
-STATUS=$(curl -s http://localhost:8080/api/setup/status 2>/dev/null || echo '{"error":"server not responding"}')
+STATUS=$(curl -s "http://localhost:${SERVER_PORT}/api/setup/status" 2>/dev/null || echo '{"error":"server not responding"}')
 if echo "$STATUS" | grep -q '"error"'; then
     echo "WARNING: Server may have failed to start. Check $LOG_FILE"
     tail -20 "$LOG_FILE" 2>/dev/null

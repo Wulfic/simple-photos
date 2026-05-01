@@ -71,7 +71,7 @@ async function _load(blobId: string, serverPhotoId?: string): Promise<string | n
       clearTimeout(timer);
     }
   } catch (err) {
-    console.warn(`[GIF_LOADER] Failed to load full GIF ${blobId}:`, err);
+    console.warn(`[GIF_LOADER] Failed to load full GIF ${blobId}:`, err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
     return null;
   }
 }

@@ -106,6 +106,9 @@ fn get_fs_stats(path: &std::path::Path) -> (i64, i64) {
         Err(_) => return (0, 0),
     };
 
+    // SAFETY: c_path is a valid NUL-terminated C string; statvfs writes only
+    // into the provided struct.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
@@ -135,6 +138,7 @@ fn get_fs_stats(path: &std::path::Path) -> (i64, i64) {
 
     // SAFETY: calling GetDiskFreeSpaceExW with valid pointers.
     // On failure the function returns 0 and we fall through to (0, 0).
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe {
         #[link(name = "kernel32")]
         extern "system" {

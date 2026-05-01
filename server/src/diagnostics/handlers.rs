@@ -50,6 +50,8 @@ pub(crate) fn read_rss_bytes() -> u64 {
 /// Read `/proc/self/stat` on Linux to get user+system CPU time in seconds.
 #[cfg(target_os = "linux")]
 pub(crate) fn read_cpu_seconds() -> f64 {
+    // SAFETY: libc::sysconf with a valid POSIX constant has no preconditions.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let ticks_per_sec = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
     std::fs::read_to_string("/proc/self/stat")
         .ok()
@@ -105,7 +107,10 @@ pub(crate) fn read_open_fds() -> u64 {
 /// Read system load averages (1min, 5min, 15min).
 #[cfg(unix)]
 pub(crate) fn read_load_average() -> [f64; 3] {
+    // SAFETY: libc::sysinfo writes only into the provided sysinfo struct.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let mut info: libc::sysinfo = unsafe { std::mem::zeroed() };
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     if unsafe { libc::sysinfo(&mut info) } == 0 {
         let scale = 1.0 / (1 << libc::SI_LOAD_SHIFT) as f64;
         [
@@ -131,6 +136,9 @@ pub(crate) fn disk_stats(path: &std::path::Path) -> (u64, u64) {
         Ok(p) => p,
         Err(_) => return (0, 0),
     };
+    // SAFETY: c_path is a valid NUL-terminated C string; statvfs writes only
+    // into the provided struct.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {

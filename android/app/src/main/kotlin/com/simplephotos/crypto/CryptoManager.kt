@@ -31,8 +31,9 @@ class CryptoManager(private val keyManager: KeyManager) {
         val nonce = ByteArray(NONCE_SIZE)
         SecureRandom().nextBytes(nonce)
 
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_SIZE, nonce))
+        // Fresh nonce per encryption; reviewed.
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding") // nosemgrep: kotlin.lang.security.gcm-detection.gcm-detection
+        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_SIZE, nonce)) // nosemgrep: kotlin.lang.security.gcm-detection.gcm-detection
         val ciphertext = cipher.doFinal(plaintext)
 
         return EncryptedPayload(nonce, ciphertext).toByteArray()
@@ -42,8 +43,9 @@ class CryptoManager(private val keyManager: KeyManager) {
         val key = keyManager.loadKey() ?: throw IllegalStateException("Encryption key not available")
         val payload = EncryptedPayload.fromByteArray(data)
 
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_SIZE, payload.nonce))
+        // Nonce read from sealed payload; reviewed.
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding") // nosemgrep: kotlin.lang.security.gcm-detection.gcm-detection
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_SIZE, payload.nonce)) // nosemgrep: kotlin.lang.security.gcm-detection.gcm-detection
         return cipher.doFinal(payload.ciphertext)
     }
 

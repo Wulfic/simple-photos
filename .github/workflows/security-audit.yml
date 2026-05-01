@@ -165,7 +165,17 @@ jobs:
 
       - name: Run cargo audit
         id: cargo-audit
-        run: cargo audit --deny warnings 2>&1 | tee /tmp/cargo-audit-output.txt || echo "AUDIT_FAILED=true" >> "$GITHUB_ENV"
+        # Ignored advisories are documented in server/audit.toml and server/deny.toml.
+        # Each entry is transitive-only and either has no upstream fix or doesn't apply
+        # to our build configuration.
+        run: |
+          cargo audit --deny warnings \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2024-0436 \
+            --ignore RUSTSEC-2025-0134 \
+            --ignore RUSTSEC-2026-0097 \
+            --ignore RUSTSEC-2026-0105 \
+            2>&1 | tee /tmp/cargo-audit-output.txt || echo "AUDIT_FAILED=true" >> "$GITHUB_ENV"
         continue-on-error: true
 
       - name: Write report section
@@ -954,12 +964,19 @@ jobs:
           merge-multiple: false
 
       - name: Consolidate into single report
+        env:
+          GH_SHA: ${{ github.sha }}
+          GH_REF: ${{ github.ref_name }}
+          GH_TRIGGER: ${{ github.event_name }}
+          GH_SERVER_URL: ${{ github.server_url }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_RUN_ID: ${{ github.run_id }}
         run: |
           REPORT="security-audit-report.txt"
           DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          SHA="${{ github.sha }}"
-          REF="${{ github.ref_name }}"
-          TRIGGER="${{ github.event_name }}"
+          SHA="$GH_SHA"
+          REF="$GH_REF"
+          TRIGGER="$GH_TRIGGER"
 
           # Header
           cat > "$REPORT" << 'HEADER'
@@ -976,7 +993,7 @@ jobs:
           echo "Commit:    $SHA" >> "$REPORT"
           echo "Branch:    $REF" >> "$REPORT"
           echo "Trigger:   $TRIGGER" >> "$REPORT"
-          echo "Run:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$REPORT"
+          echo "Run:       ${GH_SERVER_URL}/${GH_REPOSITORY}/actions/runs/${GH_RUN_ID}" >> "$REPORT"
           echo "" >> "$REPORT"
 
           # Status overview table

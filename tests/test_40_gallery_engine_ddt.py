@@ -52,7 +52,8 @@ def _ffmpeg_available() -> bool:
 
 def _generate_mp4(width: int = 64, height: int = 64, duration: float = 0.3) -> bytes:
     """Generate a short MP4 video."""
-    path = tempfile.mktemp(suffix=".mp4")
+    fd, path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i",

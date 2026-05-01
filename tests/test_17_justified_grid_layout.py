@@ -311,7 +311,8 @@ class TestThumbnailAspectRatioPreservation:
         import subprocess, tempfile, os, time
 
         # Generate a widescreen (16:9) test video
-        path = tempfile.mktemp(suffix=".mp4")
+        fd, path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
         try:
             subprocess.run([
                 "ffmpeg", "-y", "-f", "lavfi", "-i",

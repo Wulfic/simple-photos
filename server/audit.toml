@@ -1,0 +1,31 @@
+# cargo-audit configuration
+# https://github.com/rustsec/rustsec/tree/main/cargo-audit#configuration
+#
+# Ignored advisories must also be documented in deny.toml so cargo-deny is in
+# sync. Each entry must have a justification.
+
+[advisories]
+ignore = [
+    # rsa Marvin Attack (RUSTSEC-2023-0071) — pulled in only via sqlx-mysql
+    # which is not enabled (we use sqlite). Remains in Cargo.lock for resolver
+    # consistency. No fix available upstream.
+    "RUSTSEC-2023-0071",
+
+    # paste unmaintained (RUSTSEC-2024-0436) — transitive via rav1e/ravif/image
+    # for AVIF decode. Awaiting upstream maintainer transition. No fix available.
+    "RUSTSEC-2024-0436",
+
+    # rustls-pemfile unmaintained (RUSTSEC-2025-0134) — transitive via
+    # axum-server. Awaiting axum-server migration to rustls-pki-types.
+    "RUSTSEC-2025-0134",
+
+    # rand unsoundness only triggers when callers register a custom logger and
+    # use `rand::rng()` (RUSTSEC-2026-0097). We do not register a custom logger.
+    "RUSTSEC-2026-0097",
+
+    # core2 yanked/unmaintained (RUSTSEC-2026-0105) — transitive via rav1e.
+    "RUSTSEC-2026-0105",
+]
+
+informational_warnings = ["unmaintained", "unsound", "notice"]
+severity_threshold = "low"

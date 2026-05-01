@@ -23,8 +23,7 @@ fun SecureGalleryScreen(
     val biometricManager = remember { BiometricManager.from(context) }
     val canUseBiometric = remember {
         biometricManager.canAuthenticate(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                BiometricManager.Authenticators.BIOMETRIC_WEAK
+            BiometricManager.Authenticators.BIOMETRIC_STRONG
         ) == BiometricManager.BIOMETRIC_SUCCESS
     }
 
@@ -66,6 +65,7 @@ fun SecureGalleryScreen(
                 val info = BiometricPrompt.PromptInfo.Builder()
                     .setTitle("Unlock Secure Albums")
                     .setSubtitle("Use biometrics to access your secure albums")
+                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                     .setNegativeButtonText("Use Password")
                     .build()
                 prompt.authenticate(info)

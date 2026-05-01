@@ -71,11 +71,13 @@ async fn require_basic_auth_admin(
     let (user_id, password_hash, role) = match row {
         Some(r) => r,
         None => {
-            // Constant-time: still run bcrypt to prevent timing attacks
-            let _ = bcrypt::verify(
-                password,
-                "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK",
-            );
+            // Constant-time: still run bcrypt to prevent timing attacks.
+            // The hash below is a deliberately-published dummy bcrypt digest used only
+            // to equalize timing between the success and failure paths. It is not a
+            // credential.
+            // nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
+            const DUMMY_BCRYPT: &str = "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK";
+            let _ = bcrypt::verify(password, DUMMY_BCRYPT);
             return Err(AppError::Unauthorized(
                 "Invalid username or password".into(),
             ));
@@ -237,12 +239,12 @@ pub async fn external_storage(
 
     // Database size
     let db_path = &state.config.database.path;
-    let db_size = tokio::fs::metadata(db_path)
+    let db_size = tokio::fs::metadata(db_path) // codeql[rust/path-injection] -- path from server config, not user input
         .await
         .map(|m| m.len())
         .unwrap_or(0);
     let wal_path = db_path.with_extension("db-wal");
-    let wal_size = tokio::fs::metadata(&wal_path)
+    let wal_size = tokio::fs::metadata(&wal_path) // codeql[rust/path-injection] -- path derived from server config
         .await
         .map(|m| m.len())
         .unwrap_or(0);

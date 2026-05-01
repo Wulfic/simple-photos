@@ -1002,7 +1002,8 @@ def generate_test_tiff() -> bytes:
 def generate_test_video_mkv(duration: float = 0.5) -> bytes:
     """Generate a short test MKV video using ffmpeg."""
     import subprocess, tempfile
-    path = tempfile.mktemp(suffix=".mkv")
+    fd, path = tempfile.mkstemp(suffix=".mkv")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i",
@@ -1022,7 +1023,8 @@ def generate_test_video_mkv(duration: float = 0.5) -> bytes:
 def generate_test_video_avi(duration: float = 0.5) -> bytes:
     """Generate a short test AVI video using ffmpeg."""
     import subprocess, tempfile
-    path = tempfile.mktemp(suffix=".avi")
+    fd, path = tempfile.mkstemp(suffix=".avi")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i",
@@ -1040,7 +1042,8 @@ def generate_test_video_avi(duration: float = 0.5) -> bytes:
 def generate_test_audio_aiff(duration: float = 0.5) -> bytes:
     """Generate a short test AIFF audio file using ffmpeg."""
     import subprocess, tempfile
-    path = tempfile.mktemp(suffix=".aiff")
+    fd, path = tempfile.mkstemp(suffix=".aiff")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i",
@@ -1057,7 +1060,8 @@ def generate_test_audio_aiff(duration: float = 0.5) -> bytes:
 def generate_test_audio_m4a(duration: float = 0.5) -> bytes:
     """Generate a short test M4A (AAC) audio file using ffmpeg."""
     import subprocess, tempfile
-    path = tempfile.mktemp(suffix=".m4a")
+    fd, path = tempfile.mkstemp(suffix=".m4a")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i",
@@ -1078,7 +1082,8 @@ def generate_test_heic() -> bytes:
     Returns empty bytes if the system ffmpeg cannot encode HEIC.
     """
     import subprocess, tempfile
-    path = tempfile.mktemp(suffix=".heic")
+    fd, path = tempfile.mkstemp(suffix=".heic")
+    os.close(fd)
     try:
         result = subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i",

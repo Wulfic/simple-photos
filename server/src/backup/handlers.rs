@@ -255,7 +255,7 @@ pub async fn check_backup_server_status(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
-        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 

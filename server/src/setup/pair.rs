@@ -72,7 +72,7 @@ pub async fn pair(
     let base_url = normalize_server_url(&req.main_server_url);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 
@@ -239,7 +239,7 @@ pub async fn verify_backup(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 

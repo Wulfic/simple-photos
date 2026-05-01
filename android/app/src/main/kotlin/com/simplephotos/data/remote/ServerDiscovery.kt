@@ -170,7 +170,10 @@ object ServerDiscovery {
      */
     private fun probeDiscoveryPort(host: String): DiscoveredServer? {
         return try {
-            // Quick TCP connect check
+            // Quick TCP connect check (no data sent/received over the raw socket;
+            // the socket is closed immediately and the actual exchange uses
+            // HttpURLConnection, which honours the network security config).
+            // nosemgrep: kotlin.lang.security.unencrypted-socket.unencrypted-socket
             val socket = Socket()
             try {
                 socket.connect(InetSocketAddress(host, DISCOVERY_PORT), CONNECT_TIMEOUT_MS)
@@ -217,6 +220,8 @@ object ServerDiscovery {
      */
     private fun probeServerHealth(host: String, port: Int): DiscoveredServer? {
         return try {
+            // Connect-only reachability probe; no payload traverses this socket.
+            // nosemgrep: kotlin.lang.security.unencrypted-socket.unencrypted-socket
             val socket = Socket()
             try {
                 socket.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)

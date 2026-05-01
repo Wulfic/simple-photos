@@ -103,6 +103,7 @@ pub async fn generate_thumbnail_for_migration(
 
     // Fallback: generate_thumbnail_file (FFmpeg/ImageMagick)
     // UUID v4 filename prevents predictable temp file attacks.
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
     let tmp_output = std::env::temp_dir().join(format!("sp_mig_thumb_{}.jpg", Uuid::new_v4()));
     if generate_thumbnail_file(source_path, &tmp_output, mime_type, None).await {
         let result = tokio::fs::read(&tmp_output).await.ok();

@@ -77,7 +77,7 @@ class MainActivity : FragmentActivity() {
         }
 
         val biometricAvailable = BiometricManager.from(this)
-            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS
+            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
 
         setContent {
             SimplePhotosTheme {
@@ -157,7 +157,7 @@ class MainActivity : FragmentActivity() {
             .setTitle("Unlock Simple Photos")
             .setSubtitle("Verify your identity")
             .setNegativeButtonText("Cancel")
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .build()
         prompt.authenticate(info)
     }

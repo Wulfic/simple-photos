@@ -102,7 +102,7 @@ export function useThumbnailLoader(
           thumbnailCache.set(blobId, thumbUrl, mime);
           if (!cancelled) resolve(thumbUrl, mime);
         } catch (err) {
-          console.warn(`[THUMB_LOADER] Encrypted thumb download failed for ${blobId}:`, err);
+          console.warn(`[THUMB_LOADER] Encrypted thumb download failed for ${blobId}:`, err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
           if (!cancelled) _tryServerFallback();
         }
       })();

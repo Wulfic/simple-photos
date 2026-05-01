@@ -95,6 +95,12 @@ pub async fn render_photo(
     }
 
     // ── Resolve source file ───────────────────────────────────────────────────
+    // Validate the stored file path is a safe relative path before joining to the
+    // storage root — belts-and-suspenders since the path was validated at upload time.
+    if let Err(reason) = crate::sanitize::validate_relative_path(&photo.file_path) {
+        tracing::error!("[render] invalid stored file path '{}': {}", photo.file_path, reason);
+        return Err(AppError::NotFound);
+    }
     let source_path = state.config.storage.root.join(&photo.file_path);
     if !tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
         tracing::error!(
@@ -125,9 +131,12 @@ pub async fn render_photo(
     }
 
     // ── Derive output extension from original filename ────────────────────────
+    // Restrict the extension to alphanumeric characters to prevent path-component
+    // injection from the user-supplied filename stored in the database.
     let ext = Path::new(&photo.filename)
         .extension()
         .and_then(|e| e.to_str())
+        .filter(|e| e.chars().all(|c| c.is_alphanumeric()))
         .unwrap_or("mp4");
 
     // ── Check render cache ────────────────────────────────────────────────────

@@ -35,7 +35,8 @@ needs_ffmpeg = pytest.mark.skipif(
 def generate_mp4(width: int = 160, height: int = 90,
                  duration: float = 0.5) -> bytes:
     """Generate a minimal MP4 for testing."""
-    path = tempfile.mktemp(suffix=".mp4")
+    fd, path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y",

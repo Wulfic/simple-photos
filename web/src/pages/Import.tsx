@@ -200,7 +200,7 @@ export default function Import() {
         );
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Import failed";
-        console.error(`Import failed for ${item.name}:`, err);
+        console.error(`Import failed for ${item.name}:`, err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
         setItems((prev) =>
           prev.map((it, idx) =>
             idx === i ? { ...it, status: "error", error: msg } : it

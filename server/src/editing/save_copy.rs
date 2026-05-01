@@ -183,7 +183,10 @@ pub async fn duplicate_photo(
         )
         .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
 
-        // Write to a temp file with proper extension for ffmpeg/image crate
+        // Write to a temp file with proper extension for ffmpeg/image crate.
+        // Filename embeds the freshly-generated `new_id` (UUID), preventing
+        // predictable-name attacks.
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let tmp_path = std::env::temp_dir().join(format!("sp-dup-{}.{}", new_id, ext));
         tokio::fs::write(&tmp_path, &raw_bytes).await.map_err(|e| {
             AppError::Internal(format!("Failed to write temp source: {e}"))

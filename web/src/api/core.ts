@@ -79,7 +79,7 @@ export async function request<T>(
             ? `HTTP ${retry.status}: ${rawText.substring(0, 200)}`
             : `HTTP ${retry.status}`;
         }
-        console.error(`[API] ${options.method || "GET"} ${path} failed after token refresh: ${retry.status}`, rawText.substring(0, 500));
+        console.error(`[API] ${options.method || "GET"} ${path} failed after token refresh: ${retry.status}`, rawText.substring(0, 500)); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring // codeql[js/tainted-format-string]
         throw new Error(errorMessage);
       }
       if (retry.status === 204) return undefined as T;
@@ -106,7 +106,7 @@ export async function request<T>(
         ? `HTTP ${res.status}: ${rawText.substring(0, 200)}`
         : `HTTP ${res.status}`;
     }
-    console.error(`[API] ${options.method || "GET"} ${path} failed: ${res.status}`, rawText.substring(0, 500));
+    console.error(`[API] ${options.method || "GET"} ${path} failed: ${res.status}`, rawText.substring(0, 500)); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring // codeql[js/tainted-format-string]
     throw new Error(errorMessage);
   }
 

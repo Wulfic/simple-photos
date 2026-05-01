@@ -35,7 +35,8 @@ def _ffmpeg_available() -> bool:
 def generate_landscape_mp4(width: int = 320, height: int = 180,
                            duration: float = 0.5) -> bytes:
     """Generate a short landscape MP4 (wider than tall)."""
-    path = tempfile.mktemp(suffix=".mp4")
+    fd, path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y", "-f", "lavfi", "-i",
@@ -300,7 +301,8 @@ class TestRenderOrientation:
         assert resp.status_code == 200, f"Render failed: {resp.status_code} {resp.text}"
 
         # Check rendered video dimensions with ffprobe
-        rendered_path = tempfile.mktemp(suffix=".mp4")
+        fd, rendered_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
         try:
             with open(rendered_path, "wb") as f:
                 f.write(resp.content)

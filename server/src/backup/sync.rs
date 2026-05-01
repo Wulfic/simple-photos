@@ -269,7 +269,7 @@ pub async fn force_sync_from_primary(
     // Contact the primary server's request-sync endpoint
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs)
+        .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
         .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 

@@ -41,7 +41,8 @@ def _ffmpeg_available() -> bool:
 def generate_landscape_mp4(width: int = 320, height: int = 180,
                            duration: float = 1.0) -> bytes:
     """Generate a short landscape MP4 (wider than tall) with audio track."""
-    path = tempfile.mktemp(suffix=".mp4")
+    fd, path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y",
@@ -65,7 +66,8 @@ def generate_landscape_mp4(width: int = 320, height: int = 180,
 def generate_portrait_mp4(width: int = 180, height: int = 320,
                           duration: float = 1.0) -> bytes:
     """Generate a short portrait MP4 (taller than wide)."""
-    path = tempfile.mktemp(suffix=".mp4")
+    fd, path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
     try:
         subprocess.run([
             "ffmpeg", "-y",

@@ -117,12 +117,12 @@ find_available_port() {
     local max=100
     local i=0
     while port_in_use "$port" && [ $i -lt $max ]; do
-        warn "Port $port is in use, trying $((port + 1))..."
+        echo -e "${YELLOW}⚠ ${NC}Port $port is in use, trying $((port + 1))..." >&2
         port=$((port + 1))
         i=$((i + 1))
     done
     if [ $i -ge $max ]; then
-        error "No available port found after $max attempts (starting from $1)"
+        echo -e "${RED}✗ ${NC}No available port found after $max attempts (starting from $1)" >&2
         exit 1
     fi
     echo "$port"
@@ -160,6 +160,51 @@ prompt_text() {
 
 generate_key() {
     openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n' | head -c 64
+}
+
+# ── Android SDK installer ─────────────────────────────────────────────────────
+install_android_sdk() {
+    local sdk_root="${ANDROID_HOME:-$HOME/android-sdk}"
+    info "Installing Android SDK command-line tools to $sdk_root..."
+
+    # Ensure unzip is available
+    if ! command -v unzip &>/dev/null; then
+        if command -v apt-get &>/dev/null; then sudo apt-get install -y -qq unzip
+        elif command -v dnf &>/dev/null; then sudo dnf install -y unzip
+        elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm unzip
+        else error "unzip is required but could not be installed."; return 1; fi
+    fi
+
+    local cmdline_url="https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+    local tmp_zip
+    tmp_zip=$(mktemp /tmp/android-cmdtools-XXXXXX.zip)
+    curl -fsSL "$cmdline_url" -o "$tmp_zip"
+
+    mkdir -p "$sdk_root/cmdline-tools"
+    unzip -q "$tmp_zip" -d "$sdk_root/cmdline-tools"
+    # The zip extracts to cmdline-tools/cmdline-tools — rename to cmdline-tools/latest
+    if [[ -d "$sdk_root/cmdline-tools/cmdline-tools" ]]; then
+        mv "$sdk_root/cmdline-tools/cmdline-tools" "$sdk_root/cmdline-tools/latest"
+    fi
+    rm -f "$tmp_zip"
+
+    export ANDROID_HOME="$sdk_root"
+    export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+    # Accept all licenses non-interactively
+    yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+    # Install the required SDK components for compileSdk=34 / buildTools=34.0.0
+    sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+    # Persist ANDROID_HOME to ~/.bashrc so future sessions pick it up
+    local profile_export="export ANDROID_HOME=\"$sdk_root\""
+    if ! grep -qF "ANDROID_HOME" "$HOME/.bashrc" 2>/dev/null; then
+        echo "$profile_export" >> "$HOME/.bashrc"
+        echo 'export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"' >> "$HOME/.bashrc"
+    fi
+
+    success "Android SDK installed at $sdk_root"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -223,6 +268,19 @@ success "Server role: $ROLE"
 # Step 3: Check & install dependencies
 # ══════════════════════════════════════════════════════════════════════════════
 step "Step 2/7: Checking dependencies"
+
+# Warm up sudo credentials once so the session is cached for the entire script.
+# This avoids repeated password prompts between long-running steps (e.g. builds).
+if sudo -n true 2>/dev/null; then
+    : # already have cached sudo, nothing to do
+else
+    info "Some steps require sudo. Please enter your password once now."
+    sudo -v || { error "sudo authentication failed."; exit 1; }
+    # Keep sudo alive in the background for the duration of the script
+    ( while true; do sudo -n true; sleep 50; kill -0 "$$" 2>/dev/null || exit; done ) &
+    SUDO_KEEPALIVE_PID=$!
+    trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true' EXIT
+fi
 
 # ── Docker installation helper ────────────────────────────────────────────────
 install_docker() {
@@ -364,6 +422,29 @@ if [[ "$MODE" == "native" ]]; then
         MISSING_DEPS+=("ffmpeg")
     fi
 
+    if command -v mount.cifs &>/dev/null; then
+        success "cifs-utils (mount.cifs) found"
+    else
+        warn "cifs-utils not found (required for SMB/network storage mounting)"
+        MISSING_DEPS+=("cifs-utils")
+    fi
+
+    if ! $NO_BUILD_ANDROID; then
+        sdk_ok=false
+        if [[ -n "${ANDROID_HOME:-}" ]] && [[ -f "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]]; then
+            export PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
+            sdk_ok=true
+        elif command -v sdkmanager &>/dev/null; then
+            sdk_ok=true
+        fi
+        if $sdk_ok; then
+            success "Android SDK found"
+        else
+            warn "Android SDK not found (required for Android APK build)"
+            MISSING_DEPS+=("android-sdk")
+        fi
+    fi
+
     if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
         info "Missing: ${MISSING_DEPS[*]}"
         if prompt_yn "Install missing dependencies?"; then
@@ -371,6 +452,8 @@ if [[ "$MODE" == "native" ]]; then
                 case "$dep" in
                     rust)
                         info "Installing Rust via rustup..."
+                        # Official rustup installer over HTTPS+TLS1.2; verified by upstream.
+                        # nosemgrep: bash.curl.security.curl-pipe-bash.curl-pipe-bash
                         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
                         # shellcheck disable=SC1091
                         source "$HOME/.cargo/env" 2>/dev/null || true
@@ -380,6 +463,8 @@ if [[ "$MODE" == "native" ]]; then
                     node|npm)
                         info "Installing Node.js..."
                         if command -v apt-get &>/dev/null; then
+                            # Official NodeSource setup script; HTTPS-only.
+                            # nosemgrep: bash.curl.security.curl-pipe-bash.curl-pipe-bash
                             curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - 2>/dev/null || {
                                 sudo apt-get update -qq; sudo apt-get install -y -qq nodejs npm; }
                             sudo apt-get install -y -qq nodejs
@@ -414,6 +499,20 @@ if [[ "$MODE" == "native" ]]; then
                             exit 1
                         fi
                         command -v ffmpeg &>/dev/null && success "FFmpeg installed" || { error "FFmpeg install failed — required for video editing."; exit 1; }
+                        ;;
+                    cifs-utils)
+                        info "Installing cifs-utils (provides mount.cifs for SMB/network storage)..."
+                        if command -v apt-get &>/dev/null; then
+                            sudo apt-get update -qq
+                            sudo apt-get install -y -qq cifs-utils
+                        elif command -v dnf &>/dev/null; then sudo dnf install -y cifs-utils
+                        elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm cifs-utils
+                        elif command -v brew &>/dev/null; then warn "cifs-utils not available on macOS via brew — SMB mounting may not work."
+                        else warn "Cannot auto-install cifs-utils. SMB/network storage mounting will not work."; fi
+                        command -v mount.cifs &>/dev/null && success "cifs-utils installed" || warn "cifs-utils install failed — SMB storage mounting will not be available."
+                        ;;
+                    android-sdk)
+                        install_android_sdk || { error "Android SDK install failed."; exit 1; }
                         ;;
                 esac
             done
@@ -686,11 +785,33 @@ fi
 if [[ "$MODE" == "native" ]] && ! $NO_BUILD_ANDROID; then
     step "Step 6/7: Android app (optional)"
     if command -v javac &>/dev/null && [ -d "$SCRIPT_DIR/android" ]; then
-        if prompt_yn "Build the Android APK?" "N"; then
+        if prompt_yn "Build the Android APK?" "Y"; then
             info "Building Android APK..."
+            # Ensure ANDROID_HOME is set for gradlew
+            if [[ -z "${ANDROID_HOME:-}" ]]; then
+                if [[ -f "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" ]]; then
+                    export ANDROID_HOME="$HOME/android-sdk"
+                    export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+                else
+                    warn "ANDROID_HOME is not set — APK build may fail."
+                fi
+            fi
             cd "$SCRIPT_DIR/android"
-            [ -f "gradlew" ] && chmod +x gradlew && \
-                (./gradlew assembleDebug 2>&1 | tail -5 && success "APK built" || warn "APK build failed")
+            chmod +x gradlew 2>/dev/null || true
+            # Bootstrap gradle-wrapper.jar if missing (it is gitignored)
+            if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+                info "Downloading gradle-wrapper.jar..."
+                wrapper_jar_url="https://raw.githubusercontent.com/gradle/gradle/v8.7.0/gradle/wrapper/gradle-wrapper.jar"
+                mkdir -p gradle/wrapper
+                curl -fsSL "$wrapper_jar_url" -o gradle/wrapper/gradle-wrapper.jar || {
+                    warn "Could not download gradle-wrapper.jar — APK build skipped."
+                    cd "$SCRIPT_DIR"
+                    SKIP_APK=true
+                }
+            fi
+            if [[ "${SKIP_APK:-false}" != "true" ]]; then
+                (ANDROID_HOME="${ANDROID_HOME:-}" ./gradlew assembleDebug 2>&1 | tail -10 && success "APK built → android/app/build/outputs/apk/debug/app-debug.apk" || warn "APK build failed")
+            fi
             cd "$SCRIPT_DIR"
         else
             info "Skipping Android build."

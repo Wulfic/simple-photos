@@ -130,7 +130,7 @@ pub async fn batch_import_metadata(
 
     let storage_root = (**state.storage_root.load()).clone();
 
-    let mut results = Vec::with_capacity(req.entries.len());
+    let mut results = Vec::with_capacity(req.entries.len().min(500)); // bounded by the 500-entry guard above
     let mut imported = 0usize;
     let mut failed = 0usize;
 

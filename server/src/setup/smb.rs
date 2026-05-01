@@ -395,7 +395,7 @@ fn derive_key(jwt_secret: &str) -> [u8; 32] {
     hasher.update(b"simple-photos:smb-credential-key:v1\n");
     hasher.update(jwt_secret.as_bytes());
     let out = hasher.finalize();
-    let mut key = [0u8; 32];
+    let mut key = [0u8; 32]; // codeql[rust/hard-coded-cryptographic-value] -- zero-init buffer, immediately overwritten with JWT-derived hash
     key.copy_from_slice(&out);
     key
 }
@@ -724,7 +724,9 @@ mod tests {
 
     #[test]
     fn encrypt_roundtrip() {
-        let secret = "0123456789abcdef0123456789abcdef";
+        // Test-only fixture; not a real credential.
+        // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
+        let secret = "0123456789abcdef0123456789abcdef"; // codeql[rust/hard-coded-cryptographic-value]
         let ct = encrypt_password("hunter2", secret).unwrap();
         let pt = decrypt_password(&ct, secret).unwrap();
         assert_eq!(pt, "hunter2");
