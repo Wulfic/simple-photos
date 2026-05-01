@@ -627,7 +627,36 @@ fn condense_smb_error(raw: &str) -> String {
     if line.contains("Permission denied") {
         return "Permission denied (need root or SUID mount.cifs)".into();
     }
-    line.to_string()
+    // Defensive redaction: never echo a password back to the wizard, even
+    // if a future tool decides to print one in its error stream.
+    redact_secrets(line)
+}
+
+/// Strip anything that looks like a credential fragment from a free-form
+/// error string before it leaves the server.
+fn redact_secrets(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for token in s.split_whitespace() {
+        let lower = token.to_ascii_lowercase();
+        if lower.starts_with("password=")
+            || lower.starts_with("pass=")
+            || lower.starts_with("pwd=")
+            || lower.starts_with("--password=")
+            || lower.starts_with("credentials=")
+        {
+            // Keep the key, replace the value.
+            if let Some((k, _)) = token.split_once('=') {
+                out.push_str(k);
+                out.push_str("=<redacted>");
+            } else {
+                out.push_str("<redacted>");
+            }
+        } else {
+            out.push_str(token);
+        }
+        out.push(' ');
+    }
+    out.trim_end().to_string()
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
