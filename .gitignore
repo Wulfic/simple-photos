@@ -120,3 +120,4 @@ __pycache__/
 *.pyc
 downloads/simple-photos.apk
 references/
+.gitnexus
