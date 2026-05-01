@@ -50,7 +50,7 @@ impl RateLimiter {
         let now = Instant::now();
         let window_start = now - self.inner.window;
 
-        let mut entry = self.inner.entries.entry(ip).or_insert_with(Vec::new);
+        let mut entry = self.inner.entries.entry(ip).or_default();
 
         // Remove timestamps outside the window
         entry.retain(|t| *t > window_start);

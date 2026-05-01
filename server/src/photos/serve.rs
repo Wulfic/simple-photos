@@ -102,11 +102,11 @@ pub(crate) async fn serve_file_with_range(
             if let Some(ref ev) = etag_hv {
                 builder = builder.header("ETag", ev.clone());
             }
-            return Ok(builder
+            return builder
                 .body(body)
-                .map_err(|e| AppError::Internal(e.to_string()))?);
+                .map_err(|e| AppError::Internal(e.to_string()));
         } else {
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(
                     "Content-Range",
@@ -114,7 +114,7 @@ pub(crate) async fn serve_file_with_range(
                         .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
                 )
                 .body(Body::empty())
-                .map_err(|e| AppError::Internal(e.to_string()))?);
+                .map_err(|e| AppError::Internal(e.to_string()));
         }
     }
 
@@ -140,9 +140,9 @@ pub(crate) async fn serve_file_with_range(
     if let Some(ref ev) = etag_hv {
         builder = builder.header("ETag", ev.clone());
     }
-    Ok(builder
+    builder
         .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }
 
 // ── Photo Serving Endpoints ──────────────────────────────────────────────────
@@ -217,7 +217,7 @@ pub async fn serve_photo(
         let ct = HeaderValue::from_str(&mime_type)
             .unwrap_or(HeaderValue::from_static("application/octet-stream"));
         let len = raw_bytes.len();
-        return Ok(Response::builder()
+        return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", ct)
             .header("Content-Length", HeaderValue::from(len))
@@ -225,7 +225,7 @@ pub async fn serve_photo(
             .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
             .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
             .body(Body::from(raw_bytes))
-            .map_err(|e| AppError::Internal(e.to_string()))?);
+            .map_err(|e| AppError::Internal(e.to_string()));
     }
 
     // Lock-free read via ArcSwap.
@@ -285,7 +285,7 @@ pub async fn serve_photo(
                 tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
             let body = Body::from_stream(stream);
 
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", content_type)
                 .header("Content-Length", HeaderValue::from(length))
@@ -304,9 +304,9 @@ pub async fn serve_photo(
                     HeaderValue::from_static("private, max-age=86400"),
                 )
                 .body(body)
-                .map_err(|e| AppError::Internal(e.to_string()))?);
+                .map_err(|e| AppError::Internal(e.to_string()));
         } else {
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(
                     "Content-Range",
@@ -314,7 +314,7 @@ pub async fn serve_photo(
                         .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
                 )
                 .body(Body::empty())
-                .map_err(|e| AppError::Internal(e.to_string()))?);
+                .map_err(|e| AppError::Internal(e.to_string()));
         }
     }
 
@@ -323,7 +323,7 @@ pub async fn serve_photo(
     let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
     let body = Body::from_stream(stream);
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", content_type)
         .header("Content-Length", HeaderValue::from(size_bytes))
@@ -337,7 +337,7 @@ pub async fn serve_photo(
             HeaderValue::from_static("private, max-age=86400"),
         )
         .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }
 
 /// GET /api/photos/:id/thumb
@@ -404,14 +404,14 @@ pub async fn serve_thumbnail(
             "image/jpeg"
         };
         let len = raw_bytes.len();
-        return Ok(Response::builder()
+        return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", HeaderValue::from_static(content_type))
             .header("Content-Length", HeaderValue::from(len))
             .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
             .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
             .body(Body::from(raw_bytes))
-            .map_err(|e| AppError::Internal(e.to_string()))?);
+            .map_err(|e| AppError::Internal(e.to_string()));
     }
 
     let thumb_path = thumb_path_opt.ok_or(AppError::NotFound)?;
@@ -421,11 +421,11 @@ pub async fn serve_thumbnail(
 
     // If thumbnail doesn't exist yet, return 202 Accepted to signal "pending".
     if !tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
-        return Ok(Response::builder()
+        return Response::builder()
             .status(StatusCode::ACCEPTED)
             .header("Content-Type", HeaderValue::from_static("application/json"))
             .body(Body::from(r#"{"status":"pending"}"#))
-            .map_err(|e| AppError::Internal(e.to_string()))?);
+            .map_err(|e| AppError::Internal(e.to_string()));
     }
 
     let meta = tokio::fs::metadata(&full_path)
@@ -452,7 +452,7 @@ pub async fn serve_thumbnail(
         "image/jpeg"
     };
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", HeaderValue::from_static(content_type))
         .header("Content-Length", HeaderValue::from(meta.len()))
@@ -465,7 +465,7 @@ pub async fn serve_thumbnail(
             HeaderValue::from_static("private, max-age=86400"),
         )
         .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }
 
 /// GET /api/photos/:id/web
@@ -643,12 +643,12 @@ pub async fn serve_motion_video(
             let data = tokio::fs::read(&blob_path).await.map_err(|e| {
                 AppError::Internal(format!("Failed to read motion video blob: {}", e))
             })?;
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "video/mp4")
                 .header("Content-Length", meta.len())
                 .body(Body::from(data))
-                .map_err(|e| AppError::Internal(format!("Response build: {}", e)))?);
+                .map_err(|e| AppError::Internal(format!("Response build: {}", e)));
         }
     }
 
@@ -670,10 +670,10 @@ pub async fn serve_motion_video(
     })?;
 
     let len = video_bytes.len();
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "video/mp4")
         .header("Content-Length", len)
         .body(Body::from(video_bytes))
-        .map_err(|e| AppError::Internal(format!("Response build: {}", e)))?)
+        .map_err(|e| AppError::Internal(format!("Response build: {}", e)))
 }

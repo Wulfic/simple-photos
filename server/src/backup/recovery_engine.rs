@@ -273,7 +273,7 @@ pub(crate) async fn run_recovery(
         .bind(photo.latitude)      // ?12
         .bind(photo.longitude)     // ?13
         .bind(&thumb_rel)          // ?14
-        .bind(&normalize_iso_timestamp(&photo.created_at))  // ?15 — preserve original created_at
+        .bind(normalize_iso_timestamp(&photo.created_at))  // ?15 — preserve original created_at
         .bind(photo.is_favorite)   // ?16
         .bind(&photo.camera_model) // ?17
         .bind(&photo.photo_hash)   // ?18

@@ -267,7 +267,7 @@ pub async fn download_export_file(
     let stream = tokio_util::io::ReaderStream::with_capacity(file, 256 * 1024);
     let body = Body::from_stream(stream);
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/zip")
         .header(
@@ -277,7 +277,7 @@ pub async fn download_export_file(
         )
         .header("Content-Length", meta.len())
         .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }
 
 /// `DELETE /api/export/:job_id` — Cancel/delete an export job and its files.

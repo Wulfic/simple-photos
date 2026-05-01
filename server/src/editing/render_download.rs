@@ -63,7 +63,7 @@ pub async fn render_photo(
         let mut probe_cmd = Command::new("ffmpeg");
         probe_cmd.arg("-version");
         let probe = run_with_timeout(&mut probe_cmd, FFPROBE_TIMEOUT).await.ok();
-        if probe.as_ref().map_or(true, |o| !o.status.success()) {
+        if probe.as_ref().is_none_or(|o| !o.status.success()) {
             return Err(AppError::Internal(
                 "ffmpeg is not installed on this server; install it and restart".into(),
             ));
@@ -146,7 +146,7 @@ pub async fn render_photo(
 
     if tokio::fs::try_exists(&cache_path).await.unwrap_or(false) {
         tracing::info!("[render] cache hit: {:?}", cache_path);
-        return Ok(stream_file_response(&cache_path, &photo.mime_type, &photo.filename).await?);
+        return stream_file_response(&cache_path, &photo.mime_type, &photo.filename).await;
     }
 
     // ── Render via shared ffmpeg module ───────────────────────────────────────
@@ -170,11 +170,10 @@ pub async fn render_photo(
     let effective_meta = meta.as_ref().unwrap_or(&default_meta);
 
     ffmpeg::run_ffmpeg_render(&source_path, &tmp_path, media_type, effective_meta, ext).await
-        .map_err(|e| {
+        .inspect_err(|_e| {
             // Clean up tmp file on failure
             let tp = tmp_path.clone();
             tokio::spawn(async move { let _ = tokio::fs::remove_file(&tp).await; });
-            e
         })?;
 
     // ── Save to cache and stream back ─────────────────────────────────────────
@@ -186,7 +185,7 @@ pub async fn render_photo(
     }
     tracing::info!("[render] cached render at {:?}", cache_path);
 
-    Ok(stream_file_response(&cache_path, &photo.mime_type, &photo.filename).await?)
+    stream_file_response(&cache_path, &photo.mime_type, &photo.filename).await
 }
 
 /// Stream a file from disk as the download response.

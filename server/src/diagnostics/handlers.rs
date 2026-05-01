@@ -134,8 +134,8 @@ pub(crate) fn disk_stats(path: &std::path::Path) -> (u64, u64) {
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) == 0 {
-            let total = stat.f_blocks as u64 * stat.f_frsize as u64;
-            let available = stat.f_bavail as u64 * stat.f_frsize as u64;
+            let total = stat.f_blocks * stat.f_frsize;
+            let available = stat.f_bavail * stat.f_frsize;
             (total, available)
         } else {
             (0, 0)

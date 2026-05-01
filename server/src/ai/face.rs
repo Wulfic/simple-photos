@@ -1070,7 +1070,11 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 /// NMS on FaceDetection vec (used by legacy and heuristic paths).
 fn nms(detections: &mut Vec<FaceDetection>, iou_threshold: f32) {
-    detections.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+    detections.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut keep = vec![true; detections.len()];
     for i in 0..detections.len() {
@@ -1134,7 +1138,7 @@ fn skin_density_score_ycbcr(
             let b = p[2] as f32;
             let cb = 128.0 + (-0.169 * r - 0.331 * g + 0.500 * b);
             let cr = 128.0 + (0.500 * r - 0.419 * g - 0.081 * b);
-            if cb >= 77.0 && cb <= 127.0 && cr >= 133.0 && cr <= 173.0
+            if (77.0..=127.0).contains(&cb) && (133.0..=173.0).contains(&cr)
                 && r > 80.0 && g > 30.0 && b > 15.0
             {
                 skin_count += 1;
@@ -1149,7 +1153,7 @@ fn skin_density_score_ycbcr(
         return 0.0;
     }
     let density = skin_count as f32 / total as f32;
-    if density < 0.30 || density > 0.80 {
+    if !(0.30..=0.80).contains(&density) {
         return 0.0;
     }
     ((density - 0.25) / 0.45).clamp(0.0, 0.95)
@@ -1266,7 +1270,7 @@ fn face_structure_score(
     }
     if edge_total > 0 {
         let edge_ratio = edge_count as f32 / edge_total as f32;
-        if edge_ratio >= 0.05 && edge_ratio <= 0.35 {
+        if (0.05..=0.35).contains(&edge_ratio) {
             score += 0.2;
         }
     }

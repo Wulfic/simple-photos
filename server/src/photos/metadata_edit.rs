@@ -732,6 +732,28 @@ struct ExifWriteFields {
     exif_overrides: Option<std::collections::HashMap<String, String>>,
 }
 
+/// Sanitise an EXIF tag value before passing it to `exiftool`.
+///
+/// `exiftool` interprets values whose first character is `@` as "read the rest
+/// of the value as a filename and use the file's contents". An authenticated
+/// user crafting a metadata-edit request could otherwise stuff the contents of
+/// any file readable by the server (`/etc/passwd`, the JWT secret, etc.) into
+/// an EXIF tag and then read it back via the metadata-get endpoint.
+///
+/// We strip a single leading `@` (the only character with this special
+/// meaning) and also reject embedded NUL / newline characters which would let
+/// a user inject sibling tag arguments.
+fn sanitize_exif_value(raw: &str) -> Result<String, String> {
+    if raw.contains('\0') || raw.contains('\n') || raw.contains('\r') {
+        return Err("EXIF value contains illegal control characters".into());
+    }
+    Ok(if let Some(stripped) = raw.strip_prefix('@') {
+        stripped.to_string()
+    } else {
+        raw.to_string()
+    })
+}
+
 /// Write all metadata fields to a JPEG file's EXIF using exiftool.
 fn write_exif_fields_full(
     file_path: &std::path::Path,
@@ -745,7 +767,7 @@ fn write_exif_fields_full(
             .replace('T', " ")
             .trim_end_matches('Z')
             .to_string();
-        args.push(format!("-DateTimeOriginal={}", exif_dt));
+        args.push(format!("-DateTimeOriginal={}", sanitize_exif_value(&exif_dt)?));
     }
 
     if let (Some(lat), Some(lon)) = (fields.latitude, fields.longitude) {
@@ -761,7 +783,8 @@ fn write_exif_fields_full(
         ($field:expr, $tag:expr) => {
             if let Some(ref val) = $field {
                 if !val.is_empty() {
-                    args.push(format!("-{}={}", $tag, val));
+                    let safe = sanitize_exif_value(val)?;
+                    args.push(format!("-{}={}", $tag, safe));
                 }
             }
         };
@@ -804,7 +827,8 @@ fn write_exif_fields_full(
                 .filter(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !clean_tag.is_empty() && !val.is_empty() {
-                args.push(format!("-{}={}", clean_tag, val));
+                let safe = sanitize_exif_value(val)?;
+                args.push(format!("-{}={}", clean_tag, safe));
             }
         }
     }
@@ -819,7 +843,13 @@ fn write_exif_fields_full(
     let output = std::process::Command::new("exiftool")
         .args(&args)
         .output()
-        .map_err(|e| format!("Failed to run exiftool: {}", e))?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "exiftool is not installed on the server — install the `exiftool` package and retry".to_string()
+            } else {
+                format!("Failed to run exiftool: {}", e)
+            }
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

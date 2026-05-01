@@ -74,7 +74,7 @@ pub async fn download(
     let etag = format!("\"{}\"", blob_id);
     if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
         if inm == etag || inm.trim_matches('"') == blob_id {
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
                 .header(
                     "ETag",
@@ -86,7 +86,7 @@ pub async fn download(
                     HeaderValue::from_static("private, max-age=31536000, immutable"),
                 )
                 .body(Body::empty())
-                .map_err(|e| AppError::Internal(e.to_string()))?);
+                .map_err(|e| AppError::Internal(e.to_string()));
         }
     }
 
@@ -115,7 +115,7 @@ pub async fn download(
             let stream = tokio_util::io::ReaderStream::with_capacity(file.take(length), BLOB_BUF);
             let body = Body::from_stream(stream);
 
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(
                     "Content-Type",
@@ -143,10 +143,10 @@ pub async fn download(
                         .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
                 )
                 .body(body)
-                .map_err(|e| AppError::Internal(e.to_string()))?);
+                .map_err(|e| AppError::Internal(e.to_string()));
         } else {
             // Invalid range → 416 Range Not Satisfiable
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(
                     "Content-Range",
@@ -155,7 +155,7 @@ pub async fn download(
                     })?,
                 )
                 .body(Body::empty())
-                .map_err(|e| AppError::Internal(e.to_string()))?);
+                .map_err(|e| AppError::Internal(e.to_string()));
         }
     }
 
@@ -170,7 +170,7 @@ pub async fn download(
     let stream = tokio_util::io::ReaderStream::with_capacity(file, BLOB_BUF);
     let body = Body::from_stream(stream);
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(
             "Content-Type",
@@ -192,7 +192,7 @@ pub async fn download(
                 .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
         )
         .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }
 
 /// GET /api/blobs/:id/thumb — serve the encrypted thumbnail blob associated
@@ -256,7 +256,7 @@ pub async fn download_thumb(
     let etag = format!("\"{}\"", thumb_blob_id);
     if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
         if inm == etag || inm.trim_matches('"') == thumb_blob_id.as_str() {
-            return Ok(Response::builder()
+            return Response::builder()
                 .status(StatusCode::NOT_MODIFIED)
                 .header(
                     "ETag",
@@ -268,14 +268,14 @@ pub async fn download_thumb(
                     HeaderValue::from_static("private, max-age=31536000, immutable"),
                 )
                 .body(Body::empty())
-                .map_err(|e| AppError::Internal(e.to_string()))?);
+                .map_err(|e| AppError::Internal(e.to_string()));
         }
     }
 
     let stream = tokio_util::io::ReaderStream::with_capacity(file, 256 * 1024);
     let body = Body::from_stream(stream);
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(
             "Content-Type",
@@ -294,5 +294,5 @@ pub async fn download_thumb(
                 .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
         )
         .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }

@@ -268,7 +268,7 @@ pub async fn upload_sidecar(
         ));
     }
 
-    let gp_meta = google_photos::parse_sidecar(&body).map_err(|e| AppError::BadRequest(e))?;
+    let gp_meta = google_photos::parse_sidecar(&body).map_err(AppError::BadRequest)?;
 
     let photo_id = headers
         .get("x-photo-id")

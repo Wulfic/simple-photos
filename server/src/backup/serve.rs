@@ -202,11 +202,11 @@ pub async fn backup_download_thumb(
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "image/jpeg")
         .body(body)
-        .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?)
+        .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))
 }
 
 // ── Deletion Sync Endpoint ──────────────────────────────────────────────────

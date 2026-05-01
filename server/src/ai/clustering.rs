@@ -58,7 +58,9 @@ pub fn cluster_faces(
     }
 
     // Sort by similarity descending
-    similarities.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+    similarities.sort_by(|a, b| {
+        b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     tracing::debug!(
         candidate_pairs = similarities.len(),

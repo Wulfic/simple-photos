@@ -533,7 +533,7 @@ pub async fn background_log_forward_task(
                 primary_url.trim_end_matches('/')
             );
 
-            let batch: Vec<ForwardedAuditLog> = pending.drain(..).collect();
+            let batch: Vec<ForwardedAuditLog> = std::mem::take(&mut pending);
             let last_created_at = batch.last().map(|e| e.created_at.clone());
 
             match client

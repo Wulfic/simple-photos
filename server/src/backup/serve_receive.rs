@@ -461,8 +461,8 @@ pub async fn backup_receive(
         .bind(&crop_metadata)
         .bind(&thumb_rel)
         .bind(&created_at)
-        .bind(&hdr_str(&headers, "X-Encrypted-Blob-Id"))
-        .bind(&hdr_str(&headers, "X-Encrypted-Thumb-Blob-Id"))
+        .bind(hdr_str(&headers, "X-Encrypted-Blob-Id"))
+        .bind(hdr_str(&headers, "X-Encrypted-Thumb-Blob-Id"))
         .execute(&state.pool)
         .await?;
 

@@ -294,8 +294,17 @@ pub async fn mount_smb(
 
     let result = run_mount_command(&source, mount_point, &opts).await;
     if let Err(e) = result {
-        // Best-effort: leave the credentials file behind so the operator can
-        // inspect it, but make sure it stays 0600.
+        // Failed mount → remove the credentials file so failed wizard attempts
+        // don't accumulate plaintext credentials under data/smb-creds/. The
+        // 0600 mode means the mode + path leak nothing, but disk-at-rest
+        // hygiene is cheap.
+        if let Err(rm_err) = tokio::fs::remove_file(&creds_path).await {
+            tracing::warn!(
+                "Mount failed and could not remove stale SMB credentials file {}: {}",
+                creds_path.display(),
+                rm_err
+            );
+        }
         return Err(e);
     }
 
@@ -413,8 +422,13 @@ pub async fn is_mounted(mount_point: &Path) -> bool {
 
 #[cfg(target_os = "linux")]
 fn current_uid_gid() -> (u32, u32) {
-    // SAFETY: getuid/getgid are always-safe POSIX calls.
-    unsafe { (libc::geteuid(), libc::getegid()) }
+    // Use rustix's safe wrappers around `geteuid` / `getegid`.
+    // These syscalls cannot fail on Linux but rustix gives us a
+    // panic-free, `unsafe`-free surface.
+    (
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -465,7 +479,7 @@ async fn run_mount_command(source: &str, mount_point: &Path, opts: &str) -> Resu
         .await;
 
     match direct {
-        Ok(out) if out.status.success() => return Ok(()),
+        Ok(out) if out.status.success() => Ok(()),
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             // Attempt 2: sudo -n mount.cifs.
@@ -480,33 +494,33 @@ async fn run_mount_command(source: &str, mount_point: &Path, opts: &str) -> Resu
                 .output()
                 .await;
             match sudo {
-                Ok(o) if o.status.success() => return Ok(()),
+                Ok(o) if o.status.success() => Ok(()),
                 Ok(o) => {
                     let sudo_err = String::from_utf8_lossy(&o.stderr).to_string();
-                    return Err(format!(
+                    Err(format!(
                         "mount.cifs failed: {}. sudo fallback: {}. \
                          Tip: install `cifs-utils`, ensure `mount.cifs` has the SUID bit, \
                          or add a NOPASSWD sudoers rule for the server user.",
                         condense_smb_error(&stderr),
                         condense_smb_error(&sudo_err),
-                    ));
+                    ))
                 }
                 Err(_) => {
-                    return Err(format!(
+                    Err(format!(
                         "mount.cifs failed: {}. \
                          Tip: install `cifs-utils` (provides mount.cifs) and ensure it has the SUID bit, \
                          or grant the server user passwordless sudo for /usr/sbin/mount.cifs.",
                         condense_smb_error(&stderr),
-                    ));
+                    ))
                 }
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(
+            Err(
                 "mount.cifs not found — install the `cifs-utils` package and try again".into(),
-            );
+            )
         }
-        Err(e) => return Err(format!("Failed to spawn mount.cifs: {}", e)),
+        Err(e) => Err(format!("Failed to spawn mount.cifs: {}", e)),
     }
 }
 
@@ -525,13 +539,21 @@ async fn try_command(prog: &str, args: &[&str]) -> Result<(), String> {
 }
 
 /// Validate a token (host / share / username / domain) is safe to splice into
-/// shell command arguments and credentials files.
+/// `mount.cifs` arguments and the credentials file.
+///
+/// We also reject leading `-` (would be parsed as an option flag), and the
+/// `=` and `,` characters which are option separators in `mount.cifs -o ...`
+/// and which would let a malicious token escape into a sibling option even
+/// though we never feed tokens through a shell.
 fn validate_token(value: &str, kind: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err(format!("SMB {} is empty", kind));
     }
     if value.len() > 255 {
         return Err(format!("SMB {} is too long (max 255 chars)", kind));
+    }
+    if value.starts_with('-') {
+        return Err(format!("SMB {} must not start with '-'", kind));
     }
     let ok = value.chars().all(|c| {
         c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '$' | '@' | '\\' | ' ')
@@ -544,6 +566,14 @@ fn validate_token(value: &str, kind: &str) -> Result<(), String> {
     }
     if value.contains("..") {
         return Err(format!("SMB {} must not contain '..'", kind));
+    }
+    // No mount-option separators — defence in depth. None of these are valid
+    // in a hostname / share / username / domain anyway.
+    if value.contains('=') || value.contains(',') {
+        return Err(format!(
+            "SMB {} contains illegal mount-option separator (= or ,)",
+            kind
+        ));
     }
     Ok(())
 }

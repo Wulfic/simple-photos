@@ -204,7 +204,7 @@ pub async fn import_file(
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    Ok(axum::response::Response::builder()
+    axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", HeaderValue::from_static(mime))
         .header("Content-Length", HeaderValue::from(size))
@@ -215,5 +215,5 @@ pub async fn import_file(
         )
         .header("Cache-Control", HeaderValue::from_static("no-store"))
         .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }

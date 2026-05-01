@@ -490,9 +490,15 @@ pub struct DirEntry {
 ///
 /// Returns subdirectories only (no files) for the file browser UI.
 /// Defaults to the current storage root if no path is given.
+///
+/// **Security**: even though this endpoint is admin-only, we refuse to browse
+/// kernel/process pseudo-filesystems (`/proc`, `/sys`, `/dev`) and audit every
+/// access. We also re-check the canonical path after `canonicalize()` to
+/// defeat symlinks that escape into otherwise-blocked subtrees.
 pub async fn browse_directory(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<BrowseQuery>,
 ) -> Result<Json<BrowseResponse>, AppError> {
     require_admin(&state, &auth).await?;
@@ -508,6 +514,23 @@ pub async fn browse_directory(
         return Err(AppError::BadRequest("Path must not contain '..'".into()));
     }
 
+    if is_blocked_browse_path(&browse_path) {
+        audit::log(
+            &state,
+            AuditEvent::AdminAction,
+            Some(&auth.user_id),
+            &headers,
+            Some(serde_json::json!({
+                "action": "browse_directory_blocked",
+                "path": browse_path.display().to_string(),
+            })),
+        )
+        .await;
+        return Err(AppError::Forbidden(
+            "Browsing kernel/process pseudo-filesystems is not allowed".into(),
+        ));
+    }
+
     // Canonicalize to get absolute path
     let canonical = tokio::fs::canonicalize(&browse_path).await.map_err(|e| {
         AppError::BadRequest(format!(
@@ -516,6 +539,13 @@ pub async fn browse_directory(
             e
         ))
     })?;
+
+    // Re-check the canonical form too \u2014 defeats symlinks pointing into /proc et al.
+    if is_blocked_browse_path(&canonical) {
+        return Err(AppError::Forbidden(
+            "Resolved path lies inside a blocked filesystem".into(),
+        ));
+    }
 
     let meta = tokio::fs::metadata(&canonical).await.map_err(|e| {
         AppError::BadRequest(format!("Cannot access '{}': {}", canonical.display(), e))
@@ -571,4 +601,16 @@ pub async fn browse_directory(
         directories,
         writable,
     }))
+}
+
+/// Refuse to browse kernel and process pseudo-filesystems. These are not
+/// useful storage targets and exposing their contents (even read-only, even
+/// to admins) leaks sensitive process and hardware information that has no
+/// business flowing through an HTTP API.
+fn is_blocked_browse_path(p: &std::path::Path) -> bool {
+    const BLOCKED_PREFIXES: &[&str] = &["/proc", "/sys", "/dev"];
+    let s = p.to_string_lossy();
+    BLOCKED_PREFIXES
+        .iter()
+        .any(|prefix| s == *prefix || s.starts_with(&format!("{}/", prefix)))
 }

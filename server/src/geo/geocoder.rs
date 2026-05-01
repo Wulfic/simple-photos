@@ -126,7 +126,7 @@ impl ReverseGeocoder {
                 if let Some(cities) = self.grid.get(&key) {
                     for city in cities {
                         let dist = haversine_km(lat, lon, city.lat, city.lon);
-                        if best.as_ref().map_or(true, |(_, d)| dist < *d) {
+                        if best.as_ref().is_none_or(|(_, d)| dist < *d) {
                             best = Some((city, dist));
                         }
                     }

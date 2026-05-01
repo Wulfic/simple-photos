@@ -98,7 +98,7 @@ pub async fn serve_trash_thumbnail(
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", HeaderValue::from_static("image/jpeg"))
         .header("Content-Length", HeaderValue::from(meta.len()))
@@ -107,5 +107,5 @@ pub async fn serve_trash_thumbnail(
             HeaderValue::from_static("private, max-age=86400"),
         )
         .body(body)
-        .map_err(|e| AppError::Internal(e.to_string()))?)
+        .map_err(|e| AppError::Internal(e.to_string()))
 }

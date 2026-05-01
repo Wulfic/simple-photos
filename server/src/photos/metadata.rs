@@ -157,7 +157,7 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                             width,
                             height,
                         );
-                        if orient >= 5 && orient <= 8 {
+                        if (5..=8).contains(&orient) {
                             std::mem::swap(&mut width, &mut height);
                             tracing::info!(
                                 "[metadata] Swapped dims for EXIF orientation {}: \
@@ -296,7 +296,7 @@ pub(crate) fn extract_media_metadata_from_bytes(
                 exif_reader.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
             {
                 if let Some(orient) = orient_field.value.get_uint(0) {
-                    if orient >= 5 && orient <= 8 {
+                    if (5..=8).contains(&orient) {
                         std::mem::swap(&mut width, &mut height);
                     }
                 }
@@ -319,7 +319,7 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
             move || extract_media_metadata(&p)
         })
         .await
-        .unwrap_or_else(|_| (0, 0, None, None, None, None));
+        .unwrap_or((0, 0, None, None, None, None));
 
     // For video files, `imagesize` returns coded pixel dimensions which
     // ignore SAR/DAR.  Use ffprobe to get display dimensions so the gallery
@@ -438,7 +438,7 @@ pub(crate) async fn extract_media_metadata_from_bytes_async(
 ) -> MediaMetadata {
     tokio::task::spawn_blocking(move || extract_media_metadata_from_bytes(&data, &filename))
         .await
-        .unwrap_or_else(|_| (0, 0, None, None, None, None))
+        .unwrap_or((0, 0, None, None, None, None))
 }
 
 /// One-time startup repair: re-read EXIF orientation for every photo that has
