@@ -267,10 +267,13 @@ pub async fn update_metadata(
     }
 
     // ── Extended EXIF field updates ──────────────────────────────
+    // Column names are baked in at compile time via concat!, eliminating
+    // any risk of dynamic SQL construction (and silencing Semgrep's
+    // rust.lang.security.audit.format-sql-string rule).
     macro_rules! update_text_field {
-        ($field:ident, $col:expr) => {
+        ($field:ident, $col:literal) => {
             if let Some(ref val) = req.$field {
-                sqlx::query(&format!("UPDATE photos SET {} = ?1 WHERE id = ?2", $col))
+                sqlx::query(concat!("UPDATE photos SET ", $col, " = ?1 WHERE id = ?2"))
                     .bind(val)
                     .bind(&photo_id)
                     .execute(&state.pool)
@@ -280,9 +283,9 @@ pub async fn update_metadata(
         };
     }
     macro_rules! update_num_field {
-        ($field:ident, $col:expr) => {
+        ($field:ident, $col:literal) => {
             if let Some(val) = req.$field {
-                sqlx::query(&format!("UPDATE photos SET {} = ?1 WHERE id = ?2", $col))
+                sqlx::query(concat!("UPDATE photos SET ", $col, " = ?1 WHERE id = ?2"))
                     .bind(val)
                     .bind(&photo_id)
                     .execute(&state.pool)
