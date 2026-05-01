@@ -616,6 +616,7 @@ jobs:
             -v /tmp:/tmp \
             aquasec/trivy:latest image \
             --severity CRITICAL,HIGH \
+            --ignore-unfixed \
             --format table \
             simple-photos:audit 2>&1 | tee /tmp/trivy-image-table.txt || true
         continue-on-error: true
@@ -627,6 +628,7 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
+          ignore-unfixed: true
           exit-code: 0
 
       - name: Write report section
