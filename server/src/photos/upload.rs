@@ -121,8 +121,6 @@ pub async fn upload_photo(
         (body, filename, mime)
     };
 
-    let mime_type = mime_type;
-
     let media_type = if mime_type.starts_with("video/") {
         "video"
     } else if mime_type.starts_with("audio/") {
