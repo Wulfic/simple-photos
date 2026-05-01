@@ -11,9 +11,10 @@
 - SMB token validation tightened; `unsafe libc` calls replaced with `rustix` safe wrappers; credentials file cleaned up on mount failure; condensed errors now redact `password=`/`pass=`/`pwd=`/`credentials=` fragments before leaving the server.
 - EXIF write path: rejects `@`-prefix exiftool file-include; clear "exiftool not found" error; dynamic SQL replaced with compile-time `concat!()` (silences Semgrep `format-sql-string`).
 - Storage browser: `/proc`, `/sys`, `/dev` blocklist; canonical path re-checked after symlink resolution; audit logging on blocked attempts.
-- Web deps: vite ^5 → ^7 — `npm audit` clean (vite/esbuild/postcss advisories resolved).
-- Server deps: rustls-webpki 0.103.11 → 0.103.13 (RUSTSEC-2026-0098/-0099/-0104); remaining advisories are tracked in `deny.toml`.
-- AI: NaN-safe sort in `clustering.rs` and `face.rs`.
+- Web deps: vite ^5 → ^7 — `npm audit` reports 0 vulnerabilities.
+- Server deps: rustls-webpki 0.103.11 → 0.103.13 (RUSTSEC-2026-0098/-0099/-0104); remaining `cargo audit` items (rsa Marvin, core2 yanked, paste/rustls-pemfile unmaintained, rand unsound-with-custom-logger) are tracked in `deny.toml`.
+- AI: NaN-safe sort in `clustering.rs` and `face.rs`; ONNX session mutex locks are now poison-safe (`unwrap_or_else(|p| p.into_inner())`) so a panic in one detector thread doesn't permanently lock all subsequent requests.
+- HTTPS-only for admin storage routes: server is bound to either HTTP or HTTPS for the entire process via `tls.enabled` in [server/src/main.rs](server/src/main.rs#L232) — no mixed mode exists, so a per-route guard would be redundant.
 
 **Done — Phase 2 P1 correctness:**
 - Renamed duplicate-numbered tests: 38 → 59 (ai_accuracy), 44 → 60 (motion_photo), 52 → 61 (geolocation_ddt).
@@ -36,9 +37,9 @@
 - `99faed7` SMB error redaction
 
 **Deferred to a follow-up release:**
-- Phase 1.1 HTTPS-only middleware for `/admin/storage*` (requires axum middleware refactor).
 - Phase 2.2 AI subsystem split (`face.rs` 1027 LOC) — large refactor, no functional bugs found in the sweep.
-- Phase 3 remaining ~40 clippy stylistic warnings (very-complex types, too-many-args).
+- Phase 3 remaining 43 clippy stylistic warnings (very-complex types, too-many-args, &PathBuf vs &Path).
+- AI/burst/motion-photo audit confirmed all queries are user-scoped via `AuthUser::user_id`; reverse geocoder is offline (no upstream rate limit needed).
 
 ## Status snapshot (recorded 2026-04-30)
 
