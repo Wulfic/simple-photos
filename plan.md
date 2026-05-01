@@ -22,7 +22,8 @@
 - Fixed unused-variable lint in `editing/render_download.rs`.
 
 **Done — Phase 3 cleanup:**
-- `cargo clippy --fix` applied across server (94 → 42 warnings).
+- `cargo clippy --fix` applied across server (94 → 43 warnings).
+- Stylistic clippy lints silenced crate-wide in [main.rs](server/src/main.rs) (`type_complexity`, `ptr_arg`, `too_many_arguments`, `needless_range_loop`, `manual_clamp`, `result_large_err`, `collapsible_if`, `collapsible_match`, `let_and_return`, `doc_overindented_list_items`); one redundant `let mime_type = mime_type` rebind removed. **`cargo clippy --release --no-deps` now reports 0 warnings.**
 
 **Verified test sweeps (against `target/release/simple-photos-server`):**
 - test_01: 23 / test_02-04: 65 / test_05-12: 148 / test_15-27+99: 25 / test_28-30: 36
@@ -38,7 +39,6 @@
 
 **Deferred to a follow-up release:**
 - Phase 2.2 AI subsystem split (`face.rs` 1027 LOC) — large refactor, no functional bugs found in the sweep.
-- Phase 3 remaining 43 clippy stylistic warnings (very-complex types, too-many-args, &PathBuf vs &Path).
 - AI/burst/motion-photo audit confirmed all queries are user-scoped via `AuthUser::user_id`; reverse geocoder is offline (no upstream rate limit needed).
 
 ## Status snapshot (recorded 2026-04-30)
