@@ -116,11 +116,11 @@ pub async fn admin_setup_2fa(
 
     // Generate 10 backup codes
     let backup_codes: Vec<String> = {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         (0..10)
             .map(|_| {
                 (0..8)
-                    .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+                    .map(|_| rng.sample(rand::distr::Alphanumeric) as char)
                     .collect()
             })
             .collect()

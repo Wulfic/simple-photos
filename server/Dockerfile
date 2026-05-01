@@ -1,4 +1,4 @@
-FROM rust:1-slim-bookworm AS builder
+FROM rust:1-slim-trixie AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
@@ -13,7 +13,7 @@ COPY src ./src
 COPY migrations ./migrations
 RUN touch src/main.rs && cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 # Run full package upgrade first to pick up all bookworm-security backports,
 # eliminating OS-level CVEs before adding application packages.
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && \
