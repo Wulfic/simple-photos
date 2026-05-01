@@ -240,13 +240,13 @@ pub fn detect_faces_from_image(
 
     // Try SCRFD (best)
     if let Some(det) = DET_MODEL.get().and_then(|m| m.as_ref()) {
-        let mut session = det.lock().unwrap();
+        let mut session = det.lock().unwrap_or_else(|p| p.into_inner());
         return detect_faces_scrfd(img, min_confidence, &mut session);
     }
 
     // Try legacy UltraFace (acceptable)
     if let Some(legacy) = LEGACY_MODEL.get().and_then(|m| m.as_ref()) {
-        let mut session = legacy.lock().unwrap();
+        let mut session = legacy.lock().unwrap_or_else(|p| p.into_inner());
         return detect_faces_legacy(img, min_confidence, &mut session);
     }
 
@@ -565,7 +565,7 @@ fn extract_face_embedding_with_landmarks(
 
     if let Some(rec) = REC_MODEL.get().and_then(|m| m.as_ref()) {
         if has_landmarks {
-            let mut session = rec.lock().unwrap();
+            let mut session = rec.lock().unwrap_or_else(|p| p.into_inner());
             match extract_arcface_embedding(img, landmarks, &mut session) {
                 Ok(emb) => return emb,
                 Err(e) => tracing::warn!("ArcFace embedding failed: {e}, using histogram"),
@@ -925,7 +925,7 @@ pub fn extract_face_embedding(
     bbox: &BoundingBox,
 ) -> Vec<f32> {
     if let Some(rec_arc) = REC_MODEL.get().and_then(|m| m.as_ref()) {
-        let mut rec = rec_arc.lock().unwrap();
+        let mut rec = rec_arc.lock().unwrap_or_else(|p| p.into_inner());
         // Synthesise approximate landmarks from bbox centre for non-SCRFD path
         let (iw, ih) = img.dimensions();
         let cx = (bbox.x + bbox.w / 2.0) * iw as f32;

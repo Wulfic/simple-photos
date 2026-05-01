@@ -230,7 +230,7 @@ pub fn detect_objects_with_quality(
 
     // ── Phase 1: MobileNetV2 classification (if model available) ─────
     let model_used = if let Some(Some(model)) = CLS_MODEL.get() {
-        let mut session = model.lock().unwrap();
+        let mut session = model.lock().unwrap_or_else(|p| p.into_inner());
         match classify_mobilenet(img, min_confidence, &mut session) {
             Ok(model_dets) => {
                 tracing::debug!(
