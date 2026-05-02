@@ -906,6 +906,10 @@ def random_password() -> str:
 
 
 def unique_filename(ext: str = "jpg") -> str:
+    # Accept both "jpg" and ".jpg" forms — strip a single leading dot
+    # so callers don't accidentally produce "name..jpg" which the server
+    # rejects as an unsupported file format.
+    ext = ext.lstrip(".") or "jpg"
     return f"test_{int(time.time() * 1000)}_{random.randint(1000, 9999)}.{ext}"
 
 

@@ -31,6 +31,11 @@ pub struct SetupStatusResponse {
     pub version: String,
     /// Operating mode: "primary" or "backup"
     pub mode: String,
+    /// Stable random ID minted on first run and persisted in `server_settings`.
+    /// The frontend wizard uses this to detect when the server has been wiped
+    /// (e.g. via `reset-server.sh`) so it can discard a stale in-progress
+    /// `sessionStorage` step and start the wizard from the welcome screen.
+    pub setup_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,11 +72,41 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<SetupStatusRes
             .await?
             .unwrap_or_else(|| "primary".to_string());
 
+    // Mint a stable per-instance setup_id on first request and persist it.
+    // After a DB wipe the row is gone → a new id is generated, which lets
+    // the frontend wizard detect the reset and clear stale sessionStorage.
+    let setup_id: String = match sqlx::query_scalar::<_, String>(
+        "SELECT value FROM server_settings WHERE key = 'setup_id'",
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            let new_id = Uuid::new_v4().to_string();
+            // INSERT OR IGNORE so concurrent first-status calls don't race.
+            sqlx::query(
+                "INSERT OR IGNORE INTO server_settings (key, value) VALUES ('setup_id', ?)",
+            )
+            .bind(&new_id)
+            .execute(&state.pool)
+            .await?;
+            // Re-read in case another request inserted first.
+            sqlx::query_scalar::<_, String>(
+                "SELECT value FROM server_settings WHERE key = 'setup_id'",
+            )
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(new_id)
+        }
+    };
+
     Ok(Json(SetupStatusResponse {
         setup_complete: user_count > 0,
         registration_open: state.config.auth.allow_registration,
         version: crate::VERSION.to_string(),
         mode,
+        setup_id,
     }))
 }
 

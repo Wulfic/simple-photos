@@ -18,11 +18,49 @@ if [[ -z "$CARGO_BIN" || ! -x "$CARGO_BIN" ]]; then
     CARGO_BIN="cargo"
 fi
 
-# Read the configured port from config.toml (falls back to 8080)
-SERVER_PORT=$(grep -E '^port\s*=' "$SERVER_DIR/config.toml" 2>/dev/null | head -1 | awk -F'=' '{print $2}' | tr -d ' ')
-SERVER_PORT=${SERVER_PORT:-8080}
+# ── Port helpers ─────────────────────────────────────────────────────────────
+DEFAULT_PORT=8080
+
+port_in_use() {
+    local port="$1"
+    if command -v ss &>/dev/null; then
+        ss -tlnH 2>/dev/null | grep -q ":${port} " && return 0
+    elif command -v netstat &>/dev/null; then
+        netstat -tlnp 2>/dev/null | grep -q ":${port} " && return 0
+    elif command -v lsof &>/dev/null; then
+        lsof -i ":${port}" -sTCP:LISTEN &>/dev/null && return 0
+    fi
+    (echo >/dev/tcp/localhost/"$port") 2>/dev/null && return 0
+    return 1
+}
+
+find_free_port() {
+    local port="${1:-$DEFAULT_PORT}"
+    local i=0
+    while [[ $i -lt 100 ]]; do
+        if ! port_in_use "$port"; then
+            echo "$port"
+            return 0
+        fi
+        echo "  Port $port in use, trying $((port + 1))..." >&2
+        port=$((port + 1))
+        i=$((i + 1))
+    done
+    echo "ERROR: No free port found after 100 attempts starting from ${1:-$DEFAULT_PORT}" >&2
+    exit 1
+}
 
 echo "=== Reset Primary Server (backup untouched) ==="
+
+# ── Stop native server first so its port is freed before we port-scan ────────
+echo "Stopping native server..."
+if systemctl is-active simple-photos.service &>/dev/null 2>&1; then
+    sudo systemctl stop simple-photos.service
+fi
+pkill -9 -f simple-photos-server 2>/dev/null && sleep 1 || true
+
+# Now find a free port — the native server's slot is guaranteed free.
+SERVER_PORT=$(find_free_port "$DEFAULT_PORT")
 
 # ── Build web frontend ───────────────────────────────────────────────────────
 echo "Building web frontend..."
@@ -86,13 +124,6 @@ if [[ -d "$SERVER_DIR/target/debug" ]]; then
     rm -rf "$SERVER_DIR/target/debug"
 fi
 
-# ── Stop primary server ──────────────────────────────────────────────────────
-echo "Stopping server..."
-if systemctl is-active simple-photos.service &>/dev/null 2>&1; then
-    sudo systemctl stop simple-photos.service
-fi
-pkill -9 -f simple-photos-server 2>/dev/null && sleep 1 || true
-
 # ── Wipe database ────────────────────────────────────────────────────────────
 echo "Wiping database..."
 rm -f "$SERVER_DIR/data/db/"*
@@ -127,7 +158,15 @@ fi
 
 chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true
 echo "Data cleared."
-
+# Patch config.toml with the chosen port before restarting.
+CONFIG_FILE="$SERVER_DIR/config.toml"
+if [[ -f "$CONFIG_FILE" ]]; then
+    OLD_PORT=$(grep -E '^port\s*=' "$CONFIG_FILE" | head -1 | awk -F'=' '{print $2}' | tr -d ' ')
+    sed -i "s/^port\s*=.*$/port = $SERVER_PORT/" "$CONFIG_FILE"
+    if [[ -n "$OLD_PORT" ]]; then
+        sed -i "s|:\($OLD_PORT\)\b|:${SERVER_PORT}|g" "$CONFIG_FILE"
+    fi
+fi
 # ── Restart server ───────────────────────────────────────────────────────────
 LOG_FILE="${TMPDIR:-/tmp}/simple-photos-server.log"
 echo "Starting server as $RUN_USER (log: $LOG_FILE)..."
@@ -156,5 +195,11 @@ if echo "$STATUS" | grep -q '"error"'; then
     echo "WARNING: Server may have failed to start. Check $LOG_FILE"
     tail -20 "$LOG_FILE" 2>/dev/null
 fi
-echo "Setup status: $STATUS"
-echo "=== Reset complete (backup containers untouched) ==="
+
+echo ""
+echo "╔══════════════════════════════════════════════════╗"
+echo "║         Reset complete — server address         ║"
+echo "╠══════════════════════════════════════════════════╣"
+printf "║  Primary :  http://localhost:%-20s║\n" "${SERVER_PORT}"
+echo "╚══════════════════════════════════════════════════╝"
+echo ""

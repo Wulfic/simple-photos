@@ -29,6 +29,12 @@ export interface SetupStatus {
   setup_complete: boolean;
   registration_open: boolean;
   version: string;
+  /**
+   * Stable random ID minted by the server on first run. Re-issued whenever
+   * the database is wiped (e.g. `reset-server.sh`), so the wizard can detect
+   * a server reset and discard a stale in-progress step from sessionStorage.
+   */
+  setup_id?: string;
 }
 
 export interface CreatedUser {

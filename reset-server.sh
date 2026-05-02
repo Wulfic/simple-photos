@@ -20,11 +20,65 @@ if [[ -z "$CARGO_BIN" || ! -x "$CARGO_BIN" ]]; then
     CARGO_BIN="cargo"  # last resort: hope it's on PATH
 fi
 
-# Read the configured port from config.toml (falls back to 8080)
-SERVER_PORT=$(grep -E '^port\s*=' "$SERVER_DIR/config.toml" 2>/dev/null | head -1 | awk -F'=' '{print $2}' | tr -d ' ')
-SERVER_PORT=${SERVER_PORT:-8080}
+# ── Port helpers ─────────────────────────────────────────────────────────────
+DEFAULT_PORT=8080
+
+port_in_use() {
+    local port="$1"
+    if command -v ss &>/dev/null; then
+        ss -tlnH 2>/dev/null | grep -q ":${port} " && return 0
+    elif command -v netstat &>/dev/null; then
+        netstat -tlnp 2>/dev/null | grep -q ":${port} " && return 0
+    elif command -v lsof &>/dev/null; then
+        lsof -i ":${port}" -sTCP:LISTEN &>/dev/null && return 0
+    fi
+    (echo >/dev/tcp/localhost/"$port") 2>/dev/null && return 0
+    return 1
+}
+
+# find_free_port START_PORT [SKIP_PORT]
+# Returns the first port >= START_PORT that is free (and != SKIP_PORT).
+find_free_port() {
+    local port="${1:-$DEFAULT_PORT}"
+    local skip="${2:-}"
+    local i=0
+    while [[ $i -lt 100 ]]; do
+        if [[ "$port" != "$skip" ]] && ! port_in_use "$port"; then
+            echo "$port"
+            return 0
+        fi
+        echo "  Port $port in use (or reserved), trying $((port + 1))..." >&2
+        port=$((port + 1))
+        i=$((i + 1))
+    done
+    echo "ERROR: No free port found after 100 attempts starting from ${1:-$DEFAULT_PORT}" >&2
+    exit 1
+}
 
 echo "=== Simple Photos Server Reset ==="
+
+# ── Stop everything FIRST so their ports are freed before we port-scan ────────
+# Native server must yield its port before we pick a new one for it.
+echo "Stopping native server..."
+if systemctl is-active simple-photos.service &>/dev/null 2>&1; then
+    sudo systemctl stop simple-photos.service
+fi
+pkill -9 -f simple-photos-server 2>/dev/null && sleep 1 || true
+
+# Bring down the Docker backup container so its host port is also freed.
+DOCKER_DIR="$SCRIPT_DIR/docker-instances"
+BACKUP_DIR="$DOCKER_DIR/simple-photos-backup"
+BACKUP_COMPOSE="$BACKUP_DIR/docker-compose.yml"
+if command -v docker &>/dev/null && [[ -f "$BACKUP_COMPOSE" ]]; then
+    echo "Stopping backup container..."
+    docker compose -f "$BACKUP_COMPOSE" down 2>/dev/null || true
+fi
+
+# Now that nothing is listening we can find clean free ports.
+# Native (primary) takes priority — it always gets the first available port.
+SERVER_PORT=$(find_free_port "$DEFAULT_PORT")
+# Backup gets the next available port, skipping the primary's slot.
+BACKUP_PORT=$(find_free_port "$DEFAULT_PORT" "$SERVER_PORT")
 
 # ── Rebuild web frontend ─────────────────────────────────────────────────────
 echo "Building web frontend..."
@@ -92,13 +146,6 @@ if [[ -d "$SERVER_DIR/target/debug" ]]; then
     rm -rf "$SERVER_DIR/target/debug"
 fi
 
-# Kill any running server (root or user-owned)
-echo "Stopping server..."
-if systemctl is-active simple-photos.service &>/dev/null 2>&1; then
-    sudo systemctl stop simple-photos.service
-fi
-pkill -9 -f simple-photos-server 2>/dev/null && sleep 1 || true
-
 # Wipe database
 echo "Wiping database..."
 rm -f "$SERVER_DIR/data/db/"*
@@ -137,57 +184,112 @@ fi
 # Ensure data directories are owned by the real user so the server can write
 chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true
 
+# The backup Docker container runs as appuser (uid 999) while the primary runs
+# as the host user (uid 1000).  Both need write access to the shared storage
+# directory.  Set o+rwX so "other" (uid 999) can create/write files and dirs.
+chmod -R o+rwX "$SERVER_DIR/data/storage" 2>/dev/null || true
+
 echo "Data cleared."
 
-# Reset Docker backup instance (backup-1 only)
-DOCKER_DIR="$SCRIPT_DIR/docker-instances"
-if [[ -d "$DOCKER_DIR" ]]; then
-    echo "Resetting Docker backup instance..."
-    BACKUP_DATA="$DOCKER_DIR/backup-1/data"
+# Patch primary config.toml with the chosen port before starting the server.
+# We update both `port` and `base_url` so they stay consistent.
+CONFIG_FILE="$SERVER_DIR/config.toml"
+if [[ -f "$CONFIG_FILE" ]]; then
+    OLD_PORT=$(grep -E '^port\s*=' "$CONFIG_FILE" | head -1 | awk -F'=' '{print $2}' | tr -d ' ')
+    # Replace the port line
+    sed -i "s/^port\s*=.*$/port = $SERVER_PORT/" "$CONFIG_FILE"
+    # Replace base_url port in case it references the old port
+    if [[ -n "$OLD_PORT" ]]; then
+        sed -i "s|:\($OLD_PORT\)\b|:${SERVER_PORT}|g" "$CONFIG_FILE"
+    fi
+fi
+
+# Reset Docker backup instance (simple-photos-backup)
+# (Container was already stopped above before the port scan.)
+if [[ -d "$BACKUP_DIR" ]]; then
+    echo "Resetting Docker backup instance ($BACKUP_DIR)..."
+    BACKUP_DATA="$BACKUP_DIR/data"
+
     if [[ -d "$BACKUP_DATA" ]]; then
-        rm -rf "$BACKUP_DATA/db/"* 2>/dev/null || true
+        rm -rf "$BACKUP_DATA/db/"* 2>/dev/null || sudo rm -rf "$BACKUP_DATA/db/"* 2>/dev/null || true
         # storage/ files are owned by Docker's container user (uid 999) — needs sudo
         if [[ -d "$BACKUP_DATA/storage" ]]; then
             sudo rm -rf "$BACKUP_DATA/storage" 2>/dev/null || rm -rf "$BACKUP_DATA/storage" 2>/dev/null || true
         fi
-        # The container runs as appuser (uid 999). Ensure the bind-mounted
-        # data dirs are writable after the wipe recreates them as the host user.
+        # Recreate dirs and align ownership with the container's appuser (uid 999)
         mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
         chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
-        echo "  backup-1 data wiped"
+        echo "  backup data wiped"
+    else
+        mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
+        chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
+    fi
+
+    # Patch the compose ports line with the chosen backup port so Docker binds
+    # the right host port.  The container always listens on its internal port
+    # (3000); only the host-side mapping changes.
+    if [[ -f "$BACKUP_COMPOSE" ]]; then
+        CONTAINER_PORT=$(grep -E '^\s*-\s*"[0-9]+:[0-9]+"' "$BACKUP_COMPOSE" | head -1 | sed -E 's/.*"[0-9]+:([0-9]+)".*/\1/')
+        CONTAINER_PORT=${CONTAINER_PORT:-3000}
+        # Replace the ports mapping line (handles both quoted and unquoted forms)
+        sed -i -E "s/(- \"?)[0-9]+(:[0-9]+\"?)/\1${BACKUP_PORT}\2/" "$BACKUP_COMPOSE"
+        # Update base_url in the backup config.toml so links are correct
+        BACKUP_CONFIG="$BACKUP_DIR/config.toml"
+        if [[ -f "$BACKUP_CONFIG" ]]; then
+            OLD_BK_URL_PORT=$(grep -E '^base_url\s*=' "$BACKUP_CONFIG" | head -1 | sed -E 's/.*:([0-9]+).*/\1/')
+            if [[ -n "$OLD_BK_URL_PORT" ]]; then
+                sed -i "s|:${OLD_BK_URL_PORT}\b|:${BACKUP_PORT}|g" "$BACKUP_CONFIG"
+            fi
+        fi
+        echo "  Backup mapped to host port $BACKUP_PORT (container port $CONTAINER_PORT)"
     fi
 
     # Start (or recreate) the container so it picks up the clean state.
-    # --force-recreate ensures we start even when the container was stopped.
-    if command -v docker &>/dev/null && [[ -f "$DOCKER_DIR/docker-compose.yml" ]]; then
-        echo "Stopping any extra backup containers..."
-        docker compose -f "$DOCKER_DIR/docker-compose.yml" stop backup-2 backup-3 2>/dev/null || true
-        
-        echo "Starting backup container..."
-        docker compose -f "$DOCKER_DIR/docker-compose.yml" up -d --build --force-recreate backup-1 2>/dev/null || true
+    if command -v docker &>/dev/null && [[ -f "$BACKUP_COMPOSE" ]]; then
+        # Ensure the shared external network exists (compose declares it as external).
+        docker network inspect simple-photos-net &>/dev/null || \
+            docker network create simple-photos-net &>/dev/null || true
 
-        # Wait for backup-1 to start accepting requests
-        echo -n "Waiting for backup-1"
-        BK1_READY=false
-        for attempt in $(seq 1 20); do
-            if curl -sf http://localhost:8081/health >/dev/null 2>&1; then
+        echo "Building backup container image (no-cache, may take a few minutes)..."
+        docker compose -f "$BACKUP_COMPOSE" build --no-cache \
+            || { echo "WARNING: docker compose build failed for backup"; }
+        echo "Starting backup container..."
+        docker compose -f "$BACKUP_COMPOSE" up -d --force-recreate \
+            || { echo "WARNING: docker compose up failed for backup"; }
+        # Remove dangling images left over from the rebuild to avoid disk bloat.
+        docker image prune -f 2>/dev/null || true
+
+        # Wait for backup to start accepting requests
+        echo -n "Waiting for backup on :${BACKUP_PORT}"
+        BK_READY=false
+        for attempt in $(seq 1 30); do
+            if curl -sf "http://localhost:${BACKUP_PORT}/api/health" >/dev/null 2>&1 \
+                || curl -sf "http://localhost:${BACKUP_PORT}/api/setup/status" >/dev/null 2>&1; then
                 echo " ready!"
-                BK1_READY=true
+                BK_READY=true
                 break
             fi
             echo -n "."
             sleep 1
         done
 
-        if [[ "$BK1_READY" == "true" ]]; then
-            echo "  backup-1 is running and waiting for setup (http://localhost:8081)"
+        if [[ "$BK_READY" == "true" ]]; then
+            echo "  backup is running at http://localhost:${BACKUP_PORT}"
         else
-            echo "  Warning: backup-1 did not become healthy in time"
+            echo "  Warning: backup did not become healthy in time"
+            echo "  Recent logs:"
+            docker compose -f "$BACKUP_COMPOSE" logs --tail=30 2>/dev/null || true
+        fi
+    else
+        if ! command -v docker &>/dev/null; then
+            echo "  Skipping backup container start — docker not installed"
+        elif [[ ! -f "$BACKUP_COMPOSE" ]]; then
+            echo "  Skipping backup container start — $BACKUP_COMPOSE not found"
         fi
     fi
 fi
 
-# Restart server as the real user (not root)
+# ── Start native (primary) server ────────────────────────────────────────────
 LOG_FILE="${TMPDIR:-/tmp}/simple-photos-server.log"
 echo "Starting server as $RUN_USER (log: $LOG_FILE)..."
 if systemctl is-enabled simple-photos.service &>/dev/null 2>&1; then
@@ -219,5 +321,14 @@ if echo "$STATUS" | grep -q '"error"'; then
     echo "WARNING: Server may have failed to start. Check $LOG_FILE"
     tail -20 "$LOG_FILE" 2>/dev/null
 fi
-echo "Setup status: $STATUS"
-echo "=== Reset complete ==="
+
+echo ""
+echo "╔══════════════════════════════════════════════════╗"
+echo "║           Reset complete — server addresses      ║"
+echo "╠══════════════════════════════════════════════════╣"
+printf "║  Primary :  http://localhost:%-20s║\n" "${SERVER_PORT}"
+if [[ -d "$BACKUP_DIR" ]] && command -v docker &>/dev/null; then
+    printf "║  Backup  :  http://localhost:%-20s║\n" "${BACKUP_PORT}"
+fi
+echo "╚══════════════════════════════════════════════════╝"
+echo ""

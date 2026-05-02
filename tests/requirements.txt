@@ -1,0 +1,15 @@
+# Simple Photos — Python test dependencies
+#
+# Install with:
+#     python3 -m venv .venv
+#     . .venv/bin/activate
+#     pip install -r tests/requirements.txt
+#
+# Pinned to broad ranges so updates pick up security fixes automatically while
+# avoiding accidental major-version breakage.
+
+pytest>=8.0,<10
+requests>=2.31,<3
+Pillow>=10.0,<12         # image generation (generate_test_jpeg, etc.)
+cryptography>=41.0       # TLS / AESGCM tests (test_22, test_26)
+numpy>=1.26,<3           # AI accuracy tests (vector ops in test_59)

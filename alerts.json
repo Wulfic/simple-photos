@@ -1,5 +1,0 @@
-{
-  "message": "Resource not accessible by personal access token",
-  "documentation_url": "https://docs.github.com/rest/code-scanning/code-scanning#list-code-scanning-alerts-for-a-repository",
-  "status": "403"
-}

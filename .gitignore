@@ -121,3 +121,16 @@ __pycache__/
 downloads/simple-photos.apk
 references/
 .gitnexus
+
+# ── Python virtual environments ─────────────────────────────────────────────
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.tox/
+
+# ── Test artifacts ──────────────────────────────────────────────────────────
+# Network-fetched AI sample assets (face grouping etc.) — generated on demand
+tests/test_data/downloaded_*/
+tests/.cache/

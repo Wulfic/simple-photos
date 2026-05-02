@@ -207,6 +207,101 @@ install_android_sdk() {
     success "Android SDK installed at $sdk_root"
 }
 
+# ── NVIDIA GPU setup (optional, Linux only) ───────────────────────────────────
+# Detects an NVIDIA GPU and ensures the kernel module matching the *running*
+# kernel is installed, so NVENC transcoding and CUDA-accelerated AI inference
+# actually work. Safe to call on systems without NVIDIA hardware (it just exits).
+setup_gpu() {
+    # Linux only — skip on macOS / WSL where the host already manages drivers.
+    [[ "$(uname -s)" != "Linux" ]] && return 0
+    # Skip inside containers (driver belongs to the host)
+    [[ -f /.dockerenv ]] && return 0
+
+    # Detect NVIDIA hardware via lspci (fast, no driver needed)
+    if ! command -v lspci &>/dev/null; then
+        return 0
+    fi
+    if ! lspci 2>/dev/null | grep -iE "vga|3d|display" | grep -qi nvidia; then
+        info "No NVIDIA GPU detected — skipping GPU driver setup."
+        info "  (Transcoding and AI inference will run on CPU.)"
+        return 0
+    fi
+
+    success "NVIDIA GPU detected"
+
+    # If nvidia-smi already works we're done.
+    if command -v nvidia-smi &>/dev/null && nvidia-smi -L &>/dev/null; then
+        success "NVIDIA driver already loaded:"
+        nvidia-smi -L | sed 's/^/    /'
+        return 0
+    fi
+
+    warn "NVIDIA hardware present but driver is not loaded."
+
+    # Only attempt automated install on Debian/Ubuntu — other distros have
+    # very different packaging stories.
+    if ! command -v apt-get &>/dev/null; then
+        warn "Automatic NVIDIA driver install is only supported on Debian/Ubuntu."
+        warn "Please install the NVIDIA driver manually and re-run."
+        return 0
+    fi
+
+    if ! prompt_yn "Install NVIDIA driver + kernel modules for GPU acceleration?"; then
+        warn "Skipping GPU driver install. Transcoding and AI will run on CPU."
+        return 0
+    fi
+
+    info "Installing dkms, build tools, and NVIDIA driver..."
+    sudo apt-get update -qq
+    # dkms + headers are required for any source-built nvidia kernel module
+    sudo apt-get install -y -qq dkms "linux-headers-$(uname -r)" || true
+
+    # Pick the latest available driver metapackage (open-kernel preferred for
+    # Turing+ GPUs like RTX 20-series and newer).
+    local driver_pkg
+    driver_pkg=$(apt-cache search --names-only '^nvidia-driver-[0-9]+-open$' 2>/dev/null \
+        | awk '{print $1}' | sort -V | tail -1)
+    if [[ -z "$driver_pkg" ]]; then
+        driver_pkg=$(apt-cache search --names-only '^nvidia-driver-[0-9]+$' 2>/dev/null \
+            | awk '{print $1}' | sort -V | tail -1)
+    fi
+
+    if [[ -z "$driver_pkg" ]]; then
+        warn "No NVIDIA driver package found in apt — enable the 'restricted' / 'non-free' repositories and re-run."
+        return 1
+    fi
+
+    info "Installing $driver_pkg..."
+    sudo apt-get install -y -qq "$driver_pkg" || {
+        warn "Driver metapackage install failed."
+        return 1
+    }
+
+    # Ensure prebuilt kernel modules for the *running* kernel are installed.
+    # Ubuntu ships these as linux-modules-nvidia-<ver>-<flavour>-<kernel>.
+    local ver
+    ver=$(echo "$driver_pkg" | grep -oE '[0-9]+' | head -1)
+    if [[ -n "$ver" ]]; then
+        local flavour=""
+        [[ "$driver_pkg" == *-open ]] && flavour="-open"
+        local kver
+        kver=$(uname -r)
+        sudo apt-get install -y -qq \
+            "linux-modules-nvidia-${ver}${flavour}-${kver}" \
+            "linux-modules-nvidia-${ver}${flavour}-generic-hwe-24.04" 2>/dev/null || true
+    fi
+
+    # Try to load now without rebooting
+    sudo modprobe nvidia 2>/dev/null || true
+    if command -v nvidia-smi &>/dev/null && nvidia-smi -L &>/dev/null; then
+        success "NVIDIA driver loaded successfully:"
+        nvidia-smi -L | sed 's/^/    /'
+    else
+        warn "Driver installed but module is not yet loaded."
+        warn "A reboot is required before GPU transcoding and AI will work."
+    fi
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Banner
 # ══════════════════════════════════════════════════════════════════════════════
@@ -429,6 +524,13 @@ if [[ "$MODE" == "native" ]]; then
         MISSING_DEPS+=("cifs-utils")
     fi
 
+    if command -v smbclient &>/dev/null; then
+        success "smbclient found"
+    else
+        warn "smbclient not found (required for the SMB connection-test step in the wizard)"
+        MISSING_DEPS+=("smbclient")
+    fi
+
     if ! $NO_BUILD_ANDROID; then
         sdk_ok=false
         if [[ -n "${ANDROID_HOME:-}" ]] && [[ -f "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]]; then
@@ -511,6 +613,17 @@ if [[ "$MODE" == "native" ]]; then
                         else warn "Cannot auto-install cifs-utils. SMB/network storage mounting will not work."; fi
                         command -v mount.cifs &>/dev/null && success "cifs-utils installed" || warn "cifs-utils install failed — SMB storage mounting will not be available."
                         ;;
+                    smbclient)
+                        info "Installing smbclient (used by the wizard's SMB connection test)..."
+                        if command -v apt-get &>/dev/null; then
+                            sudo apt-get update -qq
+                            sudo apt-get install -y -qq smbclient
+                        elif command -v dnf &>/dev/null; then sudo dnf install -y samba-client
+                        elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm smbclient
+                        elif command -v brew &>/dev/null; then brew install samba 2>/dev/null || warn "Could not install samba via brew."
+                        else warn "Cannot auto-install smbclient. The SMB 'Test connection' button will fail."; fi
+                        command -v smbclient &>/dev/null && success "smbclient installed" || warn "smbclient install failed — the SMB connection-test step will not work."
+                        ;;
                     android-sdk)
                         install_android_sdk || { error "Android SDK install failed."; exit 1; }
                         ;;
@@ -520,6 +633,51 @@ if [[ "$MODE" == "native" ]]; then
             for dep in "${MISSING_DEPS[@]}"; do
                 [[ "$dep" == "rust" || "$dep" == "node" || "$dep" == "npm" ]] && { error "Rust and Node.js are required."; exit 1; }
             done
+        fi
+    fi
+
+    # Detect/install NVIDIA driver for GPU transcoding (NVENC) + CUDA AI inference.
+    # No-op on systems without an NVIDIA GPU.
+    setup_gpu
+
+    # ── Optional: passwordless sudo for mount.cifs / umount ──────────────────
+    # Modern cifs-utils (≥ 7.x on Ubuntu 24.04) refuses SUID-only mounts unless
+    # the mount point is listed in /etc/fstab. The cleanest fix for a
+    # background server that mounts ad-hoc shares is a NOPASSWD sudoers rule
+    # scoped to just `mount.cifs` and `umount`. We offer it here, opt-in.
+    if command -v mount.cifs &>/dev/null && [[ "$(uname)" == "Linux" ]]; then
+        SP_SUDOERS_FILE="/etc/sudoers.d/simple-photos-cifs"
+        SERVER_USER="$(whoami)"
+        MOUNT_CIFS_BIN="$(command -v mount.cifs)"
+        UMOUNT_BIN="$(command -v umount || echo /usr/bin/umount)"
+        if [[ ! -f "$SP_SUDOERS_FILE" ]]; then
+            echo ""
+            info "SMB mounting note: \`mount.cifs\` on modern Linux requires either an"
+            info "/etc/fstab entry (per-share) or a passwordless sudo rule. Installing a"
+            info "scoped sudoers drop-in lets the server mount user-supplied SMB shares"
+            info "from the setup wizard without prompting for a password."
+            if prompt_yn "Install NOPASSWD sudoers rule for mount.cifs/umount (user: ${SERVER_USER})?" "Y"; then
+                TMP_SUDOERS=$(mktemp)
+                cat > "$TMP_SUDOERS" <<SUDOERS
+# Installed by Simple Photos installer.
+# Allows the server user to (un)mount CIFS/SMB shares without a password.
+# Scope is intentionally limited to these two binaries.
+${SERVER_USER} ALL=(root) NOPASSWD: ${MOUNT_CIFS_BIN}
+${SERVER_USER} ALL=(root) NOPASSWD: ${UMOUNT_BIN}
+SUDOERS
+                if sudo visudo -cf "$TMP_SUDOERS" >/dev/null 2>&1; then
+                    sudo install -m 0440 -o root -g root "$TMP_SUDOERS" "$SP_SUDOERS_FILE" \
+                        && success "Sudoers rule installed: $SP_SUDOERS_FILE" \
+                        || warn "Could not install $SP_SUDOERS_FILE — run the installer with sudo to retry."
+                else
+                    warn "Generated sudoers file failed visudo validation — skipping."
+                fi
+                rm -f "$TMP_SUDOERS"
+            else
+                info "Skipped. You can re-run the installer or hand-craft an /etc/fstab entry later."
+            fi
+        else
+            success "Sudoers rule already present: $SP_SUDOERS_FILE"
         fi
     fi
 fi

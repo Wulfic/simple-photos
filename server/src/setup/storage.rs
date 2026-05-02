@@ -288,6 +288,23 @@ async fn configure_smb_storage(
 
     let creds_dir = std::path::PathBuf::from("data/smb-creds");
 
+    // mount.cifs is invoked as root (via SUID or sudo) and may resolve
+    // relative paths against a different CWD than the server. Pass absolute
+    // paths so the credentials file and mount point are unambiguous.
+    let cwd = std::env::current_dir().map_err(|e| {
+        AppError::Internal(format!("Cannot read server CWD: {}", e))
+    })?;
+    let mount_point = if mount_point.is_absolute() {
+        mount_point
+    } else {
+        cwd.join(&mount_point)
+    };
+    let creds_dir = if creds_dir.is_absolute() {
+        creds_dir
+    } else {
+        cwd.join(&creds_dir)
+    };
+
     let storage_root = smb::mount_smb(&target, &mount_point, &creds_dir)
         .await
         .map_err(AppError::BadRequest)?;

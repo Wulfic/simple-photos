@@ -32,6 +32,31 @@ from helpers import (
     wait_for_server,
 )
 
+# ── Local env loader ─────────────────────────────────────────────────
+# Pick up `tests/.env.local` (gitignored) so individual developers can keep
+# machine-specific credentials (e.g. SMB share login for test_41) without
+# committing them. Lines are `KEY=VALUE`; existing env vars take precedence.
+def _load_local_env() -> None:
+    env_path = os.path.join(os.path.dirname(__file__), ".env.local")
+    if not os.path.isfile(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except OSError:
+        pass
+
+
+_load_local_env()
+
 # ── Configuration ────────────────────────────────────────────────────
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

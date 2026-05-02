@@ -482,6 +482,13 @@ async fn run_mount_command(source: &str, mount_point: &Path, opts: &str) -> Resu
         Ok(out) if out.status.success() => Ok(()),
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            // Modern cifs-utils (≥ 7.x) refuses SUID-only mounts unless the
+            // mount point is in /etc/fstab. We detect that exact failure and
+            // surface a single, actionable remediation rather than a generic
+            // "permission denied".
+            let needs_fstab = stderr.contains("no match")
+                && stderr.contains("/etc/fstab")
+                && stderr.contains("permission denied");
             // Attempt 2: sudo -n mount.cifs.
             let sudo = tokio::process::Command::new("sudo")
                 .arg("-n")
@@ -497,12 +504,23 @@ async fn run_mount_command(source: &str, mount_point: &Path, opts: &str) -> Resu
                 Ok(o) if o.status.success() => Ok(()),
                 Ok(o) => {
                     let sudo_err = String::from_utf8_lossy(&o.stderr).to_string();
+                    let sudo_needs_pw = sudo_err.contains("a password is required")
+                        || sudo_err.contains("no tty present");
+                    let tip = if needs_fstab && sudo_needs_pw {
+                        "Tip: modern cifs-utils refuses SUID mounts without an /etc/fstab entry. \
+                         Re-run install.sh and accept the NOPASSWD sudoers prompt, or manually add \
+                         a drop-in at /etc/sudoers.d/simple-photos-cifs:\n  \
+                         <server-user> ALL=(root) NOPASSWD: /usr/sbin/mount.cifs\n  \
+                         <server-user> ALL=(root) NOPASSWD: /usr/bin/umount"
+                    } else {
+                        "Tip: install `cifs-utils`, ensure `mount.cifs` has the SUID bit, \
+                         or add a NOPASSWD sudoers rule for the server user."
+                    };
                     Err(format!(
-                        "mount.cifs failed: {}. sudo fallback: {}. \
-                         Tip: install `cifs-utils`, ensure `mount.cifs` has the SUID bit, \
-                         or add a NOPASSWD sudoers rule for the server user.",
+                        "mount.cifs failed: {}. sudo fallback: {}. {}",
                         condense_smb_error(&stderr),
                         condense_smb_error(&sudo_err),
+                        tip,
                     ))
                 }
                 Err(_) => {

@@ -34,6 +34,10 @@ const WIZARD_STEP_KEY = "sp_wizard_step";
 const WIZARD_ACTIVE_KEY = "sp_wizard_active";
 const WIZARD_ROLE_KEY = "sp_wizard_server_role";
 const WIZARD_INSTALL_KEY = "sp_wizard_install_type";
+// Bound the saved wizard step to the server instance it was started against.
+// When the server is reset (DB wiped), the server returns a new setup_id and
+// we discard the saved step so the wizard restarts from the welcome screen.
+const WIZARD_SETUP_ID_KEY = "sp_wizard_setup_id";
 
 function saveWizardStep(step: WizardStep) {
   try {
@@ -47,6 +51,14 @@ function saveWizardChoice(role: ServerRole, install: InstallType) {
     if (role) sessionStorage.setItem(WIZARD_ROLE_KEY, role);
     if (install) sessionStorage.setItem(WIZARD_INSTALL_KEY, install);
   } catch { /* non-critical */ }
+}
+
+function saveWizardSetupId(id: string) {
+  try { sessionStorage.setItem(WIZARD_SETUP_ID_KEY, id); } catch { /* ignore */ }
+}
+
+function loadWizardSetupId(): string | null {
+  try { return sessionStorage.getItem(WIZARD_SETUP_ID_KEY); } catch { return null; }
 }
 
 function loadWizardStep(): WizardStep | null {
@@ -71,6 +83,7 @@ function clearWizardStep() {
     sessionStorage.removeItem(WIZARD_ACTIVE_KEY);
     sessionStorage.removeItem(WIZARD_ROLE_KEY);
     sessionStorage.removeItem(WIZARD_INSTALL_KEY);
+    sessionStorage.removeItem(WIZARD_SETUP_ID_KEY);
   } catch { /* ignore */ }
 }
 
@@ -153,6 +166,16 @@ export default function Welcome() {
       const res = await fetch("/api/setup/status");
       const data: SetupStatus = await res.json();
       setStatus(data);
+
+      // If the server's setup_id no longer matches what we saved, the server
+      // was reset (or this is a different instance entirely) — discard the
+      // stored wizard state and restart from the welcome screen.
+      const savedSetupId = loadWizardSetupId();
+      const serverSetupId = data.setup_id || "";
+      if (savedSetupId && serverSetupId && savedSetupId !== serverSetupId) {
+        clearWizardStep();
+      }
+      if (serverSetupId) saveWizardSetupId(serverSetupId);
 
       if (data.setup_complete) {
         // Check if the wizard was still in progress (page refresh mid-setup)
