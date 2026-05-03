@@ -798,6 +798,21 @@ if [[ "$MODE" == "native" ]]; then
     success "Server built → server/target/release/simple-photos-server"
     cd "$SCRIPT_DIR"
 
+    # ── Optional: pre-fetch AI models and GeoNames dataset ────────────────
+    # Without these the server runs in degraded_mode (no face/object
+    # detection) and emits no city/country geocoding.  Operators who want
+    # the full feature set should pre-download these now; otherwise the
+    # server will lazily download AI models on first use, and geo will be
+    # disabled until cities500.txt is provided.
+    if prompt_yn "Pre-fetch AI models (~250 MB) and GeoNames dataset (~25 MB)?"; then
+        info "Fetching AI ONNX models → server/models/"
+        bash "$SCRIPT_DIR/scripts/fetch_ai_models.sh" "$SCRIPT_DIR/server/models" || \
+            warn "AI model download failed; server will fall back to lazy download on first use"
+        info "Fetching GeoNames cities500 → server/data/cities500.txt"
+        bash "$SCRIPT_DIR/scripts/fetch_geo_data.sh" "$SCRIPT_DIR/server/data/cities500.txt" || \
+            warn "Geo dataset download failed; reverse-geocoding will be disabled until you re-run scripts/fetch_geo_data.sh"
+    fi
+
     # ── Config ────────────────────────────────────────────────────────────
     write_config \
         "$SCRIPT_DIR/server/config.toml" \
