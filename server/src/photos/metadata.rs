@@ -19,7 +19,7 @@ pub(crate) type MediaMetadata = (
 );
 
 /// Extended subtype information extracted from XMP metadata.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SubtypeInfo {
     /// Photo subtype: "motion", "panorama", "equirectangular", "hdr", "burst"
     pub photo_subtype: Option<String>,
@@ -547,12 +547,21 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
     };
 
     // ── Motion Photo detection ──────────────────────────────────────────
-    // Old schema: Camera:MicroVideo="1" + Camera:MicroVideoOffset
-    // New schema: GCamera:MotionPhoto="1" + GCamera:MotionVideoOffset (or MicroVideoOffset)
-    let is_motion = text.contains("MicroVideo=\"1\"")
-        || text.contains("MotionPhoto=\"1\"")
-        || text.contains("MicroVideo=\"1\"")
-        || text.contains("MotionPhoto=\"1\"");
+    // Old schema: Camera:MicroVideo + Camera:MicroVideoOffset
+    // New schema: GCamera:MotionPhoto + GCamera:MotionVideoOffset (or MicroVideoOffset)
+    //
+    // The attribute helpers below tolerate either quote style and any
+    // namespace prefix, so a file that emits `gcamera:MotionPhoto='1'`
+    // with single quotes is still recognised.  We treat any non-empty,
+    // non-"0", non-"false" value as "motion photo present".
+    let motion_flag = extract_xmp_str_attr(&text, "MicroVideo")
+        .or_else(|| extract_xmp_str_attr(&text, "MotionPhoto"));
+    let is_motion = matches!(
+        motion_flag.as_deref().map(str::trim),
+        Some(v) if !v.is_empty()
+            && !v.eq_ignore_ascii_case("0")
+            && !v.eq_ignore_ascii_case("false")
+    );
 
     if is_motion {
         info.photo_subtype = Some("motion".to_string());
@@ -564,11 +573,8 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
             info.motion_video_offset = Some(offset);
         }
 
-        let has_micro = text.contains("MicroVideo=\"1\"");
-        let has_gcam = text.contains("MotionPhoto=\"1\"");
         tracing::debug!(
-            has_microvideo_attr = has_micro,
-            has_motionphoto_attr = has_gcam,
+            motion_flag = ?motion_flag,
             video_offset = ?info.motion_video_offset,
             "[xmp] Motion/live photo detected"
         );
@@ -732,4 +738,124 @@ fn extract_xmp_str_attr(text: &str, attr_name: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod xmp_tests {
+    //! Unit tests for the XMP subtype extractor.  These deliberately exercise
+    //! the brittleness fixed under todo P0-6: single-quote attributes,
+    //! varying namespace prefix casing, and `MotionPhoto`/`MicroVideo`
+    //! values that are not the literal string `"1"`.
+    //!
+    //! Each test injects a JPEG byte stream containing an APP1/XMP packet
+    //! and asserts the extractor produces the expected `SubtypeInfo`.
+
+    use super::{extract_xmp_subtype, SubtypeInfo};
+
+    fn jpeg_with_xmp(xmp: &str) -> Vec<u8> {
+        // SOI (FFD8) + APP1 with XMP packet + EOI (FFD9).
+        let xmp_header = b"http://ns.adobe.com/xap/1.0/\x00";
+        let mut payload = Vec::with_capacity(xmp_header.len() + xmp.len());
+        payload.extend_from_slice(xmp_header);
+        payload.extend_from_slice(xmp.as_bytes());
+        let seg_len = (payload.len() + 2) as u16;
+        let mut out = Vec::with_capacity(8 + payload.len());
+        out.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        out.extend_from_slice(&[0xFF, 0xE1]); // APP1
+        out.extend_from_slice(&seg_len.to_be_bytes());
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        out
+    }
+
+    #[test]
+    fn motion_photo_double_quote_value_1() {
+        let xmp = r#"<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+            <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+            <rdf:Description GCamera:MotionPhoto="1" GCamera:MotionVideoOffset="123" /></rdf:RDF></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("motion"));
+        assert_eq!(info.motion_video_offset, Some(123));
+    }
+
+    #[test]
+    fn motion_photo_single_quote_value_1() {
+        // Same content, single-quote attribute style — must still match.
+        let xmp = r#"<x:xmpmeta xmlns:x='adobe:ns:meta/'>
+            <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+            <rdf:Description GCamera:MotionPhoto='1' GCamera:MotionVideoOffset='456' /></rdf:RDF></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("motion"));
+        assert_eq!(info.motion_video_offset, Some(456));
+    }
+
+    #[test]
+    fn motion_photo_lowercase_namespace_prefix() {
+        // Some Pixel firmware emits the lower-case prefix `gcamera:`.
+        let xmp = r#"<x:xmpmeta><rdf:Description gcamera:MotionPhoto="1" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("motion"));
+    }
+
+    #[test]
+    fn motion_photo_zero_value_is_not_motion() {
+        // Per XMP spec, `MotionPhoto="0"` means *not* a motion photo.
+        let xmp = r#"<x:xmpmeta><rdf:Description GCamera:MotionPhoto="0" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype, None);
+        assert_eq!(info.motion_video_offset, None);
+    }
+
+    #[test]
+    fn motion_photo_false_value_is_not_motion() {
+        let xmp = r#"<x:xmpmeta><rdf:Description GCamera:MotionPhoto="false" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype, None);
+    }
+
+    #[test]
+    fn microvideo_old_schema() {
+        // Camera:MicroVideo (older Pixel cameras).
+        let xmp = r#"<x:xmpmeta><rdf:Description Camera:MicroVideo="1" Camera:MicroVideoOffset="789" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("motion"));
+        assert_eq!(info.motion_video_offset, Some(789));
+    }
+
+    #[test]
+    fn panorama_equirectangular_single_quotes() {
+        let xmp = r#"<x:xmpmeta><rdf:Description GPano:ProjectionType='equirectangular' /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("equirectangular"));
+    }
+
+    #[test]
+    fn panorama_cylindrical_lowercase_prefix() {
+        let xmp = r#"<x:xmpmeta><rdf:Description gpano:ProjectionType="cylindrical" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
+    }
+
+    #[test]
+    fn burst_id_single_quotes() {
+        let xmp = r#"<x:xmpmeta><rdf:Description GCamera:BurstID='abc-123' /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("burst"));
+        assert_eq!(info.burst_id.as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn hdr_gainmap_detected() {
+        let xmp = r#"<x:xmpmeta><rdf:Description hdrgm:Version="1.0" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("hdr"));
+    }
+
+    #[test]
+    fn no_xmp_no_subtype() {
+        // Plain JPEG with no XMP packet.
+        let bytes = vec![0xFF, 0xD8, 0xFF, 0xD9];
+        let info = extract_xmp_subtype(&bytes);
+        assert_eq!(info, SubtypeInfo::default());
+    }
 }
