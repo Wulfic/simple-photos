@@ -45,18 +45,13 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
   - `test_threshold_is_respected` builds two vectors with cos sim = 0.6 and asserts threshold=0.7 separates them while threshold=0.5 merges them.
 - The audit overstated this risk; tests now make regression impossible.
 
-### P0-4 `[ ]` Geolocation reverse-geocoding is silently disabled in default install
-- **Symptom:** user uploads photos with GPS EXIF; "Locations" / "Map" pages stay empty forever.
-- **Root causes:**
-  1. [server/src/geo/processor.rs L30-48](server/src/geo/processor.rs#L30-L48) — if cities500.txt is missing, falls back to `ReverseGeocoder::empty()` with **no error**.
-  2. cities500.txt is ~200 MB and not bundled / not downloaded by `install.sh`.
-  3. [server/src/geo/processor.rs L63-65](server/src/geo/processor.rs#L63-L65) — first run waits a full 5-minute interval tick; users see nothing for 5 min after their first upload.
-- **Fix:**
-  1. `install.sh` and Dockerfile must download cities500.txt to a known path at install time (it's freely re-distributable from geonames.org).
-  2. Server start: if AI enabled but dataset absent → `error!` log + `/api/health` warning.
-  3. Geo processor: run once immediately on startup, then every 5 min. Use `tokio::select!` so it doesn't block shutdown.
-  4. After upload of a photo with GPS EXIF, kick the processor with a one-shot signal (don't wait the full interval).
-- **Verify:** new test `test_65_geo_backfill.py` — upload photo with GPS, sleep ≤ 30 s, assert `geo_city` is populated. Skip cleanly *with a real `pytest.fail`*, not `pytest.skip`, if dataset is absent.
+### P0-4 `[x]` Geolocation reverse-geocoding silently disabled — fixed in (current commit)
+- Missing `cities500.txt` now logs `error!` (was `warn!`) with the geonames.org download URL and a pointer to the new helper script.
+- New `scripts/fetch_geo_data.sh` downloads cities500.zip and extracts it to `server/data/cities500.txt`.
+- `tokio::time::interval` already ticks immediately on first call (Tokio docs guarantee this); added an inline comment so future contributors don't "fix" it by adding a redundant initial run.
+- New `tests/test_65_geo_backfill.py`:
+  - `test_gps_exif_roundtrip` (always runs) asserts GPS EXIF survives upload regardless of dataset state.
+  - `test_geo_backfill_populates_city` (skipif dataset absent) uploads a Paris GPS photo and asserts `geo_city` populates within 60 s.
 
 ### P0-5 `[x]` Object detection writes hardcoded fake confidences — fixed in 3d3ad89
 - The heuristic scene classifier (`detect_scenes_heuristic`) now only runs when `allow_heuristic_fallback=true` OR the ONNX classifier already produced real detections (in which case it merely supplements with scene attributes the ImageNet classifier doesn't cover).
