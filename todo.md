@@ -119,8 +119,8 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 ### P2-2 `[!]` Heuristic fallback functions — addressed via P0-2 gating, not deletion
 - The heuristic detectors (`detect_faces_heuristic`, `detect_scenes_heuristic`, `extract_histogram_embedding`) are now opt-in via `ai.allow_heuristic_fallback=true`.  Deleting them outright would remove a documented (if degraded) capability for operators who explicitly want it.  Recommend re-evaluating after a release cycle once we can confirm nobody depends on the opt-in path.
 
-### P2-3 `[ ]` `server/src/ai/face.rs` is 1279 lines — split it
-- Mechanical 3-way split (`detector.rs` + `embedding.rs` + `clustering_link.rs`).  Carrying risk on a 1300-line core right after stabilising the AI gate — deferred to a fresh session with full impact analysis.
+### P2-3 `[x]` `server/src/ai/face.rs` split — completed
+- Converted `face.rs` (1296 lines) → `face/` module: `face/mod.rs` (803 lines, primary SCRFD + ArcFace pipeline + public API) and `face/legacy.rs` (537 lines, UltraFace + heuristic detectors + their NMS/IoU/skin/structure helpers + shared histogram-embedding fallback).  Public API (`init_face_model`, `detect_faces_from_image`, `extract_face_embedding`, `cosine_similarity`) is unchanged. Build clean (zero warnings); `tests/test_50_ai_recognition_ddt.py` 33 passed / 2 skipped, `tests/test_58_subtype_scan_regression.py` + `tests/test_59_ai_accuracy.py` 28 passed.
 
 ### P2-4 `[!]` `photos/handlers.rs` + `metadata_edit.rs` audit — false positive
 - Audit's claim that the `UPDATE photos SET photo_subtype = ?, burst_id = COALESCE(...)` pattern is repeated in `upload.rs` is incorrect.  `grep -rn "UPDATE photos SET photo_subtype"` shows exactly one occurrence (in `scan.rs`).  No helper to extract.
@@ -156,14 +156,14 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 |---------:|-----:|------:|
 | P0       |    0 |     8 |
 | P1       |    0 |     8 |
-| P2       |    1 |     6 |
+| P2       |    0 |     6 |
 | P3       |    0 |     4 |
-| **Total**|   1  |    26 |
+| **Total**|   0  |    26 |
 
-**Done in this session**: P0-1 … P0-8, P1-1 … P1-8, P2-1, P2-5, P2-6, P3-1, P3-2, P3-3.
+**Done in this session**: P0-1 … P0-8, P1-1 … P1-8, P2-1, P2-3, P2-5, P2-6, P3-1, P3-2, P3-3, P3-4.
 
 **Carried as `[!]` (deliberately not actioned)**: P2-2 (heuristic deletion superseded by the opt-in gate from P0-2), P2-4 (audit's duplication claim was a false positive).
 
-**Open**: P2-3 (split `face.rs` — mechanical refactor of a 1300-line core, deferred to a fresh session with full impact analysis).
+**Open**: none.
 
 Last updated: 2026-05-03.
