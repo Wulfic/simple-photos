@@ -6,6 +6,21 @@
 //!
 //! Complements the XMP BurstID detection in `metadata.rs` — this module
 //! handles cameras that don't write BurstID to XMP metadata.
+//!
+//! ## Precedence with XMP-based detection
+//!
+//! XMP-based burst grouping (set during upload/scan from
+//! `GCamera:BurstID`) ALWAYS takes precedence over timestamp-based
+//! grouping.  This is enforced in two places:
+//!
+//!   1. The candidate `SELECT` filters `burst_id IS NULL AND
+//!      photo_subtype IS NULL` — photos already grouped by XMP, or
+//!      already classified as motion/panorama/hdr/etc., are skipped.
+//!   2. The `UPDATE` has `WHERE id = ?2 AND burst_id IS NULL` so a
+//!      concurrent XMP write between the SELECT and UPDATE cannot be
+//!      clobbered.
+//!
+//! Tests under `burst_precedence_tests` lock this behaviour in.
 
 use sqlx::SqlitePool;
 use tracing;

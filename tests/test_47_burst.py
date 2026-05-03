@@ -209,3 +209,69 @@ class TestBurstCollapse:
         photo = _wait_for_photo(user_client, normal_pid)
         # Without collapse_bursts, burst_count should be null
         assert photo.get("burst_count") is None
+
+
+class TestBurstDetectionPrecedence:
+    """XMP-derived burst_id must take precedence over the timestamp-based
+    grouper.  Regression for todo P0-8: a photo that already carries an
+    XMP `GCamera:BurstID` must not be reassigned to a different group when
+    `POST /api/photos/detect-bursts` is invoked, even if its timestamp is
+    within the burst-gap window of an unrelated photo from the same camera.
+    """
+
+    def test_xmp_burst_id_survives_timestamp_detector(self, user_client):
+        # Upload three frames sharing an XMP BurstID.
+        burst_id = f"xmp-precedence-{int(time.time())}"
+        xmp_pids = []
+        for i in range(3):
+            content = generate_burst_jpeg(burst_id, width=200 + i)
+            pid = _upload(user_client, unique_filename(), content)
+            xmp_pids.append(pid)
+        for pid in xmp_pids:
+            _wait_for_photo(user_client, pid)
+
+        # Trigger timestamp-based detection.  This must not touch the
+        # XMP-grouped photos because they already have a burst_id.
+        r = user_client.post("/api/photos/detect-bursts")
+        assert r.status_code == 200, r.text[:200]
+
+        # All three photos must still report the original XMP burst_id.
+        data = user_client.list_photos(subtype="burst")
+        for pid in xmp_pids:
+            match = next((p for p in data["photos"] if p["id"] == pid), None)
+            assert match is not None, f"Photo {pid} disappeared from burst list"
+            assert match["burst_id"] == burst_id, (
+                f"XMP burst_id was overwritten by timestamp detector: "
+                f"expected {burst_id!r}, got {match['burst_id']!r}"
+            )
+
+    def test_timestamp_detector_skips_photos_with_subtype(self, user_client):
+        # A photo carrying photo_subtype != 'burst' (e.g. motion / panorama)
+        # must not be roped into a timestamp-derived burst group.  We can't
+        # easily build a synthetic motion photo here without mp4 trailers,
+        # so we cover the simpler invariant: a single XMP-burst photo plus
+        # a normal photo must not get grouped together by the timestamp
+        # detector even though they share a camera and were uploaded back-
+        # to-back (timestamps within the 2-second burst window).
+        burst_id = f"xmp-solo-{int(time.time())}"
+        burst_pid = _upload(
+            user_client, unique_filename(), generate_burst_jpeg(burst_id),
+        )
+        normal_pid = _upload(
+            user_client, unique_filename(), generate_normal_jpeg(),
+        )
+        _wait_for_photo(user_client, burst_pid)
+        _wait_for_photo(user_client, normal_pid)
+
+        r = user_client.post("/api/photos/detect-bursts")
+        assert r.status_code == 200
+
+        data = user_client.list_photos()
+        burst_photo = next(p for p in data["photos"] if p["id"] == burst_pid)
+        normal_photo = next(p for p in data["photos"] if p["id"] == normal_pid)
+
+        # The normal photo must NOT have inherited the XMP photo's burst_id.
+        assert burst_photo["burst_id"] == burst_id
+        assert normal_photo["burst_id"] != burst_id, (
+            "Timestamp detector pulled an unrelated photo into an XMP burst group"
+        )
