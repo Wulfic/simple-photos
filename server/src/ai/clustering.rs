@@ -216,4 +216,111 @@ mod tests {
         // Should be normalised: [0.707, 0.707] approximately
         assert!((centroid[0] - centroid[1]).abs() < 0.01);
     }
+
+    /// Regression for todo P0-3: clustering MUST use the actual stored
+    /// embedding vectors and cosine similarity, not detection-id timing
+    /// or any other proxy.  Two near-identical 512-d vectors and a third
+    /// orthogonal one must produce exactly two clusters of sizes 2 and 1.
+    #[test]
+    fn test_cluster_uses_cosine_similarity_512d() {
+        // Build a 512-d vector that looks like a real ArcFace embedding.
+        let base: Vec<f32> = (0..512)
+            .map(|i| ((i as f32) * 0.0123).sin())
+            .collect();
+        let l2 = base.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let normed: Vec<f32> = base.iter().map(|v| v / l2).collect();
+
+        // Near-identical: tiny gaussian-style perturbation, then re-normalise.
+        let mut perturbed: Vec<f32> = normed
+            .iter()
+            .enumerate()
+            .map(|(i, v)| v + ((i as f32 * 0.71).cos() * 0.01))
+            .collect();
+        let l2p = perturbed.iter().map(|v| v * v).sum::<f32>().sqrt();
+        for v in &mut perturbed {
+            *v /= l2p;
+        }
+
+        // Unrelated: orthogonal direction.
+        let unrelated: Vec<f32> = (0..512)
+            .map(|i| ((i as f32) * 0.0789 + 1.5).cos())
+            .collect();
+        let l2u = unrelated.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let unrelated: Vec<f32> = unrelated.iter().map(|v| v / l2u).collect();
+
+        // Sanity: similarity must be high between near-twins and low to
+        // the unrelated one.  This proves the test inputs themselves
+        // exercise the path we care about.
+        let sim_close = cosine_similarity(&normed, &perturbed);
+        let sim_far = cosine_similarity(&normed, &unrelated);
+        assert!(
+            sim_close > 0.95,
+            "test inputs broken: near-twins similarity {sim_close} should be > 0.95"
+        );
+        assert!(
+            sim_far < 0.5,
+            "test inputs broken: unrelated similarity {sim_far} should be < 0.5"
+        );
+
+        let faces = vec![
+            (101, normed.clone()),
+            (102, perturbed.clone()),
+            (103, unrelated.clone()),
+        ];
+        let assignments = cluster_faces(&faces, 0.6);
+
+        // Map face_id → cluster_id.
+        let cid: std::collections::HashMap<i64, i64> =
+            assignments.iter().copied().collect();
+
+        assert_eq!(
+            cid[&101], cid[&102],
+            "near-identical 512-d embeddings (cos sim {:.3}) must share a cluster, \
+             clustering ignored the embedding vectors",
+            sim_close
+        );
+        assert_ne!(
+            cid[&101], cid[&103],
+            "orthogonal 512-d embeddings (cos sim {:.3}) must NOT share a cluster, \
+             clustering used a proxy instead of cosine similarity",
+            sim_far
+        );
+    }
+
+    /// Verifies that the threshold parameter is respected and that the
+    /// cosine-similarity gate is the actual gate (not e.g. a constant).
+    #[test]
+    fn test_threshold_is_respected() {
+        // Two vectors with cosine similarity ≈ 0.6.
+        let a = vec![1.0_f32, 0.0, 0.0];
+        let b = {
+            // 60° apart from a in xy-plane: cos 60° = 0.5.  But to land at
+            // 0.6 we use cos⁻¹(0.6) ≈ 53.13°.
+            let theta: f32 = 0.6_f32.acos();
+            vec![theta.cos(), theta.sin(), 0.0]
+        };
+        let sim = cosine_similarity(&a, &b);
+        assert!((sim - 0.6).abs() < 0.01, "test setup wrong: sim={sim}");
+
+        // Strict threshold (0.7) must keep them apart.
+        let strict = cluster_faces(
+            &[(1, a.clone()), (2, b.clone())],
+            0.7,
+        );
+        let strict_map: std::collections::HashMap<i64, i64> =
+            strict.iter().copied().collect();
+        assert_ne!(
+            strict_map[&1], strict_map[&2],
+            "threshold=0.7 should reject pairs with sim={sim:.3}"
+        );
+
+        // Lenient threshold (0.5) must merge them.
+        let lenient = cluster_faces(&[(1, a), (2, b)], 0.5);
+        let lenient_map: std::collections::HashMap<i64, i64> =
+            lenient.iter().copied().collect();
+        assert_eq!(
+            lenient_map[&1], lenient_map[&2],
+            "threshold=0.5 should merge pairs with sim={sim:.3}"
+        );
+    }
 }
