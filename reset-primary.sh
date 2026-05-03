@@ -7,6 +7,137 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$SCRIPT_DIR/server"
 
+# ============================================================================
+# Safety helpers — inlined.
+#
+# These exist because of an incident where this reset script wiped roughly
+# 15 TB of user data on a network drive.  Every destructive operation below
+# MUST go through these helpers.  Do not bypass them.
+# ============================================================================
+
+SAFE_MANAGED_SUBDIRS=(blobs metadata logs .thumbnails .renders .tmp \
+                      .web_previews .converted uploads .ai_data .geo_cache)
+
+abort() {
+    echo "" >&2
+    echo "============================================================" >&2
+    echo "FATAL SAFETY CHECK: $*" >&2
+    echo "Aborting to protect your data." >&2
+    echo "============================================================" >&2
+    exit 1
+}
+
+# Returns 0 if the path is acceptable as a destination for managed-subdir
+# deletion. Refuses anything that even looks risky.
+_is_safe_storage_root() {
+    local root="$1"
+    [[ -n "$root" ]] || return 1
+    [[ "$root" == /* ]] || return 1
+    [[ -d "$root" ]] || return 1
+    case "$root" in
+        *'$'*|*'`'*|*'\'*|*$'\n'*|*$'\r'*) return 1 ;;
+    esac
+    local real
+    real=$(readlink -f -- "$root" 2>/dev/null) || return 1
+    [[ -n "$real" && -d "$real" ]] || return 1
+    case "$real" in
+        /|/root|/home|/usr|/etc|/var|/opt|/boot|/bin|/sbin|/lib|/lib32|/lib64\
+        |/mnt|/media|/srv|/tmp|/dev|/proc|/sys|/run|/Users|/Volumes)
+            return 1 ;;
+    esac
+    [[ -n "${HOME:-}" && "$real" == "$HOME" ]] && return 1
+    local stripped="${real#/}"
+    [[ "$stripped" == *"/"* ]] || return 1
+    return 0
+}
+
+# safe_purge_managed_subdirs ROOT SUBDIR [SUBDIR …]
+# Deletes ONLY the listed subdirectories beneath ROOT.  Any subdirectory that
+# has an unsafe name, is a symlink, or resolves outside ROOT is skipped with
+# a warning rather than deleted.
+safe_purge_managed_subdirs() {
+    local root="$1"; shift
+    local subdirs=("$@")
+    if ! _is_safe_storage_root "$root"; then
+        abort "Refusing to clean storage root '$root' — empty, missing, shallow, or a system path."
+    fi
+    local real_root
+    real_root=$(readlink -f -- "$root") || abort "Could not resolve '$root'."
+    local sd target real_target
+    for sd in "${subdirs[@]}"; do
+        if [[ -z "$sd" || ! "$sd" =~ ^[A-Za-z0-9._-]+$ || "$sd" == "." || "$sd" == ".." ]]; then
+            echo "  WARN: skipping invalid subdir name: '$sd'"
+            continue
+        fi
+        target="$root/$sd"
+        [[ -e "$target" || -L "$target" ]] || continue
+        if [[ -L "$target" ]]; then
+            echo "  WARN: '$target' is a symlink — leaving it alone."
+            continue
+        fi
+        if [[ ! -d "$target" ]]; then
+            echo "  WARN: '$target' is not a directory — leaving it alone."
+            continue
+        fi
+        real_target=$(readlink -f -- "$target" 2>/dev/null) || {
+            echo "  WARN: could not resolve '$target' — leaving it alone."
+            continue
+        }
+        if [[ "$real_target" != "$real_root"/* ]]; then
+            echo "  WARN: '$target' resolves outside '$root' — leaving it alone."
+            continue
+        fi
+        echo "  Removing $target/..."
+        rm -rf -- "$target"
+    done
+}
+
+# Read the storage root from a config.toml file.  Returns the empty string if
+# parsing is ambiguous (more than one match) or yields a suspicious value.
+safe_read_storage_root() {
+    local config_file="$1"
+    [[ -f "$config_file" ]] || { echo ""; return 0; }
+    local matches
+    matches=$(grep -cE '^[[:space:]]*root[[:space:]]*=' "$config_file" || true)
+    if [[ "$matches" -ne 1 ]]; then
+        echo ""
+        return 0
+    fi
+    local raw
+    raw=$(grep -E '^[[:space:]]*root[[:space:]]*=' "$config_file" \
+        | sed -E 's/^[[:space:]]*root[[:space:]]*=[[:space:]]*"([^"]*)".*$/\1/')
+    [[ "$raw" == *$'\n'* ]] && { echo ""; return 0; }
+    echo "$raw"
+}
+
+# Confirm before destructive operations unless RESET_FORCE=1.
+safe_confirm_destruction() {
+    local primary_root="$1"
+    local extra_root="${2:-}"
+    if [[ "${RESET_FORCE:-0}" == "1" ]]; then
+        echo "RESET_FORCE=1 set — skipping interactive confirmation."
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        abort "Refusing to wipe data non-interactively. Re-run with RESET_FORCE=1 to opt in."
+    fi
+    echo ""
+    echo "About to wipe simple-photos managed data:"
+    echo "  - database files under: $primary_root/data/db/"
+    echo "  - server-managed subdirs under: $primary_root/data/storage/"
+    if [[ -n "$extra_root" ]]; then
+        echo "  - server-managed subdirs under: $extra_root"
+        echo "    (files outside those subdirs are PRESERVED)"
+    fi
+    echo ""
+    echo "Server-managed subdirs are: blobs, metadata, logs, .thumbnails,"
+    echo "  .renders, .tmp, .web_previews, .converted, uploads, .ai_data, .geo_cache"
+    echo ""
+    local reply
+    read -r -p "Type 'WIPE' (uppercase) to proceed: " reply
+    [[ "$reply" == "WIPE" ]] || abort "User did not confirm — aborting."
+}
+
 RUN_USER="${SUDO_USER:-$(id -un)}"
 RUN_HOME=$(eval echo "~$RUN_USER")
 
@@ -126,34 +257,26 @@ fi
 
 # ── Wipe database ────────────────────────────────────────────────────────────
 echo "Wiping database..."
+# Pre-flight safety — read & validate storage root before touching anything.
+CONFIG_FILE="$SERVER_DIR/config.toml"
+STORAGE_ROOT=$(safe_read_storage_root "$CONFIG_FILE")
+safe_confirm_destruction "$SERVER_DIR" "$STORAGE_ROOT"
+
 rm -f "$SERVER_DIR/data/db/"*
 
 # ── Clean server-managed storage dirs ────────────────────────────────────────
 echo "Cleaning internal storage (server-managed dirs only)..."
-for subdir in blobs metadata logs .thumbnails .renders .tmp .web_previews .converted uploads .ai_data .geo_cache; do
-    if [[ -d "$SERVER_DIR/data/storage/$subdir" ]]; then
-        echo "  Removing $SERVER_DIR/data/storage/$subdir/..."
-        rm -rf "$SERVER_DIR/data/storage/$subdir"
-    fi
-done
+if [[ -d "$SERVER_DIR/data/storage" ]]; then
+    safe_purge_managed_subdirs "$SERVER_DIR/data/storage" "${SAFE_MANAGED_SUBDIRS[@]}"
+fi
 
 # Clean server-managed subdirectories under external storage root
-CONFIG_FILE="$SERVER_DIR/config.toml"
-STORAGE_ROOT=""
-if [[ -f "$CONFIG_FILE" ]]; then
-    STORAGE_ROOT=$(grep -E '^\s*root\s*=' "$CONFIG_FILE" | head -1 | sed 's/.*=\s*"\(.*\)"/\1/')
-fi
 if [[ -n "$STORAGE_ROOT" && -d "$STORAGE_ROOT" ]]; then
     echo "Cleaning storage root subdirectories in: $STORAGE_ROOT"
-    for subdir in blobs metadata logs .thumbnails .renders .tmp .web_previews .converted uploads .ai_data .geo_cache; do
-        if [[ -d "$STORAGE_ROOT/$subdir" ]]; then
-            echo "  Removing $STORAGE_ROOT/$subdir/..."
-            rm -rf "$STORAGE_ROOT/$subdir"
-        fi
-    done
+    safe_purge_managed_subdirs "$STORAGE_ROOT" "${SAFE_MANAGED_SUBDIRS[@]}"
     echo "Original photos preserved."
 else
-    echo "Warning: Could not determine storage root from config — skipping external cleanup"
+    echo "Notice: No storage root configured (or unreadable) — skipping external cleanup."
 fi
 
 chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true
