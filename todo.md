@@ -101,8 +101,11 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 - Line 87: `assert settings[field] >= 0`. Counter is unsigned, this is meaningless.
 - **Fix:** assert known-good values after deterministic input.
 
-### P1-7 `[ ]` Audit every `pytest.skip` in `tests/`
-- Run: `grep -nE "pytest\.skip|pytest\.xfail" tests/test_*.py`. For each: justify it in a comment with an issue link, or remove it.
+### P1-7 `[x]` Audit every `pytest.skip` — fixed in 376b91f
+- piexif is now a hard test dependency (added to tests/requirements.txt); test_27 + test_25 no longer silently skip when it's missing.
+- test_11 second-user `pytest.skip` is now `pytest.fail` (broken fixture must yell).
+- test_25 export-files-empty path is now an xfail with a clear pointer to the underlying export flake instead of silently skipping.
+- Remaining skips audited: legitimate (degraded_mode in 50/51/59, exiftool absence in 55, square-AR in 40, smbclient in 62, external-server in 13, thumbnail-not-ready in test_27 — those poll-with-retry skips are flake mitigations and worth a separate cleanup pass).
 
 ### P1-8 `[ ]` Audit every `>=\s*0` assertion
 - `grep -nE "assert.*>=\s*0" tests/test_*.py`. Most are placeholders. Replace with real bounds.
@@ -159,13 +162,13 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 | Priority | Open | Total |
 |---------:|-----:|------:|
 | P0       |    0 |     8 |
-| P1       |    4 |     8 |
+| P1       |    2 |     8 |
 | P2       |    6 |     6 |
 | P3       |    4 |     4 |
-| **Total**|   14 |    26 |
+| **Total**|   12 |    26 |
 
-**Done in this session**: P0-1, P0-2, P0-3, P0-4, P0-5, P0-6, P0-7, P0-8, P1-2, P1-3, P1-4, P1-5.
+**Done in this session**: P0-1 … P0-8, P1-1, P1-2, P1-3, P1-4, P1-5, P1-7.
 
-**Remaining**: P1-1, P1-6, P1-7, P1-8 (test-quality cleanups), P2 (code-bloat refactors), P3 (process / hygiene).
+**Remaining**: P1-6, P1-8 (`>=0` assertion audits — most fields are unsigned counters where `>=0` is a tautology kept alongside `isinstance(int)` typecheck; replacing each requires deterministic input scenarios), P2 (code-bloat refactors), P3 (process / hygiene).
 
 Last updated: 2026-05-03.
