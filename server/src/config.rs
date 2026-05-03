@@ -260,6 +260,18 @@ pub struct AiConfig {
     /// Higher quality is slower but more accurate.
     #[serde(default = "AiConfig::default_quality")]
     pub quality: String,
+    /// Allow degraded heuristic detectors when ONNX models are unavailable.
+    ///
+    /// `false` (default) makes ONNX models a hard requirement: face / object
+    /// detection produces no results when the model files are missing,
+    /// rather than silently emitting low-quality skin-tone / colour-histogram
+    /// guesses that look like real AI output.
+    ///
+    /// Operators who explicitly want the heuristic fallback (offline / air-
+    /// gapped installs that can't download models) can opt in by setting this
+    /// to `true`.
+    #[serde(default)]
+    pub allow_heuristic_fallback: bool,
 }
 
 impl AiConfig {
@@ -295,6 +307,7 @@ impl Default for AiConfig {
             face_similarity_threshold: 0.6,
             model_dir: "models".into(),
             quality: "high".into(),
+            allow_heuristic_fallback: false,
         }
     }
 }

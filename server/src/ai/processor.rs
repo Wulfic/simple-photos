@@ -34,11 +34,22 @@ pub fn spawn_ai_processor(
 ) {
     let engine = AiEngine::new(&config);
     if !engine.has_any_capability() {
-        tracing::warn!(
-            "AI processor: no ONNX models found in '{}'. \
-             Using fallback heuristic detectors.",
-            config.model_dir
-        );
+        if config.allow_heuristic_fallback {
+            tracing::warn!(
+                "AI processor: no ONNX models found in '{}'. \
+                 Heuristic fallback ENABLED — results will be low-quality.",
+                config.model_dir
+            );
+        } else {
+            tracing::error!(
+                "AI processor: no ONNX models found in '{}' and \
+                 allow_heuristic_fallback=false. AI features are running in \
+                 DEGRADED mode — face / object detection will produce no \
+                 results. Run scripts/fetch_ai_models.sh or set \
+                 ai.allow_heuristic_fallback = true in config.toml.",
+                config.model_dir
+            );
+        }
     }
 
     tokio::spawn(async move {
@@ -270,7 +281,11 @@ async fn process_single_photo(
 
     // Face detection
     let face_start = Instant::now();
-    let face_detections = face::detect_faces_from_image(&img, config.face_confidence)?;
+    let face_detections = face::detect_faces_from_image(
+        &img,
+        config.face_confidence,
+        config.allow_heuristic_fallback,
+    )?;
     tracing::debug!(
         photo_id = %photo_id,
         filename = %filename,
@@ -322,7 +337,12 @@ async fn process_single_photo(
     // Object detection
     let obj_start = Instant::now();
     let quality = config.detection_quality();
-    let obj_detections = object::detect_objects_with_quality(&img, config.object_confidence, quality)?;
+    let obj_detections = object::detect_objects_with_quality(
+        &img,
+        config.object_confidence,
+        quality,
+        config.allow_heuristic_fallback,
+    )?;
     tracing::debug!(
         photo_id = %photo_id,
         filename = %filename,

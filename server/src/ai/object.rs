@@ -220,6 +220,7 @@ pub fn detect_objects_with_quality(
     img: &DynamicImage,
     min_confidence: f32,
     quality: DetectionQuality,
+    allow_heuristic_fallback: bool,
 ) -> anyhow::Result<Vec<ObjectDetection>> {
     let (w, h) = img.dimensions();
     if w < 10 || h < 10 {
@@ -251,15 +252,17 @@ pub fn detect_objects_with_quality(
     };
 
     // ── Phase 2: Heuristic scene classification ──────────────────────
-    // These scene tags complement model detections (night, sunset, snow, etc.)
-    let heuristic_dets = detect_scenes_heuristic(img, min_confidence, quality)?;
-
-    // Merge: model tags take priority; only add heuristic tags not already covered
-    let model_classes: std::collections::HashSet<String> =
-        detections.iter().map(|d| d.class_name.clone()).collect();
-    for det in heuristic_dets {
-        if !model_classes.contains(&det.class_name) {
-            detections.push(det);
+    // Only run when the operator opted in OR the model already produced
+    // real detections (in which case heuristics merely supplement scene
+    // attributes the ImageNet classifier doesn't cover, e.g. "night").
+    if allow_heuristic_fallback || model_used {
+        let heuristic_dets = detect_scenes_heuristic(img, min_confidence, quality)?;
+        let model_classes: std::collections::HashSet<String> =
+            detections.iter().map(|d| d.class_name.clone()).collect();
+        for det in heuristic_dets {
+            if !model_classes.contains(&det.class_name) {
+                detections.push(det);
+            }
         }
     }
 

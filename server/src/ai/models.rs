@@ -42,6 +42,17 @@ pub struct AiStatusResponse {
     pub face_detections: i64,
     pub face_clusters: i64,
     pub object_detections: i64,
+    /// True when the SCRFD or UltraFace ONNX detection model is loaded.
+    pub face_model_loaded: bool,
+    /// True when the MobileNetV2 ONNX classification model is loaded.
+    pub object_model_loaded: bool,
+    /// True when neither model is loaded AND `allow_heuristic_fallback`
+    /// is false. In this state, AI processing runs but produces no
+    /// detections — admins should fetch the models.
+    pub degraded_mode: bool,
+    /// Whether the operator has explicitly opted in to the degraded
+    /// heuristic detectors.
+    pub allow_heuristic_fallback: bool,
 }
 
 /// Face cluster summary for the clusters list endpoint.

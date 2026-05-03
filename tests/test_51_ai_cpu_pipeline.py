@@ -110,9 +110,24 @@ class TestAiCpuPipeline:
         )
 
     def test_object_detection_green_scene(self, user_client: APIClient):
-        """Green-dominant photo triggers 'plant' object detection."""
+        """Green-dominant photo triggers 'plant' object detection.
+
+        Requires either the MobileNetV2 ONNX model OR the heuristic
+        fallback to be enabled.  When the deployment is in degraded
+        mode (no models AND `allow_heuristic_fallback=false` — the
+        production default after P0-2 / P0-5), this test cannot pass
+        and is skipped.
+        """
         # Enable AI first
         user_client.ai_toggle(True)
+
+        status = user_client.ai_status()
+        if status.get("degraded_mode", False):
+            pytest.skip(
+                "AI is in degraded mode (no ONNX models, heuristic fallback "
+                "disabled). Install models via scripts/fetch_ai_models.sh "
+                "or set ai.allow_heuristic_fallback=true to run this test."
+            )
 
         content = generate_green_scene_jpeg(200, 200)
         data = user_client.upload_photo(unique_filename(), content=content)
@@ -129,8 +144,14 @@ class TestAiCpuPipeline:
         )
 
     def test_object_detection_blue_scene(self, user_client: APIClient):
-        """Blue-dominant photo triggers 'boat' object detection (low confidence hint)."""
+        """Blue-dominant photo triggers 'boat' object detection (low confidence hint).
+
+        Skipped when AI is in degraded mode (see test above)."""
         user_client.ai_toggle(True)
+
+        status = user_client.ai_status()
+        if status.get("degraded_mode", False):
+            pytest.skip("AI in degraded mode — no models, no heuristic fallback.")
 
         content = generate_blue_scene_jpeg(200, 200)
         data = user_client.upload_photo(unique_filename(), content=content)

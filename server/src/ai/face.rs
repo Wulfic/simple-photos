@@ -229,9 +229,15 @@ fn load_onnx_legacy(path: &Path) -> anyhow::Result<Session> {
 
 /// Detect faces from an already-decoded image.
 /// Tries SCRFD → UltraFace legacy → heuristic fallback.
+///
+/// `allow_heuristic_fallback` controls whether the skin-tone / structure
+/// heuristic detector is permitted as a last resort.  When `false`
+/// (default for production), the function returns an empty Vec instead
+/// of synthesising fake AI-looking detections from raw pixel statistics.
 pub fn detect_faces_from_image(
     img: &DynamicImage,
     min_confidence: f32,
+    allow_heuristic_fallback: bool,
 ) -> anyhow::Result<Vec<FaceDetection>> {
     let (w, h) = img.dimensions();
     if w < 20 || h < 20 {
@@ -248,6 +254,17 @@ pub fn detect_faces_from_image(
     if let Some(legacy) = LEGACY_MODEL.get().and_then(|m| m.as_ref()) {
         let mut session = legacy.lock().unwrap_or_else(|p| p.into_inner());
         return detect_faces_legacy(img, min_confidence, &mut session);
+    }
+
+    if !allow_heuristic_fallback {
+        // No real model available and operator has not opted in to the
+        // degraded heuristic path — return no detections rather than
+        // emitting low-quality skin-tone guesses.
+        tracing::debug!(
+            "Face detection: no ONNX model loaded and allow_heuristic_fallback=false → \
+             returning empty detection set"
+        );
+        return Ok(vec![]);
     }
 
     // Last resort: heuristic

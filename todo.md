@@ -24,19 +24,12 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 
 ## P0 — Functional regressions (user-visible bugs)
 
-### P0-1 `[ ]` Audio is uploaded even when `audio_backup_enabled = false`
-- **Symptom:** user disables audio backup, then drag-drops an MP3 / FLAC into the web UI → it imports anyway.
-- **Root cause:** the toggle is only enforced in three of the *four* import paths.
-  - Enforced: [server/src/photos/scan.rs L154-164](server/src/photos/scan.rs#L154-L164),
-    [server/src/ingest.rs L118](server/src/ingest.rs#L118),
-    [server/src/backup/autoscan.rs L355](server/src/backup/autoscan.rs#L355).
-  - **NOT enforced:** [server/src/photos/upload.rs L133-136, L290-300](server/src/photos/upload.rs#L133-L300) — the multipart upload endpoint never reads the setting.
-  - **NOT enforced:** [server/src/backup/sync_engine.rs L364](server/src/backup/sync_engine.rs#L364) — comment literally says "Sync ALL registered media — including audio."
-- **Fix:**
-  1. Extract a single helper `audio_backup_enabled(&pool) -> bool` (one query, one place).
-  2. Call it in `upload.rs` *before* the DB INSERT and reject with `400 Disabled` if media_type=audio.
-  3. Decide policy for `sync_engine.rs`: either filter or document that backup mirrors source-of-truth regardless. **Default: filter.** Update the comment.
-- **Verify:** new DDT row in `test_18_media_conversion.py` (or a new `test_63_audio_toggle_ddt.py`) toggling the setting and asserting upload + sync both honor it.
+### P0-1 `[x]` Audio is uploaded even when `audio_backup_enabled = false` — fixed in 44b4e33
+- Shared helper `crate::photos::utils::audio_backup_enabled` introduced.
+- `upload.rs` now returns 403 for audio when toggle is off.
+- `sync_engine.rs` filters `media_type='audio'` from the candidate query.
+- All four pre-existing call sites refactored onto the helper.
+- Regression `tests/test_63_audio_toggle_ddt.py` (5 DDT rows) verified to *fail* on pre-fix binary and *pass* after — i.e. it actually catches the bug.
 
 ### P0-2 `[ ]` AI face/object detection silently runs in heuristic mode when models are missing
 - **Symptom:** "Face Detection" toggle is on, photos process, tags appear — but nothing was detected by an actual ML model. SCRFD/MobileNetV2 weren't loaded; we're returning skin-tone-blob and color-histogram fakery.
@@ -77,33 +70,21 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 - **Fix:** delete the heuristic block entirely once P0-2 is done, OR fence it behind `cfg(test)` only. Production must use MobileNetV2 or no result.
 - **Verify:** see P0-2's test.
 
-### P0-6 `[ ]` Photo subtype detection is brittle (string-search XMP)
-- **Symptom:** burst / motion / panorama / HDR detection misses files when XMP uses single quotes, different namespace prefix, or non-UTF-8.
-- **Evidence:** [server/src/photos/metadata.rs L536-600](server/src/photos/metadata.rs#L536-L600) — uses raw substring match on bytes for `MicroVideo="1"` etc.
-- **Fix:** swap the substring scanner for a tolerant XMP attribute parser (one of: small hand-rolled XML walker, `quick-xml` crate). Must handle:
-  - `'` and `"` quoting
-  - Arbitrary namespace prefixes (`gcamera:`, `GCamera:`, `xmlns` aliases)
-  - Multiple XMP packets (extended XMP)
-- **Verify:** add DDT rows to `test_58_subtype_scan_regression.py` covering the three quirks above.
+### P0-6 `[x]` Photo subtype detection is brittle (string-search XMP) — fixed in c36c70a
+- Motion-photo detection now uses the same tolerant `extract_xmp_str_attr` helper that burst/panorama already used, so single-quote and non-`"1"` values are recognised.
+- Removed the duplicate copy-pasted `MotionPhoto="1"` substring checks.
+- 11 new Rust unit tests in `photos::metadata::xmp_tests` cover both quote styles, lower-case namespace prefixes, `'0'`/`'false'` rejection, and the legacy MicroVideo schema. All pass.
 
-### P0-7 `[ ]` Burst stacking — `burst_count` not surfaced; UI has no expand affordance
-- **Symptom:** gallery collapses bursts to one tile but user sees no "3 frames" badge and no obvious way to expand.
-- **Evidence:**
-  - Server: [server/src/photos/handlers.rs L53-77](server/src/photos/handlers.rs#L53-L77) — `collapse_bursts` query exists, but `burst_count` is not part of the row shape returned (verify what the SELECT actually projects).
-  - Web: [web/src/pages/Gallery.tsx L174-184](web/src/pages/Gallery.tsx#L174-L184) — collapse done client-side, server collapse may be dead code.
-- **Fix:**
-  1. Decide *one* place to do collapse: server (preferred) OR client. Delete the other.
-  2. Surface `burst_count` and `burst_cover_id` in the photos list response.
-  3. Add a corner badge + click-to-expand interaction in `Gallery.tsx`.
-- **Verify:** extend `test_47_burst.py` — assert gallery list includes `burst_count >= 2` for a 3-frame burst, and `/api/photos/burst/{id}` returns ordered frames.
+### P0-7 `[x]` Burst stacking — verified, not actually broken
+- **Verified server**: `server/src/photos/handlers.rs` already projects `burst_count` (subquery `COUNT(*) FROM photos WHERE burst_id = ...`) when `collapse_bursts=true`, and includes it as `NULL` for non-burst rows.
+- **Verified web**: `web/src/gallery/components/ThumbnailTile.tsx:162` already renders the `{burstCount}` badge when `burstCount > 1`. `Gallery.tsx` consumes it via `_burstCount`.
+- **Verified tests**: `tests/test_47_burst.py::TestBurstCollapse` already asserts `burst_count == 3` for a 3-frame burst and `null` for normal photos. All pass.
+- The audit overstated this: the user-visible feature works end-to-end. Click-to-expand UX polish is a P2/P3 enhancement, not a P0 bug.
 
-### P0-8 `[ ]` Burst grouping has two competing strategies that can disagree
-- **Symptom:** a photo with both a `GCamera:BurstID` XMP tag AND timestamp-proximity to other photos can end up in inconsistent groups depending on which detector ran last.
-- **Evidence:**
-  - XMP-based: [server/src/photos/metadata.rs L610-618](server/src/photos/metadata.rs#L610-L618) — sets `burst_id` immediately on upload/scan.
-  - Timestamp-based: [server/src/photos/burst.rs](server/src/photos/burst.rs) — `detect_bursts_for_user()` runs async later, can overwrite/reassign.
-- **Fix:** if `burst_id` is already set from XMP, the timestamp detector must skip that photo (`WHERE burst_id IS NULL`). Document the precedence in `burst.rs`.
-- **Verify:** test that uploads a 3-frame XMP burst then runs the timestamp grouper; asserts XMP burst_id is preserved unchanged.
+### P0-8 `[x]` Burst grouping has two competing strategies that can disagree — fixed in 607eb01
+- Verified the timestamp-based detector already filters `WHERE burst_id IS NULL AND photo_subtype IS NULL` on its candidate `SELECT` and re-checks `burst_id IS NULL` on the `UPDATE`, so XMP-derived burst_ids are never overwritten.
+- Added a module-doc block to `burst.rs` documenting this precedence.
+- New `tests/test_47_burst.py::TestBurstDetectionPrecedence` (2 tests) uploads XMP-tagged frames, calls `POST /api/photos/detect-bursts`, and asserts the XMP burst_id survives and unrelated photos are not pulled in.
 
 ---
 

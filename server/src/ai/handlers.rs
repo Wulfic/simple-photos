@@ -75,6 +75,18 @@ pub async fn ai_status(
     .fetch_one(&state.pool)
     .await?;
 
+    // Re-derive model availability the same way AiEngine does so the
+    // status report is honest about whether real ONNX models are loaded.
+    let model_dir = std::path::PathBuf::from(&config.model_dir);
+    let face_model_loaded = model_dir.join("det_10g.onnx").exists()
+        || model_dir.join("ultraface-RFB-320.onnx").exists()
+        || model_dir.join("face_detection.onnx").exists();
+    let object_model_loaded = model_dir.join("mobilenetv2-12.onnx").exists()
+        || model_dir.join("object_detection.onnx").exists();
+    let degraded_mode = !face_model_loaded
+        && !object_model_loaded
+        && !config.allow_heuristic_fallback;
+
     Ok(Json(AiStatusResponse {
         enabled,
         gpu_available: false, // Will be updated when GPU detection is implemented
@@ -83,6 +95,10 @@ pub async fn ai_status(
         face_detections: face_count.0,
         face_clusters: cluster_count.0,
         object_detections: object_count.0,
+        face_model_loaded,
+        object_model_loaded,
+        degraded_mode,
+        allow_heuristic_fallback: config.allow_heuristic_fallback,
     }))
 }
 
