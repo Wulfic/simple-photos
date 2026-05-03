@@ -278,7 +278,11 @@ def server_binary():
 def fresh_server(server_binary, tmp_path):
     """Spin up a fresh server with empty storage for scan testing."""
     if server_binary is None:
-        pytest.skip("No server binary available")
+        pytest.fail(
+            "No server binary available. The release build must succeed for "
+            "the subtype scan regression test to run; do not silently skip "
+            "this critical regression check."
+        )
 
     port = _find_free_port()
     server = _FreshServer(port, str(tmp_path))

@@ -73,7 +73,24 @@ def ai_server(server_binary, tmp_path_factory):
     import subprocess
 
     if os.environ.get("E2E_PRIMARY_URL"):
-        pytest.skip("AI accuracy tests require auto-started server with AI config")
+        pytest.skip(
+            "AI accuracy tests need their own server with custom AI config "
+            "(model_dir, photos_per_minute, confidence thresholds). They "
+            "cannot run against an external server fixture. Unset "
+            "E2E_PRIMARY_URL to run them."
+        )
+
+    # AI accuracy tests are meaningless without real ONNX models. If the
+    # model directory is empty, fail loudly with the fix instructions
+    # instead of silently passing on heuristic ghosts (todo P1-4).
+    if not os.path.isdir(MODEL_DIR) or not any(
+        f.endswith(".onnx") for f in os.listdir(MODEL_DIR)
+    ):
+        pytest.fail(
+            f"AI accuracy tests require ONNX models in {MODEL_DIR}. "
+            f"Run scripts/fetch_ai_models.sh (or download SCRFD + ArcFace + "
+            f"MobileNetV2 manually) before running this suite."
+        )
 
     tmpdir = str(tmp_path_factory.mktemp("ai_accuracy"))
 
