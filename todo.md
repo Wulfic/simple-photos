@@ -145,8 +145,8 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 ### P3-3 `[x]` README accuracy pass — fixed in acfa38b
 - Face/object recognition entry now states the ONNX model requirement and points at the fetch script.  Geolocation entry now mentions cities500.txt and the fetch script.
 
-### P3-4 `[!]` `gitnexus analyze` re-run — attempted, blocked by environment
-- `npx --yes gitnexus analyze` exceeded a 120s timeout in the dev container.  Recommend running this manually in a fresh terminal with no time cap before doing impact analysis on the next batch of refactors.
+### P3-4 `[x]` `gitnexus analyze` re-run — completed
+- Re-indexed in 15.8s. New counts: 11,827 nodes / 22,281 edges / 305 clusters / 300 flows (baseline was 11,661 / 22,029 / — / 300). Seven `tests/*.py` files emit `scope extraction failed: Invalid argument` warnings — pre-existing parser quirk, does not block analysis.
 
 ---
 
@@ -162,7 +162,7 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 
 **Done in this session**: P0-1 … P0-8, P1-1 … P1-8, P2-1, P2-5, P2-6, P3-1, P3-2, P3-3.
 
-**Carried as `[!]` (deliberately not actioned)**: P2-2 (heuristic deletion superseded by the opt-in gate from P0-2), P2-4 (audit's duplication claim was a false positive), P3-4 (npx gitnexus analyze timed out in this environment — run manually).
+**Carried as `[!]` (deliberately not actioned)**: P2-2 (heuristic deletion superseded by the opt-in gate from P0-2), P2-4 (audit's duplication claim was a false positive).
 
 **Open**: P2-3 (split `face.rs` — mechanical refactor of a 1300-line core, deferred to a fresh session with full impact analysis).
 
