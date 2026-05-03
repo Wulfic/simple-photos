@@ -88,6 +88,54 @@ def test_geo_counters_non_negative(user_client, field):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Behavioural: counters reflect actual uploads (P1-6 fix)
+# ══════════════════════════════════════════════════════════════════════
+#
+# The `>= 0` checks above only verify the JSON shape (the fields are
+# unsigned counters, so the assertion is always trivially true).  These
+# tests upload deterministic input and assert the counter moves by the
+# expected delta.
+
+def _wait_for_counter(client, field: str, target: int, timeout: float = 30.0):
+    import time as _time
+    deadline = _time.time() + timeout
+    last = -1
+    while _time.time() < deadline:
+        last = client.geo_settings().get(field, 0)
+        if last >= target:
+            return last
+        _time.sleep(0.5)
+    return last
+
+
+def test_photos_without_location_counter_increments(user_client):
+    """Uploading a no-GPS photo must increment photos_without_location by exactly 1."""
+    from helpers import generate_test_jpeg, unique_filename
+    baseline = user_client.geo_settings().get("photos_without_location", 0)
+    user_client.upload_photo(unique_filename(), content=generate_test_jpeg())
+    final = _wait_for_counter(user_client, "photos_without_location", baseline + 1)
+    assert final == baseline + 1, (
+        f"photos_without_location did not increment by 1 "
+        f"(baseline={baseline}, final={final})"
+    )
+
+
+def test_photos_with_location_counter_increments(user_client):
+    """Uploading a GPS-tagged photo must increment photos_with_location by exactly 1."""
+    from helpers import generate_test_jpeg_with_gps, unique_filename
+    baseline = user_client.geo_settings().get("photos_with_location", 0)
+    user_client.upload_photo(
+        unique_filename(),
+        content=generate_test_jpeg_with_gps(48.8584, 2.2945),
+    )
+    final = _wait_for_counter(user_client, "photos_with_location", baseline + 1)
+    assert final == baseline + 1, (
+        f"photos_with_location did not increment by 1 "
+        f"(baseline={baseline}, final={final})"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
 # DDT: Geo Settings Toggle
 # ══════════════════════════════════════════════════════════════════════
 
