@@ -15,7 +15,7 @@ use crate::state::AppState;
 
 use super::metadata::{extract_media_metadata_async, extract_media_metadata_from_bytes_async, extract_xmp_subtype, extract_motion_video};
 use super::thumbnail::generate_thumbnail_file;
-use super::utils::{compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
+use super::utils::{audio_backup_enabled, compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 use chrono::Utc;
 
 /// POST /api/photos/upload
@@ -139,6 +139,23 @@ pub async fn upload_photo(
     } else {
         "photo"
     };
+
+    // Honor the `audio_backup_enabled` server toggle.  When audio backup is
+    // disabled, the multipart upload endpoint must reject audio outright —
+    // anything else (silently dropping the body, registering then deleting,
+    // etc.) results in user confusion and orphan blobs.  Returning 403 makes
+    // it possible for clients to surface a clear "audio backup is disabled"
+    // error to the user.
+    if media_type == "audio" && !audio_backup_enabled(&state.pool).await {
+        tracing::info!(
+            user_id = %auth.user_id,
+            filename = %filename,
+            "Rejecting audio upload: audio_backup_enabled is false"
+        );
+        return Err(AppError::Forbidden(
+            "Audio backup is disabled by server policy".to_string(),
+        ));
+    }
 
     let size_bytes = body.len() as i64;
 

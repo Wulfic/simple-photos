@@ -361,22 +361,32 @@ async fn sync_photos(
     // Pre-fetch ALL photo tags to avoid N+1 inside the transfer loop
     let all_tags = fetch_all_photo_tags(ctx.pool).await;
 
-    // Sync ALL registered media — including audio. The audio_backup_enabled
-    // setting only controls whether new audio files are *registered* during
-    // auto-scan, not whether already-registered files are transferred.
+    // Honor `audio_backup_enabled`: when the server-wide toggle is off, the
+    // sync engine must NOT push registered audio rows to the backup either.
+    // A user who toggled audio off (e.g. for storage-quota reasons) expects
+    // the backup to mirror that policy.  Filtering server-side keeps the
+    // backup's database consistent with the primary's policy snapshot.
+    let audio_enabled = crate::photos::utils::audio_backup_enabled(ctx.pool).await;
+
+    // Sync registered media — minus audio if the backup toggle is off.
     // Exclude secure-gallery clones: the `encrypted_gallery_items` table
     // tracks cloned blob_ids and the original_blob_ids they shadow.  The
     // primary's gallery-listing endpoints already filter these out; the
     // sync engine must do the same so the backup never receives clone rows
     // that would appear as duplicates.
     let photos: Vec<PhotoToSync> = {
-        let query =
+        let base_query =
             "SELECT id, user_id, filename, file_path, mime_type, media_type, size_bytes, taken_at, latitude, longitude, \
              width, height, duration_secs, camera_model, is_favorite, photo_hash, \
              crop_metadata, created_at, encrypted_blob_id, encrypted_thumb_blob_id FROM photos \
              WHERE id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
                AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)";
-        match sqlx::query_as::<_, PhotoToSync>(query)
+        let query_string: String = if audio_enabled {
+            base_query.to_string()
+        } else {
+            format!("{} AND media_type != 'audio'", base_query)
+        };
+        match sqlx::query_as::<_, PhotoToSync>(&query_string)
             .fetch_all(ctx.pool)
             .await
         {

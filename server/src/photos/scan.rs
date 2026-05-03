@@ -152,15 +152,7 @@ pub async fn scan_and_register(
     }
 
     // Filter out audio files when the audio-backup toggle is off.
-    let audio_enabled: bool = sqlx::query_scalar(
-        "SELECT value = 'true' FROM server_settings WHERE key = 'audio_backup_enabled'",
-    )
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(false);
-    if !audio_enabled {
+    if !super::utils::audio_backup_enabled(&state.pool).await {
         candidates.retain(|c| c.media_type != "audio");
     }
 

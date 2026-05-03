@@ -113,15 +113,9 @@ pub async fn run_conversion_pass(
         }
     }
 
-    // Check audio-backup toggle.
-    let audio_enabled: bool = sqlx::query_scalar(
-        "SELECT value = 'true' FROM server_settings WHERE key = 'audio_backup_enabled'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(false);
+    // Check audio-backup toggle (shared helper enforces the same policy on
+    // every import path: upload, scan, ingest, autoscan, sync_engine).
+    let audio_enabled: bool = crate::photos::utils::audio_backup_enabled(&pool).await;
 
     // ── Step 1: Build set of already-known paths ─────────────────────────
     let mut existing_set = std::collections::HashSet::new();

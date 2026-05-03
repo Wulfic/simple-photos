@@ -105,6 +105,26 @@ pub fn normalize_iso_timestamp(ts: &str) -> String {
     ts.to_string()
 }
 
+/// Read the `audio_backup_enabled` server setting.
+///
+/// Returns `false` when the setting is unset, malformed, or the query fails —
+/// failing closed is the safe default (a stale read should never silently turn
+/// audio backup *on* against the user's wishes).
+///
+/// Single source of truth for every import path: upload, scan, ingest,
+/// autoscan, and the cross-server sync engine all funnel through this so
+/// the toggle is enforced consistently.
+pub async fn audio_backup_enabled(pool: &sqlx::SqlitePool) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT value = 'true' FROM server_settings WHERE key = 'audio_backup_enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false)
+}
+
 /// Compute a short content-based hash: first 12 hex chars of SHA-256.
 /// This deterministic fingerprint is the same regardless of which platform
 /// uploads the photo, guaranteeing cross-platform alignment.

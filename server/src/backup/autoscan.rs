@@ -248,14 +248,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     };
 
     // Check audio-backup toggle — skip audio files unless enabled.
-    let audio_enabled: bool = sqlx::query_scalar(
-        "SELECT value = 'true' FROM server_settings WHERE key = 'audio_backup_enabled'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(false);
+    let audio_enabled: bool = crate::photos::utils::audio_backup_enabled(pool).await;
 
     // Build set of already-registered paths (from both active photos and trash)
     // using a streaming cursor so we never hold the full Vec<String> + HashSet
