@@ -33,7 +33,14 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
             if path.exists() {
                 ReverseGeocoder::load(path)
             } else {
-                tracing::warn!(path = %dataset_path, "GeoNames dataset not found — geo-resolution disabled");
+                tracing::error!(
+                    path = %dataset_path,
+                    "GeoNames cities500.txt not found — reverse geocoding is \
+                     DISABLED.  Photos with GPS EXIF will never have geo_city / \
+                     geo_country populated.  Run scripts/fetch_geo_data.sh or \
+                     download the dataset from \
+                     https://download.geonames.org/export/dump/cities500.zip"
+                );
                 Ok(ReverseGeocoder::empty())
             }
         })
@@ -58,7 +65,9 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
 
         let batch_size = config.batch_size as i64;
 
-        // Process loop — runs once then every 5 minutes to catch new uploads
+        // Process loop — `tokio::time::interval` ticks immediately on the
+        // first call so the initial backfill runs at startup.  Subsequent
+        // ticks fire every 5 minutes to pick up newly uploaded photos.
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         loop {
             interval.tick().await;

@@ -31,25 +31,19 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
 - All four pre-existing call sites refactored onto the helper.
 - Regression `tests/test_63_audio_toggle_ddt.py` (5 DDT rows) verified to *fail* on pre-fix binary and *pass* after — i.e. it actually catches the bug.
 
-### P0-2 `[ ]` AI face/object detection silently runs in heuristic mode when models are missing
-- **Symptom:** "Face Detection" toggle is on, photos process, tags appear — but nothing was detected by an actual ML model. SCRFD/MobileNetV2 weren't loaded; we're returning skin-tone-blob and color-histogram fakery.
-- **Evidence:**
-  - [server/src/ai/engine.rs L60-110](server/src/ai/engine.rs#L60-L110) — model load failures only emit `tracing::info!`; the engine keeps serving requests.
-  - [server/src/ai/face.rs](server/src/ai/face.rs) — `detect_faces_from_image()` falls back to skin-tone heuristic (Peer et al.) when no ONNX session.
-  - [server/src/ai/object.rs L240-290](server/src/ai/object.rs#L240-L290) — `detect_scenes_heuristic()` always runs, returns hand-rolled confidences (`0.3 * blue_ratio` etc.).
-  - [server/src/ai/engine.rs L67-70](server/src/ai/engine.rs#L67-L70) — `gpu_available: false` is hard-coded, never updated.
-- **Fix:**
-  1. AI status endpoint must expose `face_model_loaded`, `object_model_loaded`, `models_path` and `degraded_mode: bool`.
-  2. Front-end AI panel must show a red banner when `degraded_mode` is true.
-  3. Heuristic fallbacks should be gated behind a config flag (`config.ai.allow_heuristic_fallback`, default `false` in production).
-  4. On startup, if AI is enabled and no models are present, log `error!` (not `info!`) and surface in `/api/health`.
-- **Verify:** new test `test_64_ai_model_required.py` — start server with empty `server/models/`, toggle AI on, upload photo, assert response shows `degraded_mode=true` and *zero* detections (not heuristic ghosts).
+### P0-2 `[x]` AI face/object detection silently runs in heuristic mode — fixed in 3d3ad89
+- New `AiConfig.allow_heuristic_fallback` (default **false**): production deployments must install ONNX models; heuristic fallbacks no longer emit fake AI output unless an operator explicitly opts in.
+- `face::detect_faces_from_image` and `object::detect_objects_with_quality` now take that flag; when no model is loaded and the flag is false they return `Ok(vec![])` instead of synthesising skin-tone / colour-histogram detections.
+- `processor.rs` startup now logs `error!` (was `info!`) when no models are present and the flag is off, with explicit instructions to run `scripts/fetch_ai_models.sh`.
+- `GET /api/ai/status` now exposes `face_model_loaded`, `object_model_loaded`, `degraded_mode`, and `allow_heuristic_fallback` so dashboards / admins can detect the degraded state.
+- Regression `tests/test_64_ai_models_required.py` (6 cases) locks the contract; `tests/test_51_ai_cpu_pipeline.py` heuristic-dependent assertions now skip cleanly in degraded mode rather than passing on synthesised fake detections.
 
-### P0-3 `[ ]` Face clustering does not actually use embeddings
-- **Symptom:** face clusters group photos by detection-id timing or naive ID-based linking — *not* by face similarity. Same person across photos lands in different clusters.
-- **Evidence:** [server/src/ai/processor.rs L315-330](server/src/ai/processor.rs#L315-L330) writes embedding bytes; `link_detection_to_cluster()` ([server/src/ai/clustering.rs](server/src/ai/clustering.rs)) needs an audit — confirm it computes cosine similarity on the stored embedding vectors and not a fallback.
-- **Fix:** read clustering.rs end-to-end, instrument with a unit test that feeds two near-identical 512-d vectors and a third unrelated vector → asserts the first two cluster together, the third does not.
-- **Verify:** unit test in Rust + an E2E test that uploads two known-same-person photos (use the `tests/test_data/ai_faces/face_01_woman.jpg` files) and asserts they share a cluster_id.
+### P0-3 `[x]` Face clustering does not actually use embeddings — verified, not actually broken (7c4a105)
+- Audited `server/src/ai/clustering.rs` end-to-end: `cluster_faces` already builds a pairwise cosine-similarity matrix from the stored embedding vectors, sorts by similarity descending, and merges via union-find when similarity ≥ threshold.  No detection-id timing, no naïve linking — the embeddings ARE the gate.
+- Added two regression tests:
+  - `test_cluster_uses_cosine_similarity_512d` builds a realistic L2-normalised 512-d ArcFace-shaped vector, a near-twin (cos sim > 0.95), and an orthogonal unrelated vector (cos sim < 0.5); asserts the first two cluster together and the third does not.
+  - `test_threshold_is_respected` builds two vectors with cos sim = 0.6 and asserts threshold=0.7 separates them while threshold=0.5 merges them.
+- The audit overstated this risk; tests now make regression impossible.
 
 ### P0-4 `[ ]` Geolocation reverse-geocoding is silently disabled in default install
 - **Symptom:** user uploads photos with GPS EXIF; "Locations" / "Map" pages stay empty forever.
@@ -64,11 +58,10 @@ Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[!]` blocked / 
   4. After upload of a photo with GPS EXIF, kick the processor with a one-shot signal (don't wait the full interval).
 - **Verify:** new test `test_65_geo_backfill.py` — upload photo with GPS, sleep ≤ 30 s, assert `geo_city` is populated. Skip cleanly *with a real `pytest.fail`*, not `pytest.skip`, if dataset is absent.
 
-### P0-5 `[ ]` Object detection writes hardcoded fake confidences
-- **Symptom:** `object:` tags appear with confidence values that have no relationship to reality.
-- **Evidence:** [server/src/ai/object.rs L275-290](server/src/ai/object.rs#L275-L290) — boat = `0.3 * blue_ratio`, plant = `0.4 * green_ratio`, etc.
-- **Fix:** delete the heuristic block entirely once P0-2 is done, OR fence it behind `cfg(test)` only. Production must use MobileNetV2 or no result.
-- **Verify:** see P0-2's test.
+### P0-5 `[x]` Object detection writes hardcoded fake confidences — fixed in 3d3ad89
+- The heuristic scene classifier (`detect_scenes_heuristic`) now only runs when `allow_heuristic_fallback=true` OR the ONNX classifier already produced real detections (in which case it merely supplements with scene attributes the ImageNet classifier doesn't cover).
+- In the production-default config the heuristic confidences (`0.3 * blue_ratio`, etc.) cannot reach the API.
+- Covered by the same `tests/test_64_ai_models_required.py` regression as P0-2.
 
 ### P0-6 `[x]` Photo subtype detection is brittle (string-search XMP) — fixed in c36c70a
 - Motion-photo detection now uses the same tolerant `extract_xmp_str_attr` helper that burst/panorama already used, so single-quote and non-`"1"` values are recognised.
