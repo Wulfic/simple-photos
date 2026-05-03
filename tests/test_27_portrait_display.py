@@ -31,10 +31,10 @@ from typing import List, Tuple
 import pytest
 from PIL import Image
 
-try:
-    import piexif
-except ImportError:
-    piexif = None
+# piexif is a hard test dependency (declared in tests/requirements.txt).  We
+# import it eagerly so a broken environment fails at collection time instead
+# of letting individual tests skip silently.
+import piexif
 
 from helpers import APIClient, generate_test_jpeg
 
@@ -78,9 +78,6 @@ def make_exif_portrait(raw_w: int, raw_h: int, orientation: int = 6) -> bytes:
         raw_h: Raw pixel height
         orientation: EXIF orientation tag (5–8 for portrait rotation)
     """
-    if piexif is None:
-        pytest.skip("piexif not installed — needed for EXIF portrait tests")
-
     img = Image.new("RGB", (raw_w, raw_h))
     pixels = img.load()
     # Asymmetric gradient to detect incorrect rotation
@@ -109,9 +106,6 @@ def make_phone_portrait_realistic(aspect: str = "3:4") -> Tuple[bytes, int, int]
       - 9:16 (full-screen capture, e.g. 1080×1920)
       - 1:2  (tall/narrow, some phones)
     """
-    if piexif is None:
-        pytest.skip("piexif not installed")
-
     ratios = {
         "3:4": (400, 300),    # Raw: 400×300 landscape → display: 300×400 portrait
         "9:16": (320, 180),   # Raw: 320×180 → display: 180×320

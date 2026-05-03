@@ -15,8 +15,13 @@ Each test case is a single row in a parameter table.
 
 import pytest
 import time
+from pathlib import Path
 
 from helpers import APIClient, unique_filename, generate_test_jpeg
+
+
+AI_FACES_DIR = Path(__file__).parent / "test_data" / "ai_faces"
+AI_OBJECTS_DIR = Path(__file__).parent / "test_data" / "ai_objects"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -262,3 +267,78 @@ def test_ai_rename_input_validation(user_client, name, expected_status):
     r = user_client.ai_rename_face_cluster(1, name)
     # Either 400 (bad input) or 404 (not found) — both are valid rejections
     assert r.status_code in (expected_status, 404)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Behavioural: real face / object photos must increment counters
+# ══════════════════════════════════════════════════════════════════════
+#
+# P1-1 fix: the field-existence and `>= 0` tests above only prove the
+# JSON shape, not that recognition actually works.  These tests upload
+# real face/object fixtures and assert the corresponding counter went
+# up.  When the server is in degraded_mode (no ONNX models on disk),
+# the test is skipped with a pointer to the model-fetch script — it
+# does NOT pass on heuristic ghosts.
+
+
+def _wait_for_counter(client: APIClient, field: str, target: int, timeout: float = 60.0) -> int:
+    """Poll AI status until `field` reaches `target` or timeout. Return final value."""
+    deadline = time.time() + timeout
+    last = -1
+    while time.time() < deadline:
+        s = client.ai_status()
+        last = s.get(field, 0)
+        if last >= target:
+            return last
+        time.sleep(1.0)
+    return last
+
+
+def _require_real_models(client: APIClient) -> dict:
+    """Skip the calling test if the server is running without ONNX models."""
+    status = client.ai_status()
+    if status.get("degraded_mode", False):
+        pytest.skip(
+            "AI recognition models are not loaded (degraded_mode=true). "
+            "Install ONNX models with scripts/fetch_ai_models.sh and re-run."
+        )
+    return status
+
+
+def test_face_recognition_increments_face_detections(user_client):
+    """Uploading real face photos must produce face_detections > 0 within 60s."""
+    _require_real_models(user_client)
+    user_client.ai_toggle(True)
+
+    baseline = user_client.ai_status().get("face_detections", 0)
+
+    face_files = sorted(AI_FACES_DIR.glob("face_*.jpg"))
+    assert face_files, f"No face fixtures in {AI_FACES_DIR}"
+    for fp in face_files[:5]:  # 5 photos is plenty to get at least one detection
+        user_client.upload_photo(unique_filename("jpg"), content=fp.read_bytes())
+
+    final = _wait_for_counter(user_client, "face_detections", baseline + 1, timeout=60.0)
+    assert final > baseline, (
+        f"face_detections did not increase after uploading {len(face_files[:5])} face "
+        f"photos (baseline={baseline}, final={final}). Either the face model is silently "
+        f"broken or the AI worker is not running."
+    )
+
+
+def test_object_recognition_increments_object_detections(user_client):
+    """Uploading real object photos must produce object_detections > 0 within 60s."""
+    _require_real_models(user_client)
+    user_client.ai_toggle(True)
+
+    baseline = user_client.ai_status().get("object_detections", 0)
+
+    obj_files = sorted(AI_OBJECTS_DIR.glob("obj_*.jpg"))
+    assert obj_files, f"No object fixtures in {AI_OBJECTS_DIR}"
+    for fp in obj_files[:5]:
+        user_client.upload_photo(unique_filename("jpg"), content=fp.read_bytes())
+
+    final = _wait_for_counter(user_client, "object_detections", baseline + 1, timeout=60.0)
+    assert final > baseline, (
+        f"object_detections did not increase after uploading {len(obj_files[:5])} object "
+        f"photos (baseline={baseline}, final={final}). Object detection is broken."
+    )

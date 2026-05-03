@@ -55,7 +55,11 @@ class TestMultiUserAlbumCollaboration:
                 break
 
         if not second_id:
-            pytest.skip("Could not find second user")
+            pytest.fail(
+                f"second_user_client.username={second_user_client.username!r} "
+                f"is not in the sharing users list. The sharing fixture is "
+                f"broken or the API filtered the user out."
+            )
 
         # Add member
         user_client.add_album_member(album["id"], second_id)
@@ -91,7 +95,10 @@ class TestMultiUserAlbumCollaboration:
                 break
 
         if not second_id:
-            pytest.skip("Could not find second user")
+            pytest.fail(
+                f"second_user_client.username={second_user_client.username!r} "
+                f"is not in the sharing users list. The sharing fixture is broken."
+            )
         user_client.add_album_member(album["id"], second_id)
 
         # Verify access
