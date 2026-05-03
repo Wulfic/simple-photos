@@ -481,6 +481,64 @@ if [[ "$MODE" == "docker" ]]; then
     success "Docker daemon is running"
 fi
 
+# ── Shared host-build dependency check (all modes) ───────────────────────────
+# npm and Java are needed on the host regardless of install mode because
+# reset-server.sh always runs the web frontend build (npm) and the Android
+# APK build (Java/Gradle) directly on the host machine.
+SHARED_MISSING_DEPS=()
+
+if command -v npm &>/dev/null; then
+    success "npm $(npm --version) found"
+else
+    warn "npm not found (required to build the web frontend)"
+    SHARED_MISSING_DEPS+=("npm")
+fi
+
+if command -v javac &>/dev/null; then
+    success "Java JDK $(javac -version 2>&1 | awk '{print $2}') found"
+else
+    warn "Java JDK not found (required for Android APK builds)"
+    SHARED_MISSING_DEPS+=("java")
+fi
+
+if [ ${#SHARED_MISSING_DEPS[@]} -gt 0 ]; then
+    info "Missing host-build tools: ${SHARED_MISSING_DEPS[*]}"
+    if prompt_yn "Install missing host-build tools?"; then
+        for dep in "${SHARED_MISSING_DEPS[@]}"; do
+            case "$dep" in
+                npm)
+                    info "Installing Node.js + npm..."
+                    if command -v apt-get &>/dev/null; then
+                        # Official NodeSource setup script; HTTPS-only.
+                        # nosemgrep: bash.curl.security.curl-pipe-bash.curl-pipe-bash
+                        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - 2>/dev/null || {
+                            sudo apt-get update -qq; sudo apt-get install -y -qq nodejs npm; }
+                        sudo apt-get install -y -qq nodejs
+                    elif command -v dnf &>/dev/null; then sudo dnf install -y nodejs npm
+                    elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm nodejs npm
+                    elif command -v brew &>/dev/null; then brew install node
+                    else error "Cannot auto-install Node.js/npm"; exit 1; fi
+                    command -v npm &>/dev/null && success "npm installed" || { error "npm install failed"; exit 1; }
+                    ;;
+                java)
+                    info "Installing Java JDK 17..."
+                    if command -v apt-get &>/dev/null; then
+                        sudo apt-get update -qq
+                        sudo apt-get install -y -qq openjdk-17-jdk-headless 2>/dev/null || \
+                            sudo apt-get install -y -qq default-jdk-headless
+                    elif command -v dnf &>/dev/null; then sudo dnf install -y java-17-openjdk-devel
+                    elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm jdk17-openjdk
+                    elif command -v brew &>/dev/null; then brew install openjdk@17
+                    else warn "Cannot auto-install Java. Android builds will be skipped."; fi
+                    command -v javac &>/dev/null && success "Java JDK installed" || warn "Java install failed — Android APK builds will be skipped."
+                    ;;
+            esac
+        done
+    else
+        warn "Skipping host-build tool install — web frontend and Android APK builds will be skipped in reset-server.sh."
+    fi
+fi
+
 # ── Native dependency check ──────────────────────────────────────────────────
 if [[ "$MODE" == "native" ]]; then
     MISSING_DEPS=()
@@ -495,19 +553,6 @@ if [[ "$MODE" == "native" ]]; then
         success "Node.js $(node --version) found"
     else
         warn "Node.js not found"; MISSING_DEPS+=("node")
-    fi
-
-    if command -v npm &>/dev/null; then
-        success "npm $(npm --version) found"
-    elif [[ ! " ${MISSING_DEPS[*]:-} " =~ " node " ]]; then
-        warn "npm not found"; MISSING_DEPS+=("npm")
-    fi
-
-    if command -v javac &>/dev/null; then
-        success "Java JDK $(javac -version 2>&1 | awk '{print $2}') found"
-    else
-        warn "Java JDK not found (optional — needed for Android builds)"
-        MISSING_DEPS+=("java")
     fi
 
     if command -v ffmpeg &>/dev/null; then
@@ -562,7 +607,7 @@ if [[ "$MODE" == "native" ]]; then
                         export PATH="$HOME/.cargo/bin:$PATH"
                         command -v cargo &>/dev/null && success "Rust installed" || { error "Rust install failed"; exit 1; }
                         ;;
-                    node|npm)
+                    node)
                         info "Installing Node.js..."
                         if command -v apt-get &>/dev/null; then
                             # Official NodeSource setup script; HTTPS-only.
@@ -575,17 +620,6 @@ if [[ "$MODE" == "native" ]]; then
                         elif command -v brew &>/dev/null; then brew install node
                         else error "Cannot auto-install Node.js"; exit 1; fi
                         command -v node &>/dev/null && success "Node.js installed" || { error "Node.js install failed"; exit 1; }
-                        ;;
-                    java)
-                        info "Installing Java JDK 17..."
-                        if command -v apt-get &>/dev/null; then
-                            sudo apt-get update -qq
-                            sudo apt-get install -y -qq openjdk-17-jdk-headless 2>/dev/null || \
-                                sudo apt-get install -y -qq default-jdk-headless
-                        elif command -v dnf &>/dev/null; then sudo dnf install -y java-17-openjdk-devel
-                        elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm jdk17-openjdk
-                        elif command -v brew &>/dev/null; then brew install openjdk@17
-                        else warn "Cannot auto-install Java. Android builds unavailable."; fi
                         ;;
                     ffmpeg)
                         info "Installing FFmpeg..."
@@ -631,7 +665,7 @@ if [[ "$MODE" == "native" ]]; then
             done
         else
             for dep in "${MISSING_DEPS[@]}"; do
-                [[ "$dep" == "rust" || "$dep" == "node" || "$dep" == "npm" ]] && { error "Rust and Node.js are required."; exit 1; }
+                [[ "$dep" == "rust" || "$dep" == "node" ]] && { error "Rust and Node.js are required."; exit 1; }
             done
         fi
     fi

@@ -215,18 +215,30 @@ BACKUP_PORT=$(find_free_port "$DEFAULT_PORT" "$SERVER_PORT")
 echo "Building web frontend..."
 WEB_DIR="$SCRIPT_DIR/web"
 if [[ -d "$WEB_DIR" ]]; then
-    # Drop privileges when running as root via sudo
+    # Check if npm is available for the target user before attempting the build.
+    _NPM_OK=false
     if [[ "$RUN_USER" != "$(id -un)" ]]; then
-        sudo -u "$RUN_USER" bash -c "cd '$WEB_DIR' && npm run build" \
-            || { echo "WARNING: Web frontend build failed — continuing with existing dist"; }
+        sudo -u "$RUN_USER" bash -c 'command -v npm' &>/dev/null && _NPM_OK=true
     else
-        (cd "$WEB_DIR" && npm run build) \
-            || { echo "WARNING: Web frontend build failed — continuing with existing dist"; }
+        command -v npm &>/dev/null && _NPM_OK=true
     fi
-    # Ensure dist files are world-readable so Docker bind-mount containers
-    # (which run as a different uid) can serve them.
-    chmod -R a+r "$WEB_DIR/dist" 2>/dev/null || true
-    echo "Web frontend built."
+
+    if [[ "$_NPM_OK" == true ]]; then
+        # Drop privileges when running as root via sudo
+        if [[ "$RUN_USER" != "$(id -un)" ]]; then
+            sudo -u "$RUN_USER" bash -c "cd '$WEB_DIR' && npm run build" \
+                || { echo "WARNING: Web frontend build failed — continuing with existing dist"; }
+        else
+            (cd "$WEB_DIR" && npm run build) \
+                || { echo "WARNING: Web frontend build failed — continuing with existing dist"; }
+        fi
+        # Ensure dist files are world-readable so Docker bind-mount containers
+        # (which run as a different uid) can serve them.
+        chmod -R a+r "$WEB_DIR/dist" 2>/dev/null || true
+        echo "Web frontend built."
+    else
+        echo "WARNING: npm not found — skipping web frontend build (using existing dist)"
+    fi
 else
     echo "WARNING: $WEB_DIR not found — skipping web build"
 fi
@@ -236,24 +248,36 @@ echo "Building Android APK..."
 ANDROID_DIR="$SCRIPT_DIR/android"
 DOWNLOADS_DIR="$SCRIPT_DIR/downloads"
 if [[ -d "$ANDROID_DIR" ]]; then
-    mkdir -p "$DOWNLOADS_DIR"
-    # Resolve ANDROID_HOME — prefer env var, then the default install location
-    RESOLVED_ANDROID_HOME="${ANDROID_HOME:-$(eval echo ~$RUN_USER)/android-sdk}"
-    BUILD_CMD="export ANDROID_HOME='$RESOLVED_ANDROID_HOME'; cd '$ANDROID_DIR' && ./gradlew assembleDebug"
+    # Check if java is available for the target user — gradle requires it.
+    _JAVA_OK=false
     if [[ "$RUN_USER" != "$(id -un)" ]]; then
-        sudo -u "$RUN_USER" bash -c "$BUILD_CMD" \
-            || { echo "WARNING: Android APK build failed — continuing without APK"; }
+        sudo -u "$RUN_USER" bash -c 'command -v java' &>/dev/null && _JAVA_OK=true
     else
-        (eval "$BUILD_CMD") \
-            || { echo "WARNING: Android APK build failed — continuing without APK"; }
+        command -v java &>/dev/null && _JAVA_OK=true
     fi
-    APK_SRC="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
-    if [[ -f "$APK_SRC" ]]; then
-        cp "$APK_SRC" "$DOWNLOADS_DIR/simple-photos.apk" 2>/dev/null \
-            || { echo "WARNING: Could not copy APK to $DOWNLOADS_DIR (permission denied) — continuing"; }
-        [[ -f "$DOWNLOADS_DIR/simple-photos.apk" ]] && echo "Android APK copied to $DOWNLOADS_DIR/simple-photos.apk"
+
+    if [[ "$_JAVA_OK" == true ]]; then
+        mkdir -p "$DOWNLOADS_DIR"
+        # Resolve ANDROID_HOME — prefer env var, then the default install location
+        RESOLVED_ANDROID_HOME="${ANDROID_HOME:-$(eval echo ~$RUN_USER)/android-sdk}"
+        BUILD_CMD="export ANDROID_HOME='$RESOLVED_ANDROID_HOME'; cd '$ANDROID_DIR' && ./gradlew assembleDebug"
+        if [[ "$RUN_USER" != "$(id -un)" ]]; then
+            sudo -u "$RUN_USER" bash -c "$BUILD_CMD" \
+                || { echo "WARNING: Android APK build failed — continuing without APK"; }
+        else
+            (eval "$BUILD_CMD") \
+                || { echo "WARNING: Android APK build failed — continuing without APK"; }
+        fi
+        APK_SRC="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
+        if [[ -f "$APK_SRC" ]]; then
+            cp "$APK_SRC" "$DOWNLOADS_DIR/simple-photos.apk" 2>/dev/null \
+                || { echo "WARNING: Could not copy APK to $DOWNLOADS_DIR (permission denied) — continuing"; }
+            [[ -f "$DOWNLOADS_DIR/simple-photos.apk" ]] && echo "Android APK copied to $DOWNLOADS_DIR/simple-photos.apk"
+        else
+            echo "WARNING: APK not found at $APK_SRC after build"
+        fi
     else
-        echo "WARNING: APK not found at $APK_SRC after build"
+        echo "WARNING: Java not found — skipping Android APK build"
     fi
 else
     echo "WARNING: $ANDROID_DIR not found — skipping Android build"
