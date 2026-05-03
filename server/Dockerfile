@@ -3,8 +3,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     cmake \
+    make \
     g++ \
     libclang-dev \
+    perl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/src/app
 COPY Cargo.toml Cargo.lock ./

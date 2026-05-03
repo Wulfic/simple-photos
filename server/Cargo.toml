@@ -28,7 +28,7 @@ tower = "0.5"
 tokio-util = { version = "0.7", features = ["io"] }
 dashmap = "6"
 subtle = "2"
-reqwest = { version = "0.12", features = ["json", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 percent-encoding = "2"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 imagesize = "0.13"
@@ -45,6 +45,8 @@ futures-util = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 ort = { version = "2.0.0-rc.12", features = ["ndarray"] }
 ndarray = "0.17"
+# Force vendored OpenSSL so ort-sys's ureq build dep doesn't need system headers
+openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
