@@ -131,7 +131,7 @@ enabled = false
 # city/country using an offline GeoNames dataset and generates smart
 # albums by location and timeline.
 enabled = false
-# dataset_path = "data/cities500.txt"           # GeoNames cities file (matches scripts/fetch_geo_data.sh)
+# dataset_path = "data/cities500.txt"           # GeoNames cities file (downloaded by install.sh / install.ps1)
 # batch_size = 100                               # photos per geocoding batch
 
 [transcode]

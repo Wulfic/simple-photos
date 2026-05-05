@@ -122,6 +122,9 @@ downloads/simple-photos.apk
 references/
 .gitnexus
 
+# ── Benchmark results ─────────────────────────────────────────────────────────
+benchmark_results/
+
 # ── Python virtual environments ─────────────────────────────────────────────
 .venv/
 venv/

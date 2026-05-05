@@ -46,6 +46,91 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ══════════════════════════════════════════════════════════════════════════════
+# AI model + GeoNames download helpers (formerly scripts/fetch_ai_models.sh
+# and scripts/fetch_geo_data.sh)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Download a single file with curl or wget, using a .part temp file so a
+# partial download never leaves a corrupt artifact behind.
+_download_file() {
+    local out="$1" url="$2"
+    if [[ -s "$out" ]]; then
+        info "[dl] $(basename "$out") already present — skipping"
+        return 0
+    fi
+    info "[dl] Downloading $(basename "$out")…"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 -o "$out.part" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$out.part" "$url"
+    else
+        error "Neither curl nor wget found on PATH."
+        return 1
+    fi
+    if [[ ! -s "$out.part" ]]; then
+        error "Download produced empty file: $out.part"
+        rm -f "$out.part"
+        return 1
+    fi
+    mv "$out.part" "$out"
+    info "[dl]   → $(du -h "$out" | cut -f1)"
+}
+
+# Download all ONNX models needed for AI face/object recognition.
+# Models: SCRFD face detector, ArcFace embeddings, UltraFace fallback,
+#         MobileNetV2 object classifier (all Apache-2.0 / MIT-licensed).
+download_ai_models() {
+    local target="${1:-$SCRIPT_DIR/server/models}"
+    mkdir -p "$target"
+
+    _download_file "$target/det_10g.onnx" \
+        "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx"
+    _download_file "$target/w600k_r50.onnx" \
+        "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx"
+    _download_file "$target/ultraface-RFB-320.onnx" \
+        "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-RFB-320.onnx"
+    _download_file "$target/mobilenetv2-12.onnx" \
+        "https://github.com/onnx/models/raw/refs/heads/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx"
+
+    info "[ai] Models present in $target:"
+    ls -lh "$target" | tail -n +2
+}
+
+# Download the GeoNames cities500 dataset for offline reverse geocoding.
+# License: CC BY 4.0 — attribute geonames.org.
+download_geo_data() {
+    local target="${1:-$SCRIPT_DIR/server/data/cities500.txt}"
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmpdir'" RETURN
+
+    mkdir -p "$(dirname "$target")"
+    info "[geo] Downloading GeoNames cities500 dataset…"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 -o "$tmpdir/cities500.zip" \
+            "https://download.geonames.org/export/dump/cities500.zip"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$tmpdir/cities500.zip" \
+            "https://download.geonames.org/export/dump/cities500.zip"
+    else
+        error "Neither curl nor wget found on PATH."
+        return 1
+    fi
+
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -p "$tmpdir/cities500.zip" cities500.txt > "$target"
+    else
+        error "unzip is not installed."
+        return 1
+    fi
+
+    local lines
+    lines="$(wc -l <"$target" | tr -d ' ')"
+    info "[geo] Done — $lines cities written to $target"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Default values
 # ══════════════════════════════════════════════════════════════════════════════
 MODE=""
@@ -825,21 +910,21 @@ if [[ "$MODE" == "native" ]]; then
     # out-of-band (network-restricted environments, custom mirror, etc.).
     if [[ "${SKIP_MODELS:-false}" == "true" ]]; then
         warn "Skipping AI models / GeoNames dataset download (--skip-models). \
-              Server will start in degraded_mode until you run scripts/fetch_ai_models.sh."
+              Server will start in degraded_mode until models are downloaded."
     else
         info "Fetching AI ONNX models → server/models/  (~200 MB, mandatory for face/object recognition)"
-        if ! bash "$SCRIPT_DIR/scripts/fetch_ai_models.sh" "$SCRIPT_DIR/server/models"; then
-            error "AI model download failed.  Re-run scripts/fetch_ai_models.sh \
-                   before starting the server, or pass --skip-models to install \
+        if ! download_ai_models "$SCRIPT_DIR/server/models"; then
+            error "AI model download failed.  Re-run install.sh (or call download_ai_models \
+                   manually) before starting the server, or pass --skip-models to install \
                    without AI features."
             exit 1
         fi
         success "AI models installed"
 
         info "Fetching GeoNames cities500 → server/data/cities500.txt  (~25 MB, mandatory for reverse geocoding)"
-        if ! bash "$SCRIPT_DIR/scripts/fetch_geo_data.sh" "$SCRIPT_DIR/server/data/cities500.txt"; then
+        if ! download_geo_data "$SCRIPT_DIR/server/data/cities500.txt"; then
             warn "Geo dataset download failed; reverse-geocoding will be disabled \
-                  until you re-run scripts/fetch_geo_data.sh"
+                  until you re-run install.sh or call download_geo_data manually."
         else
             success "GeoNames dataset installed"
         fi

@@ -13,6 +13,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import { useAuthStore } from "../store/auth";
 import type { FaceCluster } from "../api/ai";
 
 type SharedAlbumInfo = {
@@ -31,6 +32,7 @@ export default function Albums() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const isBackupServer = useIsBackupServer();
+  const { accessToken } = useAuthStore();
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
   const navigate = useNavigate();
@@ -95,12 +97,17 @@ export default function Albums() {
         if (photo?.thumbnailData) {
           const mime = photo.thumbnailMimeType || "image/jpeg";
           urls[c.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        } else {
+          // Fallback: serve thumbnail directly from the server
+          urls[c.id] = accessToken
+            ? `${api.photos.thumbUrl(c.representative)}?token=${accessToken}`
+            : api.photos.thumbUrl(c.representative);
         }
       }
       if (!cancelled) setPeopleThumbUrls(urls);
     })();
     return () => { cancelled = true; };
-  }, [peopleClusters]);
+  }, [peopleClusters, accessToken]);
 
   // Load thumbnails for memories
   useEffect(() => {
@@ -498,7 +505,10 @@ export default function Albums() {
       {/* ── People ─────────────────────────────────────────────────────────── */}
       {peopleClusters.length > 0 && (
         <div className="mt-8">
-          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">People</h2>
+          <h2
+            className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            onClick={() => navigate("/albums/smart-people")}
+          >People</h2>
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
             {peopleClusters.map((cluster) => (
               <div

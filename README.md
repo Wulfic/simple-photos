@@ -17,9 +17,9 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **Multi-user** — multiple accounts with per-user storage, shared albums, and admin controls
 - **Themes** — full light/dark theme support
 - **Google Cast Support** — cast photos and videos to compatible devices
-- **Face and object recognition** — optional local AI module for face clustering and object tagging.  Requires ONNX models (SCRFD + ArcFace + MobileNetV2); without them the AI subsystem reports `degraded_mode: true` via `/api/ai/status` and emits no detections.  Run `scripts/fetch_ai_models.sh` to pre-download models, or accept the prompt during `install.sh`.
+- **Face and object recognition** — optional local AI module for face clustering and object tagging.  Requires ONNX models (SCRFD + ArcFace + MobileNetV2); without them the AI subsystem reports `degraded_mode: true` via `/api/ai/status` and emits no detections.  Models are downloaded automatically by `install.sh` / `install.ps1` unless `--skip-models` / `-SkipModels` is passed.
 - **Metadata editing** — view and edit photo metadata (EXIF, IPTC, XMP) with support for custom metadata fields
-- **Geolocation support** — optional reverse geocoding to country/city.  Requires the GeoNames `cities500.txt` dataset (CC BY 4.0).  Run `scripts/fetch_geo_data.sh` to install it; without it, GPS coordinates are stored but no city/country tags are produced.
+- **Geolocation support** — optional reverse geocoding to country/city.  Requires the GeoNames `cities500.txt` dataset (CC BY 4.0).  Downloaded automatically by `install.sh` / `install.ps1`; without it, GPS coordinates are stored but no city/country tags are produced.
 - **Geolocation Stripping** — option to remove geolocation metadata during import for privacy
 - **GPU acceleration** — optional GPU-accelerated media processing and AI inference for faster performance on supported hardware
 ### Media

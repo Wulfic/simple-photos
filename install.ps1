@@ -30,6 +30,9 @@
 .PARAMETER NoStart
     Don't start the server after install
 
+.PARAMETER SkipModels
+    Don't download AI ONNX models or the GeoNames dataset
+
 .PARAMETER Yes
     Auto-accept all prompts
 
@@ -52,6 +55,7 @@ param(
     [string]$AdminPass = "",
     [switch]$NoBuildAndroid,
     [switch]$NoStart,
+    [switch]$SkipModels,
     [switch]$Yes
 )
 
@@ -68,6 +72,84 @@ function Write-Ok      { param([string]$Msg) Write-Host "  √ " -ForegroundColo
 function Write-Warn    { param([string]$Msg) Write-Host "  ! " -ForegroundColor Yellow -NoNewline; Write-Host $Msg }
 function Write-Err     { param([string]$Msg) Write-Host "  X " -ForegroundColor Red -NoNewline; Write-Host $Msg }
 function Write-Step    { param([string]$Msg) Write-Host "`n--- $Msg ---`n" -ForegroundColor Cyan }
+
+# Download a single URL to $OutPath, skipping if the file already exists.
+function Invoke-FileDownload {
+    param([string]$Url, [string]$OutPath)
+    if ((Test-Path $OutPath) -and (Get-Item $OutPath).Length -gt 0) {
+        Write-Info "[dl] $(Split-Path $OutPath -Leaf) already present — skipping"
+        return
+    }
+    Write-Info "[dl] Downloading $(Split-Path $OutPath -Leaf)…"
+    $part = "$OutPath.part"
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $part -UseBasicParsing
+        if (-not (Test-Path $part) -or (Get-Item $part).Length -eq 0) {
+            throw "Download produced an empty file."
+        }
+        Move-Item -Path $part -Destination $OutPath -Force
+        $size = [math]::Round((Get-Item $OutPath).Length / 1MB, 1)
+        Write-Info "[dl]   → ${size} MB"
+    } catch {
+        Remove-Item $part -ErrorAction SilentlyContinue
+        throw "Failed to download $(Split-Path $OutPath -Leaf): $_"
+    }
+}
+
+# Download ONNX models for AI face/object recognition.
+# Models: SCRFD face detector, ArcFace embeddings, UltraFace fallback,
+#         MobileNetV2 object classifier (all Apache-2.0 / MIT-licensed).
+function Download-AiModels {
+    param([string]$Target)
+    if (-not (Test-Path $Target)) { New-Item -ItemType Directory -Path $Target -Force | Out-Null }
+
+    Invoke-FileDownload `
+        -Url "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx" `
+        -OutPath (Join-Path $Target "det_10g.onnx")
+    Invoke-FileDownload `
+        -Url "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx" `
+        -OutPath (Join-Path $Target "w600k_r50.onnx")
+    Invoke-FileDownload `
+        -Url "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-RFB-320.onnx" `
+        -OutPath (Join-Path $Target "ultraface-RFB-320.onnx")
+    Invoke-FileDownload `
+        -Url "https://github.com/onnx/models/raw/refs/heads/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx" `
+        -OutPath (Join-Path $Target "mobilenetv2-12.onnx")
+
+    Write-Info "[ai] Models present in $Target:"
+    Get-ChildItem $Target | ForEach-Object { Write-Info "  $($_.Name)  ($([math]::Round($_.Length/1MB,1)) MB)" }
+}
+
+# Download the GeoNames cities500 dataset for offline reverse geocoding.
+# License: CC BY 4.0 — attribute geonames.org.
+function Download-GeoData {
+    param([string]$Target)
+    $dir = Split-Path $Target -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+
+    $zipPath = Join-Path $env:TEMP "cities500_$([System.IO.Path]::GetRandomFileName()).zip"
+    try {
+        Write-Info "[geo] Downloading GeoNames cities500 dataset…"
+        Invoke-WebRequest `
+            -Uri "https://download.geonames.org/export/dump/cities500.zip" `
+            -OutFile $zipPath -UseBasicParsing
+
+        Write-Info "[geo] Extracting…"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+        try {
+            $entry = $zip.Entries | Where-Object { $_.Name -eq "cities500.txt" } | Select-Object -First 1
+            if (-not $entry) { throw "cities500.txt not found in archive" }
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $Target, $true)
+        } finally {
+            $zip.Dispose()
+        }
+        $lines = (Get-Content $Target | Measure-Object -Line).Lines
+        Write-Info "[geo] Done — $lines cities written to $Target"
+    } finally {
+        Remove-Item $zipPath -ErrorAction SilentlyContinue
+    }
+}
 
 function Test-PortInUse {
     param([int]$PortNumber)
@@ -439,6 +521,30 @@ if ($Mode -eq "native") {
     cargo build --release 2>&1 | Select-Object -Last 5
     Write-Ok "Server built -> server\target\release\simple-photos-server.exe"
     Set-Location $ScriptDir
+
+    # ── AI models + GeoNames dataset ──────────────────────────────────────
+    if ($SkipModels) {
+        Write-Warn "Skipping AI models / GeoNames dataset download (-SkipModels). Server will start in degraded_mode until models are downloaded."
+    } else {
+        Write-Info "Fetching AI ONNX models -> server\models\  (~200 MB, mandatory for face/object recognition)"
+        try {
+            Download-AiModels -Target (Join-Path $ScriptDir "server\models")
+            Write-Ok "AI models installed"
+        } catch {
+            Write-Err "AI model download failed: $_"
+            Write-Err "Re-run install.ps1 or call Download-AiModels manually before starting the server, or pass -SkipModels to install without AI features."
+            exit 1
+        }
+
+        Write-Info "Fetching GeoNames cities500 -> server\data\cities500.txt  (~25 MB, mandatory for reverse geocoding)"
+        try {
+            Download-GeoData -Target (Join-Path $ScriptDir "server\data\cities500.txt")
+            Write-Ok "GeoNames dataset installed"
+        } catch {
+            Write-Warn "Geo dataset download failed: $_"
+            Write-Warn "Reverse-geocoding will be disabled until you re-run install.ps1 or call Download-GeoData manually."
+        }
+    }
 
     # ── Config ────────────────────────────────────────────────────────────
     $configPath = Join-Path $ScriptDir "server\config.toml"
