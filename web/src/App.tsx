@@ -32,7 +32,7 @@ import SavingBanner from "./components/SavingBanner";
 function ProtectedLayout() {
   const { isAuthenticated } = useAuthStore();
   const [setupChecked, setSetupChecked] = useState(false);
-  const [setupComplete, setSetupComplete] = useState(true);
+  const [wizardCompleted, setWizardCompleted] = useState(true);
   const [serverUnreachable, setServerUnreachable] = useState(false);
 
   useEffect(() => {
@@ -42,7 +42,11 @@ function ProtectedLayout() {
         return r.json();
       })
       .then((data) => {
-        setSetupComplete(data.setup_complete);
+        // Treat the *wizard* as the gate, not just "a user exists". The
+        // wizard may have created an admin but not yet been finalized
+        // (e.g. browser crashed mid-flow); we still need to send the
+        // user back to /welcome rather than into the gallery.
+        setWizardCompleted(Boolean(data.wizard_completed));
         setSetupChecked(true);
       })
       .catch(() => {
@@ -78,8 +82,10 @@ function ProtectedLayout() {
     );
   }
 
-  // No users exist — must complete first-time setup before anything else
-  if (!setupComplete) return <Navigate to="/welcome" replace />;
+  // Wizard not finalized — send the user back to step 1 of the wizard.
+  // (The Welcome page itself decides whether to resume from sessionStorage
+  // or restart from the welcome step.)
+  if (!wizardCompleted) return <Navigate to="/welcome" replace />;
 
   // Not logged in — must authenticate
   if (!isAuthenticated) return <Navigate to="/login" replace />;
@@ -100,13 +106,13 @@ function ProtectedLayout() {
 function LoginGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
   const [setupChecked, setSetupChecked] = useState(false);
-  const [setupComplete, setSetupComplete] = useState(true);
+  const [wizardCompleted, setWizardCompleted] = useState(true);
 
   useEffect(() => {
     fetch("/api/setup/status")
       .then((r) => r.json())
       .then((data) => {
-        setSetupComplete(data.setup_complete);
+        setWizardCompleted(Boolean(data.wizard_completed));
         setSetupChecked(true);
       })
       .catch(() => setSetupChecked(true));
@@ -120,7 +126,7 @@ function LoginGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!setupComplete) return <Navigate to="/welcome" replace />;
+  if (!wizardCompleted) return <Navigate to="/welcome" replace />;
   if (isAuthenticated) return <Navigate to="/gallery" replace />;
 
   return <>{children}</>;
@@ -140,7 +146,7 @@ function RootRedirect() {
     fetch("/api/setup/status")
       .then((r) => r.json())
       .then((data) => {
-        if (!data.setup_complete) {
+        if (!data.wizard_completed) {
           setTarget("/welcome");
         } else if (isAuthenticated) {
           setTarget("/gallery");

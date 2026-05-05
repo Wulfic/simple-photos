@@ -2,32 +2,70 @@
 //!
 //! Each helper builds a [`Router`] fragment for one domain. [`api_routes()`]
 //! merges them all under the `/api` prefix consumed by `main.rs`.
+//!
+//! ## Wizard gating
+//!
+//! Routes are split into two groups:
+//!
+//! * **Wizard-open routes** (`setup_routes`, `auth_routes`) — callable while
+//!   the first-run wizard is still in progress. The wizard itself, login,
+//!   and 2FA endpoints all live here.
+//! * **Wizard-gated routes** — every other domain. The
+//!   [`crate::setup::wizard_gate::require_wizard_completed`] middleware is
+//!   applied to this group so all of them return 403 with
+//!   `error_code: "wizard_incomplete"` until the admin finalizes the
+//!   wizard at the final step. The web frontend reads that code and
+//!   redirects to `/welcome`.
 
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
+use crate::setup::wizard_gate::require_wizard_completed;
 use crate::state::AppState;
 
 /// Assemble every API route into a single router (mounted at `/api` by main).
-pub fn api_routes() -> Router<AppState> {
-    Router::new()
+///
+/// `state` is required so the wizard-gate middleware can be constructed with
+/// `from_fn_with_state` — it needs the same state to perform its DB lookup.
+pub fn api_routes(state: AppState) -> Router<AppState> {
+    // Routes that must remain reachable while the wizard is incomplete.
+    //
+    // The wizard itself drives admin endpoints (storage, port, SSL, users,
+    // backup pairing/restore) so those groups stay open. They are still
+    // protected by the normal `AuthUser` + `require_admin` checks at the
+    // handler level. What we *don't* want is a half-finished wizard letting
+    // someone manually navigate to `/gallery`, `/photos/{id}`, `/albums`,
+    // etc. — those touch user content and are gated below.
+    let open = Router::new()
         .merge(setup_routes())
         .merge(auth_routes())
-        .merge(blob_routes())
-        .merge(download_routes())
         .merge(admin_routes())
         .merge(import_routes())
+        .merge(backup_routes())
+        .merge(download_routes())
+        .merge(client_log_routes())
+        .merge(diagnostics_routes());
+
+    // User-data routes — gated until `wizard_completed = true`. Each one
+    // returns 403 with `error_code: "wizard_incomplete"` while the flag is
+    // unset; the SPA reads that code and forwards the user back to the
+    // wizard at step 1.
+    let gated = Router::new()
+        .merge(blob_routes())
         .merge(photo_routes())
         .merge(gallery_routes())
         .merge(trash_routes())
-        .merge(backup_routes())
         .merge(sharing_routes())
         .merge(tag_routes())
-        .merge(client_log_routes())
-        .merge(diagnostics_routes())
         .merge(export_routes())
         .merge(ai_routes())
         .merge(geo_routes())
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            require_wizard_completed,
+        ));
+
+    open.merge(gated)
 }
 
 // ── Setup & first-run ────────────────────────────────────────────────
@@ -36,6 +74,7 @@ fn setup_routes() -> Router<AppState> {
     Router::new()
         .route("/setup/status", get(crate::setup::handlers::status))
         .route("/setup/init", post(crate::setup::handlers::init))
+        .route("/setup/finalize", post(crate::setup::handlers::finalize))
         .route("/setup/pair", post(crate::setup::pair::pair))
         .route("/setup/discover", get(crate::setup::discovery::discover))
         .route(
@@ -122,6 +161,14 @@ fn admin_routes() -> Router<AppState> {
             post(crate::setup::storage::test_smb),
         )
         .route("/admin/browse", get(crate::setup::storage::browse_directory))
+        .route(
+            "/admin/pick-directory",
+            get(crate::setup::storage::pick_directory),
+        )
+        .route(
+            "/admin/resolve-sentinel",
+            get(crate::setup::storage::resolve_storage_sentinel),
+        )
         // Port
         .route("/admin/port", get(crate::setup::port::get_port))
         .route("/admin/port", put(crate::setup::port::update_port))

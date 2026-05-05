@@ -15,16 +15,46 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audit::{self, AuditEvent};
+use crate::auth::middleware::AuthUser;
 use crate::auth::validation;
 use crate::error::AppError;
+use crate::setup::admin::require_admin;
 use crate::state::AppState;
+
+/// `server_settings` row that flips to `"true"` only when the first-run wizard
+/// reaches its final "Go to Gallery" step. Until then the rest of the API is
+/// gated and the frontend redirects everything back to `/welcome`.
+pub const WIZARD_COMPLETED_KEY: &str = "wizard_completed";
+
+/// Read the wizard-completed flag from `server_settings`. Missing or any
+/// value other than the literal string `"true"` is treated as not completed.
+pub async fn is_wizard_completed(state: &AppState) -> Result<bool, AppError> {
+    let value: Option<String> = sqlx::query_scalar(
+        "SELECT value FROM server_settings WHERE key = ?",
+    )
+    .bind(WIZARD_COMPLETED_KEY)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(matches!(value.as_deref(), Some("true")))
+}
 
 // ── Response types ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
 pub struct SetupStatusResponse {
-    /// Whether initial setup has been completed (at least one user exists)
+    /// Whether initial setup has been completed (at least one user exists).
+    ///
+    /// NOTE: this is a *necessary* condition for the wizard, not a sufficient
+    /// one. A user can exist while the wizard is still mid-flight (the user
+    /// closed the tab between the account step and the final step). Use
+    /// `wizard_completed` for routing decisions instead.
     pub setup_complete: bool,
+    /// Whether the first-run setup wizard has been fully finalized
+    /// (the admin clicked "Go to Gallery" on the final step).
+    ///
+    /// While this is `false`, the API returns 403 for non-setup endpoints
+    /// and the web frontend forwards every page to `/welcome`.
+    pub wizard_completed: bool,
     /// Whether new user registration is currently enabled
     pub registration_open: bool,
     /// Server version
@@ -101,12 +131,81 @@ pub async fn status(State(state): State<AppState>) -> Result<Json<SetupStatusRes
         }
     };
 
+    let wizard_completed = is_wizard_completed(&state).await?;
+
     Ok(Json(SetupStatusResponse {
         setup_complete: user_count > 0,
+        wizard_completed,
         registration_open: state.config.auth.allow_registration,
         version: crate::VERSION.to_string(),
         mode,
         setup_id,
+    }))
+}
+
+// ── Finalize ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct FinalizeResponse {
+    pub wizard_completed: bool,
+    pub message: String,
+}
+
+/// Mark the first-run wizard as fully completed.
+///
+/// Called by the frontend's `CompleteStep` when the user clicks "Go to
+/// Gallery". Until this is called, every non-setup API endpoint returns 403
+/// and the SPA forwards every route to `/welcome`.
+///
+/// # Security
+/// - Requires a valid auth token.
+/// - Requires admin role (only the admin created during the wizard can
+///   finalize). This prevents a hypothetical scenario where a non-admin
+///   account exists but somehow reaches this endpoint.
+/// - Requires `setup_complete = true` (at least one user must exist).
+/// - Idempotent: calling it again on an already-finalized server is a no-op.
+pub async fn finalize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: AuthUser,
+) -> Result<Json<FinalizeResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    // Belt-and-suspenders: refuse to finalize without any users. (Cannot
+    // actually reach this path because AuthUser already requires a real user.)
+    let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.pool)
+        .await?;
+    if user_count == 0 {
+        return Err(AppError::BadRequest(
+            "Cannot finalize wizard: no users exist.".into(),
+        ));
+    }
+
+    sqlx::query(
+        "INSERT INTO server_settings (key, value) VALUES (?, 'true') \
+         ON CONFLICT(key) DO UPDATE SET value = 'true'",
+    )
+    .bind(WIZARD_COMPLETED_KEY)
+    .execute(&state.pool)
+    .await?;
+
+    audit::log(
+        &state,
+        AuditEvent::Register,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "event": "wizard_finalized",
+        })),
+    )
+    .await;
+
+    tracing::info!("First-run wizard finalized by user {}", auth.user_id);
+
+    Ok(Json(FinalizeResponse {
+        wizard_completed: true,
+        message: "Setup wizard completed.".into(),
     }))
 }
 

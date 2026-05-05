@@ -18,15 +18,13 @@ export interface ServerConfigStepProps {
   // Storage state
   storagePath: string;
   storageConfirmed: boolean;
-  handleSelectStoragePath: () => void;
+  handleSelectStoragePath: (path?: string) => void;
 
   // Shared
   loading: boolean;
   error: string;
   setStep: (step: WizardStep) => void;
   setError: (msg: string) => void;
-  /** Directly set the storage path to save */
-  setStoragePathDirect: (path: string) => void;
   /** Server role — determines next step */
   serverRole?: ServerRole;
   /** Install type — determines back navigation */
@@ -48,7 +46,6 @@ export default function ServerConfigStep({
   error,
   setStep,
   setError,
-  setStoragePathDirect,
   serverRole,
   installType,
 }: ServerConfigStepProps) {
@@ -99,6 +96,58 @@ export default function ServerConfigStep({
     setBrowserOpen(true);
   }
 
+  async function handleNativePick() {
+    // Prefer the native OS folder dialog (same as photo upload dialog).
+    // `showDirectoryPicker()` is available in Chrome/Edge/Opera on desktop.
+    if (
+      typeof window !== "undefined" &&
+      "showDirectoryPicker" in window
+    ) {
+      setError("");
+      let dirHandle: FileSystemDirectoryHandle | null = null;
+      const sentinelName = `sp-picker-${crypto.randomUUID()}.tmp`;
+      try {
+        // This opens the exact same native OS dialog as <input type="file">
+        dirHandle = await (
+          window as Window &
+            typeof globalThis & {
+              showDirectoryPicker: (
+                o?: object
+              ) => Promise<FileSystemDirectoryHandle>;
+            }
+        ).showDirectoryPicker({ mode: "readwrite" });
+
+        // Write a tiny sentinel file so the server can locate the directory.
+        const fileHandle = await dirHandle.getFileHandle(sentinelName, {
+          create: true,
+        });
+        const writable = await fileHandle.createWritable();
+        await writable.write("x");
+        await writable.close();
+
+        // Ask the server to resolve the absolute path.
+        const res = await api.admin.resolveStorageSentinel(sentinelName);
+        setPathInput(res.path);
+      } catch (err: unknown) {
+        const e = err as { name?: string };
+        if (e?.name === "AbortError") return; // user pressed Cancel
+        // Any other failure (write permissions, server unreachable, etc.)
+        // → fall back to the in-browser directory browser.
+        handleOpenBrowser();
+      } finally {
+        // Best-effort cleanup — ignore errors (e.g. handle already released).
+        if (dirHandle) {
+          dirHandle.removeEntry(sentinelName).catch(() => {});
+        }
+      }
+      return;
+    }
+
+    // Browser doesn't support showDirectoryPicker — fall back to the
+    // in-browser FolderBrowserModal (Firefox, Safari, older browsers).
+    handleOpenBrowser();
+  }
+
   function handleBrowserSelect(selectedPath: string) {
     setPathInput(selectedPath);
     setBrowserOpen(false);
@@ -120,9 +169,8 @@ export default function ServerConfigStep({
     setSaving(true);
     setError("");
     try {
-      setStoragePathDirect(trimmed);
-      await new Promise((r) => setTimeout(r, 50));
-      handleSelectStoragePath();
+      // Pass the path directly — avoids the React setState closure timing issue
+      await handleSelectStoragePath(trimmed);
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Failed to set storage path."));
     } finally {
@@ -169,9 +217,8 @@ export default function ServerConfigStep({
       const res = await api.admin.configureSmbStorage(payload);
       // The server has already swapped its storage root. Reflect that in the
       // wizard state so the green "Storage path saved" panel renders.
-      setStoragePathDirect(res.storage_path);
       setPathInput(res.storage_path);
-      handleSelectStoragePath();
+      await handleSelectStoragePath(res.storage_path);
       setSmbStatus({ kind: "ok", msg: res.message });
       setSmbModalOpen(false);
       // Wipe credentials from React state once the share is mounted — they
@@ -276,14 +323,14 @@ export default function ServerConfigStep({
         />
         <button
           type="button"
-          onClick={handleOpenBrowser}
+          onClick={handleNativePick}
           className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors flex items-center gap-1.5"
-          title="Browse server directories"
+          title="Open system folder picker"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
           </svg>
-          Browse
+          Browse…
         </button>
         <button
           type="button"
@@ -329,7 +376,7 @@ export default function ServerConfigStep({
           }}
           className={`${serverRole === "primary" && installType === "fresh" ? "flex-[2]" : "w-full"} bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors`}
         >
-          {storageConfirmed ? "Continue →" : "Keep Default & Continue →"}
+          Continue →
         </button>
       </div>
 

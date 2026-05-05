@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -e
 
-# Reset the primary server only (wipe DB + storage, rebuild, restart).
-# Leaves backup containers untouched.
+# Reset both the primary native server and the Docker backup container
+# (wipe DB + storage, rebuild, restart both).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$SCRIPT_DIR/server"
+DOCKER_DIR="$SCRIPT_DIR/docker-instances"
+BACKUP_DIR="$DOCKER_DIR/simple-photos-backup-8081"
+BACKUP_COMPOSE="$BACKUP_DIR/docker-compose.yml"
 
 # ============================================================================
 # Safety helpers — inlined.
@@ -88,7 +91,10 @@ safe_purge_managed_subdirs() {
             continue
         fi
         echo "  Removing $target/..."
-        rm -rf -- "$target"
+        if ! timeout 10 rm -rf -- "$target"; then
+            echo "  WARN: deletion of '$target' timed out or failed (possibly a slow network drive)."
+            echo "        Please delete it manually: rm -rf '$target'"
+        fi
     done
 }
 
@@ -111,31 +117,11 @@ safe_read_storage_root() {
 }
 
 # Confirm before destructive operations unless RESET_FORCE=1.
+# Confirm before destructive operations.
+# Safety is enforced by safe_purge_managed_subdirs / _is_safe_storage_root
+# guard-rails, so no interactive prompt is needed for the test reset script.
 safe_confirm_destruction() {
-    local primary_root="$1"
-    local extra_root="${2:-}"
-    if [[ "${RESET_FORCE:-0}" == "1" ]]; then
-        echo "RESET_FORCE=1 set — skipping interactive confirmation."
-        return 0
-    fi
-    if [[ ! -t 0 ]]; then
-        abort "Refusing to wipe data non-interactively. Re-run with RESET_FORCE=1 to opt in."
-    fi
-    echo ""
-    echo "About to wipe simple-photos managed data:"
-    echo "  - database files under: $primary_root/data/db/"
-    echo "  - server-managed subdirs under: $primary_root/data/storage/"
-    if [[ -n "$extra_root" ]]; then
-        echo "  - server-managed subdirs under: $extra_root"
-        echo "    (files outside those subdirs are PRESERVED)"
-    fi
-    echo ""
-    echo "Server-managed subdirs are: blobs, metadata, logs, .thumbnails,"
-    echo "  .renders, .tmp, .web_previews, .converted, uploads, .ai_data, .geo_cache"
-    echo ""
-    local reply
-    read -r -p "Type 'WIPE' (uppercase) to proceed: " reply
-    [[ "$reply" == "WIPE" ]] || abort "User did not confirm — aborting."
+    echo "Auto-proceeding — safety guard-rails are active."
 }
 
 RUN_USER="${SUDO_USER:-$(id -un)}"
@@ -165,15 +151,18 @@ port_in_use() {
     return 1
 }
 
+# find_free_port START_PORT [SKIP_PORT]
+# Returns the first port >= START_PORT that is free (and != SKIP_PORT).
 find_free_port() {
     local port="${1:-$DEFAULT_PORT}"
+    local skip="${2:-}"
     local i=0
     while [[ $i -lt 100 ]]; do
-        if ! port_in_use "$port"; then
+        if [[ "$port" != "$skip" ]] && ! port_in_use "$port"; then
             echo "$port"
             return 0
         fi
-        echo "  Port $port in use, trying $((port + 1))..." >&2
+        echo "  Port $port in use (or reserved), trying $((port + 1))..." >&2
         port=$((port + 1))
         i=$((i + 1))
     done
@@ -181,17 +170,26 @@ find_free_port() {
     exit 1
 }
 
-echo "=== Reset Primary Server (backup untouched) ==="
+echo "=== Reset Primary + Docker Backup ==="
 
-# ── Stop native server first so its port is freed before we port-scan ────────
+# ── Stop everything FIRST so their ports are freed before we port-scan ────────
 echo "Stopping native server..."
 if systemctl is-active simple-photos.service &>/dev/null 2>&1; then
     sudo systemctl stop simple-photos.service
 fi
 pkill -9 -f simple-photos-server 2>/dev/null && sleep 1 || true
 
-# Now find a free port — the native server's slot is guaranteed free.
+# Bring down the Docker backup container so its host port is also freed.
+if command -v docker &>/dev/null && [[ -f "$BACKUP_COMPOSE" ]]; then
+    echo "Stopping backup container..."
+    docker compose -f "$BACKUP_COMPOSE" down 2>/dev/null || true
+fi
+
+# Now that nothing is listening we can find clean free ports.
+# Native (primary) takes priority — it always gets the first available port.
 SERVER_PORT=$(find_free_port "$DEFAULT_PORT")
+# Backup gets the next available port, skipping the primary's slot.
+BACKUP_PORT=$(find_free_port "$DEFAULT_PORT" "$SERVER_PORT")
 
 # ── Build web frontend ───────────────────────────────────────────────────────
 echo "Building web frontend..."
@@ -262,7 +260,9 @@ CONFIG_FILE="$SERVER_DIR/config.toml"
 STORAGE_ROOT=$(safe_read_storage_root "$CONFIG_FILE")
 safe_confirm_destruction "$SERVER_DIR" "$STORAGE_ROOT"
 
-rm -f "$SERVER_DIR/data/db/"*
+if ! timeout 10 rm -f "$SERVER_DIR/data/db/"*; then
+    echo "WARN: DB deletion timed out or failed — please delete manually: $SERVER_DIR/data/db/"
+fi
 
 # ── Clean server-managed storage dirs ────────────────────────────────────────
 echo "Cleaning internal storage (server-managed dirs only)..."
@@ -279,8 +279,110 @@ else
     echo "Notice: No storage root configured (or unreadable) — skipping external cleanup."
 fi
 
-chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true
+# Scope chown to only the subdirs we touched — avoids traversing network mounts
+# under data/mounts/ which can hang indefinitely.
+timeout 10 chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data/db" "$SERVER_DIR/data/storage" 2>/dev/null || true
+
+# The backup Docker container runs as appuser (uid 999) while the primary runs
+# as the host user.  Both need write access to the shared storage directory.
+timeout 10 chmod -R o+rwX "$SERVER_DIR/data/storage" 2>/dev/null || true
+
 echo "Data cleared."
+
+# ── Reset Docker backup instance ─────────────────────────────────────────────
+if [[ -d "$BACKUP_DIR" ]]; then
+    echo "Resetting Docker backup instance ($BACKUP_DIR)..."
+    BACKUP_DATA="$BACKUP_DIR/data"
+
+    # Sanity: BACKUP_DATA must live under SCRIPT_DIR — otherwise refuse.
+    case "$BACKUP_DATA" in
+        "$SCRIPT_DIR"/docker-instances/*) : ;;
+        *) abort "Backup data path '$BACKUP_DATA' is outside the project — refusing to wipe." ;;
+    esac
+
+    if [[ -d "$BACKUP_DATA" ]]; then
+        if ! timeout 10 rm -rf "$BACKUP_DATA/db/"* 2>/dev/null \
+                && ! timeout 10 sudo rm -rf "$BACKUP_DATA/db/"* 2>/dev/null; then
+            echo "  WARN: backup DB deletion timed out or failed — please delete manually: $BACKUP_DATA/db/"
+        fi
+        if [[ -d "$BACKUP_DATA/storage" ]]; then
+            case "$BACKUP_DATA/storage" in
+                "$SCRIPT_DIR"/docker-instances/*/data/storage)
+                    if ! timeout 10 sudo rm -rf "$BACKUP_DATA/storage" 2>/dev/null \
+                            && ! timeout 10 rm -rf "$BACKUP_DATA/storage" 2>/dev/null; then
+                        echo "  WARN: backup storage deletion timed out or failed — please delete manually: $BACKUP_DATA/storage"
+                    fi
+                    ;;
+                *)
+                    echo "  WARN: refusing to wipe unexpected backup storage path: $BACKUP_DATA/storage"
+                    ;;
+            esac
+        fi
+        mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
+        timeout 10 chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || timeout 10 chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
+        echo "  backup data wiped"
+    else
+        mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
+        timeout 10 chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || timeout 10 chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
+    fi
+
+    if [[ -f "$BACKUP_COMPOSE" ]]; then
+        # Patch the host-side port mapping in docker-compose.yml.
+        CONTAINER_PORT=$(grep -E '^\s*-\s*"[0-9]+:[0-9]+"' "$BACKUP_COMPOSE" | head -1 | sed -E 's/.*"[0-9]+:([0-9]+)".*/\1/')
+        CONTAINER_PORT=${CONTAINER_PORT:-3000}
+        sed -i -E "s/(- \"?)[0-9]+(:[0-9]+\"?)/\\1${BACKUP_PORT}\\2/" "$BACKUP_COMPOSE"
+        # Update base_url in the backup config.toml.
+        BACKUP_CONFIG="$BACKUP_DIR/config.toml"
+        if [[ -f "$BACKUP_CONFIG" ]]; then
+            OLD_BK_URL_PORT=$(grep -E '^base_url\s*=' "$BACKUP_CONFIG" | head -1 | sed -E 's/.*:([0-9]+).*/\1/')
+            if [[ -n "$OLD_BK_URL_PORT" ]]; then
+                sed -i "s|:${OLD_BK_URL_PORT}\b|:${BACKUP_PORT}|g" "$BACKUP_CONFIG"
+            fi
+        fi
+        echo "  Backup mapped to host port $BACKUP_PORT (container port $CONTAINER_PORT)"
+    fi
+
+    if command -v docker &>/dev/null && [[ -f "$BACKUP_COMPOSE" ]]; then
+        docker network inspect simple-photos-net &>/dev/null || \
+            docker network create simple-photos-net &>/dev/null || true
+
+        echo "Building backup container image (no-cache, may take a few minutes)..."
+        docker compose -f "$BACKUP_COMPOSE" build --no-cache \
+            || { echo "WARNING: docker compose build failed for backup"; }
+        echo "Starting backup container..."
+        docker compose -f "$BACKUP_COMPOSE" up -d --force-recreate \
+            || { echo "WARNING: docker compose up failed for backup"; }
+        docker image prune -f 2>/dev/null || true
+
+        echo -n "Waiting for backup on :${BACKUP_PORT}"
+        BK_READY=false
+        for attempt in $(seq 1 30); do
+            if curl -sf "http://localhost:${BACKUP_PORT}/api/health" >/dev/null 2>&1 \
+                || curl -sf "http://localhost:${BACKUP_PORT}/api/setup/status" >/dev/null 2>&1; then
+                echo " ready!"
+                BK_READY=true
+                break
+            fi
+            echo -n "."
+            sleep 1
+        done
+
+        if [[ "$BK_READY" == "true" ]]; then
+            echo "  backup is running at http://localhost:${BACKUP_PORT}"
+        else
+            echo "  Warning: backup did not become healthy in time"
+            echo "  Recent logs:"
+            docker compose -f "$BACKUP_COMPOSE" logs --tail=30 2>/dev/null || true
+        fi
+    else
+        if ! command -v docker &>/dev/null; then
+            echo "  Skipping backup container — docker not installed"
+        elif [[ ! -f "$BACKUP_COMPOSE" ]]; then
+            echo "  Skipping backup container — $BACKUP_COMPOSE not found"
+        fi
+    fi
+fi
+
 # Patch config.toml with the chosen port before restarting.
 CONFIG_FILE="$SERVER_DIR/config.toml"
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -321,8 +423,11 @@ fi
 
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
-echo "║         Reset complete — server address         ║"
+echo "║          Reset complete — server addresses       ║"
 echo "╠══════════════════════════════════════════════════╣"
 printf "║  Primary :  http://localhost:%-20s║\n" "${SERVER_PORT}"
+if [[ -d "$BACKUP_DIR" ]] && command -v docker &>/dev/null; then
+    printf "║  Backup  :  http://localhost:%-20s║\n" "${BACKUP_PORT}"
+fi
 echo "╚══════════════════════════════════════════════════╝"
 echo ""

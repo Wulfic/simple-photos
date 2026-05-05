@@ -120,6 +120,13 @@ def test_smoke_geo_reverse_geocoding(user_client: APIClient):
             "Run scripts/fetch_geo_data.sh and re-run this smoke test."
         )
 
+    # Geo is OFF by default to match production privacy.  Opt this user in
+    # before exercising the backfill pipeline.
+    r = user_client.geo_update_settings(enabled=True)
+    assert r.status_code in (200, 204), (
+        f"failed to enable geo for test user: {r.status_code} {r.text}"
+    )
+
     name = unique_filename("jpg")
     content = generate_test_jpeg_with_gps(48.8584, 2.2945)  # Eiffel Tower
     upload = user_client.upload_photo(name, content=content)

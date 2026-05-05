@@ -22,6 +22,7 @@ import { aiApi } from "./ai";
 import { geoApi } from "./geo";
 import { metadataApi } from "./metadata";
 import { transcodeApi } from "./transcode";
+import { setupApi } from "./setup";
 
 // Re-export all types for backward compatibility
 export type {
@@ -63,4 +64,5 @@ export const api = {
   geo: geoApi,
   metadata: metadataApi,
   transcode: transcodeApi,
+  setup: setupApi,
 };

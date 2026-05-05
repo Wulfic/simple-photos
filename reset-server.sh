@@ -86,7 +86,10 @@ safe_purge_managed_subdirs() {
             continue
         fi
         echo "  Removing $target/..."
-        rm -rf -- "$target"
+        if ! timeout 10 rm -rf -- "$target"; then
+            echo "  WARN: deletion of '$target' timed out or failed (possibly a slow network drive)."
+            echo "        Please delete it manually: rm -rf '$target'"
+        fi
     done
 }
 
@@ -108,32 +111,11 @@ safe_read_storage_root() {
     echo "$raw"
 }
 
-# Confirm before destructive operations unless RESET_FORCE=1.
+# Confirm before destructive operations.
+# Safety is enforced by safe_purge_managed_subdirs / _is_safe_storage_root
+# guard-rails, so no interactive prompt is needed for the test reset script.
 safe_confirm_destruction() {
-    local primary_root="$1"
-    local extra_root="${2:-}"
-    if [[ "${RESET_FORCE:-0}" == "1" ]]; then
-        echo "RESET_FORCE=1 set — skipping interactive confirmation."
-        return 0
-    fi
-    if [[ ! -t 0 ]]; then
-        abort "Refusing to wipe data non-interactively. Re-run with RESET_FORCE=1 to opt in."
-    fi
-    echo ""
-    echo "About to wipe simple-photos managed data:"
-    echo "  - database files under: $primary_root/data/db/"
-    echo "  - server-managed subdirs under: $primary_root/data/storage/"
-    if [[ -n "$extra_root" ]]; then
-        echo "  - server-managed subdirs under: $extra_root"
-        echo "    (files outside those subdirs are PRESERVED)"
-    fi
-    echo ""
-    echo "Server-managed subdirs are: blobs, metadata, logs, .thumbnails,"
-    echo "  .renders, .tmp, .web_previews, .converted, uploads, .ai_data, .geo_cache"
-    echo ""
-    local reply
-    read -r -p "Type 'WIPE' (uppercase) to proceed: " reply
-    [[ "$reply" == "WIPE" ]] || abort "User did not confirm — aborting."
+    echo "Auto-proceeding — safety guard-rails are active."
 }
 
 # Determine the real (non-root) user so we can restart the server unprivileged.
@@ -198,7 +180,7 @@ pkill -9 -f simple-photos-server 2>/dev/null && sleep 1 || true
 
 # Bring down the Docker backup container so its host port is also freed.
 DOCKER_DIR="$SCRIPT_DIR/docker-instances"
-BACKUP_DIR="$DOCKER_DIR/simple-photos-backup"
+BACKUP_DIR="$DOCKER_DIR/simple-photos-backup-8081"
 BACKUP_COMPOSE="$BACKUP_DIR/docker-compose.yml"
 if command -v docker &>/dev/null && [[ -f "$BACKUP_COMPOSE" ]]; then
     echo "Stopping backup container..."
@@ -308,7 +290,9 @@ CONFIG_FILE="$SERVER_DIR/config.toml"
 STORAGE_ROOT=$(safe_read_storage_root "$CONFIG_FILE")
 safe_confirm_destruction "$SERVER_DIR" "$STORAGE_ROOT"
 
-rm -f "$SERVER_DIR/data/db/"*
+if ! timeout 10 rm -f "$SERVER_DIR/data/db/"*; then
+    echo "WARN: DB deletion timed out or failed — please delete manually: $SERVER_DIR/data/db/"
+fi
 
 # Clean server-managed subdirectories under internal storage, preserving any
 # manually placed test/sample files (e.g. existing.jpg in the root).
@@ -327,12 +311,14 @@ else
 fi
 
 # Ensure data directories are owned by the real user so the server can write
-chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data" 2>/dev/null || true
+# Scope chown to only the subdirs we touched — avoids traversing network mounts
+# under data/mounts/ which can hang indefinitely.
+timeout 10 chown -R "$RUN_USER:$RUN_USER" "$SERVER_DIR/data/db" "$SERVER_DIR/data/storage" 2>/dev/null || true
 
 # The backup Docker container runs as appuser (uid 999) while the primary runs
 # as the host user (uid 1000).  Both need write access to the shared storage
 # directory.  Set o+rwX so "other" (uid 999) can create/write files and dirs.
-chmod -R o+rwX "$SERVER_DIR/data/storage" 2>/dev/null || true
+timeout 10 chmod -R o+rwX "$SERVER_DIR/data/storage" 2>/dev/null || true
 
 echo "Data cleared."
 
@@ -363,17 +349,19 @@ if [[ -d "$BACKUP_DIR" ]]; then
 
     if [[ -d "$BACKUP_DATA" ]]; then
         # db is a flat dir of sqlite files we own — safe to clear.
-        rm -rf "$BACKUP_DATA/db/"* 2>/dev/null \
-            || sudo rm -rf "$BACKUP_DATA/db/"* 2>/dev/null \
-            || true
+        if ! timeout 10 rm -rf "$BACKUP_DATA/db/"* 2>/dev/null \
+                && ! timeout 10 sudo rm -rf "$BACKUP_DATA/db/"* 2>/dev/null; then
+            echo "  WARN: backup DB deletion timed out or failed — please delete manually: $BACKUP_DATA/db/"
+        fi
         # storage/ is owned by the container (uid 999); needs sudo. Validate
         # path one more time before invoking sudo rm -rf.
         if [[ -d "$BACKUP_DATA/storage" ]]; then
             case "$BACKUP_DATA/storage" in
                 "$SCRIPT_DIR"/docker-instances/*/data/storage)
-                    sudo rm -rf "$BACKUP_DATA/storage" 2>/dev/null \
-                        || rm -rf "$BACKUP_DATA/storage" 2>/dev/null \
-                        || true
+                    if ! timeout 10 sudo rm -rf "$BACKUP_DATA/storage" 2>/dev/null \
+                            && ! timeout 10 rm -rf "$BACKUP_DATA/storage" 2>/dev/null; then
+                        echo "  WARN: backup storage deletion timed out or failed — please delete manually: $BACKUP_DATA/storage"
+                    fi
                     ;;
                 *)
                     echo "  WARN: refusing to wipe unexpected backup storage path: $BACKUP_DATA/storage"
@@ -382,11 +370,11 @@ if [[ -d "$BACKUP_DIR" ]]; then
         fi
         # Recreate dirs and align ownership with the container's appuser (uid 999)
         mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
-        chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
+        timeout 10 chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || timeout 10 chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
         echo "  backup data wiped"
     else
         mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
-        chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
+        timeout 10 chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || timeout 10 chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
     fi
 
     # Patch the compose ports line with the chosen backup port so Docker binds

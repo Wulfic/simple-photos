@@ -148,7 +148,7 @@ export default function Welcome() {
   const [showUserForm, setShowUserForm] = useState(false);
   const [pendingTotpUser, setPendingTotpUser] = useState<CreatedUser | null>(null);
 
-  const { setTokens, setUsername: storeSetUsername } = useAuthStore();
+  const { setTokens, setUsername: storeSetUsername, accessToken } = useAuthStore();
 
   const pw = useMemo(() => checkPasswordStrength(password), [password]);
   const un = useMemo(() => checkUsername(username), [username]);
@@ -177,29 +177,29 @@ export default function Welcome() {
       }
       if (serverSetupId) saveWizardSetupId(serverSetupId);
 
-      if (data.setup_complete) {
-        // Check if the wizard was still in progress (page refresh mid-setup)
-        const savedStep = loadWizardStep();
-        if (savedStep && savedStep !== "loading" && savedStep !== "complete") {
-          // Restore choices so the step indicator and back-navigation work
-          const { role, install } = loadWizardChoices();
-          if (role) setServerRoleRaw(role);
-          if (install) setInstallTypeRaw(install);
-          // Resume the wizard where the user left off
-          setStepRaw(savedStep);
-        } else {
-          // Wizard truly finished — go to login
-          clearWizardStep();
-          navigate("/login", { replace: true });
-        }
+      if (data.wizard_completed) {
+        // Wizard is fully finalized — nothing to resume. Send the user to
+        // /login. We deliberately do NOT honour saved sessionStorage steps
+        // here; once the wizard is done, the only way back into it is a
+        // server reset (which mints a new setup_id and clears storage).
+        clearWizardStep();
+        navigate("/login", { replace: true });
       } else {
-        // Also restore choices for the case where setup_complete is still false
+        // Wizard not finalized — either fresh install or interrupted run.
+        // Restore in-progress state from sessionStorage if present, else
+        // start at step 1 (the welcome screen).
         const savedStep = loadWizardStep();
         if (savedStep && savedStep !== "loading" && savedStep !== "complete") {
           const { role, install } = loadWizardChoices();
           if (role) setServerRoleRaw(role);
           if (install) setInstallTypeRaw(install);
-          setStepRaw(savedStep);
+          // If the wizard was paused on the account step but the account was
+          // already created (e.g. user navigated back), skip straight to 2FA.
+          const resumeStep =
+            savedStep === "account" && data.setup_complete
+              ? "admin-2fa"
+              : savedStep;
+          setStepRaw(resumeStep);
         } else {
           setStep("welcome");
         }
@@ -233,16 +233,18 @@ export default function Welcome() {
 
     setLoading(true);
     try {
-      await fetch("/api/setup/init", {
+      const initRes = await fetch("/api/setup/init", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
-      }).then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: "Setup failed" }));
-          throw new Error(err.error || `HTTP ${res.status}`);
-        }
       });
+
+      if (!initRes.ok && initRes.status !== 403) {
+        const err = await initRes.json().catch(() => ({ error: "Setup failed" }));
+        throw new Error(err.error || `HTTP ${initRes.status}`);
+      }
+      // 403 = account already exists from an earlier attempt — fall through
+      // to login so the user can advance without re-creating the account.
 
       const loginRes = await api.auth.login(username, password);
       if (loginRes.access_token && loginRes.refresh_token) {
@@ -371,13 +373,15 @@ export default function Welcome() {
     }
   }
 
-  async function handleSelectStoragePath() {
-    if (!pendingStoragePath.trim()) return;
+  async function handleSelectStoragePath(pathOverride?: string) {
+    const path = (pathOverride ?? pendingStoragePath).trim();
+    if (!path) return;
     setError("");
     setLoading(true);
     try {
-      const res = await api.admin.updateStorage(pendingStoragePath.trim());
+      const res = await api.admin.updateStorage(path);
       setStoragePath(res.storage_path);
+      setPendingStoragePath(res.storage_path);
       setStorageConfirmed(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to update storage path");
@@ -626,7 +630,6 @@ export default function Welcome() {
               error={error}
               setStep={setStep}
               setError={setError}
-              setStoragePathDirect={setPendingStoragePath}
               serverRole={serverRole}
               installType={installType}
             />

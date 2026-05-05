@@ -64,11 +64,13 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
         );
 
         let batch_size = config.batch_size as i64;
+        let poll_secs = config.poll_interval_secs.max(1);
 
         // Process loop — `tokio::time::interval` ticks immediately on the
         // first call so the initial backfill runs at startup.  Subsequent
-        // ticks fire every 5 minutes to pick up newly uploaded photos.
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        // ticks fire every `poll_interval_secs` (default 5 minutes; tests
+        // shorten this so newly uploaded photos are picked up promptly).
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(poll_secs));
         loop {
             interval.tick().await;
 

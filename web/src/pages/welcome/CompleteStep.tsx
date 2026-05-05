@@ -221,6 +221,21 @@ export default function CompleteStep({
                 }
               }
 
+              // ── Finalize the wizard ─────────────────────────────────
+              // This is the single source of truth that flips
+              // `wizard_completed` to true on the server. Until this
+              // succeeds, every user-data API endpoint returns 403 and
+              // the SPA route guards forward back to /welcome. Doing
+              // this last means an interrupted wizard (browser crash,
+              // network drop) never leaves a half-configured server
+              // that lets people poke around the gallery.
+              //
+              // Must run BEFORE storeKey/auto-scan because those hit
+              // gated endpoints (`/admin/encryption/store-key`,
+              // `/admin/photos/auto-scan` is open but the encryption
+              // route lives under photo_routes which is gated).
+              await api.setup.finalize();
+
               // ── Normal setup tasks ────────────────────────────────────
               // Store the encryption key on the server so it can run
               // auto-migration autonomously.
@@ -243,6 +258,8 @@ export default function CompleteStep({
                   console.warn("Post-setup auto-scan failed:", err);
                 });
               }
+
+              // Finalize was moved above storeKey/auto-scan — no-op here.
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
               console.error("Setup finalization failed:", err);

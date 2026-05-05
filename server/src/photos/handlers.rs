@@ -57,7 +57,7 @@ pub async fn list_photos(
             "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, \
              crop_metadata, camera_model, photo_hash, photo_subtype, burst_id, motion_video_blob_id, \
-             burst_count FROM (\
+             burst_count, geo_city, geo_state, geo_country, geo_country_code FROM (\
              SELECT *, \
              CASE WHEN burst_id IS NOT NULL THEN \
                (SELECT COUNT(*) FROM photos p2 WHERE p2.user_id = photos.user_id AND p2.burst_id = photos.burst_id) \
@@ -74,7 +74,7 @@ pub async fn list_photos(
             "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
              duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, \
              crop_metadata, camera_model, photo_hash, photo_subtype, burst_id, motion_video_blob_id, \
-             NULL AS burst_count \
+             NULL AS burst_count, geo_city, geo_state, geo_country, geo_country_code \
              FROM photos WHERE user_id = ? \
              AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
              AND id NOT IN (SELECT original_blob_id FROM encrypted_gallery_items WHERE original_blob_id IS NOT NULL)",
@@ -559,7 +559,8 @@ pub async fn list_burst_photos(
         "SELECT id, filename, file_path, mime_type, media_type, size_bytes, width, height, \
          duration_secs, taken_at, latitude, longitude, thumb_path, created_at, is_favorite, \
          crop_metadata, camera_model, photo_hash, photo_subtype, burst_id, motion_video_blob_id, \
-         (SELECT COUNT(*) FROM photos p2 WHERE p2.user_id = photos.user_id AND p2.burst_id = photos.burst_id) AS burst_count \
+         (SELECT COUNT(*) FROM photos p2 WHERE p2.user_id = photos.user_id AND p2.burst_id = photos.burst_id) AS burst_count, \
+         geo_city, geo_state, geo_country, geo_country_code \
          FROM photos WHERE user_id = ? AND burst_id = ? \
          ORDER BY COALESCE(taken_at, created_at) ASC",
     )

@@ -85,6 +85,47 @@ def _find_free_port() -> int:
 def _write_config(path: str, port: int, db_path: str, storage_root: str,
                   backup_api_key: str = "", discovery_port: int = 0) -> None:
     """Write a minimal test config.toml."""
+    # Geo: keep `enabled = false` to match the production privacy default
+    # (test_53::test_geo_toggle_persists asserts the off-by-default
+    # behaviour).  But:
+    #   - point dataset_path at the real GeoNames file in the repo if it
+    #     was downloaded by `scripts/fetch_geo_data.sh`, so tests that
+    #     opt-in via `POST /api/settings/geo` actually have data to look
+    #     up against; and
+    #   - shorten `poll_interval_secs` to 2 s so the background backfill
+    #     cycle can pick up newly uploaded photos within a test's wait
+    #     window (production default 300 s is too slow for E2E).
+    geo_dataset = os.path.join(SERVER_DIR, "data", "cities500.txt")
+    if os.path.isfile(geo_dataset):
+        geo_section = (
+            "[geo]\n"
+            "enabled = false\n"
+            f'dataset_path = "{geo_dataset}"\n'
+            "poll_interval_secs = 2\n"
+        )
+    else:
+        geo_section = "[geo]\nenabled = false\npoll_interval_secs = 2\n"
+
+    # AI: keep `enabled = false` (matches production privacy default; tests
+    # that need AI opt in via `POST /api/settings/ai`).  Point `model_dir`
+    # at the repo's `server/models` so when the operator has run
+    # `scripts/fetch_ai_models.sh`, the smoke test
+    # (`test_99_smoke_real_features.py::test_smoke_face_and_object_recognition`)
+    # actually exercises the ONNX pipeline instead of skipping with
+    # "degraded_mode".  Without this override the test server starts in
+    # `tmpdir` whose `./models` directory is empty and AI silently degrades.
+    ai_models_dir = os.path.join(SERVER_DIR, "models")
+    has_ai_models = os.path.isdir(ai_models_dir) and any(
+        f.endswith(".onnx") for f in os.listdir(ai_models_dir)
+    ) if os.path.isdir(ai_models_dir) else False
+    if has_ai_models:
+        ai_section = (
+            "[ai]\n"
+            "enabled = false\n"
+            f'model_dir = "{ai_models_dir}"\n'
+        )
+    else:
+        ai_section = "[ai]\nenabled = false\n"
     config = f"""
 [server]
 host = "127.0.0.1"
@@ -120,7 +161,9 @@ enabled = false
 
 [scan]
 auto_scan_interval_secs = 0
-"""
+
+{geo_section}
+{ai_section}"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:  # codeql[py/clear-text-storage-sensitive-data] -- test-only config with intentionally weak JWT secret
         f.write(config)
@@ -233,7 +276,10 @@ def session_tmpdir():
     """Temp directory for the entire test session."""
     d = tempfile.mkdtemp(prefix="e2e_simple_photos_")
     yield d
-    shutil.rmtree(d, ignore_errors=True)
+    if os.environ.get("KEEP_E2E_TMPDIR"):
+        print(f"\n[E2E] Preserving session tmpdir: {d}")
+    else:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")
@@ -287,6 +333,12 @@ def primary_admin(primary_server) -> APIClient:
         client.setup_init(ADMIN_USERNAME, ADMIN_PASSWORD)
 
     client.login(ADMIN_USERNAME, ADMIN_PASSWORD)
+
+    # Finalize the wizard so user-data endpoints stop returning 403.
+    # Idempotent on the server, so safe to call even if already finalized.
+    if not client.setup_status().get("wizard_completed"):
+        client.setup_finalize()
+
     # Store encryption key for server-side operations
     try:
         client.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
@@ -303,6 +355,8 @@ def backup_admin(backup_server) -> APIClient:
     if not status.get("setup_complete"):
         client.setup_init("backupadmin", "BackupAdminPass123!")
     client.login("backupadmin", "BackupAdminPass123!")
+    if not client.setup_status().get("wizard_completed"):
+        client.setup_finalize()
     try:
         client.admin_store_encryption_key(TEST_ENCRYPTION_KEY)
     except Exception:

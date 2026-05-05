@@ -196,7 +196,7 @@ async fn main() -> anyhow::Result<()> {
     let mut app = Router::new()
         .route("/health", get(health::handlers::health))
         .route("/api/discover/info", get(health::handlers::discover_info))
-        .nest("/api", routes::api_routes())
+        .nest("/api", routes::api_routes(state.clone()))
         // Security headers on all responses
         .layer(axum::middleware::from_fn(security::security_headers))
         // Disable Axum's default 2 MiB body limit — we rely on tower-http's

@@ -76,6 +76,18 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    def setup_finalize(self) -> dict:
+        """Mark the first-run setup wizard as fully complete.
+
+        After ``setup_init`` creates the admin user, the server still gates
+        every user-data endpoint behind ``wizard_completed = true``. Tests
+        must call this once — with an authenticated admin token — before
+        hitting `/photos`, `/blobs`, `/galleries/*`, etc.
+        """
+        r = self.post("/api/setup/finalize")
+        r.raise_for_status()
+        return r.json()
+
     def register(self, username: str, password: str) -> dict:
         r = self.post("/api/auth/register", json_data={"username": username, "password": password})
         r.raise_for_status()
@@ -88,6 +100,24 @@ class APIClient:
         if "access_token" in data:
             self.access_token = data["access_token"]
             self.refresh_token = data.get("refresh_token")
+            # Test-only convenience: the production wizard finalizes itself
+            # by calling /setup/finalize from the final wizard step. Tests
+            # don't go through the wizard UI; they call setup_init + login
+            # and immediately start hitting user-data endpoints. Auto-finalize
+            # here so existing tests keep working without manual finalize
+            # calls. Idempotent on the server, and silently ignored if the
+            # logged-in user isn't an admin (e.g. multi-user pipeline tests
+            # logging in as a non-admin after the admin already finalized).
+            try:
+                status = self.session.get(self._url("/api/setup/status"), timeout=10).json()
+                if not status.get("wizard_completed"):
+                    self.session.post(
+                        self._url("/api/setup/finalize"),
+                        headers=self._auth_headers(),
+                        timeout=10,
+                    )
+            except Exception:
+                pass
         return data
 
     def refresh(self) -> dict:

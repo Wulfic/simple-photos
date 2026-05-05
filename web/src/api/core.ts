@@ -44,6 +44,34 @@ export async function request<T>(
 
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
 
+  // ── Wizard-incomplete redirect ───────────────────────────────────────────
+  // The server returns 403 with `error_code: "wizard_incomplete"` for any
+  // user-data endpoint while the first-run setup wizard hasn't been
+  // finalized. Forward the user to step 1 of the wizard instead of bubbling
+  // a confusing "Forbidden" error up into the UI.
+  //
+  // Skip this for the setup endpoints themselves — they're the way *out*
+  // of the wizard, and a 403 from `/setup/finalize` (e.g. non-admin caller)
+  // is a real error that should surface.
+  if (res.status === 403 && !path.startsWith("/setup/")) {
+    const cloned = res.clone();
+    try {
+      const body = await cloned.json();
+      if (body && body.error_code === "wizard_incomplete") {
+        if (typeof window !== "undefined" && window.location.pathname !== "/welcome") {
+          window.location.replace("/welcome");
+        }
+        throw new Error("Setup wizard incomplete — redirecting to /welcome");
+      }
+    } catch (e) {
+      // JSON parse failed or rethrew our own redirect error. Fall through
+      // and let the normal `!res.ok` handler below format the message.
+      if (e instanceof Error && e.message.startsWith("Setup wizard incomplete")) {
+        throw e;
+      }
+    }
+  }
+
   // ── Rate limiting ────────────────────────────────────────────────────────
   if (res.status === 429) {
     const retryAfter = res.headers.get("Retry-After");

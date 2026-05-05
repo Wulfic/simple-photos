@@ -27,6 +27,12 @@ export interface DiscoveredServer {
 
 export interface SetupStatus {
   setup_complete: boolean;
+  /**
+   * `true` once the admin clicks "Go to Gallery" on the final wizard step.
+   * Until then, the rest of the API is gated and every page redirects to
+   * `/welcome`. The wizard itself is the only place this can flip to true.
+   */
+  wizard_completed: boolean;
   registration_open: boolean;
   version: string;
   /**

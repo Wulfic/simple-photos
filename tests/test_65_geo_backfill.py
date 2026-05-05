@@ -88,11 +88,14 @@ def test_gps_exif_roundtrip(user_client: APIClient):
 )
 def test_geo_backfill_populates_city(user_client: APIClient):
     """When the dataset IS present, upload + wait must populate geo_city."""
-    # Enable geo for this user (in case config default is off).
-    try:
-        user_client.put("/api/settings/geo", json_data={"enabled": True})
-    except Exception:
-        pass
+    # Enable geo for this user (config default is off to match production
+    # privacy default).  Use the proper POST helper — an earlier version
+    # of this test called PUT and silently swallowed the 405, leaving geo
+    # disabled and producing a misleading "pipeline broken" failure.
+    r = user_client.geo_update_settings(enabled=True)
+    assert r.status_code in (200, 204), (
+        f"failed to enable geo for test user: {r.status_code} {r.text}"
+    )
 
     content = _gps_jpeg(48.8584, 2.2945)  # Paris
     data = user_client.upload_photo(unique_filename(), content=content)

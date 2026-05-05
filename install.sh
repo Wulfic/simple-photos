@@ -9,20 +9,16 @@
 # ║    Interactive:   ./install.sh                                           ║
 # ║    CLI (native):  ./install.sh --mode native --port 8080                 ║
 # ║    CLI (docker):  ./install.sh --mode docker --port 8080                 ║
-# ║    CLI (backup):  ./install.sh --mode docker --role backup --port 8081   ║
-# ║                                                                          ║
 # ║  CLI Flags:                                                              ║
 # ║    --mode <native|docker>  Installation mode                             ║
 # ║    --port <number>         Starting port (auto-increments if busy)       ║
-# ║    --role <primary|backup> Server role (default: primary)                ║
 # ║    --name <string>         Instance name (for Docker containers)         ║
 # ║    --storage <path>        Path to photo storage directory               ║
 # ║    --admin-user <string>   Admin username (skip interactive prompt)      ║
 # ║    --admin-pass <string>   Admin password (skip interactive prompt)      ║
-# ║    --backup-api-key <key>  Backup API key for backup servers             ║
-# ║    --primary-url <url>     Primary server URL (for backup pairing)       ║
 # ║    --no-build-android      Skip Android APK build prompt                 ║
 # ║    --no-start              Don't start the server after install          ║
+# ║    --skip-models           Don't download AI models / GeoNames dataset   ║
 # ║    --yes                   Auto-accept all prompts                       ║
 # ║    --help                  Show this help                                ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -54,15 +50,13 @@ cd "$SCRIPT_DIR"
 # ══════════════════════════════════════════════════════════════════════════════
 MODE=""
 PORT=""
-ROLE=""
 INSTANCE_NAME=""
 STORAGE_PATH=""
 ADMIN_USER=""
 ADMIN_PASS=""
-BACKUP_API_KEY=""
-PRIMARY_URL=""
 NO_BUILD_ANDROID=false
 NO_START=false
+SKIP_MODELS=false
 AUTO_YES=false
 DEFAULT_PORT=8080
 DOCKER_CMD="docker"
@@ -79,15 +73,13 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --mode)           MODE="$2"; shift 2 ;;
         --port)           PORT="$2"; shift 2 ;;
-        --role)           ROLE="$2"; shift 2 ;;
         --name)           INSTANCE_NAME="$2"; shift 2 ;;
         --storage)        STORAGE_PATH="$2"; shift 2 ;;
         --admin-user)     ADMIN_USER="$2"; shift 2 ;;
         --admin-pass)     ADMIN_PASS="$2"; shift 2 ;;
-        --backup-api-key) BACKUP_API_KEY="$2"; shift 2 ;;
-        --primary-url)    PRIMARY_URL="$2"; shift 2 ;;
         --no-build-android) NO_BUILD_ANDROID=true; shift ;;
         --no-start)       NO_START=true; shift ;;
+        --skip-models)    SKIP_MODELS=true; shift ;;
         --yes|-y)         AUTO_YES=true; shift ;;
         --help|-h)        show_help ;;
         *)                error "Unknown option: $1"; echo "Use --help for usage."; exit 1 ;;
@@ -338,31 +330,9 @@ fi
 success "Installation mode: $MODE"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 2: Server role
+# Step 2: Check & install dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-if [ -z "$ROLE" ]; then
-    if ! $AUTO_YES; then
-        echo ""
-        echo -e "  ${BOLD}Server role:${NC}"
-        echo -e "  ${CYAN}1)${NC} Primary — main server for uploading & managing photos"
-        echo -e "  ${CYAN}2)${NC} Backup  — backup server that syncs from a primary"
-        echo ""
-        read -p "  Choose [1/2]: " ROLE_CHOICE
-        case "${ROLE_CHOICE:-1}" in
-            1) ROLE="primary" ;;
-            2) ROLE="backup" ;;
-            *) ROLE="primary" ;;
-        esac
-    else
-        ROLE="primary"
-    fi
-fi
-success "Server role: $ROLE"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Step 3: Check & install dependencies
-# ══════════════════════════════════════════════════════════════════════════════
-step "Step 2/7: Checking dependencies"
+step "Step 2/6: Checking dependencies"
 
 # Warm up sudo credentials once so the session is cached for the entire script.
 # This avoids repeated password prompts between long-running steps (e.g. builds).
@@ -549,6 +519,14 @@ if [[ "$MODE" == "native" ]]; then
         warn "Rust not found"; MISSING_DEPS+=("rust")
     fi
 
+    # openssl-sys (and similar crates) need libssl-dev + pkg-config at compile time
+    if pkg-config --exists openssl 2>/dev/null; then
+        success "libssl-dev / pkg-config found"
+    else
+        warn "libssl-dev or pkg-config not found (required to compile Rust openssl crates)"
+        MISSING_DEPS+=("libssl-dev")
+    fi
+
     if command -v node &>/dev/null; then
         success "Node.js $(node --version) found"
     else
@@ -606,6 +584,15 @@ if [[ "$MODE" == "native" ]]; then
                         source "$HOME/.cargo/env" 2>/dev/null || true
                         export PATH="$HOME/.cargo/bin:$PATH"
                         command -v cargo &>/dev/null && success "Rust installed" || { error "Rust install failed"; exit 1; }
+                        # Install OpenSSL dev headers + pkg-config required by openssl-sys crate
+                        info "Installing libssl-dev and pkg-config (required by Rust openssl crates)..."
+                        if command -v apt-get &>/dev/null; then
+                            sudo apt-get install -y -qq libssl-dev pkg-config
+                        elif command -v dnf &>/dev/null; then sudo dnf install -y openssl-devel pkgconf-pkg-config
+                        elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm openssl pkg-config
+                        elif command -v brew &>/dev/null; then brew install openssl pkg-config
+                        fi
+                        success "libssl-dev and pkg-config installed"
                         ;;
                     node)
                         info "Installing Node.js..."
@@ -646,6 +633,16 @@ if [[ "$MODE" == "native" ]]; then
                         elif command -v brew &>/dev/null; then warn "cifs-utils not available on macOS via brew — SMB mounting may not work."
                         else warn "Cannot auto-install cifs-utils. SMB/network storage mounting will not work."; fi
                         command -v mount.cifs &>/dev/null && success "cifs-utils installed" || warn "cifs-utils install failed — SMB storage mounting will not be available."
+                        ;;
+                    libssl-dev)
+                        info "Installing libssl-dev and pkg-config (required to compile Rust openssl crates)..."
+                        if command -v apt-get &>/dev/null; then
+                            sudo apt-get install -y -qq libssl-dev pkg-config
+                        elif command -v dnf &>/dev/null; then sudo dnf install -y openssl-devel pkgconf-pkg-config
+                        elif command -v pacman &>/dev/null; then sudo pacman -S --noconfirm openssl pkg-config
+                        elif command -v brew &>/dev/null; then brew install openssl pkg-config
+                        else error "Cannot auto-install libssl-dev. Please install it manually."; exit 1; fi
+                        pkg-config --exists openssl 2>/dev/null && success "libssl-dev and pkg-config installed" || { error "libssl-dev install failed — required to build the server."; exit 1; }
                         ;;
                     smbclient)
                         info "Installing smbclient (used by the wizard's SMB connection test)..."
@@ -719,7 +716,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Port configuration (auto-increment)
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 3/7: Port configuration"
+step "Step 3/6: Port configuration"
 
 if [ -z "$PORT" ]; then
     PORT=$(prompt_text "Server port" "$DEFAULT_PORT")
@@ -735,11 +732,11 @@ success "Server will run on port $PORT"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 4/7: Configuration"
+step "Step 4/6: Configuration"
 
 if [ -z "$INSTANCE_NAME" ]; then
     if [[ "$MODE" == "docker" ]]; then
-        DEFAULT_NAME="simple-photos-${ROLE}-${PORT}"
+        DEFAULT_NAME="simple-photos-${PORT}"
     else
         DEFAULT_NAME="simple-photos"
     fi
@@ -755,19 +752,10 @@ success "Storage: $STORAGE_PATH"
 
 JWT_SECRET=$(generate_key)
 
-if [[ "$ROLE" == "backup" ]] && [ -z "$BACKUP_API_KEY" ]; then
-    BACKUP_API_KEY=$(generate_key)
-    info "Generated backup API key: ${BACKUP_API_KEY:0:16}..."
-fi
-
-if [[ "$ROLE" == "backup" ]] && [ -z "$PRIMARY_URL" ] && ! $AUTO_YES; then
-    PRIMARY_URL=$(prompt_text "Primary server URL (e.g., http://localhost:8080)" "")
-fi
-
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 6: Build & Install
+# Step 5: Build & Install
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 5/7: Building"
+step "Step 5/6: Building"
 
 write_config() {
     local dest="$1"
@@ -776,11 +764,6 @@ write_config() {
     local cfg_db="$4"
     local cfg_web="$5"
     local cfg_base_url="$6"
-
-    local backup_line=""
-    if [ -n "$BACKUP_API_KEY" ]; then
-        backup_line="api_key = \"${BACKUP_API_KEY}\""
-    fi
 
     cat > "$dest" << TOML
 [server]
@@ -808,7 +791,6 @@ bcrypt_cost = 12
 static_root = "${cfg_web}"
 
 [backup]
-${backup_line}
 
 [tls]
 enabled = false
@@ -832,19 +814,35 @@ if [[ "$MODE" == "native" ]]; then
     success "Server built → server/target/release/simple-photos-server"
     cd "$SCRIPT_DIR"
 
-    # ── Optional: pre-fetch AI models and GeoNames dataset ────────────────
-    # Without these the server runs in degraded_mode (no face/object
-    # detection) and emits no city/country geocoding.  Operators who want
-    # the full feature set should pre-download these now; otherwise the
-    # server will lazily download AI models on first use, and geo will be
-    # disabled until cities500.txt is provided.
-    if prompt_yn "Pre-fetch AI models (~250 MB) and GeoNames dataset (~25 MB)?"; then
-        info "Fetching AI ONNX models → server/models/"
-        bash "$SCRIPT_DIR/scripts/fetch_ai_models.sh" "$SCRIPT_DIR/server/models" || \
-            warn "AI model download failed; server will fall back to lazy download on first use"
-        info "Fetching GeoNames cities500 → server/data/cities500.txt"
-        bash "$SCRIPT_DIR/scripts/fetch_geo_data.sh" "$SCRIPT_DIR/server/data/cities500.txt" || \
-            warn "Geo dataset download failed; reverse-geocoding will be disabled until you re-run scripts/fetch_geo_data.sh"
+    # ── AI models + GeoNames dataset ──────────────────────────────────────
+    # AI face/object recognition is a core feature: without the ONNX models
+    # the server runs in `degraded_mode` and the `/api/ai/*` endpoints
+    # return empty results.  These models are mandatory for a "fully
+    # installed" instance.  GeoNames is similar for reverse geocoding —
+    # without it `geo_city` / `geo_country` are never populated for
+    # photos with GPS EXIF.  Both are downloaded unconditionally; opting
+    # out is supported via `--skip-models` for users who manage models
+    # out-of-band (network-restricted environments, custom mirror, etc.).
+    if [[ "${SKIP_MODELS:-false}" == "true" ]]; then
+        warn "Skipping AI models / GeoNames dataset download (--skip-models). \
+              Server will start in degraded_mode until you run scripts/fetch_ai_models.sh."
+    else
+        info "Fetching AI ONNX models → server/models/  (~200 MB, mandatory for face/object recognition)"
+        if ! bash "$SCRIPT_DIR/scripts/fetch_ai_models.sh" "$SCRIPT_DIR/server/models"; then
+            error "AI model download failed.  Re-run scripts/fetch_ai_models.sh \
+                   before starting the server, or pass --skip-models to install \
+                   without AI features."
+            exit 1
+        fi
+        success "AI models installed"
+
+        info "Fetching GeoNames cities500 → server/data/cities500.txt  (~25 MB, mandatory for reverse geocoding)"
+        if ! bash "$SCRIPT_DIR/scripts/fetch_geo_data.sh" "$SCRIPT_DIR/server/data/cities500.txt"; then
+            warn "Geo dataset download failed; reverse-geocoding will be disabled \
+                  until you re-run scripts/fetch_geo_data.sh"
+        else
+            success "GeoNames dataset installed"
+        fi
     fi
 
     # ── Config ────────────────────────────────────────────────────────────
@@ -990,7 +988,7 @@ fi
 # Step 6.5: Android APK (optional, native only)
 # ══════════════════════════════════════════════════════════════════════════════
 if [[ "$MODE" == "native" ]] && ! $NO_BUILD_ANDROID; then
-    step "Step 6/7: Android app (optional)"
+    step "Step 6/6: Android app (optional)"
     if command -v javac &>/dev/null && [ -d "$SCRIPT_DIR/android" ]; then
         if prompt_yn "Build the Android APK?" "Y"; then
             info "Building Android APK..."
@@ -1029,24 +1027,41 @@ if [[ "$MODE" == "native" ]] && ! $NO_BUILD_ANDROID; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Step 6.9: Firewall — open the server port
+# ══════════════════════════════════════════════════════════════════════════════
+if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "^Status: active"; then
+    if ufw status | grep -q "^${PORT}/tcp"; then
+        success "UFW rule for port ${PORT}/tcp already exists"
+    else
+        info "UFW is active — opening port ${PORT}/tcp..."
+        ufw allow "${PORT}/tcp" comment "Simple Photos ${INSTANCE_NAME}" \
+            && success "UFW: opened port ${PORT}/tcp" \
+            || warn "Could not add UFW rule for port ${PORT}. Add it manually: sudo ufw allow ${PORT}/tcp"
+    fi
+elif command -v firewall-cmd &>/dev/null && firewall-cmd --state 2>/dev/null | grep -q "^running"; then
+    if firewall-cmd --query-port="${PORT}/tcp" --permanent &>/dev/null; then
+        success "firewalld rule for port ${PORT}/tcp already exists"
+    else
+        info "firewalld is active — opening port ${PORT}/tcp..."
+        firewall-cmd --permanent --add-port="${PORT}/tcp" \
+            && firewall-cmd --reload \
+            && success "firewalld: opened port ${PORT}/tcp" \
+            || warn "Could not add firewalld rule for port ${PORT}. Add it manually: sudo firewall-cmd --permanent --add-port=${PORT}/tcp"
+    fi
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Step 7: Summary & Launch
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 7/7: Ready!"
+step "Step 6/6: Ready!"
 
 echo -e "${GREEN}${BOLD}  ✅ Simple Photos is installed and ready!${NC}"
 echo ""
 echo -e "  ${BOLD}Mode:${NC}     $MODE"
-echo -e "  ${BOLD}Role:${NC}     $ROLE"
 echo -e "  ${BOLD}Port:${NC}     $PORT"
 echo -e "  ${BOLD}Name:${NC}     $INSTANCE_NAME"
 echo -e "  ${BOLD}Storage:${NC}  $STORAGE_PATH"
 echo ""
-
-if [ -n "$BACKUP_API_KEY" ]; then
-    echo -e "  ${BOLD}Backup API Key:${NC} $BACKUP_API_KEY"
-    echo -e "  ${YELLOW}  (Save this — needed to register this server as a backup target)${NC}"
-    echo ""
-fi
 
 if [[ "$MODE" == "native" ]]; then
     if command -v systemctl &>/dev/null; then

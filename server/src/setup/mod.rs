@@ -20,3 +20,4 @@ pub mod port;
 pub mod smb;
 pub mod ssl;
 pub mod storage;
+pub mod wizard_gate;

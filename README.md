@@ -90,18 +90,17 @@ The install scripts handle everything — building the server, web frontend, and
 ```
 --mode <native|docker>  Installation mode
 --port <number>         Starting port (auto-increments if busy)
---role <primary|backup> Server role (default: primary)
 --name <string>         Instance name (for Docker containers)
 --storage <path>        Path to photo storage directory
 --admin-user <string>   Admin username (skip interactive prompt)
 --admin-pass <string>   Admin password (skip interactive prompt)
---backup-api-key <key>  Backup API key for backup servers
---primary-url <url>     Primary server URL (for backup pairing)
 --no-build-android      Skip Android APK build prompt
 --no-start              Don't start the server after install
 --yes                   Auto-accept all prompts
 --help                  Show this help
 ```
+
+> **Note:** Primary/backup role is configured after install via the setup wizard — the same binary serves both roles.
 
 **Examples:**
 
@@ -109,8 +108,8 @@ The install scripts handle everything — building the server, web frontend, and
 # Native install on port 8080
 ./install.sh --mode native --port 8080
 
-# Docker install as a backup server
-./install.sh --mode docker --role backup --port 8081
+# Docker install
+./install.sh --mode docker --port 8080
 
 # Fully non-interactive
 ./install.sh --mode docker --port 8080 --admin-user admin --admin-pass secret --yes

@@ -12,9 +12,6 @@
 .PARAMETER Port
     Starting port number (auto-increments if busy). Default: 8080
 
-.PARAMETER Role
-    Server role: "primary" or "backup". Default: primary
-
 .PARAMETER Name
     Instance name (for Docker containers). Default: auto-generated
 
@@ -26,12 +23,6 @@
 
 .PARAMETER AdminPass
     Admin password (skip interactive prompt)
-
-.PARAMETER BackupApiKey
-    Backup API key for backup servers
-
-.PARAMETER PrimaryUrl
-    Primary server URL (for backup pairing)
 
 .PARAMETER NoBuildAndroid
     Skip Android APK build prompt
@@ -46,7 +37,6 @@
     .\install.ps1
     .\install.ps1 -Mode native -Port 8080
     .\install.ps1 -Mode docker -Port 8080
-    .\install.ps1 -Mode docker -Role backup -Port 8081
 #>
 
 [CmdletBinding()]
@@ -56,15 +46,10 @@ param(
 
     [int]$Port = 0,
 
-    [ValidateSet("primary", "backup", "")]
-    [string]$Role = "",
-
     [string]$Name = "",
     [string]$StoragePath = "",
     [string]$AdminUser = "",
     [string]$AdminPass = "",
-    [string]$BackupApiKey = "",
-    [string]$PrimaryUrl = "",
     [switch]$NoBuildAndroid,
     [switch]$NoStart,
     [switch]$Yes
@@ -173,30 +158,9 @@ if (-not $Mode) {
 Write-Ok "Installation mode: $Mode"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 2: Server role
+# Step 2: Check & install dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-if (-not $Role) {
-    if (-not $Yes) {
-        Write-Host ""
-        Write-Host "  Server role:" -ForegroundColor White
-        Write-Host "  1) Primary - main server for uploading & managing photos" -ForegroundColor Cyan
-        Write-Host "  2) Backup  - backup server that syncs from a primary" -ForegroundColor Cyan
-        Write-Host ""
-        $choice = Read-Host "  Choose [1/2]"
-        $Role = switch ($choice) {
-            "2" { "backup" }
-            default { "primary" }
-        }
-    } else {
-        $Role = "primary"
-    }
-}
-Write-Ok "Server role: $Role"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Step 3: Check & install dependencies
-# ══════════════════════════════════════════════════════════════════════════════
-Write-Step "Step 2/7: Checking dependencies"
+Write-Step "Step 2/6: Checking dependencies"
 
 if ($Mode -eq "docker") {
     # ── Docker ────────────────────────────────────────────────────────────
@@ -368,7 +332,7 @@ if ($Mode -eq "native") {
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Port configuration
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "Step 3/7: Port configuration"
+Write-Step "Step 3/6: Port configuration"
 
 if ($Port -eq 0) {
     $Port = [int](Read-Prompt "Server port" $DefaultPort)
@@ -384,10 +348,10 @@ Write-Ok "Server will run on port $Port"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "Step 4/7: Configuration"
+Write-Step "Step 4/6: Configuration"
 
 if (-not $Name) {
-    $defaultName = if ($Mode -eq "docker") { "simple-photos-$Role-$Port" } else { "simple-photos" }
+    $defaultName = if ($Mode -eq "docker") { "simple-photos-$Port" } else { "simple-photos" }
     $Name = Read-Prompt "Instance name" $defaultName
 }
 Write-Ok "Instance: $Name"
@@ -403,19 +367,10 @@ Write-Ok "Storage: $StoragePath"
 
 $JwtSecret = New-SecureKey
 
-if ($Role -eq "backup" -and -not $BackupApiKey) {
-    $BackupApiKey = New-SecureKey
-    Write-Info "Generated backup API key: $($BackupApiKey.Substring(0, 16))..."
-}
-
-if ($Role -eq "backup" -and -not $PrimaryUrl -and -not $Yes) {
-    $PrimaryUrl = Read-Prompt "Primary server URL (e.g., http://localhost:8080)" ""
-}
-
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 6: Build & Install
+# Step 5: Build & Install
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "Step 5/7: Building"
+Write-Step "Step 5/6: Building"
 
 function Write-Config {
     param(
@@ -428,9 +383,6 @@ function Write-Config {
     )
 
     $backupLine = ""
-    if ($BackupApiKey) {
-        $backupLine = "api_key = `"$BackupApiKey`""
-    }
 
     # Escape backslashes for TOML
     $CfgStorage = $CfgStorage -replace "\\", "\\"
@@ -695,17 +647,10 @@ Write-Host ""
 Write-Host "  Simple Photos is installed and ready!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Mode:     $Mode"
-Write-Host "  Role:     $Role"
 Write-Host "  Port:     $Port"
 Write-Host "  Name:     $Name"
 Write-Host "  Storage:  $StoragePath"
 Write-Host ""
-
-if ($BackupApiKey) {
-    Write-Host "  Backup API Key: $BackupApiKey" -ForegroundColor White
-    Write-Host "  (Save this - needed to register this server as a backup target)" -ForegroundColor Yellow
-    Write-Host ""
-}
 
 if ($Mode -eq "native") {
     $serverExe = Join-Path $ScriptDir "server\target\release\simple-photos-server.exe"

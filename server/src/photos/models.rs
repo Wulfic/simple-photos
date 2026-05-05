@@ -67,6 +67,11 @@ pub struct PhotoRecord {
     /// Number of photos in this burst group. Populated when `collapse_bursts=true`;
     /// NULL otherwise.
     pub burst_count: Option<i64>,
+    /// Reverse-geocoded city (populated by the geo backfill processor).
+    pub geo_city: Option<String>,
+    pub geo_state: Option<String>,
+    pub geo_country: Option<String>,
+    pub geo_country_code: Option<String>,
 }
 
 /// Request body for `POST /api/photos/register`.

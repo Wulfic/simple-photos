@@ -631,3 +631,216 @@ fn is_blocked_browse_path(p: &std::path::Path) -> bool {
         .iter()
         .any(|prefix| s == *prefix || s.starts_with(&format!("{}/", prefix)))
 }
+
+// ── Native folder-picker ──────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct PickDirectoryResponse {
+    pub path: String,
+}
+
+/// Admin-only: spawn a native OS folder-picker dialog on the server machine
+/// and return the selected path.
+///
+/// GET /api/admin/pick-directory
+///
+/// Tries `zenity` (GNOME/GTK) first, then `kdialog` (KDE). Returns 503 when
+/// neither tool is available or the server has no display (headless).
+/// The frontend falls back to the in-browser FolderBrowserModal in that case.
+pub async fn pick_directory(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+) -> Result<Json<PickDirectoryResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    let path = spawn_native_picker().await.map_err(|e| {
+        AppError::BadRequest(format!("native_picker_unavailable: {}", e))
+    })?;
+
+    audit::log(
+        &state,
+        AuditEvent::AdminAction,
+        Some(&auth.user_id),
+        &headers,
+        Some(serde_json::json!({
+            "action": "pick_directory",
+            "selected": path,
+        })),
+    )
+    .await;
+
+    Ok(Json(PickDirectoryResponse { path }))
+}
+
+/// Try to launch a native folder-selection dialog. Attempts `zenity` (GTK/GNOME)
+/// then `kdialog` (KDE). Returns the selected path or an error string if
+/// unavailable or cancelled.
+async fn spawn_native_picker() -> Result<String, String> {
+    // Without a graphical display environment neither zenity nor kdialog can
+    // show a window. Both would exit with code 1 — identical to user-cancel —
+    // making them undetectable on the frontend. Bail out immediately so the
+    // frontend knows to fall back to the in-browser directory browser.
+    let has_display = std::env::var("DISPLAY").is_ok()
+        || std::env::var("WAYLAND_DISPLAY").is_ok();
+    if !has_display {
+        return Err(
+            "native_picker_unavailable: no graphical display found (DISPLAY / WAYLAND_DISPLAY not set)".into(),
+        );
+    }
+
+    // zenity --file-selection --directory
+    match tokio::process::Command::new("zenity")
+        .args([
+            "--file-selection",
+            "--directory",
+            "--title=Select Photo Storage Folder",
+        ])
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => {
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !p.is_empty() {
+                return Ok(p);
+            }
+        }
+        Ok(out) if out.status.code() == Some(1) => {
+            // User clicked Cancel
+            return Err("cancelled".into());
+        }
+        _ => {} // zenity not installed or no display — try next
+    }
+
+    // kdialog --getexistingdirectory
+    match tokio::process::Command::new("kdialog")
+        .args([
+            "--getexistingdirectory",
+            "/",
+            "--title",
+            "Select Photo Storage Folder",
+        ])
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => {
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !p.is_empty() {
+                return Ok(p);
+            }
+        }
+        Ok(out) if out.status.code() == Some(1) => {
+            return Err("cancelled".into());
+        }
+        _ => {}
+    }
+
+    Err(
+        "No native dialog tool found. Install zenity (GNOME/GTK) or kdialog (KDE), \
+         or ensure the server process has access to a display."
+            .into(),
+    )
+}
+
+// ── Sentinel resolver ────────────────────────────────────────────────────────
+//
+// The browser's `showDirectoryPicker()` shows the native OS folder-picker (the
+// same dialog as file uploads) but, for security, never exposes the absolute
+// filesystem path to JavaScript. To bridge this gap the frontend:
+//   1. Calls `showDirectoryPicker()` → gets a FileSystemDirectoryHandle.
+//   2. Writes a tiny sentinel file into that directory via the handle.
+//   3. Calls this endpoint with the sentinel's filename.
+//   4. The server locates the file on disk and returns its parent directory.
+//   5. The frontend deletes the sentinel.
+//
+// Sentinel names are validated to the form `sp-picker-<uuid>.tmp` to prevent
+// the endpoint from being used as an arbitrary filesystem search tool.
+
+#[derive(Debug, Deserialize)]
+pub struct SentinelQuery {
+    pub filename: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SentinelResponse {
+    pub path: String,
+}
+
+/// Validate that a sentinel filename matches `sp-picker-<uuid>.tmp`.
+fn is_valid_sentinel_name(name: &str) -> bool {
+    let Some(mid) = name
+        .strip_prefix("sp-picker-")
+        .and_then(|s| s.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    // UUID: 32-36 chars of lowercase hex + hyphens, no slashes or dots
+    mid.len() >= 32
+        && mid.len() <= 36
+        && mid.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+        && !mid.contains('/')
+        && !mid.contains('\\')
+        && !mid.contains('.')
+}
+
+/// Admin-only: locate a sentinel file and return its parent directory path.
+///
+/// GET /api/admin/resolve-sentinel?filename=sp-picker-UUID.tmp
+///
+/// Used by the frontend's `showDirectoryPicker()` flow to recover the absolute
+/// server-side path of a folder the user chose via the native OS dialog.
+pub async fn resolve_storage_sentinel(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    axum::extract::Query(query): axum::extract::Query<SentinelQuery>,
+) -> Result<Json<SentinelResponse>, AppError> {
+    require_admin(&state, &auth).await?;
+
+    if !is_valid_sentinel_name(&query.filename) {
+        return Err(AppError::BadRequest(
+            "Invalid sentinel filename — expected sp-picker-<uuid>.tmp".into(),
+        ));
+    }
+
+    // Search common user-accessible locations (non-system roots only).
+    // Non-existent roots are silently skipped by `find`.
+    const SEARCH_ROOTS: &[&str] = &[
+        "/home", "/mnt", "/media", "/run/media", "/data", "/storage", "/srv",
+    ];
+
+    let filename = query.filename.clone();
+    let mut cmd = tokio::process::Command::new("find");
+    for root in SEARCH_ROOTS {
+        cmd.arg(root);
+    }
+    cmd.args(["-maxdepth", "8", "-name", &filename, "-type", "f"]);
+    // Suppress "Permission denied" noise from inaccessible subdirectories.
+    cmd.stderr(std::process::Stdio::null());
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| AppError::BadRequest("Directory search timed out — try entering the path manually.".into()))?
+    .map_err(|e| AppError::Internal(format!("find command error: {}", e)))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first = stdout.lines().next().ok_or_else(|| {
+        AppError::BadRequest(
+            "Sentinel file not found. The selected folder may not be readable by \
+             the server process, or it is outside the searched locations \
+             (/home, /mnt, /media, /data, /srv). Enter the path manually instead."
+                .into(),
+        )
+    })?;
+
+    let file_path = std::path::PathBuf::from(first.trim());
+    let parent = file_path
+        .parent()
+        .ok_or_else(|| AppError::Internal("Sentinel has no parent path".into()))?;
+
+    Ok(Json(SentinelResponse {
+        path: parent.display().to_string(),
+    }))
+}

@@ -142,6 +142,19 @@ export const adminApi = {
       writable: boolean;
     }>(`/admin/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`),
 
+  /** Open a native OS folder-picker dialog on the server machine.
+   *  Returns the selected path. Throws if unavailable (headless / no zenity)
+   *  or if the user cancelled. The caller should fall back to browseDirectory. */
+  pickDirectory: () =>
+    request<{ path: string }>("/admin/pick-directory"),
+
+  /** Locate a sentinel file the browser wrote via showDirectoryPicker() and
+   *  return the absolute server-side path of its parent directory. */
+  resolveStorageSentinel: (filename: string) =>
+    request<{ path: string }>(
+      `/admin/resolve-sentinel?filename=${encodeURIComponent(filename)}`
+    ),
+
   importScan: (path?: string) =>
     request<{
       directory: string;

@@ -328,11 +328,23 @@ pub struct GeoConfig {
     /// Maximum photos to geocode per batch.
     #[serde(default = "GeoConfig::default_batch_size")]
     pub batch_size: usize,
+    /// Seconds between background backfill cycles.  The first tick fires
+    /// immediately at startup; subsequent ticks fire every
+    /// `poll_interval_secs`.  Production default is 5 minutes.  E2E tests
+    /// override this to a few seconds so newly-uploaded photos can be
+    /// asserted within a reasonable window.
+    #[serde(default = "GeoConfig::default_poll_interval_secs")]
+    pub poll_interval_secs: u64,
 }
 
 impl GeoConfig {
-    fn default_dataset_path() -> String { "data/geonames/cities500.txt".into() }
+    // Matches the path written by `scripts/fetch_geo_data.sh` (which is what
+    // `install.sh` calls) so the out-of-the-box install actually finds the
+    // dataset.  Earlier default `data/geonames/cities500.txt` never matched
+    // the fetch script and silently disabled reverse geocoding.
+    fn default_dataset_path() -> String { "data/cities500.txt".into() }
     fn default_batch_size() -> usize { 100 }
+    fn default_poll_interval_secs() -> u64 { 300 }
 }
 
 impl Default for GeoConfig {
@@ -341,6 +353,7 @@ impl Default for GeoConfig {
             enabled: false,
             dataset_path: Self::default_dataset_path(),
             batch_size: 100,
+            poll_interval_secs: 300,
         }
     }
 }
