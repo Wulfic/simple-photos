@@ -371,21 +371,25 @@ export default function Settings() {
         />
       )}
 
-      {/* ── AI Recognition ────────────────────────────────────────── */}
-      <AiRecognitionSection
-        error={error}
-        setError={setError}
-        success={success}
-        setSuccess={setSuccess}
-      />
+      {/* ── AI Recognition (primary only — backups receive AI data via sync) ── */}
+      {!isBackupMode && (
+        <AiRecognitionSection
+          error={error}
+          setError={setError}
+          success={success}
+          setSuccess={setSuccess}
+        />
+      )}
 
-      {/* ── Geolocation ───────────────────────────────────────────── */}
-      <GeolocationSection
-        error={error}
-        setError={setError}
-        success={success}
-        setSuccess={setSuccess}
-      />
+      {/* ── Geolocation (primary only — backups receive geo data via sync) ── */}
+      {!isBackupMode && (
+        <GeolocationSection
+          error={error}
+          setError={setError}
+          success={success}
+          setSuccess={setSuccess}
+        />
+      )}
 
       {/* ── Apps (hidden on backup servers — Android clients connect to primary) ── */}
       {!isBackupMode && (

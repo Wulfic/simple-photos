@@ -738,6 +738,43 @@ class APIClient:
         return r.json()
 
 
+# ── Real-world sample library helper ───────────────────────────────────────
+
+def sample_files_root() -> str:
+    """Return the root directory for real-world sample files.
+
+    Honours the ``SAMPLE_FILES_ROOT`` env var so CI and contributor machines
+    can override the default (which assumes the dev box layout).
+    """
+    import os
+    return os.environ.get(
+        "SAMPLE_FILES_ROOT",
+        os.path.expanduser("~/Desktop/Sample_files"),
+    )
+
+
+def load_sample(category: str, name: str) -> bytes:
+    """Load a real sample file's raw bytes.
+
+    ``category`` is a sub-folder under ``SAMPLE_FILES_ROOT`` (e.g. ``"image"``,
+    ``"video"``, ``"AI/subtypes/panorama"``).  If the requested file is not
+    present on the runner, ``pytest.skip`` is called so CI without the
+    sample bundle stays green.
+    """
+    import os
+    import pytest as _pytest
+
+    root = sample_files_root()
+    path = os.path.join(root, category, name)
+    if not os.path.exists(path):
+        _pytest.skip(
+            f"Sample file not present: {path} "
+            f"(set SAMPLE_FILES_ROOT to the directory containing the sample library)"
+        )
+    with open(path, "rb") as f:
+        return f.read()
+
+
 # ── Test data generators ─────────────────────────────────────────────
 
 def generate_test_jpeg(width: int = 2, height: int = 2) -> bytes:

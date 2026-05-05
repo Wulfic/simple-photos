@@ -13,7 +13,7 @@ use crate::media::{is_supported_extension, mime_from_extension};
 use crate::sanitize;
 use crate::state::AppState;
 
-use super::metadata::{extract_media_metadata_async, extract_media_metadata_from_bytes_async, extract_xmp_subtype, extract_motion_video};
+use super::metadata::{extract_media_metadata_async, extract_media_metadata_from_bytes_async, extract_xmp_subtype, apply_aspect_subtype_fallback, extract_motion_video};
 use super::thumbnail::generate_thumbnail_file;
 use super::utils::{audio_backup_enabled, compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
 use chrono::Utc;
@@ -268,7 +268,14 @@ pub async fn upload_photo(
     // Read original file bytes to detect motion photo, panorama, 360, HDR,
     // or burst subtype from embedded XMP metadata.
     let xmp_data = tokio::fs::read(&file_path).await.unwrap_or_default();
-    let subtype_info = extract_xmp_subtype(&xmp_data);
+    let mut subtype_info = extract_xmp_subtype(&xmp_data);
+
+    // ── Aspect-ratio fallback ───────────────────────────────────────────
+    // When XMP is missing/stripped (common for scanned/exported panoramas
+    // and 360° photos that lost their GPano markers), fall back to the
+    // image dimensions so the gallery still routes them to the correct
+    // viewer.
+    apply_aspect_subtype_fallback(&mut subtype_info, img_w, img_h);
 
     match &subtype_info.photo_subtype {
         Some(subtype) => {

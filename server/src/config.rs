@@ -280,7 +280,14 @@ impl AiConfig {
     fn default_photos_per_minute() -> u32 { 60 }
     fn default_face_confidence() -> f32 { 0.7 }
     fn default_object_confidence() -> f32 { 0.5 }
-    fn default_face_similarity_threshold() -> f32 { 0.6 }
+    /// Cosine similarity threshold for ArcFace 512-d embeddings.
+    ///
+    /// InsightFace's `w600k_r50` model was trained so that same-identity
+    /// pairs score ≥ ~0.42 and different-identity pairs ≤ ~0.30.  The old
+    /// default of 0.60 was far too strict and caused the same person to
+    /// fragment into many singleton clusters when their pose, lighting,
+    /// or expression varied (e.g. group photos, candid shots).
+    fn default_face_similarity_threshold() -> f32 { 0.42 }
     fn default_model_dir() -> String { "models".into() }
     fn default_quality() -> String { "high".into() }
 
@@ -304,7 +311,7 @@ impl Default for AiConfig {
             photos_per_minute: 60,
             face_confidence: 0.7,
             object_confidence: 0.5,
-            face_similarity_threshold: 0.6,
+            face_similarity_threshold: 0.42,
             model_dir: "models".into(),
             quality: "high".into(),
             allow_heuristic_fallback: false,

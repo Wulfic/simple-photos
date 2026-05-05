@@ -84,13 +84,34 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
         let img = apply_exif_orientation(&input, img);
         let exif_w = img.width();
         let exif_h = img.height();
+        // ── Panorama-aware sizing ────────────────────────────────────
+        // Standard photos: long edge ≤ 512 px (fits the gallery grid).
+        // Panoramas (aspect ≥ 2): scale by **short edge** to 384 px so
+        // a 7000×1000 stitch becomes 2688×384 instead of 512×73 — the
+        // gallery still gets a reasonable cell, and clicking through to
+        // the panorama viewer no longer shows a 73-pixel-tall blob.
+        let aspect = if exif_h > 0 {
+            exif_w as f64 / exif_h as f64
+        } else {
+            1.0
+        };
+        let (target_w, target_h) = if aspect >= 2.0 {
+            // Short-edge fit: scale so min(w, h) <= 384.
+            (3072u32, 384u32)
+        } else if (1.0 / aspect) >= 2.0 {
+            // Tall panorama (rare but possible).
+            (384u32, 3072u32)
+        } else {
+            (512u32, 512u32)
+        };
         tracing::info!(
-            "[thumbnail] Static image: raw={}×{}, after_exif={}×{} (changed={}), src={}",
+            "[thumbnail] Static image: raw={}×{}, after_exif={}×{} (changed={}), target={}×{}, src={}",
             raw_w, raw_h, exif_w, exif_h,
             raw_w != exif_w || raw_h != exif_h,
+            target_w, target_h,
             input.display(),
         );
-        let thumb = img.resize(512, 512, image::imageops::FilterType::Triangle);
+        let thumb = img.resize(target_w, target_h, image::imageops::FilterType::Triangle);
         tracing::info!(
             "[thumbnail] Resized to {}×{}, saving to {}",
             thumb.width(), thumb.height(), output.display(),
@@ -105,11 +126,69 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
     match result {
         Ok(Ok(())) => true,
         Ok(Err(e)) => {
-            tracing::warn!(path = %input_path.display(), error = %e, "Thumbnail generation failed");
+            tracing::warn!(
+                path = %input_path.display(),
+                error = %e,
+                "image-crate thumbnail failed, trying FFmpeg fallback"
+            );
+            // FFmpeg handles many formats the `image` crate cannot —
+            // SVG (via librsvg), RAW (CR2/NEF/etc), PSD, JP2, JPEG-XL, and
+            // odd TIFF variants.  This avoids the grey placeholder for
+            // formats we can otherwise decode through FFmpeg.
+            if generate_static_image_ffmpeg(input_path, output_path).await {
+                return true;
+            }
             generate_placeholder_thumbnail(output_path, [50, 50, 50]).await
         }
         Err(e) => {
             tracing::warn!(path = %input_path.display(), error = %e, "Thumbnail task panicked");
+            false
+        }
+    }
+}
+
+/// FFmpeg-based static image thumbnail fallback.
+///
+/// Used when the pure-Rust `image` crate cannot decode a format we still
+/// want to display — SVG, RAW (CR2/NEF/ARW/etc), PSD, JP2, JPEG-XL, and
+/// some TIFF variants with unusual compression.  FFmpeg routes the input
+/// through its own decoders (often via `libheif` / `librsvg` /
+/// `libopenjpeg`) and emits a JPEG sized to fit within 512 px on the
+/// longest edge, preserving aspect ratio.
+async fn generate_static_image_ffmpeg(input_path: &Path, output_path: &Path) -> bool {
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-i"])
+        .arg(input_path)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=512:512:force_original_aspect_ratio=decrease",
+            "-q:v",
+            "5",
+        ])
+        .arg(output_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let result = status_with_timeout(&mut cmd, THUMBNAIL_TIMEOUT).await;
+    match result {
+        Ok(status) if status.success() && output_path.exists() => {
+            tracing::info!(
+                path = %input_path.display(),
+                "Static image FFmpeg fallback succeeded"
+            );
+            true
+        }
+        Ok(status) => {
+            tracing::warn!(
+                path = %input_path.display(),
+                exit_code = ?status.code(),
+                "FFmpeg static image fallback failed"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::warn!(path = %input_path.display(), error = %e, "FFmpeg fallback errored");
             false
         }
     }

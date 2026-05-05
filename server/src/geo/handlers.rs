@@ -437,6 +437,247 @@ fn format_memory_date(date_str: &str) -> String {
     format!("{} {}, {}", month, day, parts[0])
 }
 
+// ── Trips (multi-day smart location albums) ─────────────────────────────
+
+#[derive(Serialize)]
+pub struct Trip {
+    pub id: String,
+    pub name: String,
+    pub city: String,
+    pub state: Option<String>,
+    pub country: String,
+    pub country_code: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub date_label: String,
+    pub photo_count: i64,
+    pub day_count: i64,
+    pub first_photo_id: Option<String>,
+    pub first_thumb_path: Option<String>,
+}
+
+/// GET /api/geo/trips — multi-day smart location albums.
+///
+/// A trip is a run of photos taken in the same city where consecutive
+/// photos are at most `MAX_GAP_DAYS` (default 3) days apart.  Trips with
+/// fewer than `MIN_PHOTOS` (default 5) photos are filtered out unless
+/// they span at least `MIN_DAYS` (default 1) day; very short bursts of
+/// many photos (e.g. a single-day Yellowstone visit) qualify regardless.
+///
+/// Auth: required (caller's photos only).
+pub async fn list_trips(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Trip>>, AppError> {
+    const MAX_GAP_DAYS: i64 = 3;
+    const MIN_PHOTOS: i64 = 5;
+
+    // Pull every photo with city + date, grouped by city/state/country
+    // and ordered by date so we can run a one-pass clustering pass.
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: String,
+        thumb_path: Option<String>,
+        taken_date: String,
+        city: String,
+        state: Option<String>,
+        country: String,
+        country_code: String,
+    }
+
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT id, thumb_path, DATE(taken_at) AS taken_date, geo_city AS city, \
+                geo_state AS state, geo_country AS country, geo_country_code AS country_code \
+         FROM photos \
+         WHERE user_id = ?1 \
+           AND geo_city IS NOT NULL \
+           AND taken_at IS NOT NULL \
+         ORDER BY geo_country_code, geo_city, taken_at ASC",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    fn parse_date(s: &str) -> Option<chrono::NaiveDate> {
+        chrono::NaiveDate::parse_from_str(&s[..10.min(s.len())], "%Y-%m-%d").ok()
+    }
+
+    struct Cluster {
+        city: String,
+        state: Option<String>,
+        country: String,
+        country_code: String,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+        photo_ids: Vec<String>,
+        cover_thumb: Option<String>,
+    }
+
+    let mut clusters: Vec<Cluster> = Vec::new();
+
+    for row in rows {
+        let date = match parse_date(&row.taken_date) {
+            Some(d) => d,
+            None => continue,
+        };
+        let last_matches = clusters.last().map(|c| {
+            c.country_code == row.country_code
+                && c.city == row.city
+                && (date - c.end).num_days() <= MAX_GAP_DAYS
+                && (date - c.end).num_days() >= 0
+        }).unwrap_or(false);
+
+        if last_matches {
+            let last = clusters.last_mut().unwrap();
+            last.end = date;
+            last.photo_ids.push(row.id);
+            if last.cover_thumb.is_none() {
+                last.cover_thumb = row.thumb_path;
+            }
+        } else {
+            clusters.push(Cluster {
+                city: row.city,
+                state: row.state,
+                country: row.country,
+                country_code: row.country_code,
+                start: date,
+                end: date,
+                photo_ids: vec![row.id],
+                cover_thumb: row.thumb_path,
+            });
+        }
+    }
+
+    let mut trips: Vec<Trip> = clusters
+        .into_iter()
+        .filter(|c| c.photo_ids.len() as i64 >= MIN_PHOTOS)
+        .map(|c| {
+            let day_count = (c.end - c.start).num_days() + 1;
+            let date_label = if c.start == c.end {
+                format_memory_date(&c.start.format("%Y-%m-%d").to_string())
+            } else {
+                format!(
+                    "{} \u{2013} {}",
+                    format_memory_date(&c.start.format("%Y-%m-%d").to_string()),
+                    format_memory_date(&c.end.format("%Y-%m-%d").to_string())
+                )
+            };
+            let name = format!("{} · {}", c.city, date_label);
+            // Trip ID: city-slug + start..end so the same place visited
+            // twice produces two distinct trips.
+            let id = format!(
+                "{}_{}_{}_{}",
+                c.country_code.to_lowercase(),
+                c.city.to_lowercase().replace(' ', "-"),
+                c.start.format("%Y-%m-%d"),
+                c.end.format("%Y-%m-%d")
+            );
+            let first_photo_id = c.photo_ids.first().cloned();
+            let photo_count = c.photo_ids.len() as i64;
+            Trip {
+                id,
+                name,
+                city: c.city,
+                state: c.state,
+                country: c.country,
+                country_code: c.country_code,
+                start_date: c.start.format("%Y-%m-%d").to_string(),
+                end_date: c.end.format("%Y-%m-%d").to_string(),
+                date_label,
+                photo_count,
+                day_count,
+                first_photo_id,
+                first_thumb_path: c.cover_thumb,
+            }
+        })
+        .collect();
+
+    // Most recent trip first.
+    trips.sort_by(|a, b| b.start_date.cmp(&a.start_date));
+
+    Ok(Json(trips))
+}
+
+/// GET /api/geo/trips/:id/photos — photos belonging to a specific trip.
+///
+/// `id` format: `<country_code>_<city-slug>_<YYYY-MM-DD>_<YYYY-MM-DD>`.
+pub async fn list_trip_photos(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(trip_id): Path<String>,
+) -> Result<Json<Vec<PhotoSummary>>, AppError> {
+    // Trip ID format: <cc>_<city-slug>_<start>_<end>
+    // The trailing two segments are always the dates.
+    let parts: Vec<&str> = trip_id.rsplitn(3, '_').collect();
+    if parts.len() != 3 {
+        return Err(AppError::BadRequest("Invalid trip ID format".into()));
+    }
+    let end_date = parts[0];
+    let start_date = parts[1];
+    let head = parts[2];
+    let head_parts: Vec<&str> = head.splitn(2, '_').collect();
+    if head_parts.len() != 2 {
+        return Err(AppError::BadRequest("Invalid trip ID format".into()));
+    }
+    let country_code = head_parts[0].to_uppercase();
+    let city_slug = head_parts[1];
+
+    // Resolve city slug back to canonical name.
+    let city_row: Option<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT geo_city FROM photos \
+         WHERE user_id = ?1 \
+           AND geo_country_code = ?2 \
+           AND geo_city IS NOT NULL \
+           AND LOWER(REPLACE(geo_city, ' ', '-')) = ?3 \
+         LIMIT 1",
+    )
+    .bind(&auth.user_id)
+    .bind(&country_code)
+    .bind(city_slug)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let city = city_row
+        .map(|(c,)| c)
+        .ok_or(AppError::NotFound)?;
+
+    let rows: Vec<(String, String, Option<String>, Option<String>, Option<f64>, Option<f64>)> =
+        sqlx::query_as(
+            "SELECT id, filename, thumb_path, taken_at, latitude, longitude \
+             FROM photos \
+             WHERE user_id = ?1 \
+               AND geo_city = ?2 \
+               AND geo_country_code = ?3 \
+               AND DATE(taken_at) BETWEEN ?4 AND ?5 \
+             ORDER BY taken_at ASC",
+        )
+        .bind(&auth.user_id)
+        .bind(&city)
+        .bind(&country_code)
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(&state.pool)
+        .await?;
+
+    if rows.is_empty() {
+        return Err(AppError::NotFound);
+    }
+
+    let photos = rows
+        .into_iter()
+        .map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
+            id,
+            filename,
+            thumb_path: thumb,
+            taken_at: taken,
+            latitude: lat,
+            longitude: lon,
+        })
+        .collect();
+
+    Ok(Json(photos))
+}
+
 // ── Scrub ────────────────────────────────────────────────────────────
 
 /// POST /api/geo/scrub — scrub all geolocation data for this user.

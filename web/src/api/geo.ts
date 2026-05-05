@@ -60,6 +60,22 @@ export interface Memory {
   first_thumb_path: string | null;
 }
 
+export interface Trip {
+  id: string;
+  name: string;
+  city: string;
+  state: string | null;
+  country: string;
+  country_code: string;
+  start_date: string;
+  end_date: string;
+  date_label: string;
+  photo_count: number;
+  day_count: number;
+  first_photo_id: string | null;
+  first_thumb_path: string | null;
+}
+
 export const geoApi = {
   /** Get geo settings for current user */
   getSettings: () => request<GeoStatus>("/settings/geo"),
@@ -108,4 +124,11 @@ export const geoApi = {
   /** List photos in a specific memory */
   listMemoryPhotos: (memoryId: string) =>
     request<PhotoSummary[]>(`/geo/memories/${encodeURIComponent(memoryId)}/photos`),
+
+  /** List multi-day smart trip albums (clustered by city + ≤3-day gaps). */
+  listTrips: () => request<Trip[]>("/geo/trips"),
+
+  /** List photos in a specific trip */
+  listTripPhotos: (tripId: string) =>
+    request<PhotoSummary[]>(`/geo/trips/${encodeURIComponent(tripId)}/photos`),
 };

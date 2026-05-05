@@ -58,6 +58,15 @@ export default function Albums() {
   }>>([]);
   const [memoryThumbUrls, setMemoryThumbUrls] = useState<Record<string, string>>({});
 
+  // Trips (multi-day smart location albums)
+  const [trips, setTrips] = useState<Array<{
+    id: string; name: string; city: string; country: string;
+    country_code: string; start_date: string; end_date: string;
+    date_label: string; photo_count: number; day_count: number;
+    first_photo_id: string | null; first_thumb_path: string | null;
+  }>>([]);
+  const [tripThumbUrls, setTripThumbUrls] = useState<Record<string, string>>({});
+
   // Encrypted photos from IndexedDB (for smart album counts)
   const encryptedPhotos = useLiveQuery(() => db.photos.toArray());
 
@@ -68,6 +77,7 @@ export default function Albums() {
     loadSharedAlbums();
     loadPeopleClusters();
     loadMemories();
+    loadTrips();
   }, []);
 
   async function loadPeopleClusters() {
@@ -81,6 +91,13 @@ export default function Albums() {
     try {
       const data = await api.geo.listMemories();
       setMemories(data);
+    } catch { /* Geo may not be enabled */ }
+  }
+
+  async function loadTrips() {
+    try {
+      const data = await api.geo.listTrips();
+      setTrips(data);
     } catch { /* Geo may not be enabled */ }
   }
 
@@ -122,12 +139,40 @@ export default function Albums() {
         if (photo?.thumbnailData) {
           const mime = photo.thumbnailMimeType || "image/jpeg";
           urls[m.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        } else if (m.first_photo_id) {
+          urls[m.id] = accessToken
+            ? `${api.photos.thumbUrl(m.first_photo_id)}?token=${accessToken}`
+            : api.photos.thumbUrl(m.first_photo_id);
         }
       }
       if (!cancelled) setMemoryThumbUrls(urls);
     })();
     return () => { cancelled = true; };
-  }, [memories]);
+  }, [memories, accessToken]);
+
+  // Load thumbnails for trips
+  useEffect(() => {
+    if (trips.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const urls: Record<string, string> = {};
+      for (const t of trips) {
+        if (!t.first_photo_id) continue;
+        const photo = await db.photos.where("serverPhotoId").equals(t.first_photo_id).first();
+        if (cancelled) return;
+        if (photo?.thumbnailData) {
+          const mime = photo.thumbnailMimeType || "image/jpeg";
+          urls[t.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        } else {
+          urls[t.id] = accessToken
+            ? `${api.photos.thumbUrl(t.first_photo_id)}?token=${accessToken}`
+            : api.photos.thumbUrl(t.first_photo_id);
+        }
+      }
+      if (!cancelled) setTripThumbUrls(urls);
+    })();
+    return () => { cancelled = true; };
+  }, [trips, accessToken]);
 
   // Compute encrypted smart album counts + first thumbnails from IndexedDB
   const encryptedPhotoCounts = encryptedPhotos ? {
@@ -384,7 +429,122 @@ export default function Albums() {
         ))}
       </div>
 
-      {/* ── Shared Albums ──────────────────────────────────────────────────── */}
+      {/* ── People ─────────────────────────────────────────────────────────── */}
+      {peopleClusters.length > 0 && (
+        <div className="mt-8">
+          <h2
+            className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            onClick={() => navigate("/albums/smart-people")}
+          >People</h2>
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
+            {peopleClusters.map((cluster) => (
+              <div
+                key={cluster.id}
+                onClick={() => navigate(`/albums/smart-people/${cluster.id}`)}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
+              >
+                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
+                  {peopleThumbUrls[cluster.id] ? (
+                    <img
+                      src={peopleThumbUrls[cluster.id]}
+                      alt={cluster.label || "Unknown"}
+                      className="w-full h-full object-cover rounded-full"
+                    />
+                  ) : (
+                    <svg className="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+                    </svg>
+                  )}
+                </div>
+                <p className="font-medium text-center text-sm truncate">
+                  {cluster.label || "Unknown Person"}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                  {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Memories ───────────────────────────────────────────────────────── */}
+      {memories.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Memories</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            {memories.map((memory) => (
+              <div
+                key={memory.id}
+                onClick={() => navigate(`/albums/smart-memories/${memory.id}`)}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
+              >
+                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                  {memoryThumbUrls[memory.id] ? (
+                    <img
+                      src={memoryThumbUrls[memory.id]}
+                      alt={memory.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                    </svg>
+                  )}
+                </div>
+                <div className="p-3">
+                  <p className="font-medium text-sm truncate">{memory.name}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {memory.photo_count} photo{memory.photo_count !== 1 ? "s" : ""} · {memory.country}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Trips (multi-day smart location albums) ───────────────────────── */}
+      {trips.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Trips</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            {trips.map((trip) => (
+              <div
+                key={trip.id}
+                onClick={() => navigate(`/albums/smart-trips/${trip.id}`)}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
+              >
+                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                  {tripThumbUrls[trip.id] ? (
+                    <img
+                      src={tripThumbUrls[trip.id]}
+                      alt={trip.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" />
+                    </svg>
+                  )}
+                </div>
+                <div className="p-3">
+                  <p className="font-medium text-sm truncate">{trip.city}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                    {trip.date_label}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {trip.photo_count} photo{trip.photo_count !== 1 ? "s" : ""} · {trip.day_count} day{trip.day_count !== 1 ? "s" : ""} · {trip.country}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Shared Albums ───────────────────────────────────────── */}
       <div className="mt-8">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Shared Albums</h2>
@@ -501,82 +661,6 @@ export default function Albums() {
           ))}
         </div>
       </div>
-
-      {/* ── People ─────────────────────────────────────────────────────────── */}
-      {peopleClusters.length > 0 && (
-        <div className="mt-8">
-          <h2
-            className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
-            onClick={() => navigate("/albums/smart-people")}
-          >People</h2>
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
-            {peopleClusters.map((cluster) => (
-              <div
-                key={cluster.id}
-                onClick={() => navigate(`/albums/smart-people/${cluster.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
-              >
-                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
-                  {peopleThumbUrls[cluster.id] ? (
-                    <img
-                      src={peopleThumbUrls[cluster.id]}
-                      alt={cluster.label || "Unknown"}
-                      className="w-full h-full object-cover rounded-full"
-                    />
-                  ) : (
-                    <svg className="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-                    </svg>
-                  )}
-                </div>
-                <p className="font-medium text-center text-sm truncate">
-                  {cluster.label || "Unknown Person"}
-                </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
-                  {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Memories ───────────────────────────────────────────────────────── */}
-      {memories.length > 0 && (
-        <div className="mt-8">
-          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Memories</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {memories.map((memory) => (
-              <div
-                key={memory.id}
-                onClick={() => navigate(`/albums/smart-memories/${memory.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
-              >
-                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
-                  {memoryThumbUrls[memory.id] ? (
-                    <img
-                      src={memoryThumbUrls[memory.id]}
-                      alt={memory.name}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
-                    </svg>
-                  )}
-                </div>
-                <div className="p-3">
-                  <p className="font-medium text-sm truncate">{memory.name}</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {memory.photo_count} photo{memory.photo_count !== 1 ? "s" : ""} · {memory.country}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
       </main>
     </div>
   );

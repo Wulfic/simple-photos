@@ -196,7 +196,9 @@ pub async fn scan_and_register(
 
             // ── XMP subtype detection (motion, panorama, burst, HDR) ────
             let file_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
-            let subtype_info = extract_xmp_subtype(&file_bytes);
+            let mut subtype_info = extract_xmp_subtype(&file_bytes);
+            // Aspect-ratio fallback for panoramas / 360° photos missing XMP.
+            super::metadata::apply_aspect_subtype_fallback(&mut subtype_info, img_w, img_h);
 
             let insert_result = sqlx::query(
                 "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
@@ -408,8 +410,8 @@ pub async fn scan_and_register(
     // ── Retroactively fill missing XMP subtypes for existing photos ──────
     // Detect motion, panorama, burst, HDR subtypes that were missed by
     // earlier scan versions that didn't do XMP extraction.
-    let photos_needing_subtype: Vec<(String, String)> = sqlx::query_as(
-        "SELECT id, file_path FROM photos \
+    let photos_needing_subtype: Vec<(String, String, i64, i64)> = sqlx::query_as(
+        "SELECT id, file_path, COALESCE(width, 0), COALESCE(height, 0) FROM photos \
          WHERE user_id = ? AND photo_subtype IS NULL AND file_path != ''",
     )
     .bind(&auth.user_id)
@@ -426,7 +428,7 @@ pub async fn scan_and_register(
         let subtype_count = Arc::new(AtomicI64::new(0));
         let mut handles = Vec::with_capacity(photos_needing_subtype.len());
 
-        for (pid, fpath) in photos_needing_subtype {
+        for (pid, fpath, ph_w, ph_h) in photos_needing_subtype {
             let abs = storage_root.join(&fpath);
             if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
                 continue;
@@ -440,7 +442,43 @@ pub async fn scan_and_register(
             handles.push(tokio::spawn(async move {
                 let _permit = sem.acquire().await;
                 let file_bytes = tokio::fs::read(&abs).await.unwrap_or_default();
-                let sub = extract_xmp_subtype(&file_bytes);
+                let mut sub = extract_xmp_subtype(&file_bytes);
+
+                // If the photos row never recorded width/height (legacy
+                // imports), the aspect fallback would otherwise skip these
+                // panoramas forever.  Re-extract dimensions from disk.
+                let (mut eff_w, mut eff_h) = (ph_w, ph_h);
+                if eff_w <= 0 || eff_h <= 0 {
+                    let fname = abs
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let (rw, rh, _, _, _, _) =
+                        super::metadata::extract_media_metadata_from_bytes_async(
+                            file_bytes.clone(),
+                            fname,
+                        )
+                        .await;
+                    if rw > 0 && rh > 0 {
+                        eff_w = rw;
+                        eff_h = rh;
+                        // Persist the re-extracted dimensions so future
+                        // queries (and aspect-aware previews) see them.
+                        let _ = sqlx::query(
+                            "UPDATE photos SET width = ?, height = ? WHERE id = ?",
+                        )
+                        .bind(eff_w)
+                        .bind(eff_h)
+                        .bind(&pid)
+                        .execute(&pool)
+                        .await;
+                    }
+                }
+
+                // Aspect-ratio fallback for panoramas / 360° photos
+                // missing XMP markers (e.g. scanned or re-exported files).
+                super::metadata::apply_aspect_subtype_fallback(&mut sub, eff_w, eff_h);
 
                 if let Some(ref subtype) = sub.photo_subtype {
                     sqlx::query(

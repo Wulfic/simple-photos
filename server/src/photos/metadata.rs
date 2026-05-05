@@ -627,6 +627,79 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
     info
 }
 
+/// Aspect-ratio fallback for panorama / equirectangular detection.
+///
+/// Many real-world panoramic images — especially scanned/stitched JPEGs
+/// and 360° photos exported by tools that strip XMP — carry **no**
+/// `GPano:ProjectionType` marker.  When `extract_xmp_subtype` returns
+/// `None`, we still want the gallery to designate them so the proper
+/// viewer (panorama scrubber or 360° sphere) is offered.
+///
+/// Rules (only applied when `info.photo_subtype` is `None`):
+/// * `width >= 1024` is required to avoid mislabeling small banners.
+/// * If the aspect ratio is between 1.95 and 2.05 (inclusive) **and**
+///   `width >= 1500`, the image is treated as `equirectangular` (true
+///   2:1 360° panorama).
+/// * Otherwise, an aspect ratio `>= 2.0` ⇒ `panorama` (cylindrical /
+///   wide stitch).
+///
+/// Width/height of `0` (unknown) are treated as a no-op.
+/// Apply aspect-ratio fallback to detect panoramas / 360° photos when XMP
+/// metadata is missing.
+///
+/// Triggers only when `info.photo_subtype` is `None`. Marks images with
+/// aspect ratio ≥ 1.8 (or ≤ 1/1.8 for vertical panoramas) and a long edge
+/// of at least 1024 px as panoramas.  Photos at exactly 2:1 (±2.5%) and
+/// ≥ 1500 px wide are tagged as `equirectangular` (likely 360° photo
+/// sphere with stripped GPano XMP).
+///
+/// Width/height of `0` (unknown) are treated as a no-op.
+pub(crate) fn apply_aspect_subtype_fallback(
+    info: &mut SubtypeInfo,
+    width: i64,
+    height: i64,
+) {
+    if info.photo_subtype.is_some() {
+        return;
+    }
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    // Long edge must be at least 1024 px so we don't tag tiny thumbnails.
+    if width.max(height) < 1024 {
+        return;
+    }
+    let w = width as f64;
+    let h = height as f64;
+    let aspect = w / h;
+    // Horizontal panorama: w/h ≥ 1.8 (covers 16:9 phone panos, classic 2:1
+    // 360°, ultra-wide stitched panoramas, etc.).
+    // Vertical panorama: h/w ≥ 1.8 (rare but exists — Samsung "vertical pano").
+    let is_horizontal_pano = aspect >= 1.8;
+    let is_vertical_pano = (1.0 / aspect) >= 1.8;
+    if !is_horizontal_pano && !is_vertical_pano {
+        return;
+    }
+    let subtype = if is_horizontal_pano
+        && (1.95..=2.05).contains(&aspect)
+        && width >= 1500
+    {
+        // 2:1 ratio and large enough — most likely an equirectangular 360°
+        // capture whose GPano XMP was stripped during conversion / sharing.
+        "equirectangular"
+    } else {
+        "panorama"
+    };
+    tracing::debug!(
+        width,
+        height,
+        aspect,
+        chosen = subtype,
+        "[subtype] aspect-ratio fallback assigned panorama subtype"
+    );
+    info.photo_subtype = Some(subtype.to_string());
+}
+
 /// Extract photo subtype from a file on disk (reads first 128 KB).
 pub(crate) fn extract_xmp_subtype_from_file(path: &std::path::Path) -> SubtypeInfo {
     match std::fs::read(path) {
@@ -750,7 +823,7 @@ mod xmp_tests {
     //! Each test injects a JPEG byte stream containing an APP1/XMP packet
     //! and asserts the extractor produces the expected `SubtypeInfo`.
 
-    use super::{extract_xmp_subtype, SubtypeInfo};
+    use super::{apply_aspect_subtype_fallback, extract_xmp_subtype, SubtypeInfo};
 
     fn jpeg_with_xmp(xmp: &str) -> Vec<u8> {
         // SOI (FFD8) + APP1 with XMP packet + EOI (FFD9).
@@ -857,5 +930,86 @@ mod xmp_tests {
         let bytes = vec![0xFF, 0xD8, 0xFF, 0xD9];
         let info = extract_xmp_subtype(&bytes);
         assert_eq!(info, SubtypeInfo::default());
+    }
+
+    #[test]
+    fn aspect_fallback_equirectangular_2to1() {
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 3000, 1500);
+        assert_eq!(info.photo_subtype.as_deref(), Some("equirectangular"));
+    }
+
+    #[test]
+    fn aspect_fallback_wide_panorama() {
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 7000, 1000);
+        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
+    }
+
+    #[test]
+    fn aspect_fallback_small_2to1_is_panorama_not_equirect() {
+        // Below 1500 px wide but still 2:1 — treated as panorama, not 360°.
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 1200, 600);
+        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
+    }
+
+    #[test]
+    fn aspect_fallback_skips_when_xmp_already_set() {
+        let mut info = SubtypeInfo {
+            photo_subtype: Some("motion".to_string()),
+            ..SubtypeInfo::default()
+        };
+        apply_aspect_subtype_fallback(&mut info, 7000, 1000);
+        assert_eq!(info.photo_subtype.as_deref(), Some("motion"));
+    }
+
+    #[test]
+    fn aspect_fallback_skips_too_small() {
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 800, 200);
+        assert_eq!(info.photo_subtype, None);
+    }
+
+    #[test]
+    fn aspect_fallback_skips_normal_photo() {
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 4000, 3000);
+        assert_eq!(info.photo_subtype, None);
+    }
+
+    #[test]
+    fn aspect_fallback_handles_zero_dims() {
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 0, 0);
+        assert_eq!(info.photo_subtype, None);
+    }
+
+    // ── New regression coverage for the lowered aspect threshold ────────
+
+    #[test]
+    fn aspect_fallback_phone_panorama_18to1() {
+        // Modern phone panoramas often land at ~1.8:1 (16:9-ish stitching).
+        // The old 2.0 cutoff missed these and they showed up as plain photos.
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 5760, 3200); // 1.8:1
+        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
+    }
+
+    #[test]
+    fn aspect_fallback_just_below_threshold_is_normal() {
+        // 1.77 (≈ 16:9) is still a normal photo — guards against false
+        // positives on widescreen captures and screenshots.
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 1920, 1080);
+        assert_eq!(info.photo_subtype, None);
+    }
+
+    #[test]
+    fn aspect_fallback_vertical_panorama() {
+        // Samsung "vertical pano" — height/width ≥ 1.8.
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 1080, 4000);
+        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
     }
 }

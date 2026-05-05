@@ -226,8 +226,18 @@ pub async fn list_face_clusters(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<FaceClusterSummary>>, AppError> {
+    // `representative` is not yet populated by the processor; fall back to
+    // the highest-confidence face detection's photo so the People grid in
+    // the UI shows a real thumbnail instead of a generic placeholder.
     let clusters: Vec<FaceClusterSummary> = sqlx::query_as(
-        "SELECT fc.id, fc.label, fc.photo_count, fc.representative, fc.created_at, fc.updated_at \
+        "SELECT fc.id, fc.label, fc.photo_count, \
+                COALESCE(\
+                    fc.representative, \
+                    (SELECT fd.photo_id FROM face_detections fd \
+                     WHERE fd.cluster_id = fc.id \
+                     ORDER BY fd.confidence DESC LIMIT 1) \
+                ) AS representative, \
+                fc.created_at, fc.updated_at \
          FROM face_clusters fc \
          WHERE fc.user_id = ?1 \
          ORDER BY fc.photo_count DESC"

@@ -6,7 +6,7 @@
  * and sharing controls.
  */
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Navigate } from "react-router-dom";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
 import { db, type CachedPhoto, type CachedAlbum } from "../db";
@@ -65,6 +65,10 @@ export default function AlbumDetail() {
   if (albumId === "smart-memories") {
     if (subId) return <MemoryDetailView memoryId={subId} />;
     return <MemoriesView />;
+  }
+  if (albumId === "smart-trips") {
+    if (subId) return <TripDetailView tripId={subId} />;
+    return <Navigate to="/albums" replace />;
   }
 
   // ── Smart album rendering (delegates to a separate sub-component) ───────
@@ -1151,6 +1155,125 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
                       photoIds: photos.map(p => p.blobId),
                       currentIndex: idx,
                       albumId: `smart-memories/${memoryId}`,
+                    },
+                  });
+                }}
+                onLongPress={() => {}}
+                onRemove={() => {}}
+              />
+            )}
+          />
+        )}
+      </main>
+
+      {slideshow.isActive && (
+        <Slideshow
+          currentBlobId={slideshow.currentBlobId}
+          isPlaying={slideshow.isPlaying}
+          currentSlide={slideshow.currentSlide}
+          totalSlides={slideshow.totalSlides}
+          shuffleEnabled={slideshow.shuffleEnabled}
+          intervalMs={slideshow.intervalMs}
+          transition={slideshow.transition}
+          direction={slideshow.direction}
+          onTogglePlay={slideshow.togglePlay}
+          onNext={slideshow.next}
+          onPrev={slideshow.prev}
+          onToggleShuffle={slideshow.toggleShuffle}
+          onSetSpeed={slideshow.setSpeed}
+          onSetTransition={slideshow.setTransition}
+          onExit={slideshow.stop}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Trip Detail View ──────────────────────────────────────────────────────────
+
+function TripDetailView({ tripId }: { tripId: string }) {
+  const navigate = useNavigate();
+  const [tripName, setTripName] = useState("Trip");
+  const [photos, setPhotos] = useState<CachedPhoto[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const trips = await api.geo.listTrips();
+        const trip = trips.find(t => t.id === tripId);
+        if (!cancelled && trip) setTripName(`${trip.city} · ${trip.date_label}`);
+
+        const summaries = await api.geo.listTripPhotos(tripId);
+        const found: CachedPhoto[] = [];
+        for (const s of summaries) {
+          const photo = await db.photos.where("serverPhotoId").equals(s.id).first();
+          if (photo) found.push(photo);
+        }
+        if (!cancelled) setPhotos(found);
+      } catch { /* trip may not exist */ }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [tripId]);
+
+  const blobIds = useMemo(() => photos.map(p => p.blobId), [photos]);
+  const mediaTypeMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of photos) m.set(p.blobId, p.mediaType);
+    return m;
+  }, [photos]);
+  const slideshow = useSlideshow(blobIds, mediaTypeMap);
+  const hasPhotos = photos.some(p => p.mediaType === "photo" || p.mediaType === "gif");
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <AppHeader />
+      <main className="p-4">
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => navigate("/albums")}
+            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            title="Back to Albums"
+          >
+            <AppIcon name="back-arrow" size="w-5 h-5" />
+          </button>
+          <h2 className="text-xl font-semibold truncate">{tripName}</h2>
+          <span className="text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          {hasPhotos && (
+            <button
+              onClick={() => slideshow.start(0)}
+              className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              title="Start Slideshow"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+            </button>
+          )}
+        </div>
+
+        {loading ? (
+          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+        ) : photos.length === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+            <p className="text-gray-500 dark:text-gray-400">No photos found for this trip</p>
+          </div>
+        ) : (
+          <JustifiedGrid
+            items={photos}
+            getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
+            getKey={(p) => p.blobId}
+            renderItem={(photo, idx) => (
+              <AlbumTile
+                photo={photo}
+                isSelectionMode={false}
+                isSelected={false}
+                onClick={() => {
+                  navigate(`/photo/${photo.blobId}`, {
+                    state: {
+                      photoIds: photos.map(p => p.blobId),
+                      currentIndex: idx,
+                      albumId: `smart-trips/${tripId}`,
                     },
                   });
                 }}

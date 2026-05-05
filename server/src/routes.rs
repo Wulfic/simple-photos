@@ -646,6 +646,8 @@ fn geo_routes() -> Router<AppState> {
         // Memories (auto-generated smart albums)
         .route("/geo/memories", get(crate::geo::handlers::list_memories))
         .route("/geo/memories/{memory_id}/photos", get(crate::geo::handlers::list_memory_photos))
+        .route("/geo/trips", get(crate::geo::handlers::list_trips))
+        .route("/geo/trips/{trip_id}/photos", get(crate::geo::handlers::list_trip_photos))
         // Scrub
         .route("/geo/scrub", post(crate::geo::handlers::scrub_geo_data))
 }

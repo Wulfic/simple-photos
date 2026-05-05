@@ -11,6 +11,7 @@ import { clearKey } from "../crypto/crypto";
 import { api } from "../api/client";
 import { useProcessingStore } from "../store/processing";
 import AppIcon from "./AppIcon";
+import CastDialog, { CastIcon } from "./CastDialog";
 import { clearAllUserData } from "../db";
 import { thumbMemoryCache } from "../utils/gallery";
 
@@ -67,6 +68,7 @@ export default function AppHeader({
 
   const hasActivity = useProcessingStore((s) => s.isProcessing);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [castOpen, setCastOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Check admin status from JWT
@@ -217,6 +219,14 @@ export default function AppHeader({
                   )}
                   <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
                   <button
+                    onClick={() => { setCastOpen(true); setDropdownOpen(false); }}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                  >
+                    <CastIcon className="w-4 h-4" />
+                    Cast…
+                  </button>
+                  <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+                  <button
                     onClick={() => { toggleTheme(); setDropdownOpen(false); }}
                     className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
                   >
@@ -242,6 +252,7 @@ export default function AppHeader({
       </div>
     </header>
     <div className="h-14" />
+    <CastDialog open={castOpen} onClose={() => setCastOpen(false)} />
     </>
   );
 }

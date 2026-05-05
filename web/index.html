@@ -18,6 +18,33 @@
   </head>
   <body class="bg-gray-50 dark:bg-gray-900 min-h-screen overflow-x-hidden">
     <div id="root"></div>
+    <!--
+      Pre-install the Cast SDK availability handler BEFORE the cast_sender.js
+      script loads.  Otherwise, on Chromium-based browsers (especially Brave)
+      where the gstatic CDN script may execute before our React bundle has
+      mounted, the SDK will invoke window.__onGCastApiAvailable while it is
+      still undefined and the result is lost — leaving the app stuck on the
+      "Cast SDK not available" branch even though the SDK loaded fine.
+
+      The result is parked on window.__castApiPreload so the React init code
+      (web/src/utils/cast.ts → initCast) can read it synchronously.
+    -->
+    <script>
+      (function () {
+        window.__castApiPreload = { received: false, available: false, listeners: [] };
+        window.__onGCastApiAvailable = function (isAvailable) {
+          var p = window.__castApiPreload;
+          p.received = true;
+          p.available = !!isAvailable;
+          for (var i = 0; i < p.listeners.length; i++) {
+            try { p.listeners[i](!!isAvailable); } catch (e) { console.error("[cast] listener error", e); }
+          }
+          p.listeners.length = 0;
+        };
+      })();
+    </script>
+    <!-- Google Cast Sender SDK (loads CastContext on window.__onGCastApiAvailable) -->
+    <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1" async></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

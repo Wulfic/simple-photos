@@ -34,7 +34,7 @@ axum-server = { version = "0.7", features = ["tls-rustls"] }
 imagesize = "0.13"
 kamadak-exif = "0.5"
 aes-gcm = "0.10"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "ico", "avif"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "ico", "avif", "tiff", "hdr"] }
 base64 = "0.22"
 num_cpus = "1"
 async-stream = "0.3"
