@@ -242,6 +242,13 @@ export const adminApi = {
         challenge_port: number;
         last_issued_at: string | null;
       } | null;
+      local_ca?: {
+        generated_at: string;
+        ca_expires_at: string;
+        cert_expires_at: string;
+        hosts: string[];
+        fingerprint_sha256: string;
+      } | null;
     }>("/admin/ssl"),
 
   /** Update TLS configuration (manual cert paths) */
@@ -289,5 +296,44 @@ export const adminApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  /**
+   * Generate a self-signed local CA + leaf certificate.
+   *
+   * Builds a 10-year root CA and a 397-day server cert covering localhost,
+   * the host's hostname, all detected LAN IPs, and any extra DNS names
+   * the operator supplies.  The public CA cert is bundled with install
+   * scripts for Linux, Windows, and Android (downloadable via
+   * `localCaBundleUrl()`); the private keys never leave the server.
+   *
+   * Pass `dry_run: true` to validate inputs without touching the
+   * filesystem.
+   */
+  provisionLocalCa: (data: {
+    label?: string;
+    extra_hosts?: string[];
+    dry_run?: boolean;
+  }) =>
+    request<{
+      success: boolean;
+      dry_run: boolean;
+      fingerprint_sha256: string;
+      hosts: string[];
+      generated_at: string;
+      ca_expires_at: string;
+      cert_expires_at: string;
+      cert_path: string;
+      key_path: string;
+      bundle_url: string;
+      message: string;
+    }>("/admin/ssl/local-ca", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** Returns the absolute URL the browser should hit to download the
+   *  install bundle.  The endpoint requires admin auth — UI uses an
+   *  authenticated `fetch` instead of a plain anchor `href`. */
+  localCaBundleUrl: () => "/api/admin/ssl/local-ca/bundle",
 
 };

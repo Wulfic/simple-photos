@@ -180,6 +180,14 @@ fn admin_routes() -> Router<AppState> {
             "/admin/ssl/letsencrypt",
             post(crate::setup::ssl::provision_letsencrypt),
         )
+        .route(
+            "/admin/ssl/local-ca",
+            post(crate::setup::ssl::provision_local_ca),
+        )
+        .route(
+            "/admin/ssl/local-ca/bundle",
+            get(crate::setup::ssl::download_local_ca_bundle),
+        )
         // Server-side import
         .route("/admin/import/scan", get(crate::setup::import::import_scan))
         .route("/admin/import/file", get(crate::setup::import::import_file))

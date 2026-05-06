@@ -57,6 +57,7 @@ param(
     [string]$LetsEncryptEmail = "",
     [switch]$LetsEncryptStaging,
     [switch]$LetsEncryptAgreeTos,
+    [switch]$LocalCa,
     [switch]$NoBuildAndroid,
     [switch]$NoStart,
     [switch]$SkipModels,
@@ -827,4 +828,21 @@ if (-not $NoStart) {
             Set-Location $ScriptDir
         }
     }
+}
+
+# ── Local-CA hint ─────────────────────────────────────────────────────
+# Mirror the install.sh post-install hint so Windows operators who pass
+# -LocalCa get the same instructions for generating the self-signed CA
+# and downloading the install bundle from the web UI.
+if ($LocalCa) {
+    Write-Host ""
+    Write-Info 'Self-signed local CA was requested (-LocalCa).'
+    Write-Info 'Open the web UI -> Settings -> SSL / TLS -> "Self-signed local CA"'
+    Write-Info 'and click "Generate local CA".  Then click "Download CA install'
+    Write-Info 'bundle" and run the included script on each device:'
+    Write-Info '  Linux:    sudo ./install-linux.sh'
+    Write-Info '  Windows:  PowerShell (as admin) -> .\install-windows.ps1'
+    Write-Info '  Android:  follow install-android.txt'
+    Write-Info 'After installing the CA on a device, the Simple Photos URL will'
+    Write-Info 'load as a fully-trusted HTTPS site with no browser warnings.'
 }

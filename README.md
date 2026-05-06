@@ -3,7 +3,7 @@
 A self-hosted photo & video library with end-to-end encryption, multi-server backup & restore, and web + Android access.
 
 ### PROJECT STATUS: BETA
-This project is in early development and not yet recommended for production use. Expect breaking changes, missing features, and rough edges. Feedback and contributions are very welcome! I expect to have a proper release by early summer 2026. Once this reaches beta, I don't anticipate any new features for a long time, and will primarily be focused on bug fixes, performance improvements, and polish. That being said I dont have access to apple hardware for testing, so if anyone wants to help with the apple side of things (Live Photo support, HEIC conversion, iOS app development, etc) that would be a huge help!
+This project is in early development and not yet recommended for production use. Expect breaking changes, missing features, and rough edges. Feedback and contributions are very welcome! I expect to have a proper release by early summer 2026. Once this reaches a first release, I don't anticipate any new major features for a long time, and will primarily be focused on bug fixes, performance improvements, and polish. That being said I dont have access to apple hardware for testing, so if anyone wants to help with the apple side of things (Live Photo support, HEIC conversion, iOS app development, etc) that would be a huge help!
 
 ### Authors Note
 Simple Photos was born out of a desire for a secure, private, and user-friendly photo management solution that I could host myself. But found that other solutions lacked one critical thing, backup servers! Forcing users to choose between only having one backup target, or use multiple solutions; So I decided to build something from the ground up that met all my needs — and hopefully yours too!
@@ -17,11 +17,11 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **Multi-user** — multiple accounts with per-user storage, shared albums, and admin controls
 - **Themes** — full light/dark theme support
 - **Google Cast Support** — cast photos and videos to compatible devices
-- **Face and object recognition** — optional local AI module for face clustering and object tagging.  Requires ONNX models (SCRFD + ArcFace + MobileNetV2); without them the AI subsystem reports `degraded_mode: true` via `/api/ai/status` and emits no detections.  Models are downloaded automatically by `install.sh` / `install.ps1` unless `--skip-models` / `-SkipModels` is passed.
+- **Face and object recognition** — optional local AI module for face clustering and object tagging.  
 - **Metadata editing** — view and edit photo metadata (EXIF, IPTC, XMP) with support for custom metadata fields
-- **Geolocation support** — optional reverse geocoding to country/city.  Requires the GeoNames `cities500.txt` dataset (CC BY 4.0).  Downloaded automatically by `install.sh` / `install.ps1`; without it, GPS coordinates are stored but no city/country tags are produced.
+- **Geolocation support** — optional reverse geocoding to country/city.  
 - **Geolocation Stripping** — option to remove geolocation metadata during import for privacy
-- **GPU acceleration** — optional GPU-accelerated media processing and AI inference for faster performance on supported hardware
+- **GPU acceleration** — optional GPU-accelerated media processing and AI inference for faster performance on supported hardware(AMD/INTEL GPUs have not been tested but should work, I only own nvidia)
 ### Media
 - **Supported Photo, video, and audio formats** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
 - **Media conversion** — automatic FFmpeg-based conversion of non-native formats (I.E HEIC → JPEG, MKV → MP4, WMA → MP3) during import and scan
@@ -47,13 +47,14 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 
 - **Backup sync** — automatic server-to-server backup replication with support for multiple backup targets, including remote servers
 - **Backup recovery** — restore a primary server from any backup server with full data integrity (photos, albums, secure galleries, trash, metadata, accounts, etc.)
+- **Offsite Backup Support** - Ability to host from a VPS or other similar services
 
 ### Security
 
 - **2FA** — TOTP two-factor authentication with backup codes
 - **Rate limiting** — brute-force protection on authentication endpoints
 - **Audit logging** — server-side audit trail
-- **TLS** — native HTTPS support with configurable certificates
+- **TLS/SSL** — native HTTPS support with configurable certificates, supporting multiple methods
 
 ### Android
 
@@ -71,7 +72,7 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 
 ## Getting Started
 
-The install scripts handle everything — building the server, web frontend, and (optionally) the Android APK. They support both Docker and bare-metal (native) installations with auto-port detection, admin account creation, and backup server pairing.
+The install scripts handle everything — building the server, web frontend, and (optionally) the Android APK. They support both Docker and bare-metal (native) installations.
 
 ### Linux / macOS
 
@@ -100,8 +101,6 @@ The install scripts handle everything — building the server, web frontend, and
 --help                  Show this help
 ```
 
-> **Note:** Primary/backup role is configured after install via the setup wizard — the same binary serves both roles.
-
 **Examples:**
 
 ```bash
@@ -124,12 +123,6 @@ The install scripts handle everything — building the server, web frontend, and
 - **Android SDK** (optional, for building the Android APK)
 
 All prerequisites are handled automatically by the install scripts, minus docker installation on Windows (which requires manual setup).
-
-#### GPU Acceleration (automatic)
-
-GPU acceleration for AI inference and video transcoding is **auto-detected at runtime** — no manual configuration required. If a supported GPU is present (NVIDIA CUDA, Intel QSV/VA-API, AMD AMF), the server uses it automatically. Otherwise it falls back to CPU. The same binary works on any machine.
-
-The built web frontend is served by the Rust server from the configured `static_root`. The Android APK is available at `android/app/build/outputs/apk/debug/app-debug.apk` and served by the server at `/api/downloads/android` (a download button is available in settings).
 
 ## API
 

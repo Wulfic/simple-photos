@@ -44,6 +44,11 @@ pem = "3"
 # provider as the process default at boot — otherwise the multi-provider
 # auto-selection panics.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# `time` is already a transitive dep of rcgen — declare it directly so the
+# self-signed local CA module can name `time::OffsetDateTime` (the type used
+# by `rcgen::CertificateParams::not_before` / `not_after`) without inferring
+# it through opaque return types.
+time = "0.3"
 imagesize = "0.13"
 kamadak-exif = "0.5"
 aes-gcm = "0.10"

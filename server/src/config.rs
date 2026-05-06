@@ -239,6 +239,14 @@ pub struct TlsConfig {
     /// renewal status.
     #[serde(default)]
     pub letsencrypt: Option<LetsEncryptConfig>,
+    /// Optional self-signed local CA state.  Populated by
+    /// [`crate::setup::local_ca::generate_local_ca`] when the admin picks
+    /// the "Self-signed local CA" TLS option (4th choice in the wizard /
+    /// settings panel).  Surfaced in `GET /api/admin/ssl` so the UI can
+    /// expose the "Download CA bundle" button only after one has been
+    /// generated.
+    #[serde(default)]
+    pub local_ca: Option<LocalCaConfig>,
 }
 
 impl TlsConfig {
@@ -255,8 +263,32 @@ impl Default for TlsConfig {
             redirect_http: true,
             http_redirect_port: 80,
             letsencrypt: None,
+            local_ca: None,
         }
     }
+}
+
+/// Persisted state for a self-signed local CA.
+///
+/// Stored under `[tls.local_ca]` in `config.toml` after a successful
+/// generation run.  Contains only public/non-sensitive metadata — the
+/// private keys live exclusively in `data/local_ca/*.key` with `0o600`
+/// permissions.
+#[derive(Debug, Deserialize, serde::Serialize, Clone)]
+pub struct LocalCaConfig {
+    /// RFC-3339 timestamp when the CA was generated.
+    pub generated_at: String,
+    /// RFC-3339 timestamp when the root CA expires.
+    pub ca_expires_at: String,
+    /// RFC-3339 timestamp when the leaf cert expires.
+    pub cert_expires_at: String,
+    /// SANs embedded in the leaf certificate at generation time.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    /// SHA-256 fingerprint of the root CA, colon-separated hex.  The
+    /// install scripts re-verify this before adding the cert to the OS
+    /// trust store.
+    pub fingerprint_sha256: String,
 }
 
 /// Persisted state for an ACME (Let's Encrypt) certificate.

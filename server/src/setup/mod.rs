@@ -7,6 +7,7 @@
 //! - [`port`]     — Server port configuration and restart.
 //! - [`ssl`]      — TLS certificate configuration (manual + Let's Encrypt).
 //! - [`letsencrypt`] — ACME-v2 (RFC 8555) automated certificate issuance.
+//! - [`local_ca`]  — Self-signed local CA generator + install bundle (LAN-only HTTPS).
 //! - [`storage`]  — Storage root and directory browsing.
 
 pub mod admin;
@@ -16,6 +17,7 @@ pub mod discovery_phases;
 pub mod handlers;
 pub mod import;
 pub mod letsencrypt;
+pub mod local_ca;
 pub mod pair;
 pub mod pair_helpers;
 pub mod port;

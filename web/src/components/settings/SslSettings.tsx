@@ -1,6 +1,8 @@
-/** SSL/TLS certificate configuration panel — upload cert/key or configure Let's Encrypt. */
+/** SSL/TLS certificate configuration panel — upload cert/key, configure
+ *  Let's Encrypt, or generate a self-signed local CA for LAN-only HTTPS. */
 import { useState, useEffect } from "react";
 import { api } from "../../api/client";
+import { downloadRaw } from "../../api/core";
 import { getErrorMessage } from "../../utils/formatters";
 
 interface SslSettingsProps {
@@ -34,6 +36,23 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
   const [leProvisioning, setLeProvisioning] = useState(false);
   const [leMessage, setLeMessage] = useState("");
 
+  // ── Local CA state ─────────────────────────────────────────────────
+  // 4th TLS option: server generates its own root CA + leaf, the operator
+  // installs the public root on each client device.  No third party, no
+  // public DNS, no inbound firewall rules.
+  const [lcExisting, setLcExisting] = useState<{
+    generated_at: string;
+    ca_expires_at: string;
+    cert_expires_at: string;
+    hosts: string[];
+    fingerprint_sha256: string;
+  } | null>(null);
+  const [lcLabel, setLcLabel] = useState("");
+  const [lcExtraHosts, setLcExtraHosts] = useState("");
+  const [lcGenerating, setLcGenerating] = useState(false);
+  const [lcMessage, setLcMessage] = useState("");
+  const [lcDownloading, setLcDownloading] = useState(false);
+
   useEffect(() => {
     loadSslSettings();
   }, []);
@@ -50,6 +69,9 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
         setLeEmail(res.letsencrypt.email);
         setLeStaging(res.letsencrypt.staging);
         setLeChallengePort(String(res.letsencrypt.challenge_port ?? 80));
+      }
+      if (res.local_ca) {
+        setLcExisting(res.local_ca);
       }
       setSslLoaded(true);
     } catch {
@@ -122,6 +144,64 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
       setError(getErrorMessage(err));
     } finally {
       setSslSaving(false);
+    }
+  }
+
+  async function handleGenerateLocalCa() {
+    setError("");
+    setLcMessage("");
+
+    const extras = lcExtraHosts
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    setLcGenerating(true);
+    try {
+      // Dry-run validates the inputs before mutating the filesystem.
+      await api.admin.provisionLocalCa({
+        label: lcLabel.trim() || undefined,
+        extra_hosts: extras,
+        dry_run: true,
+      });
+      const res = await api.admin.provisionLocalCa({
+        label: lcLabel.trim() || undefined,
+        extra_hosts: extras,
+        dry_run: false,
+      });
+      setLcMessage(
+        `Local CA generated. Fingerprint: ${res.fingerprint_sha256}. Restart the server to begin serving HTTPS.`,
+      );
+      setSuccess(
+        "Self-signed local CA generated. Download the bundle and install it on every device that connects to this server.",
+      );
+      void loadSslSettings();
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to generate local CA"));
+    } finally {
+      setLcGenerating(false);
+    }
+  }
+
+  async function handleDownloadLocalCaBundle() {
+    setError("");
+    setLcDownloading(true);
+    try {
+      const buf = await downloadRaw(api.admin.localCaBundleUrl());
+      const blob = new Blob([buf], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "simple-photos-ca-bundle.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Revoke after a tick so Safari has time to start the download.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to download CA bundle"));
+    } finally {
+      setLcDownloading(false);
     }
   }
 
@@ -327,6 +407,111 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
           </button>
           {leMessage && (
             <p className="text-sm text-green-700 dark:text-green-400">{leMessage}</p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Self-signed Local CA panel ────────────────────────────── */}
+      <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+        <h3 className="text-sm font-semibold mb-2">Self-signed local CA (no third-party)</h3>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Generate a long-lived root CA and a server certificate signed by it.
+          Install the public root on each device (Linux, Windows, Android) using
+          the bundled scripts and you'll get a real, trusted HTTPS connection on
+          your LAN — no Let's Encrypt, no public DNS, no inbound firewall rules.
+          The private keys never leave the server.
+        </p>
+
+        {lcExisting && (
+          <div className="mb-3 p-3 rounded-md bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-xs">
+            <div className="font-medium text-emerald-800 dark:text-emerald-300">
+              Active local CA
+            </div>
+            <div className="text-emerald-700 dark:text-emerald-400 mt-1 break-all">
+              Fingerprint (SHA-256): <span className="font-mono">{lcExisting.fingerprint_sha256}</span>
+            </div>
+            <div className="text-emerald-700 dark:text-emerald-400 mt-1">
+              Generated: {new Date(lcExisting.generated_at).toLocaleString()}
+            </div>
+            <div className="text-emerald-700 dark:text-emerald-400">
+              Leaf expires: {new Date(lcExisting.cert_expires_at).toLocaleDateString()}{" · "}
+              CA expires: {new Date(lcExisting.ca_expires_at).toLocaleDateString()}
+            </div>
+            {lcExisting.hosts.length > 0 && (
+              <div className="text-emerald-700 dark:text-emerald-400 mt-1">
+                Hosts: <span className="font-mono">{lcExisting.hosts.join(", ")}</span>
+              </div>
+            )}
+            <button
+              onClick={handleDownloadLocalCaBundle}
+              disabled={lcDownloading}
+              className="mt-3 bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm"
+            >
+              {lcDownloading ? "Preparing download…" : "⬇ Download CA install bundle (.zip)"}
+            </button>
+            <p className="text-emerald-700 dark:text-emerald-400 mt-2 text-[11px] leading-snug">
+              The zip contains <code className="font-mono">ca.pem</code>, plus install
+              scripts for Linux (<code className="font-mono">install-linux.sh</code>),
+              Windows (<code className="font-mono">install-windows.ps1</code>), and
+              Android (<code className="font-mono">install-android.txt</code>).
+              Verify the fingerprint above matches the one printed by the install
+              script before trusting the certificate.
+            </p>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              CA label (optional)
+            </label>
+            <input
+              type="text"
+              value={lcLabel}
+              onChange={(e) => setLcLabel(e.target.value)}
+              placeholder="Simple Photos Local CA — kitchen-NAS"
+              maxLength={128}
+              autoComplete="off"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              disabled={lcGenerating}
+            />
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Shown in the OS trust store. Defaults to the server's hostname.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Extra hosts (optional, space- or comma-separated)
+            </label>
+            <input
+              type="text"
+              value={lcExtraHosts}
+              onChange={(e) => setLcExtraHosts(e.target.value)}
+              placeholder="photos.local 192.168.1.50"
+              autoComplete="off"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              disabled={lcGenerating}
+            />
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Localhost, the server hostname, and detected LAN IPs are added
+              automatically. Add custom DNS names or static IPs here.
+            </p>
+          </div>
+          <button
+            onClick={handleGenerateLocalCa}
+            disabled={lcGenerating}
+            className="bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm"
+          >
+            {lcGenerating
+              ? "Generating CA…"
+              : lcExisting
+                ? "Re-generate local CA"
+                : "Generate local CA"}
+          </button>
+          {lcMessage && (
+            <p className="text-sm text-emerald-700 dark:text-emerald-400 break-all">
+              {lcMessage}
+            </p>
           )}
         </div>
       </div>

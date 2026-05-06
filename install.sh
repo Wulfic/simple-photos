@@ -23,6 +23,12 @@
 # ║    --letsencrypt-agree-tos       Confirm acceptance of the LE Subscriber║
 # ║                                  Agreement (https://letsencrypt.org/    ║
 # ║                                  repository/) — required to provision  ║
+# ║    --local-ca                    Generate a self-signed local CA after  ║
+# ║                                  install (LAN-only HTTPS, no third-     ║
+# ║                                  party CA, no public DNS).  See         ║
+# ║                                  Settings → SSL → "Self-signed local    ║
+# ║                                  CA" in the web UI for the download &   ║
+# ║                                  per-platform install scripts.          ║
 # ║    --no-build-android      Skip Android APK build prompt                ║
 # ║    --no-start              Don't start the server after install          ║
 # ║    --skip-models           Don't download AI models / GeoNames dataset   ║
@@ -150,6 +156,7 @@ LE_DOMAIN=""
 LE_EMAIL=""
 LE_STAGING=false
 LE_AGREE_TOS=false
+LOCAL_CA=false
 NO_BUILD_ANDROID=false
 NO_START=false
 SKIP_MODELS=false
@@ -177,6 +184,7 @@ while [[ $# -gt 0 ]]; do
         --letsencrypt-email)     LE_EMAIL="$2"; shift 2 ;;
         --letsencrypt-staging)   LE_STAGING=true; shift ;;
         --letsencrypt-agree-tos) LE_AGREE_TOS=true; shift ;;
+        --local-ca)       LOCAL_CA=true; shift ;;
         --no-build-android) NO_BUILD_ANDROID=true; shift ;;
         --no-start)       NO_START=true; shift ;;
         --skip-models)    SKIP_MODELS=true; shift ;;
@@ -1255,4 +1263,23 @@ if ! $NO_START; then
             success "Container $INSTANCE_NAME is running"
         fi
     fi
+fi
+
+# ── Local-CA hint ─────────────────────────────────────────────────────────
+# When the operator passed --local-ca we don't try to call the API from
+# inside the installer (the server may not be ready yet, and admin auth is
+# user-driven).  Instead we surface a clear post-install instruction so
+# they know exactly where to click to generate the cert and download the
+# install bundle for each device.
+if $LOCAL_CA; then
+    echo ""
+    info "Self-signed local CA was requested (--local-ca)."
+    info "Open the web UI → Settings → SSL / TLS → \"Self-signed local CA\" and"
+    info "click \"Generate local CA\".  Then click \"Download CA install bundle\""
+    info "and run the included script on each device:"
+    info "  • Linux:    sudo ./install-linux.sh"
+    info "  • Windows:  PowerShell (as admin) → .\\install-windows.ps1"
+    info "  • Android:  follow install-android.txt"
+    info "After installing the CA on a device, the Simple Photos URL will load"
+    info "as a fully-trusted HTTPS site with no browser warnings."
 fi
