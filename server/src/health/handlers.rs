@@ -54,6 +54,13 @@ pub async fn activity_status(
     // a small LIMIT to keep the query bounded — we don't need an exact
     // total, just "is there at least one?".  Errors are swallowed so a
     // transient DB hiccup doesn't 500 a status poll.
+    //
+    // IMPORTANT: mirror the AI processor's user-enabled filter exactly.
+    // Without it, photos belonging to users who have AI disabled (or who
+    // are on a server where AI is globally off) are never processed, so
+    // the backlog query would return true forever and the spinner would
+    // never stop.
+    let ai_config_default = if state.config.ai.enabled { 1i64 } else { 0i64 };
     let ai_pending: bool = sqlx::query_scalar::<_, i64>(
         "SELECT EXISTS( \
              SELECT 1 FROM photos p \
@@ -63,26 +70,44 @@ pub async fn activity_status(
                  SELECT 1 FROM ai_processed_photos ap \
                  WHERE ap.photo_id = p.id AND ap.user_id = p.user_id \
              ) \
+             AND ( \
+                 EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'ai_enabled' AND us.value = 'true') \
+                 OR ( \
+                     ?2 = 1 AND NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'ai_enabled') \
+                 ) \
+             ) \
              LIMIT 1 \
          )",
     )
     .bind(&auth.user_id)
+    .bind(ai_config_default)
     .fetch_one(&state.read_pool)
     .await
     .map(|n| n != 0)
     .unwrap_or(false);
 
     // Backlog: photos with GPS but no resolved geo_city for this user.
+    // Again, mirror the geo processor's user-enabled filter so we don't
+    // report pending work for users who have geo disabled — those photos
+    // will never get geo_city populated and would spin forever otherwise.
+    let geo_config_default = if state.config.geo.enabled { 1i64 } else { 0i64 };
     let geo_pending: bool = sqlx::query_scalar::<_, i64>(
         "SELECT EXISTS( \
              SELECT 1 FROM photos p \
              WHERE p.user_id = ?1 \
              AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
              AND p.geo_city IS NULL \
+             AND ( \
+                 EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'geo_enabled' AND us.value = 'true') \
+                 OR ( \
+                     ?2 = 1 AND NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'geo_enabled') \
+                 ) \
+             ) \
              LIMIT 1 \
          )",
     )
     .bind(&auth.user_id)
+    .bind(geo_config_default)
     .fetch_one(&state.read_pool)
     .await
     .map(|n| n != 0)
