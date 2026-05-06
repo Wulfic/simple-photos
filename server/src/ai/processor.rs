@@ -7,6 +7,8 @@
 //! Rate-limited by `photos_per_minute` config to avoid overwhelming the CPU.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
@@ -31,6 +33,7 @@ pub fn spawn_ai_processor(
     config: AiConfig,
     storage_root: PathBuf,
     jwt_secret: String,
+    active: Arc<AtomicBool>,
 ) {
     let engine = AiEngine::new(&config);
     if !engine.has_any_capability() {
@@ -68,7 +71,12 @@ pub fn spawn_ai_processor(
         );
 
         loop {
-            if let Err(e) = process_batch(&pool, &engine, &config, &storage_root, &jwt_secret).await {
+            // Run a batch with the activity flag held high so the web client
+            // can spin its profile-avatar indicator while AI work is in progress.
+            active.store(true, Ordering::Relaxed);
+            let result = process_batch(&pool, &engine, &config, &storage_root, &jwt_secret).await;
+            active.store(false, Ordering::Relaxed);
+            if let Err(e) = result {
                 tracing::error!("AI processor error: {}", e);
             }
 

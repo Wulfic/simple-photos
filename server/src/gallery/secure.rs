@@ -145,6 +145,153 @@ pub async fn delete_secure_gallery(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// DELETE /api/galleries/secure/:gallery_id/items/:item_id
+///
+/// Remove an item from a secure gallery, returning the original photo to
+/// the regular gallery.  This deletes the cloned blob (and clone photos
+/// row, if any) created by `add_gallery_item`, and removes the
+/// `encrypted_gallery_items` membership row.  The original photo —
+/// referenced via `original_blob_id` — is automatically un-hidden the
+/// next time the main gallery polls `/api/galleries/secure/blob-ids`.
+///
+/// Ownership of the gallery is verified before any deletion.
+pub async fn remove_gallery_item(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((gallery_id, item_id)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    // Verify gallery ownership first.
+    let owner: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM encrypted_galleries WHERE id = ? AND user_id = ?")
+            .bind(&gallery_id)
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if owner == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    // Look up the item — we need the cloned blob_id (and encrypted_*) to
+    // delete the underlying files and DB rows.
+    let item: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT blob_id, encrypted_blob_id, encrypted_thumb_blob_id \
+         FROM encrypted_gallery_items WHERE id = ? AND gallery_id = ?",
+    )
+    .bind(&item_id)
+    .bind(&gallery_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let (clone_blob_id, enc_blob_id, enc_thumb_blob_id) =
+        item.ok_or(AppError::NotFound)?;
+
+    let storage_root = (**state.storage_root.load()).clone();
+
+    // Delete the cloned blob file + row (if owned by this user).
+    let clone_blob: Option<(String,)> = sqlx::query_as(
+        "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+    )
+    .bind(&clone_blob_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some((sp,)) = clone_blob {
+        let _ = crate::blobs::storage::delete_blob(&storage_root, &sp).await;
+        let _ = sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
+            .bind(&clone_blob_id)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    // Delete server-side clone photos row (and its thumbnail file) if any.
+    // The clone uses the same id as the cloned blob.
+    let clone_photo: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT file_path, thumb_path, encrypted_blob_id, encrypted_thumb_blob_id \
+         FROM photos WHERE id = ? AND user_id = ?",
+    )
+    .bind(&clone_blob_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some((fp, tp, photo_enc_blob, photo_enc_thumb)) = clone_photo {
+        if !fp.is_empty() {
+            let _ = crate::blobs::storage::delete_blob(&storage_root, &fp).await;
+        }
+        if let Some(tp) = tp {
+            let _ = crate::blobs::storage::delete_blob(&storage_root, &tp).await;
+        }
+        // Delete encrypted blobs that belong only to this clone photo row
+        for eb in [photo_enc_blob.as_deref(), photo_enc_thumb.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Ok(Some((sp,))) = sqlx::query_as::<_, (String,)>(
+                "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+            )
+            .bind(eb)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.pool)
+            .await
+            {
+                let _ = crate::blobs::storage::delete_blob(&storage_root, &sp).await;
+                let _ = sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
+                    .bind(eb)
+                    .bind(&auth.user_id)
+                    .execute(&state.pool)
+                    .await;
+            }
+        }
+        sqlx::query("DELETE FROM photos WHERE id = ? AND user_id = ?")
+            .bind(&clone_blob_id)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    // Delete encrypted_blob_id / encrypted_thumb_blob_id stored on the item
+    // (used on backup servers when there is no photos clone row).  Avoid
+    // double-deleting blobs we already removed above.
+    for eb in [enc_blob_id.as_deref(), enc_thumb_blob_id.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|id| *id != clone_blob_id)
+    {
+        if let Ok(Some((sp,))) = sqlx::query_as::<_, (String,)>(
+            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(eb)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await
+        {
+            let _ = crate::blobs::storage::delete_blob(&storage_root, &sp).await;
+            let _ = sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
+                .bind(eb)
+                .bind(&auth.user_id)
+                .execute(&state.pool)
+                .await;
+        }
+    }
+
+    // Finally drop the membership row — the original photo becomes visible
+    // again because `list_secure_blob_ids` will no longer include its id.
+    sqlx::query("DELETE FROM encrypted_gallery_items WHERE id = ? AND gallery_id = ?")
+        .bind(&item_id)
+        .bind(&gallery_id)
+        .execute(&state.pool)
+        .await?;
+
+    tracing::info!(
+        gallery_id = %gallery_id,
+        item_id = %item_id,
+        clone_blob_id = %clone_blob_id,
+        "[DIAG:SECURE_REMOVE] Removed item from secure gallery; original returned to gallery"
+    );
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Request body for `POST /api/galleries/secure/{id}/items`.
 /// Associates an encrypted blob with a secure gallery.
 #[derive(Debug, Deserialize)]

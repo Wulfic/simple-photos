@@ -26,6 +26,8 @@ pub fn spawn_all(
     scan_lock: &Arc<tokio::sync::Mutex<()>>,
     audit_tx: &tokio::sync::broadcast::Sender<AuditBroadcast>,
     storage_available: &Arc<AtomicBool>,
+    ai_active: &Arc<AtomicBool>,
+    geo_active: &Arc<AtomicBool>,
 ) {
     spawn_housekeeping(pool.clone());
     spawn_trash_purge(pool.clone(), config.storage.root.clone());
@@ -61,8 +63,9 @@ pub fn spawn_all(
         config.ai.clone(),
         config.storage.root.clone(),
         config.auth.jwt_secret.clone(),
+        ai_active.clone(),
     );
-    crate::geo::processor::spawn_geo_processor(pool.clone(), config.geo.clone());
+    crate::geo::processor::spawn_geo_processor(pool.clone(), config.geo.clone(), geo_active.clone());
 }
 
 // ── Individual task spawners ─────────────────────────────────────────

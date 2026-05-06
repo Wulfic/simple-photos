@@ -107,10 +107,28 @@ CROP_ROTATE_CASES = [
     pytest.param(100, 80, 0.0, 0.0, 0.5, 0.5, 270, 40, 50, id="quarter_rot270"),
     # 100×80 crop to 50×40 then rotate 180° → 50×40 (no swap)
     pytest.param(100, 80, 0.0, 0.0, 0.5, 0.5, 180, 50, 40, id="quarter_rot180"),
-    # 200×100 left-half crop to 100×100 then rotate 90° → 100×100 (square stays)
-    pytest.param(200, 100, 0.0, 0.0, 0.5, 1.0, 90, 100, 100, id="square_result_rot90"),
+    # 200×100 left-half crop in the **rotated** view: rotate90 first
+    # (→100×200), then crop cw=0.5/ch=1.0 → 50×200.  Crop fractions are
+    # interpreted in the user's on-screen (rotated) coordinate space —
+    # see ``server/src/editing/image_render.rs`` for the rationale.
+    pytest.param(200, 100, 0.0, 0.0, 0.5, 1.0, 90, 50, 200, id="rotated_left_half_rot90"),
     # 200×160 inset 80% (160×128) then rotate 270° → 128×160
     pytest.param(200, 160, 0.1, 0.1, 0.8, 0.8, 270, 128, 160, id="inset_rot270"),
+    # ── Rotate-then-crop semantic regression cases ─────────────────────
+    # These rows specifically exercise the rotation-first ordering: when
+    # rotation swaps the canvas dimensions, the crop fractions are read
+    # against the swapped (post-rotation) frame.  Each row is hand-picked
+    # so the legacy "crop first" ordering would produce a different
+    # answer, guaranteeing the test fails if the server regresses.
+    # ────────────────────────────────────────────────────────────────────
+    # 200×100 → rotate 90° (100×200) → crop top half (cw=1, ch=0.5) → 100×100.
+    # Legacy ordering would have yielded 200×100 → crop 200×50 → rot90 → 50×200.
+    pytest.param(200, 100, 0.0, 0.0, 1.0, 0.5, 90, 100, 100, id="rotfirst_top_half_rot90"),
+    # 100×80 → rotate 270° (80×100) → asymmetric crop cw=0.5 ch=0.25 → 40×25.
+    # Legacy ordering: 100×80 → crop 50×20 → rot270 → 20×50 (different).
+    pytest.param(100, 80, 0.0, 0.0, 0.5, 0.25, 270, 40, 25, id="rotfirst_strip_rot270"),
+    # 120×80 → rotate 90° (80×120) → bottom-right quadrant cw=0.5 ch=0.5 → 40×60.
+    pytest.param(120, 80, 0.5, 0.5, 0.5, 0.5, 90, 40, 60, id="rotfirst_quadrant_rot90"),
 ]
 
 

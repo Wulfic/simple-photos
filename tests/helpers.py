@@ -359,6 +359,10 @@ class APIClient:
     def delete_secure_gallery(self, gallery_id: str) -> requests.Response:
         return self.delete(f"/api/galleries/secure/{gallery_id}")
 
+    def remove_secure_gallery_item(self, gallery_id: str, item_id: str) -> requests.Response:
+        """Remove an item from a secure gallery (returns it to the regular gallery)."""
+        return self.delete(f"/api/galleries/secure/{gallery_id}/items/{item_id}")
+
     # ── Shared album helpers ─────────────────────────────────────────
 
     def list_shared_albums(self) -> list:

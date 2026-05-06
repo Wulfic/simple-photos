@@ -10,6 +10,7 @@ import { useBackupStore } from "../store/backup";
 import { clearKey } from "../crypto/crypto";
 import { api } from "../api/client";
 import { useProcessingStore } from "../store/processing";
+import useServerActivityPolling from "../hooks/useServerActivityPolling";
 import AppIcon from "./AppIcon";
 import CastDialog, { CastIcon } from "./CastDialog";
 import { clearAllUserData } from "../db";
@@ -70,6 +71,10 @@ export default function AppHeader({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [castOpen, setCastOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Mirror server-side AI / geo background work into the processing store
+  // so the avatar spinner reflects ALL activity, not just client-side tasks.
+  useServerActivityPolling();
 
   // Check admin status from JWT
   const isAdmin = (() => {

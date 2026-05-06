@@ -174,7 +174,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Launch all background tasks (housekeeping, backup sync, auto-scan, etc.)
     let storage_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    tasks::spawn_all(&pool, &config, &storage_root_swap, &scan_lock, &audit_tx, &storage_available);
+    let ai_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let geo_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    tasks::spawn_all(
+        &pool,
+        &config,
+        &storage_root_swap,
+        &scan_lock,
+        &audit_tx,
+        &storage_available,
+        &ai_active,
+        &geo_active,
+    );
 
     // Probe GPU hardware acceleration for video transcoding.
     let hw_accel = Arc::new(transcode::gpu_probe::probe_hwaccel(
@@ -199,6 +210,8 @@ async fn main() -> anyhow::Result<()> {
         audit_tx,
         storage_available,
         hw_accel,
+        ai_active,
+        geo_active,
     };
 
     let mut app = Router::new()

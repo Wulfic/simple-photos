@@ -183,10 +183,74 @@ export default function useViewerEdit(
   }, [cropData, mediaDuration]);
 
   // ── Corner drag handlers ───────────────────────────────────────────────
-  const getMediaRect = useCallback((mediaType: MediaType) => {
-    if (mediaType === "video" && videoRef.current) return videoRef.current.getBoundingClientRect();
-    return cropImageRef.current?.getBoundingClientRect() ?? null;
-  }, []);
+  /**
+   * Compute the **visible content rect** of the photo/video in screen
+   * coordinates, taking into account:
+   *
+   * - `object-contain` letterboxing when the media's aspect ratio differs
+   *   from the container's,
+   * - the user's current rotation (0 / 90 / 180 / 270°), which swaps the
+   *   effective aspect ratio for 90° and 270°.
+   *
+   * The returned rect describes the area of the screen where the photo is
+   * actually drawn — corner-drag pointer coordinates are normalized
+   * against this rect, and `CropOverlay` is positioned with it.  Without
+   * this correction, pointer coords were normalized against the IMG
+   * element's full box (including letterbox padding and the rotated outer
+   * bounding box), which produced misaligned crops — especially when
+   * combined with rotation.  Returns `null` if the element isn't ready.
+   */
+  const getMediaRect = useCallback((mediaType: MediaType): DOMRect | null => {
+    const el = mediaType === "video"
+      ? (videoRef.current as HTMLElement | null)
+      : (cropImageRef.current as HTMLElement | null);
+    const container = cropContainerRef.current;
+    if (!el || !container) return null;
+
+    const containerRect = container.getBoundingClientRect();
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+
+    let nw = 0, nh = 0;
+    const v = videoRef.current;
+    if (mediaType === "video" && v && v.videoWidth > 0 && v.videoHeight > 0) {
+      nw = v.videoWidth; nh = v.videoHeight;
+    } else if (cropImageRef.current && cropImageRef.current.naturalWidth > 0) {
+      nw = cropImageRef.current.naturalWidth;
+      nh = cropImageRef.current.naturalHeight;
+    }
+
+    // No natural dims yet — fall back to the element's own bounding rect.
+    // This branch is rare (image not yet decoded) and the user can't drag
+    // before the image is visible anyway.
+    if (nw === 0 || nh === 0 || cw === 0 || ch === 0) {
+      return el.getBoundingClientRect();
+    }
+
+    const rot = ((rotateValue % 360) + 360) % 360;
+    const isSwapped = rot === 90 || rot === 270;
+    // Effective aspect ratio AFTER the user's rotation has been applied.
+    const aw = isSwapped ? nh : nw;
+    const ah = isSwapped ? nw : nh;
+    const aspect = aw / ah;
+
+    let dispW: number, dispH: number;
+    if (aspect > cw / ch) {
+      dispW = cw; dispH = cw / aspect;
+    } else {
+      dispH = ch; dispW = ch * aspect;
+    }
+
+    const left = containerRect.left + (cw - dispW) / 2;
+    const top = containerRect.top + (ch - dispH) / 2;
+    // Synthesise a DOMRect-compatible object — only `left/top/width/height`
+    // are read by callers, but we provide all fields for safety.
+    return {
+      x: left, y: top, left, top, width: dispW, height: dispH,
+      right: left + dispW, bottom: top + dispH,
+      toJSON() { return this; },
+    } as DOMRect;
+  }, [rotateValue]);
 
   const handleCornerPointerDown = useCallback((corner: string) => {
     return (e: React.PointerEvent) => {

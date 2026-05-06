@@ -5,6 +5,7 @@
 //! for photos that have GPS coordinates or timestamps but haven't been
 //! resolved yet.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -24,7 +25,7 @@ use super::geocoder::ReverseGeocoder;
 /// 2. Backfills geo columns for photos with lat/lon but no geo_city
 /// 3. Backfills photo_year/photo_month for photos with taken_at but no year
 /// 4. Sleeps and re-checks periodically for newly uploaded photos
-pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
+pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<AtomicBool>) {
     tokio::spawn(async move {
         // Load the dataset in a blocking task (file I/O + parsing)
         let dataset_path = config.dataset_path.clone();
@@ -74,6 +75,10 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
         loop {
             interval.tick().await;
 
+            // Mark geo as active while we run a backfill cycle so the web
+            // client can spin the profile avatar indicator.
+            active.store(true, Ordering::Relaxed);
+
             // ── Backfill geo location from lat/lon ──────────────────────
             if geocoder.is_loaded() {
                 if let Err(e) = backfill_geo_locations(&pool, &geocoder, batch_size, &config).await {
@@ -85,6 +90,8 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig) {
             if let Err(e) = backfill_year_month(&pool, batch_size).await {
                 tracing::warn!(error = %e, "Year/month backfill cycle failed");
             }
+
+            active.store(false, Ordering::Relaxed);
         }
     });
 }

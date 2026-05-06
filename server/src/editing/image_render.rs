@@ -74,30 +74,14 @@ pub async fn render_image(
         let iw = img.width() as f64;
         let ih = img.height() as f64;
 
-        // Crop (fractional coordinates, clamped to image bounds)
-        if w < 0.999 || h < 0.999 || x > 0.001 || y > 0.001 {
-            let cx = ((x * iw).round() as u32).min(img.width().saturating_sub(1));
-            let cy = ((y * ih).round() as u32).min(img.height().saturating_sub(1));
-            let max_w = img.width().saturating_sub(cx);
-            let max_h = img.height().saturating_sub(cy);
-            let cw = ((w * iw).round().max(1.0) as u32).min(max_w).max(1);
-            let ch = ((h * ih).round().max(1.0) as u32).min(max_h).max(1);
-
-            tracing::info!(
-                "[editing/image_render] Crop: frac=({:.4},{:.4},{:.4},{:.4}) → \
-                 px=({},{},{},{}) on {}×{} canvas",
-                x, y, w, h, cx, cy, cw, ch, img.width(), img.height(),
-            );
-
-            img = img.crop_imm(cx, cy, cw, ch);
-
-            tracing::info!(
-                "[editing/image_render] After crop: {}×{}",
-                img.width(), img.height(),
-            );
-        }
-
-        // Rotation
+        // ── Apply user rotation BEFORE crop ───────────────────────────────
+        // The user defines the crop rectangle in the **rotated** view they
+        // see in the editor (i.e. after their rotation has been applied to
+        // the EXIF-corrected image).  Therefore we must rotate first and
+        // then crop, so the fractional crop coordinates match what the user
+        // selected on screen.  (Previously we cropped in pre-rotation space,
+        // which produced misaligned crops for 90°/270° rotations and
+        // garbage thumbnails when both rotate + crop were used together.)
         if rot > 0 {
             let pre_rot_w = img.width();
             let pre_rot_h = img.height();
@@ -108,8 +92,35 @@ pub async fn render_image(
                 _ => img,
             };
             tracing::info!(
-                "[editing/image_render] Rotation {}°: {}×{} → {}×{}",
+                "[editing/image_render] Rotation {}° (pre-crop): {}×{} → {}×{}",
                 rot, pre_rot_w, pre_rot_h, img.width(), img.height(),
+            );
+        }
+
+        // Crop (fractional coordinates in the rotated coordinate system).
+        // We re-read the dimensions because rotation may have swapped them.
+        let _ = (iw, ih); // silence unused-warn for the pre-rotation dims
+        let iw = img.width() as f64;
+        let ih = img.height() as f64;
+        if w < 0.999 || h < 0.999 || x > 0.001 || y > 0.001 {
+            let cx = ((x * iw).round() as u32).min(img.width().saturating_sub(1));
+            let cy = ((y * ih).round() as u32).min(img.height().saturating_sub(1));
+            let max_w = img.width().saturating_sub(cx);
+            let max_h = img.height().saturating_sub(cy);
+            let cw = ((w * iw).round().max(1.0) as u32).min(max_w).max(1);
+            let ch = ((h * ih).round().max(1.0) as u32).min(max_h).max(1);
+
+            tracing::info!(
+                "[editing/image_render] Crop (post-rotation): frac=({:.4},{:.4},{:.4},{:.4}) → \
+                 px=({},{},{},{}) on {}×{} canvas",
+                x, y, w, h, cx, cy, cw, ch, img.width(), img.height(),
+            );
+
+            img = img.crop_imm(cx, cy, cw, ch);
+
+            tracing::info!(
+                "[editing/image_render] After crop: {}×{}",
+                img.width(), img.height(),
             );
         }
 

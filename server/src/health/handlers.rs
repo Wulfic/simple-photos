@@ -25,6 +25,26 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+/// GET /api/status/activity — report whether server-side background work
+/// (AI inference, geo backfill) is currently running.
+///
+/// Requires authentication so the activity state isn't leaked to anonymous
+/// callers.  Used by the web client to spin the profile-avatar indicator
+/// so users know when the server is doing something on their behalf.
+pub async fn activity_status(
+    State(state): State<AppState>,
+    _auth: crate::auth::middleware::AuthUser,
+) -> Json<Value> {
+    use std::sync::atomic::Ordering;
+    let ai = state.ai_active.load(Ordering::Relaxed);
+    let geo = state.geo_active.load(Ordering::Relaxed);
+    Json(json!({
+        "ai": ai,
+        "geo": geo,
+        "active": ai || geo,
+    }))
+}
+
 /// GET /api/discover/info
 ///
 /// Loopback-only endpoint used by the primary server's `discover_servers`

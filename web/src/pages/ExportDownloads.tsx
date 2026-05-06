@@ -6,7 +6,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import { downloadRaw } from "../api/core";
+import { useAuthStore } from "../store/auth";
 import type { ExportFile, ExportJob } from "../api/export";
 import AppHeader from "../components/AppHeader";
 import { getErrorMessage } from "../utils/formatters";
@@ -60,25 +60,48 @@ export default function ExportDownloads() {
   }
 
   const [downloading, setDownloading] = useState<string | null>(null);
+  const accessToken = useAuthStore((s) => s.accessToken);
 
-  async function handleDownload(file: ExportFile) {
+  /**
+   * Trigger a streaming download via a direct anchor link.
+   *
+   * The previous implementation buffered the entire export zip into memory
+   * via `arrayBuffer()` before constructing a Blob and clicking a link.
+   * For multi-GB exports this wasted memory and made the UI appear to
+   * "hang" while the whole file accumulated in RAM.
+   *
+   * Instead we point a hidden `<a download>` at the export endpoint with
+   * `?token=<jwt>` so the server's auth middleware (which already accepts
+   * the query-param token for media URLs) authenticates the request, and
+   * the browser streams the response straight to disk like a normal
+   * download — progress shows in the browser's download manager and
+   * memory usage stays flat regardless of file size.
+   */
+  function handleDownload(file: ExportFile) {
     if (downloading) return;
+    if (!accessToken) {
+      setError("Not authenticated.");
+      return;
+    }
     setDownloading(file.id);
     try {
-      const buf = await downloadRaw(file.download_url);
-      const blob = new Blob([buf], { type: "application/zip" });
-      const url = URL.createObjectURL(blob);
+      const sep = file.download_url.includes("?") ? "&" : "?";
+      // download_url is server-relative (e.g. "/api/export/files/{id}/download").
+      const url = `${file.download_url}${sep}token=${encodeURIComponent(accessToken)}`;
       const a = document.createElement("a");
       a.href = url;
       a.download = file.filename;
+      a.rel = "noopener";
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
     } catch (err: unknown) {
-      setError(getErrorMessage(err, "Failed to download file."));
+      setError(getErrorMessage(err, "Failed to start download."));
     } finally {
-      setDownloading(null);
+      // The browser owns the actual transfer once the click fires; clear
+      // our local "downloading" state on the next tick so the button
+      // returns to the idle state without waiting for the full transfer.
+      setTimeout(() => setDownloading(null), 500);
     }
   }
 

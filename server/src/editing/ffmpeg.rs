@@ -19,11 +19,27 @@ use super::models::CropMeta;
 ///
 /// Returns an empty `Vec` when no video filters are needed.
 ///
-/// Filter order: crop → rotate → brightness  (matches the client editor's
-/// application order so server-rendered output is visually identical to the
-/// client-side CSS preview).
+/// Filter order: rotate → crop → brightness.  The crop fractional
+/// coordinates are defined in the user's *displayed* (rotated) view, so we
+/// must rotate the source first and then crop in that rotated coordinate
+/// system.  Cropping before rotation produced misaligned output for
+/// 90°/270° rotations and corrupted thumbnails when both transforms were
+/// combined.  This matches `image_render::render_image()`.
 pub fn build_video_filters(meta: &CropMeta) -> Vec<String> {
     let mut filters: Vec<String> = Vec::new();
+
+    // Rotation via transpose (only cardinal angles) — applied FIRST so the
+    // crop coordinates are interpreted in the rotated coordinate system the
+    // user saw in the editor.
+    match meta.rotation_degrees() {
+        90  => filters.push("transpose=1".into()),
+        180 => {
+            filters.push("vflip".into());
+            filters.push("hflip".into());
+        }
+        270 => filters.push("transpose=2".into()),
+        _   => {}
+    }
 
     // Crop (fractional coordinates evaluated at runtime via ffmpeg expressions)
     if meta.has_crop() {
@@ -34,17 +50,6 @@ pub fn build_video_filters(meta: &CropMeta) -> Vec<String> {
         filters.push(format!(
             "crop=iw*{w:.6}:ih*{h:.6}:iw*{x:.6}:ih*{y:.6}"
         ));
-    }
-
-    // Rotation via transpose (only cardinal angles)
-    match meta.rotation_degrees() {
-        90  => filters.push("transpose=1".into()),
-        180 => {
-            filters.push("vflip".into());
-            filters.push("hflip".into());
-        }
-        270 => filters.push("transpose=2".into()),
-        _   => {}
     }
 
     // Brightness via eq filter (-1.0 to 1.0; our scale is -100 to +100)
@@ -218,12 +223,12 @@ mod tests {
     }
 
     #[test]
-    fn combined_filters_ordered_crop_rotate_brightness() {
+    fn combined_filters_ordered_rotate_crop_brightness() {
         let m = meta(r#"{"x":0.1,"y":0,"width":0.8,"height":1,"rotate":90,"brightness":20}"#);
         let filters = build_video_filters(&m);
         assert_eq!(filters.len(), 3);
-        assert!(filters[0].starts_with("crop="));
-        assert_eq!(filters[1], "transpose=1");
+        assert_eq!(filters[0], "transpose=1");
+        assert!(filters[1].starts_with("crop="));
         assert!(filters[2].starts_with("eq=brightness="));
     }
 

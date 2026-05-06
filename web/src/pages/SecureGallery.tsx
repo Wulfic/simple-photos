@@ -172,6 +172,29 @@ export default function SecureGallery() {
     }
   }
 
+  // Remove a single item from the current secure album.
+  // The cloned blob is deleted server-side and the original photo becomes
+  // visible again in the regular gallery (the server's
+  // `/galleries/secure/blob-ids` endpoint will stop reporting its id, so
+  // the next gallery refresh unhides it automatically).
+  async function handleRemoveItem(item: GalleryItem) {
+    if (!selectedGallery) return;
+    if (!confirm("Remove this photo from the secure album? It will return to your regular gallery."))
+      return;
+    try {
+      await api.secureGalleries.removeItem(selectedGallery.id, item.id);
+      // Drop the local IDB clone entry that `handleAddSelectedPhotos`
+      // created at add time, so the secure album view stays consistent
+      // even before the next reload.
+      try { await db.photos.delete(item.blob_id); } catch { /* non-fatal */ }
+      setSuccess("Photo returned to your gallery.");
+      await loadItems(selectedGallery.id);
+      await loadGalleries();
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
+    }
+  }
+
   // Toggle photo selection for adding to album
   function togglePhotoSelection(blobId: string) {
     setSelectedPhotos((prev) => {
@@ -537,18 +560,30 @@ export default function SecureGallery() {
               getAspectRatio={(item) => (item.width && item.height) ? item.width / item.height : 1}
               getKey={(item) => item.id}
               renderItem={(item, idx) => (
-                <SecureGalleryItem
-                  item={item}
-                  onClick={() =>
-                    navigate(`/photo/${item.blob_id}`, {
-                      state: {
-                        photoIds: items.map((i) => i.blob_id),
-                        currentIndex: idx,
-                        secureGallery: true,
-                      },
-                    })
-                  }
-                />
+                <div className="group relative w-full h-full">
+                  <SecureGalleryItem
+                    item={item}
+                    onClick={() =>
+                      navigate(`/photo/${item.blob_id}`, {
+                        state: {
+                          photoIds: items.map((i) => i.blob_id),
+                          currentIndex: idx,
+                          secureGallery: true,
+                        },
+                      })
+                    }
+                  />
+                  {!isBackupServer && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleRemoveItem(item); }}
+                      className="absolute top-1 right-1 hidden group-hover:flex items-center justify-center w-7 h-7 bg-black/60 hover:bg-red-600 text-white rounded-full transition-colors z-10"
+                      title="Remove from secure album (returns to regular gallery)"
+                      aria-label="Remove from secure album"
+                    >
+                      <AppIcon name="trashcan" size="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               )}
             />
           ) : null}

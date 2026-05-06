@@ -66,6 +66,15 @@ pub struct AppState {
     /// Detected GPU hardware acceleration capability for video transcoding.
     /// Probed once at startup from FFmpeg and cached for the process lifetime.
     pub hw_accel: Arc<HwAccelCapability>,
+    /// Set to `true` while the AI processor is actively running a batch
+    /// (face detection, object detection, clustering, etc.).  Read by
+    /// `GET /api/status/activity` so the web client can spin the profile
+    /// avatar while server work is in progress.
+    pub ai_active: Arc<AtomicBool>,
+    /// Set to `true` while the geo processor is actively backfilling
+    /// reverse-geocoded city/state/country or year/month data.  Read by
+    /// `GET /api/status/activity`.
+    pub geo_active: Arc<AtomicBool>,
 }
 
 impl AppState {

@@ -18,6 +18,11 @@ const TASK_LABELS: Record<string, string> = {
   download: "Downloading",
   scan: "Scanning",
   saveCopy: "Saving copy",
+  // Server-side background work — polled from /api/status/activity so the
+  // profile-avatar spinner reflects when the server is doing AI inference
+  // or geo backfill on the user's behalf.
+  ai: "AI processing",
+  geo: "Resolving locations",
 };
 
 interface ProcessingState {

@@ -59,6 +59,17 @@ export const secureGalleriesApi = {
       }
     ),
 
+  /**
+   * Remove a single item from a secure album.  Deletes the encrypted clone
+   * from disk and unhides the original photo so it returns to the regular
+   * gallery.  See server/src/gallery/secure.rs::remove_gallery_item.
+   */
+  removeItem: (galleryId: string, itemId: string) =>
+    request<void>(
+      `/galleries/secure/${galleryId}/items/${itemId}`,
+      { method: "DELETE" }
+    ),
+
   /** Get all blob IDs across all secure galleries (for filtering from main gallery) */
   secureBlobIds: () =>
     request<{ blob_ids: string[] }>("/galleries/secure/blob-ids"),

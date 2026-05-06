@@ -335,6 +335,10 @@ fn gallery_routes() -> Router<AppState> {
             "/galleries/secure/{id}/items",
             post(crate::gallery::secure::add_gallery_item),
         )
+        .route(
+            "/galleries/secure/{id}/items/{item_id}",
+            delete(crate::gallery::secure::remove_gallery_item),
+        )
 }
 
 // ── Trash ────────────────────────────────────────────────────────────
@@ -550,6 +554,14 @@ fn client_log_routes() -> Router<AppState> {
     Router::new()
         .route("/client-logs", post(crate::client_logs::handlers::submit_logs))
         .route("/admin/client-logs", get(crate::client_logs::handlers::list_logs))
+        // Server activity flag (AI / geo backfill running) — open to any
+        // authenticated user; the AuthUser extractor is enforced by the
+        // handler itself if needed.  Placed in a wizard-open group so the
+        // SPA can poll it without redirecting through the wizard.
+        .route(
+            "/status/activity",
+            get(crate::health::handlers::activity_status),
+        )
 }
 
 // ── Server diagnostics & audit ───────────────────────────────────────
