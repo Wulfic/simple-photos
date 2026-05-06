@@ -7,6 +7,20 @@ import type { MediaType } from "../db";
 import type { CropMetadata } from "../types/media";
 import type { EditTab } from "../components/viewer/ViewerEditPanel";
 
+/**
+ * Inset factor applied to the photo when the crop tab is active.
+ *
+ * Without an inset the photo fills the entire viewer and the corner
+ * grab-handles end up flush against (or past) the screen edge, where
+ * they're nearly impossible to grab — especially on touch.  Scaling
+ * the photo down to ~85% of the container leaves a visible gutter
+ * around it so the user can always drag the corners inward and outward.
+ *
+ * The factor is purely visual: it does NOT affect crop fractions, which
+ * remain expressed in the rotated photo's own 0–1 coordinate space.
+ */
+export const EDIT_CROP_PADDING_SCALE = 0.85;
+
 export default function useViewerEdit(
   viewerContainerRef: React.RefObject<HTMLDivElement>,
 ) {
@@ -190,7 +204,10 @@ export default function useViewerEdit(
    * - `object-contain` letterboxing when the media's aspect ratio differs
    *   from the container's,
    * - the user's current rotation (0 / 90 / 180 / 270°), which swaps the
-   *   effective aspect ratio for 90° and 270°.
+   *   effective aspect ratio for 90° and 270°,
+   * - the edit-mode padding scale ({@link EDIT_CROP_PADDING_SCALE}) that
+   *   shrinks the photo away from the container edges so the crop corner
+   *   handles are always grabbable.
    *
    * The returned rect describes the area of the screen where the photo is
    * actually drawn — corner-drag pointer coordinates are normalized
@@ -241,6 +258,15 @@ export default function useViewerEdit(
       dispH = ch; dispW = ch * aspect;
     }
 
+    // Apply the edit-mode padding inset only when the crop tab is active.
+    // Other edit tabs (brightness, rotate, trim) keep the photo at full
+    // size so the user can preview their changes without an artificial
+    // gutter.
+    if (editMode && editTab === "crop") {
+      dispW *= EDIT_CROP_PADDING_SCALE;
+      dispH *= EDIT_CROP_PADDING_SCALE;
+    }
+
     const left = containerRect.left + (cw - dispW) / 2;
     const top = containerRect.top + (ch - dispH) / 2;
     // Synthesise a DOMRect-compatible object — only `left/top/width/height`
@@ -250,7 +276,7 @@ export default function useViewerEdit(
       right: left + dispW, bottom: top + dispH,
       toJSON() { return this; },
     } as DOMRect;
-  }, [rotateValue]);
+  }, [rotateValue, editMode, editTab]);
 
   const handleCornerPointerDown = useCallback((corner: string) => {
     return (e: React.PointerEvent) => {
@@ -299,6 +325,7 @@ export default function useViewerEdit(
     computeRotationScale,
     computeCropZoom,
     enterEditMode,
+    getMediaRect,
     handleCornerPointerDown, handleCornerPointerMove, handleCornerPointerUp,
   };
 }

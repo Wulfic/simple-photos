@@ -26,18 +26,70 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
 }
 
 /// GET /api/status/activity — report whether server-side background work
-/// (AI inference, geo backfill) is currently running.
+/// (AI inference, geo backfill) is currently running **or has pending
+/// work for the authenticated user**.
+///
+/// The flag is the OR of two signals:
+/// 1. The transient atomic flag set by the AI/geo processors while a
+///    batch is in flight.  This is precise but flickers — a sub-second
+///    batch will rarely be observable to a 3-second poll.
+/// 2. A backlog query: any photo belonging to this user that still
+///    needs detection or reverse-geocoding.  This makes the spinner
+///    visible for the entire duration of background work, not just the
+///    moment a batch is actively running.
 ///
 /// Requires authentication so the activity state isn't leaked to anonymous
 /// callers.  Used by the web client to spin the profile-avatar indicator
 /// so users know when the server is doing something on their behalf.
 pub async fn activity_status(
     State(state): State<AppState>,
-    _auth: crate::auth::middleware::AuthUser,
+    auth: crate::auth::middleware::AuthUser,
 ) -> Json<Value> {
     use std::sync::atomic::Ordering;
-    let ai = state.ai_active.load(Ordering::Relaxed);
-    let geo = state.geo_active.load(Ordering::Relaxed);
+
+    let ai_running = state.ai_active.load(Ordering::Relaxed);
+    let geo_running = state.geo_active.load(Ordering::Relaxed);
+
+    // Backlog: photos awaiting AI detection for this user.  We only count
+    // a small LIMIT to keep the query bounded — we don't need an exact
+    // total, just "is there at least one?".  Errors are swallowed so a
+    // transient DB hiccup doesn't 500 a status poll.
+    let ai_pending: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS( \
+             SELECT 1 FROM photos p \
+             WHERE p.user_id = ?1 \
+             AND ( (p.file_path IS NOT NULL AND p.file_path != '') OR p.encrypted_blob_id IS NOT NULL ) \
+             AND NOT EXISTS ( \
+                 SELECT 1 FROM ai_processed_photos ap \
+                 WHERE ap.photo_id = p.id AND ap.user_id = p.user_id \
+             ) \
+             LIMIT 1 \
+         )",
+    )
+    .bind(&auth.user_id)
+    .fetch_one(&state.read_pool)
+    .await
+    .map(|n| n != 0)
+    .unwrap_or(false);
+
+    // Backlog: photos with GPS but no resolved geo_city for this user.
+    let geo_pending: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS( \
+             SELECT 1 FROM photos p \
+             WHERE p.user_id = ?1 \
+             AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
+             AND p.geo_city IS NULL \
+             LIMIT 1 \
+         )",
+    )
+    .bind(&auth.user_id)
+    .fetch_one(&state.read_pool)
+    .await
+    .map(|n| n != 0)
+    .unwrap_or(false);
+
+    let ai = ai_running || ai_pending;
+    let geo = geo_running || geo_pending;
     Json(json!({
         "ai": ai,
         "geo": geo,

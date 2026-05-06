@@ -24,7 +24,7 @@ import useZoomPan from "../hooks/useZoomPan";
 import usePhotoPreload from "../hooks/usePhotoPreload";
 import useViewerMedia from "../hooks/useViewerMedia";
 import useViewerActions from "../hooks/useViewerActions";
-import useViewerEdit from "../hooks/useViewerEdit";
+import useViewerEdit, { EDIT_CROP_PADDING_SCALE } from "../hooks/useViewerEdit";
 import useSwipeNavigation from "../hooks/useSwipeNavigation";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import useSlideshow from "../hooks/useSlideshow";
@@ -100,6 +100,7 @@ export default function Viewer() {
     computeRotationScale,
     computeCropZoom,
     enterEditMode,
+    getMediaRect,
     handleCornerPointerDown, handleCornerPointerMove, handleCornerPointerUp,
   } = useViewerEdit(viewerContainerRef);
 
@@ -432,12 +433,26 @@ export default function Viewer() {
                 onLoad={inEdit ? undefined : computeCropZoom}
                 style={{
                   imageRendering: mediaType === "gif" ? "auto" : undefined,
-                  ...(inEdit ? {
-                    filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
-                    ...(rot !== 0 ? {
-                      transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(cropImageRef.current, cropContainerRef.current)})` : ""}`,
-                    } : {}),
-                  } : {
+                  ...(inEdit ? (() => {
+                    // Compose rotation + edit-mode padding inset.  The
+                    // padding scale shrinks the photo away from the
+                    // viewport edges so the corner grab-handles aren't
+                    // crushed against the screen border.  Applied only
+                    // while the crop tab is active — other tabs preview
+                    // the full-size image.
+                    const editScale = editTab === "crop" ? EDIT_CROP_PADDING_SCALE : 1;
+                    const rotScale = isSwapped
+                      ? computeRotationScale(cropImageRef.current, cropContainerRef.current)
+                      : 1;
+                    const totalScale = editScale * rotScale;
+                    const transformParts: string[] = [];
+                    if (rot !== 0) transformParts.push(`rotate(${rot}deg)`);
+                    if (totalScale !== 1) transformParts.push(`scale(${totalScale})`);
+                    return {
+                      filter: brightness !== 0 ? `brightness(${1 + brightness / 100})` : undefined,
+                      ...(transformParts.length > 0 ? { transform: transformParts.join(" ") } : {}),
+                    };
+                  })() : {
                     ...(cropData && zoomScale <= 1 ? cropZoomStyle : {}),
                     ...(zoomScale > 1 ? {
                       transform: `scale(${zoomScale}) translate(${panOffset.x / zoomScale}px, ${panOffset.y / zoomScale}px)`,
@@ -454,14 +469,23 @@ export default function Viewer() {
                   visible={!editMode}
                 />
               )}
-              {inEdit && editTab === "crop" && cropImageRef.current && cropContainerRef.current && (
-                <CropOverlay
-                  mediaRect={cropImageRef.current.getBoundingClientRect()}
-                  containerRect={cropContainerRef.current.getBoundingClientRect()}
-                  cropCorners={cropCorners}
-                  onCornerPointerDown={handleCornerPointerDown}
-                />
-              )}
+              {inEdit && editTab === "crop" && cropImageRef.current && cropContainerRef.current && (() => {
+                // Use the hook's letterbox-aware visible content rect so
+                // the crop circles, drawn lines, and pointer-event
+                // handlers all share a single coordinate frame.  Falling
+                // back to the IMG element's raw bounding rect (the old
+                // behavior) put the corners on top of the letterbox
+                // padding instead of the photo itself.
+                const mediaRect = getMediaRect(mediaType) ?? cropImageRef.current.getBoundingClientRect();
+                return (
+                  <CropOverlay
+                    mediaRect={mediaRect}
+                    containerRect={cropContainerRef.current.getBoundingClientRect()}
+                    cropCorners={cropCorners}
+                    onCornerPointerDown={handleCornerPointerDown}
+                  />
+                );
+              })()}
             </div>
           );
         })()}
@@ -524,8 +548,19 @@ export default function Viewer() {
         {editMode && mediaUrl && mediaType === "video" && !videoError && (() => {
           const rot = ((rotateValue % 360) + 360) % 360;
           const isSwapped = rot === 90 || rot === 270;
-          const rotStyle: React.CSSProperties = rot !== 0
-            ? { transform: `rotate(${rot}deg)${isSwapped ? ` scale(${computeRotationScale(videoRef.current, cropContainerRef.current)})` : ""}` }
+          // Compose rotation + edit-mode padding inset (crop tab only),
+          // mirroring the photo branch above so video crop handles are
+          // equally grabbable near the screen edge.
+          const editScale = editTab === "crop" ? EDIT_CROP_PADDING_SCALE : 1;
+          const rotScale = isSwapped
+            ? computeRotationScale(videoRef.current, cropContainerRef.current)
+            : 1;
+          const totalScale = editScale * rotScale;
+          const transformParts: string[] = [];
+          if (rot !== 0) transformParts.push(`rotate(${rot}deg)`);
+          if (totalScale !== 1) transformParts.push(`scale(${totalScale})`);
+          const rotStyle: React.CSSProperties = transformParts.length > 0
+            ? { transform: transformParts.join(" ") }
             : {};
           return (
           <div
@@ -565,14 +600,17 @@ export default function Viewer() {
             </div>
             {/* Custom controls — NOT rotated (sits outside rotation wrapper) */}
             <VideoControls videoRef={videoRef} visible={true} />
-            {editTab === "crop" && videoRef.current && cropContainerRef.current && (
-              <CropOverlay
-                mediaRect={videoRef.current.getBoundingClientRect()}
-                containerRect={cropContainerRef.current.getBoundingClientRect()}
-                cropCorners={cropCorners}
-                onCornerPointerDown={handleCornerPointerDown}
-              />
-            )}
+            {editTab === "crop" && videoRef.current && cropContainerRef.current && (() => {
+              const mediaRect = getMediaRect(mediaType) ?? videoRef.current!.getBoundingClientRect();
+              return (
+                <CropOverlay
+                  mediaRect={mediaRect}
+                  containerRect={cropContainerRef.current!.getBoundingClientRect()}
+                  cropCorners={cropCorners}
+                  onCornerPointerDown={handleCornerPointerDown}
+                />
+              );
+            })()}
           </div>
           );
         })()}

@@ -86,6 +86,13 @@ pub async fn upload_photo(
             .await
             .map_err(|e| AppError::Internal(format!("Write temp input: {}", e)))?;
 
+        // Make this upload visible in the global ConversionBanner so the
+        // user knows their HEIC/MKV/TIFF is still in flight — without
+        // this, transient sub-second conversions never showed a banner.
+        // Paired `progress_finish_one()` runs in *both* arms of the
+        // match below to keep counters accurate even on failure.
+        conversion::progress_add(1);
+
         let conv_result = conversion::convert_file(&tmp_input, &tmp_output, &target).await;
 
         // Always clean up input
@@ -97,6 +104,7 @@ pub async fn upload_photo(
                     .await
                     .map_err(|e| AppError::Internal(format!("Read converted file: {}", e)))?;
                 let _ = tokio::fs::remove_file(&tmp_output).await;
+                conversion::progress_finish_one();
 
                 // Build new filename with converted extension
                 let stem = std::path::Path::new(&filename)
@@ -116,6 +124,7 @@ pub async fn upload_photo(
             }
             Err(e) => {
                 let _ = tokio::fs::remove_file(&tmp_output).await;
+                conversion::progress_finish_one();
                 return Err(AppError::Internal(format!(
                     "Media conversion failed for '{}': {}", filename, e
                 )));

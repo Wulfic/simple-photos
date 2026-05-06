@@ -77,6 +77,33 @@ pub fn progress_finish() {
     CONV_ACTIVE.store(false, Ordering::Relaxed);
 }
 
+/// Register an additional `n` items to the in-flight conversion total
+/// **without** resetting the existing `done` counter.  Used by the
+/// per-upload conversion path (`photos/upload.rs`) where each upload is
+/// its own one-item "batch" but we want the banner to span all
+/// concurrent uploads instead of flashing once per file.
+///
+/// Safe to interleave with `progress_start` (batch ingest) — the
+/// running totals just accumulate, and the banner naturally hides once
+/// `done == total` and `active` flips back to false via
+/// [`progress_finish_one`].
+pub fn progress_add(n: i64) {
+    CONV_TOTAL.fetch_add(n, Ordering::Relaxed);
+    CONV_ACTIVE.store(true, Ordering::Relaxed);
+}
+
+/// Counterpart to [`progress_add`] — increments `done` and clears the
+/// `active` flag once `done` has caught up to `total`.  This is what
+/// keeps the banner visible across many concurrent uploads but lets it
+/// hide when the queue drains.
+pub fn progress_finish_one() {
+    let done = CONV_DONE.fetch_add(1, Ordering::Relaxed) + 1;
+    let total = CONV_TOTAL.load(Ordering::Relaxed);
+    if done >= total {
+        CONV_ACTIVE.store(false, Ordering::Relaxed);
+    }
+}
+
 /// Read the current conversion progress snapshot.
 /// `done` is clamped to `total` as a safety net against races.
 pub fn progress_snapshot() -> (bool, i64, i64) {
