@@ -16,6 +16,7 @@ export default function StepIndicator({ step, serverRole, installType }: StepInd
           { id: "server-role", label: "Role" },
           { id: "pair", label: "Pair" },
           { id: "storage", label: "Server" },
+          { id: "ssl", label: "SSL" },
           { id: "complete", label: "Done" },
         ]
       : installType === "restore"

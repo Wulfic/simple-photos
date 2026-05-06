@@ -235,6 +235,13 @@ export const adminApi = {
       cert_path: string | null;
       key_path: string | null;
       message: string;
+      letsencrypt?: {
+        domain: string;
+        email: string;
+        staging: boolean;
+        challenge_port: number;
+        last_issued_at: string | null;
+      } | null;
     }>("/admin/ssl"),
 
   /** Update TLS configuration (manual cert paths) */
@@ -250,6 +257,36 @@ export const adminApi = {
       message: string;
     }>("/admin/ssl", {
       method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  /**
+   * Provision a Let's Encrypt certificate for the given domain.
+   *
+   * Drives the full ACME-v2 HTTP-01 handshake on the server, writes the
+   * issued cert to `data/letsencrypt/{domain}/`, and persists the new
+   * paths into `config.toml`.  Pass `dry_run: true` to validate inputs
+   * without contacting the CA (used by the wizard to surface form errors
+   * before burning a Let's Encrypt rate-limit slot).
+   */
+  provisionLetsEncrypt: (data: {
+    domain: string;
+    email: string;
+    agree_tos: boolean;
+    staging?: boolean;
+    challenge_port?: number;
+    dry_run?: boolean;
+  }) =>
+    request<{
+      success: boolean;
+      dry_run: boolean;
+      domain: string;
+      staging: boolean;
+      cert_path: string | null;
+      key_path: string | null;
+      message: string;
+    }>("/admin/ssl/letsencrypt", {
+      method: "POST",
       body: JSON.stringify(data),
     }),
 

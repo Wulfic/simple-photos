@@ -99,6 +99,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // ── rustls process-level CryptoProvider ──────────────────────────────
+    // Multiple rustls-using crates (axum-server-tls, instant-acme, reqwest)
+    // pull in different crypto providers via their default feature sets.
+    // When more than one is present the auto-selection panics, so we pin
+    // the `ring` provider explicitly here.  Idempotent: subsequent calls
+    // (e.g. by tests) are no-ops.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let config = config::AppConfig::load()?;
     tracing::info!("Starting Simple Photos server v{VERSION}");
     tracing::info!("Listening on {}:{}", config.server.host, config.server.port);
@@ -266,6 +274,22 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to load TLS config: {}", e))?;
 
+        // ── HTTP → HTTPS redirect listener ─────────────────────────────
+        // When TLS is enabled, every plain-HTTP request is upgraded to
+        // HTTPS via a 301.  This guarantees that links / clients which
+        // still default to `http://` end up on the encrypted endpoint
+        // without surfacing a "connection refused" error.  Disable by
+        // setting `[tls] redirect_http = false` (e.g. behind a reverse
+        // proxy that already handles the upgrade).
+        if config.tls.redirect_http {
+            let redirect_port = config.tls.http_redirect_port;
+            let https_port = config.server.port;
+            let redirect_addr: SocketAddr = format!("0.0.0.0:{}", redirect_port).parse()?;
+            tokio::spawn(async move {
+                spawn_https_redirect(redirect_addr, https_port).await;
+            });
+        }
+
         tracing::info!("Server ready (HTTPS)");
         axum_server::bind_rustls(addr, rustls_config)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
@@ -281,6 +305,60 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Bind a plain-HTTP listener that 301-redirects every incoming request
+/// to its HTTPS equivalent. Bind failures (e.g. EACCES on port 80 when
+/// running unprivileged, or the port already being in use) are logged as
+/// warnings but never abort startup — the HTTPS listener keeps serving.
+async fn spawn_https_redirect(addr: SocketAddr, https_port: u16) {
+    use axum::http::{header, HeaderMap, StatusCode, Uri};
+    use axum::response::Redirect;
+
+    async fn redirect_handler(
+        headers: HeaderMap,
+        uri: Uri,
+        axum::extract::State(https_port): axum::extract::State<u16>,
+    ) -> Result<Redirect, StatusCode> {
+        // Strip any explicit port from the Host header before re-attaching
+        // the HTTPS port, otherwise we'd produce hosts like
+        // `example.com:80:8443`.
+        let host = headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .ok_or(StatusCode::BAD_REQUEST)?;
+        let bare_host = host.split(':').next().unwrap_or(host);
+        let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+        let target = if https_port == 443 {
+            format!("https://{}{}", bare_host, path_and_query)
+        } else {
+            format!("https://{}:{}{}", bare_host, https_port, path_and_query)
+        };
+        // 301 (permanent) is appropriate: the operator opted in to TLS,
+        // so this redirect is intended to stay in place.
+        Ok(Redirect::permanent(&target))
+    }
+
+    let app = axum::Router::new()
+        .fallback(redirect_handler)
+        .with_state(https_port);
+
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(
+                "HTTP→HTTPS redirect listener failed to bind on {} ({}). \
+                 HTTPS continues to serve normally; set `[tls] redirect_http = false` \
+                 to silence this warning, or run with elevated privileges to bind port 80.",
+                addr, e
+            );
+            return;
+        }
+    };
+    tracing::info!("HTTP → HTTPS redirect listener bound on {}", addr);
+    if let Err(e) = axum::serve(listener, app).await {
+        tracing::warn!("HTTP→HTTPS redirect listener exited: {}", e);
+    }
 }
 
 /// Remount a previously-configured SMB share at boot. Pulls the encrypted

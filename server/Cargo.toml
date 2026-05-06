@@ -31,6 +31,19 @@ subtle = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 percent-encoding = "2"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
+# ── Let's Encrypt / ACME ───────────────────────────────────────────
+# `instant-acme` drives the ACME-v2 RFC-8555 protocol over rustls
+# (no OpenSSL).  `rcgen` builds the CSR / keypair we hand to the CA.
+# `pem` is used to round-trip the certificate chain returned by ACME
+# into the on-disk PEM file the rustls listener loads.
+instant-acme = "0.7"
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
+pem = "3"
+# `rustls` is pulled in transitively by axum-server-tls / instant-acme /
+# reqwest, but we depend on it directly to install the `ring` crypto
+# provider as the process default at boot — otherwise the multi-provider
+# auto-selection panics.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 imagesize = "0.13"
 kamadak-exif = "0.5"
 aes-gcm = "0.10"

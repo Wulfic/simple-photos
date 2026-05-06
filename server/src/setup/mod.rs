@@ -5,7 +5,8 @@
 //! - [`admin`]    — User management CRUD (create, list, delete, role, password, 2FA).
 //! - [`import`]   — Server-side directory scan for client-driven import.
 //! - [`port`]     — Server port configuration and restart.
-//! - [`ssl`]      — TLS certificate configuration.
+//! - [`ssl`]      — TLS certificate configuration (manual + Let's Encrypt).
+//! - [`letsencrypt`] — ACME-v2 (RFC 8555) automated certificate issuance.
 //! - [`storage`]  — Storage root and directory browsing.
 
 pub mod admin;
@@ -14,6 +15,7 @@ pub mod discovery;
 pub mod discovery_phases;
 pub mod handlers;
 pub mod import;
+pub mod letsencrypt;
 pub mod pair;
 pub mod pair_helpers;
 pub mod port;

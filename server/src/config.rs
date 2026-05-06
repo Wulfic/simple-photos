@@ -208,7 +208,7 @@ impl Default for ScanConfig {
 
 /// TLS/SSL configuration.
 /// When enabled, the server will listen on HTTPS instead of plain HTTP.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TlsConfig {
     /// Whether TLS is enabled.
     #[serde(default)]
@@ -219,6 +219,73 @@ pub struct TlsConfig {
     /// Path to the PEM-encoded TLS private key file.
     #[serde(default)]
     pub key_path: Option<String>,
+    /// When TLS is enabled, also bind a plain-HTTP listener that 301-
+    /// redirects every request to its HTTPS equivalent.
+    /// Default: `true`. Set to `false` to disable the redirect entirely
+    /// (e.g. when a reverse proxy already handles HTTP→HTTPS upgrade).
+    #[serde(default = "TlsConfig::default_redirect_http")]
+    pub redirect_http: bool,
+    /// Port the HTTP→HTTPS redirect listener binds to.
+    /// Default: `80` (the well-known HTTP port).  Bind failures are
+    /// non-fatal — the server logs a warning and continues to serve
+    /// HTTPS on the configured TLS port.
+    #[serde(default = "TlsConfig::default_http_redirect_port")]
+    pub http_redirect_port: u16,
+    /// Optional Let's Encrypt account / certificate state.  Populated by
+    /// [`crate::setup::letsencrypt::provision_certificate`] when the
+    /// admin opts in via the setup wizard or settings panel.  Used by
+    /// the daily renewal background task to know which domain to renew
+    /// and surfaced in `GET /api/admin/ssl` so the UI can display
+    /// renewal status.
+    #[serde(default)]
+    pub letsencrypt: Option<LetsEncryptConfig>,
+}
+
+impl TlsConfig {
+    fn default_redirect_http() -> bool { true }
+    fn default_http_redirect_port() -> u16 { 80 }
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cert_path: None,
+            key_path: None,
+            redirect_http: true,
+            http_redirect_port: 80,
+            letsencrypt: None,
+        }
+    }
+}
+
+/// Persisted state for an ACME (Let's Encrypt) certificate.
+///
+/// Stored under `[tls.letsencrypt]` in `config.toml` after a successful
+/// provisioning run.  Used by the daily renewal task to renew within 30
+/// days of expiry without operator intervention.
+#[derive(Debug, Deserialize, serde::Serialize, Clone)]
+pub struct LetsEncryptConfig {
+    /// FQDN the certificate was issued for (e.g. "photos.example.com").
+    pub domain: String,
+    /// Contact email registered with the ACME account.
+    pub email: String,
+    /// `true` when the staging directory was used (test-only certificates
+    /// not trusted by browsers).  Defaults to `false` (production).
+    #[serde(default)]
+    pub staging: bool,
+    /// Port used for the ACME HTTP-01 challenge.  Default: `80`.
+    #[serde(default = "LetsEncryptConfig::default_challenge_port")]
+    pub challenge_port: u16,
+    /// RFC-3339 timestamp of the most recent successful issuance / renewal.
+    /// Used purely for diagnostics; renewal is driven by reading the cert's
+    /// `notAfter` field on disk.
+    #[serde(default)]
+    pub last_issued_at: Option<String>,
+}
+
+impl LetsEncryptConfig {
+    fn default_challenge_port() -> u16 { 80 }
 }
 
 /// AI face & object recognition configuration.
@@ -509,6 +576,14 @@ impl AppConfig {
         }
         if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_KEY_PATH") {
             config.tls.key_path = Some(v);
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_REDIRECT_HTTP") {
+            config.tls.redirect_http = v.to_lowercase() == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("SIMPLE_PHOTOS_TLS_HTTP_REDIRECT_PORT") {
+            config.tls.http_redirect_port = v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid SIMPLE_PHOTOS_TLS_HTTP_REDIRECT_PORT"))?;
         }
 
         // AI

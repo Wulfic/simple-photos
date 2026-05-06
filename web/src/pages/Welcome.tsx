@@ -640,6 +640,7 @@ export default function Welcome() {
               setStep={setStep}
               setError={setError}
               error={error}
+              serverRole={serverRole}
             />
           )}
 

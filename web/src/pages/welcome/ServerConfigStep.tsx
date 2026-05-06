@@ -372,7 +372,9 @@ export default function ServerConfigStep({
         <button
           onClick={() => {
             setError("");
-            setStep(serverRole === "backup" ? "complete" : "ssl");
+            // Both primary and backup flows now run through the SSL step
+            // so every server can opt into Let's Encrypt or a manual cert.
+            setStep("ssl");
           }}
           className={`${serverRole === "primary" && installType === "fresh" ? "flex-[2]" : "w-full"} bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors`}
         >

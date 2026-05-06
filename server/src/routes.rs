@@ -176,6 +176,10 @@ fn admin_routes() -> Router<AppState> {
         // SSL/TLS
         .route("/admin/ssl", get(crate::setup::ssl::get_ssl))
         .route("/admin/ssl", put(crate::setup::ssl::update_ssl))
+        .route(
+            "/admin/ssl/letsencrypt",
+            post(crate::setup::ssl::provision_letsencrypt),
+        )
         // Server-side import
         .route("/admin/import/scan", get(crate::setup::import::import_scan))
         .route("/admin/import/file", get(crate::setup::import::import_file))

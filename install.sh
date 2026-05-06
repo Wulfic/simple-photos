@@ -16,7 +16,14 @@
 # ║    --storage <path>        Path to photo storage directory               ║
 # ║    --admin-user <string>   Admin username (skip interactive prompt)      ║
 # ║    --admin-pass <string>   Admin password (skip interactive prompt)      ║
-# ║    --no-build-android      Skip Android APK build prompt                 ║
+# ║    --letsencrypt-domain <fqdn>   Pre-seed Let's Encrypt domain in       ║
+# ║                                  config.toml [tls.letsencrypt]          ║
+# ║    --letsencrypt-email <addr>    Pre-seed Let's Encrypt contact email   ║
+# ║    --letsencrypt-staging         Use the LE staging directory (testing) ║
+# ║    --letsencrypt-agree-tos       Confirm acceptance of the LE Subscriber║
+# ║                                  Agreement (https://letsencrypt.org/    ║
+# ║                                  repository/) — required to provision  ║
+# ║    --no-build-android      Skip Android APK build prompt                ║
 # ║    --no-start              Don't start the server after install          ║
 # ║    --skip-models           Don't download AI models / GeoNames dataset   ║
 # ║    --yes                   Auto-accept all prompts                       ║
@@ -139,6 +146,10 @@ INSTANCE_NAME=""
 STORAGE_PATH=""
 ADMIN_USER=""
 ADMIN_PASS=""
+LE_DOMAIN=""
+LE_EMAIL=""
+LE_STAGING=false
+LE_AGREE_TOS=false
 NO_BUILD_ANDROID=false
 NO_START=false
 SKIP_MODELS=false
@@ -162,6 +173,10 @@ while [[ $# -gt 0 ]]; do
         --storage)        STORAGE_PATH="$2"; shift 2 ;;
         --admin-user)     ADMIN_USER="$2"; shift 2 ;;
         --admin-pass)     ADMIN_PASS="$2"; shift 2 ;;
+        --letsencrypt-domain)    LE_DOMAIN="$2"; shift 2 ;;
+        --letsencrypt-email)     LE_EMAIL="$2"; shift 2 ;;
+        --letsencrypt-staging)   LE_STAGING=true; shift ;;
+        --letsencrypt-agree-tos) LE_AGREE_TOS=true; shift ;;
         --no-build-android) NO_BUILD_ANDROID=true; shift ;;
         --no-start)       NO_START=true; shift ;;
         --skip-models)    SKIP_MODELS=true; shift ;;
@@ -882,6 +897,31 @@ enabled = false
 TOML
 }
 
+# Append a [tls.letsencrypt] stanza to a freshly written config.toml when
+# the user supplied --letsencrypt-* flags.  This pre-seeds the wizard's
+# Let's Encrypt form (visible at first boot in Setup → SSL) so the operator
+# only has to click "Issue certificate".  Provisioning itself is performed
+# by the running server, which has the privileged CA-account material in
+# memory — never by the installer.
+maybe_write_letsencrypt_stanza() {
+    local dest="$1"
+    [[ -z "$LE_DOMAIN" || -z "$LE_EMAIL" ]] && return 0
+    if ! $LE_AGREE_TOS; then
+        warn "Let's Encrypt flags supplied without --letsencrypt-agree-tos — skipping config stub."
+        warn "Re-run with --letsencrypt-agree-tos to accept https://letsencrypt.org/repository/."
+        return 0
+    fi
+    cat >> "$dest" << TOML
+
+[tls.letsencrypt]
+domain = "${LE_DOMAIN}"
+email = "${LE_EMAIL}"
+staging = ${LE_STAGING}
+challenge_port = 80
+TOML
+    success "Pre-seeded [tls.letsencrypt] for ${LE_DOMAIN} (complete in setup wizard)."
+}
+
 if [[ "$MODE" == "native" ]]; then
     # ── Build web frontend ────────────────────────────────────────────────
     info "Installing npm packages..."
@@ -955,6 +995,7 @@ if [[ "$MODE" == "native" ]]; then
         "./data/db/simple-photos.db" \
         "../web/dist" \
         "http://localhost:${PORT}"
+    maybe_write_letsencrypt_stanza "$SCRIPT_DIR/server/config.toml"
     success "Config → server/config.toml"
 
     mkdir -p "$SCRIPT_DIR/server/data/db" "$SCRIPT_DIR/server/data/storage"
@@ -1031,6 +1072,7 @@ elif [[ "$MODE" == "docker" ]]; then
         "/data/db/simple-photos.db" \
         "/app/web/dist" \
         "http://${DOCKER_BASE_HOST}:${PORT}"
+    maybe_write_letsencrypt_stanza "$INSTANCE_DIR/config.toml"
     success "Config → docker-instances/${INSTANCE_NAME}/config.toml"
 
     # ── docker-compose.yml ────────────────────────────────────────────────

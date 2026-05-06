@@ -53,6 +53,10 @@ param(
     [string]$StoragePath = "",
     [string]$AdminUser = "",
     [string]$AdminPass = "",
+    [string]$LetsEncryptDomain = "",
+    [string]$LetsEncryptEmail = "",
+    [switch]$LetsEncryptStaging,
+    [switch]$LetsEncryptAgreeTos,
     [switch]$NoBuildAndroid,
     [switch]$NoStart,
     [switch]$SkipModels,
@@ -505,6 +509,31 @@ enabled = false
     Set-Content -Path $Dest -Value $config -Encoding UTF8
 }
 
+# Append a [tls.letsencrypt] stanza when the operator supplied LE flags.
+# Mirrors maybe_write_letsencrypt_stanza in install.sh — the running
+# server performs the actual ACME flow once the wizard's SSL step is
+# completed (or admin clicks "Issue certificate" in Settings → SSL/TLS).
+function Add-LetsEncryptStanza {
+    param([string]$Dest)
+    if (-not $LetsEncryptDomain -or -not $LetsEncryptEmail) { return }
+    if (-not $LetsEncryptAgreeTos) {
+        Write-Warn "Let's Encrypt flags supplied without -LetsEncryptAgreeTos -- skipping config stub."
+        Write-Warn "Re-run with -LetsEncryptAgreeTos to accept https://letsencrypt.org/repository/."
+        return
+    }
+    $stagingValue = if ($LetsEncryptStaging) { "true" } else { "false" }
+    $stanza = @"
+
+[tls.letsencrypt]
+domain = "$LetsEncryptDomain"
+email = "$LetsEncryptEmail"
+staging = $stagingValue
+challenge_port = 80
+"@
+    Add-Content -Path $Dest -Value $stanza -Encoding UTF8
+    Write-Ok "Pre-seeded [tls.letsencrypt] for $LetsEncryptDomain (complete in setup wizard)."
+}
+
 if ($Mode -eq "native") {
     # ── Build web frontend ────────────────────────────────────────────────
     Write-Info "Installing npm packages..."
@@ -572,6 +601,7 @@ if ($Mode -eq "native") {
         -CfgDb ".\data\db\simple-photos.db" `
         -CfgWeb "..\web\dist" `
         -CfgBaseUrl "http://localhost:$Port"
+    Add-LetsEncryptStanza -Dest $configPath
     Write-Ok "Config -> server\config.toml"
 
     # ── Data directories ──────────────────────────────────────────────────
@@ -667,13 +697,15 @@ if ($Mode -eq "native") {
     }
 
     # Inside container, internal port is always 3000
+    $dockerConfigPath = Join-Path $instanceDir "config.toml"
     Write-Config `
-        -Dest (Join-Path $instanceDir "config.toml") `
+        -Dest $dockerConfigPath `
         -CfgPort 3000 `
         -CfgStorage "/data/storage" `
         -CfgDb "/data/db/simple-photos.db" `
         -CfgWeb "/app/web/dist" `
         -CfgBaseUrl "http://localhost:$Port"
+    Add-LetsEncryptStanza -Dest $dockerConfigPath
     Write-Ok "Config -> docker-instances\$Name\config.toml"
 
     # ── docker-compose.yml ────────────────────────────────────────────────
