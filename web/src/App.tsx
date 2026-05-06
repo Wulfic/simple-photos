@@ -20,6 +20,8 @@ import ExportDownloads from "./pages/ExportDownloads";
 import EncryptionBanner from "./components/EncryptionBanner";
 import ConversionBanner from "./components/ConversionBanner";
 import SavingBanner from "./components/SavingBanner";
+import AiBanner from "./components/AiBanner";
+import GeoBanner from "./components/GeoBanner";
 
 /**
  * Layout route for authenticated pages.
@@ -94,6 +96,8 @@ function ProtectedLayout() {
     <>
       <ConversionBanner />
       <EncryptionBanner />
+      <AiBanner />
+      <GeoBanner />
       <SavingBanner />
       <Outlet />
     </>

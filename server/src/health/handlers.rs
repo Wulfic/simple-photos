@@ -27,20 +27,20 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
 
 /// GET /api/status/activity — report whether server-side background work
 /// (AI inference, geo backfill) is currently running **or has pending
-/// work for the authenticated user**.
+/// work for the authenticated user**, plus per-task progress counts so
+/// the web client can render banners with totals/done/percent — the same
+/// pattern used by the encryption and conversion banners.
 ///
-/// The flag is the OR of two signals:
-/// 1. The transient atomic flag set by the AI/geo processors while a
-///    batch is in flight.  This is precise but flickers — a sub-second
-///    batch will rarely be observable to a 3-second poll.
-/// 2. A backlog query: any photo belonging to this user that still
-///    needs detection or reverse-geocoding.  This makes the spinner
-///    visible for the entire duration of background work, not just the
-///    moment a batch is actively running.
+/// Each task block reports:
+///   - `running`  — transient flag set by the processor mid-batch
+///   - `pending`  — count of photos still requiring this work
+///   - `total`    — count of photos in scope (eligible for this work)
+///   - `done`     — `total - pending`
+///   - `active`   — `running || (pending > 0)`
 ///
 /// Requires authentication so the activity state isn't leaked to anonymous
 /// callers.  Used by the web client to spin the profile-avatar indicator
-/// so users know when the server is doing something on their behalf.
+/// and drive AI / geo progress banners.
 pub async fn activity_status(
     State(state): State<AppState>,
     auth: crate::auth::middleware::AuthUser,
@@ -50,20 +50,30 @@ pub async fn activity_status(
     let ai_running = state.ai_active.load(Ordering::Relaxed);
     let geo_running = state.geo_active.load(Ordering::Relaxed);
 
-    // Backlog: photos awaiting AI detection for this user.  We only count
-    // a small LIMIT to keep the query bounded — we don't need an exact
-    // total, just "is there at least one?".  Errors are swallowed so a
-    // transient DB hiccup doesn't 500 a status poll.
-    //
-    // IMPORTANT: mirror the AI processor's user-enabled filter exactly.
-    // Without it, photos belonging to users who have AI disabled (or who
-    // are on a server where AI is globally off) are never processed, so
-    // the backlog query would return true forever and the spinner would
-    // never stop.
     let ai_config_default = if state.config.ai.enabled { 1i64 } else { 0i64 };
-    let ai_pending: bool = sqlx::query_scalar::<_, i64>(
-        "SELECT EXISTS( \
-             SELECT 1 FROM photos p \
+
+    // Total photos in AI scope for this user (mirrors processor's
+    // user-enabled filter).  Errors are swallowed so a transient DB hiccup
+    // doesn't 500 a status poll.
+    let ai_total: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM photos p \
+             WHERE p.user_id = ?1 \
+             AND ( (p.file_path IS NOT NULL AND p.file_path != '') OR p.encrypted_blob_id IS NOT NULL ) \
+             AND ( \
+                 EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'ai_enabled' AND us.value = 'true') \
+                 OR ( \
+                     ?2 = 1 AND NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'ai_enabled') \
+                 ) \
+             )",
+    )
+    .bind(&auth.user_id)
+    .bind(ai_config_default)
+    .fetch_one(&state.read_pool)
+    .await
+    .unwrap_or(0);
+
+    let ai_pending_count: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM photos p \
              WHERE p.user_id = ?1 \
              AND ( (p.file_path IS NOT NULL AND p.file_path != '') OR p.encrypted_blob_id IS NOT NULL ) \
              AND NOT EXISTS ( \
@@ -75,25 +85,35 @@ pub async fn activity_status(
                  OR ( \
                      ?2 = 1 AND NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'ai_enabled') \
                  ) \
-             ) \
-             LIMIT 1 \
-         )",
+             )",
     )
     .bind(&auth.user_id)
     .bind(ai_config_default)
     .fetch_one(&state.read_pool)
     .await
-    .map(|n| n != 0)
-    .unwrap_or(false);
+    .unwrap_or(0);
 
-    // Backlog: photos with GPS but no resolved geo_city for this user.
-    // Again, mirror the geo processor's user-enabled filter so we don't
-    // report pending work for users who have geo disabled — those photos
-    // will never get geo_city populated and would spin forever otherwise.
+    // Geo scope: photos with GPS coordinates and the user's geo enabled.
     let geo_config_default = if state.config.geo.enabled { 1i64 } else { 0i64 };
-    let geo_pending: bool = sqlx::query_scalar::<_, i64>(
-        "SELECT EXISTS( \
-             SELECT 1 FROM photos p \
+    let geo_total: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM photos p \
+             WHERE p.user_id = ?1 \
+             AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
+             AND ( \
+                 EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'geo_enabled' AND us.value = 'true') \
+                 OR ( \
+                     ?2 = 1 AND NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'geo_enabled') \
+                 ) \
+             )",
+    )
+    .bind(&auth.user_id)
+    .bind(geo_config_default)
+    .fetch_one(&state.read_pool)
+    .await
+    .unwrap_or(0);
+
+    let geo_pending_count: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM photos p \
              WHERE p.user_id = ?1 \
              AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
              AND p.geo_city IS NULL \
@@ -102,23 +122,39 @@ pub async fn activity_status(
                  OR ( \
                      ?2 = 1 AND NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id AND us.key = 'geo_enabled') \
                  ) \
-             ) \
-             LIMIT 1 \
-         )",
+             )",
     )
     .bind(&auth.user_id)
     .bind(geo_config_default)
     .fetch_one(&state.read_pool)
     .await
-    .map(|n| n != 0)
-    .unwrap_or(false);
+    .unwrap_or(0);
 
-    let ai = ai_running || ai_pending;
-    let geo = geo_running || geo_pending;
+    let ai_done = (ai_total - ai_pending_count).max(0);
+    let geo_done = (geo_total - geo_pending_count).max(0);
+    let ai_active = ai_running || ai_pending_count > 0;
+    let geo_active = geo_running || geo_pending_count > 0;
+
     Json(json!({
-        "ai": ai,
-        "geo": geo,
-        "active": ai || geo,
+        // Back-compat top-level booleans (used by older clients).
+        "ai": ai_active,
+        "geo": geo_active,
+        "active": ai_active || geo_active,
+        // Per-task progress, banner-friendly.
+        "ai_progress": {
+            "running": ai_running,
+            "active": ai_active,
+            "total": ai_total,
+            "done": ai_done,
+            "pending": ai_pending_count,
+        },
+        "geo_progress": {
+            "running": geo_running,
+            "active": geo_active,
+            "total": geo_total,
+            "done": geo_done,
+            "pending": geo_pending_count,
+        },
     }))
 }
 

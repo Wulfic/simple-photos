@@ -92,29 +92,66 @@ export default function Slideshow({
           return;
         }
 
-        // Download + decrypt.
-        const encrypted = await api.blobs.download(currentBlobId);
+        // Resolve which server-side ID to fetch.  Edit copies and secure
+        // clones share the original's storageBlobId; server-side
+        // (unencrypted) photos fetch via /photos/:id/file.  Without this
+        // resolution the slideshow renders a black screen for any photo
+        // whose CachedPhoto.blobId differs from its server storage ID.
+        const dbCached = await db.photos.get(currentBlobId).catch(() => undefined);
         if (cancelled) return;
-        const decrypted = await decrypt(encrypted);
-        if (cancelled) return;
-        const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
-        const bytes = base64ToUint8Array(payload.data).buffer as ArrayBuffer;
-        const blob = new Blob([bytes], { type: payload.mime_type });
+
+        let bytes: ArrayBuffer;
+        let mimeType: string;
+        let mediaType: "photo" | "gif" | "video" | "audio";
+        let filename: string;
+
+        if (dbCached?.serverSide && dbCached.serverPhotoId) {
+          // Server-side (unencrypted) — fetch the file directly.
+          const res = await fetch(`/api/photos/${dbCached.serverPhotoId}/file`, {
+            credentials: "include",
+          });
+          if (cancelled) return;
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          bytes = await res.arrayBuffer();
+          mimeType = res.headers.get("content-type") || dbCached.mimeType || "image/jpeg";
+          mediaType = dbCached.mediaType;
+          filename = dbCached.filename;
+        } else {
+          // Encrypted blob path — use storageBlobId when available so
+          // copies/clones resolve to the original's server blob.
+          const fetchId = dbCached?.storageBlobId || currentBlobId;
+          const encrypted = await api.blobs.download(fetchId);
+          if (cancelled) return;
+          const decrypted = await decrypt(encrypted);
+          if (cancelled) return;
+          const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
+          bytes = base64ToUint8Array(payload.data).buffer as ArrayBuffer;
+          mimeType = payload.mime_type;
+          mediaType = (payload.media_type ?? "photo") as "photo" | "gif" | "video" | "audio";
+          filename = payload.filename;
+        }
+
+        const blob = new Blob([bytes], { type: mimeType });
         const url = URL.createObjectURL(blob);
         if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
         prevUrlRef.current = url;
         setMediaUrl(url);
 
-        // Cache for future.
-        await db.fullPhotos.put({
-          photoId: currentBlobId,
-          filename: payload.filename,
-          mimeType: payload.mime_type,
-          mediaType: (payload.media_type ?? "photo") as "photo" | "gif" | "video" | "audio",
-          isFavorite: false,
-          data: bytes,
-          cachedAt: Date.now(),
-        });
+        // Cache for future.  Skip caching for very large blobs to avoid
+        // blowing the IndexedDB quota.
+        if (bytes.byteLength < 50 * 1024 * 1024) {
+          try {
+            await db.fullPhotos.put({
+              photoId: currentBlobId,
+              filename,
+              mimeType,
+              mediaType,
+              isFavorite: dbCached?.isFavorite ?? false,
+              data: bytes,
+              cachedAt: Date.now(),
+            });
+          } catch { /* non-fatal */ }
+        }
       } catch {
         // Silently skip on error — slideshow will auto-advance.
       } finally {
