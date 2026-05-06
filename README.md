@@ -74,44 +74,45 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 
 The install scripts handle everything — building the server, web frontend, and (optionally) the Android APK. They support both Docker and bare-metal (native) installations.
 
-### Linux / macOS
-
-```bash
-./install.sh
-```
-
-### Windows (PowerShell)
-
-```powershell
-.\install.ps1
-```
-
 ### CLI Flags
 
 ```
 --mode <native|docker>  Installation mode
---port <number>         Starting port (auto-increments if busy)
 --name <string>         Instance name (for Docker containers)
---storage <path>        Path to photo storage directory
---admin-user <string>   Admin username (skip interactive prompt)
---admin-pass <string>   Admin password (skip interactive prompt)
 --no-build-android      Skip Android APK build prompt
 --no-start              Don't start the server after install
 --yes                   Auto-accept all prompts
 --help                  Show this help
 ```
 
-**Examples:**
+**Examples:(Run as Root/Admin)**
 
 ```bash
-# Native install on port 8080
-./install.sh --mode native --port 8080
+# Native install
+./install.sh --mode native 
 
 # Docker install
-./install.sh --mode docker --port 8080
+./install.sh --mode docker
 
-# Fully non-interactive
-./install.sh --mode docker --port 8080 --admin-user admin --admin-pass secret --yes
+# Native uninstall
+./install.sh --uninstall native
+
+# Docker uninstall
+./install.sh --uninstall docker
+```
+
+```powershell
+# Native install
+.\install.ps1 -Mode native 
+
+# Docker install
+.\install.ps1 -Mode docker
+
+# Native uninstall
+.\install.ps1 -Uninstall native
+
+# Docker uninstall
+.\install.ps1 -Uninstall docker
 ```
 
 ### Prerequisites

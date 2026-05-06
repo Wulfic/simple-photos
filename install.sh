@@ -14,8 +14,7 @@
 # ║    --port <number>         Starting port (auto-increments if busy)       ║
 # ║    --name <string>         Instance name (for Docker containers)         ║
 # ║    --storage <path>        Path to photo storage directory               ║
-# ║    --admin-user <string>   Admin username (skip interactive prompt)      ║
-# ║    --admin-pass <string>   Admin password (skip interactive prompt)      ║
+# ║    --uninstall <native|docker>  Remove an existing installation          ║
 # ║    --letsencrypt-domain <fqdn>   Pre-seed Let's Encrypt domain in       ║
 # ║                                  config.toml [tls.letsencrypt]          ║
 # ║    --letsencrypt-email <addr>    Pre-seed Let's Encrypt contact email   ║
@@ -150,8 +149,7 @@ MODE=""
 PORT=""
 INSTANCE_NAME=""
 STORAGE_PATH=""
-ADMIN_USER=""
-ADMIN_PASS=""
+UNINSTALL=""
 LE_DOMAIN=""
 LE_EMAIL=""
 LE_STAGING=false
@@ -178,8 +176,7 @@ while [[ $# -gt 0 ]]; do
         --port)           PORT="$2"; shift 2 ;;
         --name)           INSTANCE_NAME="$2"; shift 2 ;;
         --storage)        STORAGE_PATH="$2"; shift 2 ;;
-        --admin-user)     ADMIN_USER="$2"; shift 2 ;;
-        --admin-pass)     ADMIN_PASS="$2"; shift 2 ;;
+        --uninstall)      UNINSTALL="$2"; shift 2 ;;
         --letsencrypt-domain)    LE_DOMAIN="$2"; shift 2 ;;
         --letsencrypt-email)     LE_EMAIL="$2"; shift 2 ;;
         --letsencrypt-staging)   LE_STAGING=true; shift ;;
@@ -401,6 +398,82 @@ setup_gpu() {
         warn "A reboot is required before GPU transcoding and AI will work."
     fi
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Uninstall mode
+# ══════════════════════════════════════════════════════════════════════════════
+if [ -n "${UNINSTALL:-}" ]; then
+    case "$UNINSTALL" in
+        native)
+            step "Uninstalling Simple Photos (native)"
+            if command -v systemctl &>/dev/null; then
+                if systemctl is-active --quiet simple-photos.service 2>/dev/null; then
+                    info "Stopping simple-photos service..."
+                    sudo systemctl stop simple-photos.service 2>/dev/null || true
+                fi
+                if systemctl is-enabled --quiet simple-photos.service 2>/dev/null; then
+                    sudo systemctl disable simple-photos.service 2>/dev/null || true
+                fi
+                if [ -f /etc/systemd/system/simple-photos.service ]; then
+                    sudo rm -f /etc/systemd/system/simple-photos.service
+                    sudo systemctl daemon-reload
+                    success "Systemd service removed"
+                fi
+            fi
+            if [ -f /etc/sudoers.d/simple-photos-cifs ]; then
+                sudo rm -f /etc/sudoers.d/simple-photos-cifs
+                success "Sudoers rule removed"
+            fi
+            if [ -f "$SCRIPT_DIR/server/target/release/simple-photos-server" ] || \
+               [ -f "$SCRIPT_DIR/server/config.toml" ]; then
+                if prompt_yn "Remove built server binary and config.toml?" "Y"; then
+                    rm -f "$SCRIPT_DIR/server/target/release/simple-photos-server"
+                    rm -f "$SCRIPT_DIR/server/config.toml"
+                    success "Server binary and config removed"
+                fi
+            fi
+            echo ""
+            success "Native uninstall complete."
+            warn "Photo storage data was NOT removed: $SCRIPT_DIR/server/data/storage"
+            info "Remove it manually if no longer needed."
+            exit 0
+            ;;
+        docker)
+            step "Uninstalling Simple Photos (docker)"
+            INSTANCES_DIR="$SCRIPT_DIR/docker-instances"
+            if [ ! -d "$INSTANCES_DIR" ] || [ -z "$(ls -A "$INSTANCES_DIR" 2>/dev/null)" ]; then
+                warn "No docker-instances directory found."
+                exit 0
+            fi
+            if [ -n "$INSTANCE_NAME" ]; then
+                TARGETS=("$INSTANCES_DIR/$INSTANCE_NAME")
+            else
+                mapfile -t TARGETS < <(find "$INSTANCES_DIR" -mindepth 1 -maxdepth 1 -type d)
+            fi
+            for inst_dir in "${TARGETS[@]}"; do
+                [ -d "$inst_dir" ] || continue
+                inst_name=$(basename "$inst_dir")
+                if [ -f "$inst_dir/docker-compose.yml" ]; then
+                    info "Stopping container: $inst_name"
+                    (cd "$inst_dir" && $DOCKER_CMD compose down 2>/dev/null) || true
+                fi
+                if prompt_yn "Remove instance directory: docker-instances/$inst_name?" "Y"; then
+                    rm -rf "$inst_dir"
+                    success "Removed: docker-instances/$inst_name"
+                fi
+            done
+            echo ""
+            success "Docker uninstall complete."
+            warn "Photo storage data was NOT removed from any custom --storage paths."
+            info "Remove it manually if no longer needed."
+            exit 0
+            ;;
+        *)
+            error "Unknown uninstall mode: '$UNINSTALL' (use 'native' or 'docker')"
+            exit 1
+            ;;
+    esac
+fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Banner
@@ -827,7 +900,7 @@ fi
 step "Step 3/6: Port configuration"
 
 if [ -z "$PORT" ]; then
-    PORT=$(prompt_text "Server port" "$DEFAULT_PORT")
+    PORT="$DEFAULT_PORT"
 fi
 
 FINAL_PORT=$(find_available_port "$PORT")
@@ -853,7 +926,11 @@ fi
 success "Instance: $INSTANCE_NAME"
 
 if [ -z "$STORAGE_PATH" ]; then
-    STORAGE_PATH=$(prompt_text "Photo storage path" "$SCRIPT_DIR/server/data/storage")
+    if [[ "$MODE" == "docker" ]]; then
+        STORAGE_PATH="$SCRIPT_DIR/docker-instances/${INSTANCE_NAME}/data/storage"
+    else
+        STORAGE_PATH="$SCRIPT_DIR/server/data/storage"
+    fi
 fi
 mkdir -p "$STORAGE_PATH" 2>/dev/null || true
 success "Storage: $STORAGE_PATH"

@@ -18,11 +18,8 @@
 .PARAMETER StoragePath
     Path to photo storage directory
 
-.PARAMETER AdminUser
-    Admin username (skip interactive prompt)
-
-.PARAMETER AdminPass
-    Admin password (skip interactive prompt)
+.PARAMETER Uninstall
+    Remove an existing installation: "native" or "docker"
 
 .PARAMETER NoBuildAndroid
     Skip Android APK build prompt
@@ -51,8 +48,7 @@ param(
 
     [string]$Name = "",
     [string]$StoragePath = "",
-    [string]$AdminUser = "",
-    [string]$AdminPass = "",
+    [string]$Uninstall = "",
     [string]$LetsEncryptDomain = "",
     [string]$LetsEncryptEmail = "",
     [switch]$LetsEncryptStaging,
@@ -224,6 +220,83 @@ Write-Host "  |         Simple Photos Installer (Windows)       |" -ForegroundCo
 Write-Host "  |    Self-hosted E2E encrypted photo library      |" -ForegroundColor White
 Write-Host "  +================================================+" -ForegroundColor White
 Write-Host ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Uninstall mode
+# ══════════════════════════════════════════════════════════════════════════════
+if ($Uninstall) {
+    switch ($Uninstall.ToLower()) {
+        "native" {
+            Write-Step "Uninstalling Simple Photos (native)"
+            $taskName = "SimplePhotosServer"
+            if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+                Write-Info "Stopping and removing scheduled task: $taskName"
+                Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+                Write-Ok "Scheduled task removed"
+            }
+            Get-NetFirewallRule -DisplayName "SimplePhotos-Port-*" -ErrorAction SilentlyContinue | ForEach-Object {
+                Remove-NetFirewallRule -Name $_.Name -ErrorAction SilentlyContinue
+                Write-Ok "Firewall rule removed: $($_.DisplayName)"
+            }
+            $serverExe = Join-Path $ScriptDir "server\target\release\simple-photos-server.exe"
+            $configPath = Join-Path $ScriptDir "server\config.toml"
+            if ((Test-Path $serverExe) -or (Test-Path $configPath)) {
+                if (Read-YesNo "Remove built server binary and config.toml?" "Y") {
+                    Remove-Item $serverExe -ErrorAction SilentlyContinue
+                    Remove-Item $configPath -ErrorAction SilentlyContinue
+                    Write-Ok "Server binary and config removed"
+                }
+            }
+            Write-Host ""
+            Write-Ok "Native uninstall complete."
+            Write-Warn "Photo storage data was NOT removed: $(Join-Path $ScriptDir 'server\data\storage')"
+            Write-Info "Remove it manually if no longer needed."
+            exit 0
+        }
+        "docker" {
+            Write-Step "Uninstalling Simple Photos (docker)"
+            if (-not (Test-CommandExists "docker")) {
+                Write-Err "Docker not found. Cannot perform Docker uninstall."
+                exit 1
+            }
+            $instancesDir = Join-Path $ScriptDir "docker-instances"
+            if (-not (Test-Path $instancesDir)) {
+                Write-Warn "No docker-instances directory found."
+                exit 0
+            }
+            $targets = if ($Name) {
+                @(Join-Path $instancesDir $Name)
+            } else {
+                Get-ChildItem $instancesDir -Directory | Select-Object -ExpandProperty FullName
+            }
+            foreach ($instDir in $targets) {
+                if (-not (Test-Path $instDir)) { continue }
+                $instName = Split-Path $instDir -Leaf
+                $composePath = Join-Path $instDir "docker-compose.yml"
+                if (Test-Path $composePath) {
+                    Write-Info "Stopping container: $instName"
+                    Push-Location $instDir
+                    docker compose down 2>$null
+                    Pop-Location
+                }
+                if (Read-YesNo "Remove instance directory: docker-instances\$instName?" "Y") {
+                    Remove-Item $instDir -Recurse -Force
+                    Write-Ok "Removed: docker-instances\$instName"
+                }
+            }
+            Write-Host ""
+            Write-Ok "Docker uninstall complete."
+            Write-Warn "Photo storage data was NOT removed from any custom -StoragePath paths."
+            Write-Info "Remove it manually if no longer needed."
+            exit 0
+        }
+        default {
+            Write-Err "Unknown uninstall mode: '$Uninstall' (use 'native' or 'docker')"
+            exit 1
+        }
+    }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 1: Installation mode
@@ -422,7 +495,7 @@ if ($Mode -eq "native") {
 Write-Step "Step 3/6: Port configuration"
 
 if ($Port -eq 0) {
-    $Port = [int](Read-Prompt "Server port" $DefaultPort)
+    $Port = $DefaultPort
 }
 
 $FinalPort = Find-AvailablePort $Port
@@ -444,8 +517,11 @@ if (-not $Name) {
 Write-Ok "Instance: $Name"
 
 if (-not $StoragePath) {
-    $defaultStorage = Join-Path $ScriptDir "server\data\storage"
-    $StoragePath = Read-Prompt "Photo storage path" $defaultStorage
+    if ($Mode -eq "docker") {
+        $StoragePath = Join-Path $ScriptDir "docker-instances\$Name\data\storage"
+    } else {
+        $StoragePath = Join-Path $ScriptDir "server\data\storage"
+    }
 }
 if (-not (Test-Path $StoragePath)) {
     New-Item -ItemType Directory -Path $StoragePath -Force | Out-Null
