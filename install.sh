@@ -936,23 +936,12 @@ if [[ "$MODE" == "native" ]]; then
     info "Building server (release)... may take a few minutes on first run."
     cd "$SCRIPT_DIR/server"
 
-    # Auto-detect CUDA so NVIDIA hosts get GPU-accelerated AI inference
-    # without an opt-in flag.  Hosts without nvidia-smi / libcudart fall
-    # through to the portable CPU build.
-    CARGO_FEATURES=()
-    if command -v nvidia-smi >/dev/null 2>&1 && \
-       nvidia-smi --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then
-        success "NVIDIA GPU detected — building with CUDA execution provider"
-        CARGO_FEATURES+=(--features cuda)
-    elif [[ -e /usr/local/cuda/lib64/libcudart.so ]] || \
-         [[ -e /usr/lib/x86_64-linux-gnu/libcudart.so ]]; then
-        success "CUDA runtime detected — building with CUDA execution provider"
-        CARGO_FEATURES+=(--features cuda)
-    else
-        info "No CUDA-capable GPU detected — building portable CPU server"
-    fi
-
-    cargo build --release "${CARGO_FEATURES[@]}" 2>&1 | tail -5
+    # CUDA execution provider is baked into the default build (see
+    # server/Cargo.toml [features]). The ORT CUDA EP loads libcudart
+    # lazily at runtime, so the same binary runs on GPU and CPU hosts —
+    # `AiEngine::detect_cuda()` decides per-process whether to use it.
+    info "Building with CUDA execution provider baked in (auto-falls back to CPU at runtime)"
+    cargo build --release 2>&1 | tail -5
     success "Server built → server/target/release/simple-photos-server"
     cd "$SCRIPT_DIR"
 

@@ -548,23 +548,11 @@ if ($Mode -eq "native") {
     Write-Info "Building server (release)... may take a few minutes on first run."
     Set-Location (Join-Path $ScriptDir "server")
 
-    # Auto-detect CUDA so NVIDIA hosts get GPU-accelerated AI inference
-    # without an opt-in flag. Hosts without nvidia-smi fall through to the
-    # portable CPU build.
-    $cargoFeatures = @()
-    $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-    if ($nvidiaSmi) {
-        $null = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "NVIDIA GPU detected -- building with CUDA execution provider"
-            $cargoFeatures = @("--features", "cuda")
-        }
-    }
-    if ($cargoFeatures.Count -eq 0) {
-        Write-Info "No CUDA-capable GPU detected -- building portable CPU server"
-    }
-
-    cargo build --release @cargoFeatures 2>&1 | Select-Object -Last 5
+    # CUDA execution provider is baked into the default build (see
+    # server\Cargo.toml [features]). The ORT CUDA EP loads cudart lazily
+    # at runtime, so the same binary runs on GPU and CPU hosts.
+    Write-Info "Building with CUDA execution provider baked in (auto-falls back to CPU at runtime)"
+    cargo build --release 2>&1 | Select-Object -Last 5
     Write-Ok "Server built -> server\target\release\simple-photos-server.exe"
     Set-Location $ScriptDir
 

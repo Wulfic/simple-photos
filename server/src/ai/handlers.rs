@@ -89,7 +89,14 @@ pub async fn ai_status(
 
     Ok(Json(AiStatusResponse {
         enabled,
-        gpu_available: false, // Will be updated when GPU detection is implemented
+        // Reflect the actual execution provider negotiated by AiEngine at
+        // startup (honours `ai.gpu_preferred`, runtime CUDA availability,
+        // AND the compile-time `cuda` cargo feature so we don't lie when
+        // the binary lacks the EP). See `crate::ai::engine::AiEngine::new`.
+        gpu_available: matches!(
+            crate::ai::session::current().provider,
+            crate::ai::engine::ExecutionProvider::Cuda
+        ),
         photos_processed: processed.0,
         photos_pending: total.0 - processed.0,
         face_detections: face_count.0,

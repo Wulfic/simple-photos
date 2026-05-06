@@ -53,11 +53,26 @@ impl AiEngine {
     pub fn new(config: &AiConfig) -> Self {
         let model_dir = PathBuf::from(&config.model_dir);
 
-        // Detect execution provider
+        // Detect execution provider. GPU is honoured when:
+        //   1. The operator allows it (`gpu_preferred = true`, default).
+        //   2. The host has a CUDA driver (nvidia-smi or libcudart.so).
+        //   3. The binary was compiled with the `cuda` cargo feature
+        //      (default ON since v0.6.10 — see server/Cargo.toml).
+        // The CUDA EP is dlopen'd at runtime so a CUDA-built binary still
+        // runs on CPU-only hosts; we just skip registering the EP.
+        let cuda_built_in = cfg!(feature = "cuda");
         let provider = if config.gpu_preferred {
-            if Self::detect_cuda() {
+            let cuda_runtime = Self::detect_cuda();
+            if cuda_runtime && cuda_built_in {
                 tracing::info!("AI engine: CUDA GPU detected, using GPU acceleration");
                 ExecutionProvider::Cuda
+            } else if cuda_runtime && !cuda_built_in {
+                tracing::warn!(
+                    "AI engine: CUDA GPU detected on host but binary was built \
+                     without the `cuda` feature (non-default build). Running on \
+                     CPU. Rebuild with default features to enable GPU."
+                );
+                ExecutionProvider::Cpu
             } else {
                 tracing::info!("AI engine: No CUDA GPU detected, falling back to CPU");
                 ExecutionProvider::Cpu

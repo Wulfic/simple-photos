@@ -12,8 +12,104 @@ use tokio::process::Command;
 
 use crate::error::AppError;
 use crate::process::{run_with_timeout, FFMPEG_RENDER_TIMEOUT};
+use crate::transcode::HwAccelCapability;
+use crate::transcode::gpu_probe::HwAccelType;
 
 use super::models::CropMeta;
+
+/// Encoder selection for the editing re-encode path.
+///
+/// Pairs the FFmpeg encoder + quality args with any required global
+/// flags (e.g. `-vaapi_device`) and an optional filter-chain suffix
+/// (e.g. `format=nv12,hwupload`) needed to feed software-decoded frames
+/// into the hardware encoder.
+struct EncoderPlan {
+    /// Global args inserted BEFORE `-i` (e.g. `-vaapi_device /dev/dri/renderD128`).
+    pre_input: Vec<String>,
+    /// Encoder + quality args inserted AFTER the filter chain.
+    encoder: Vec<String>,
+    /// Optional filter chain suffix appended after user filters
+    /// (with a leading comma added by the caller when filters exist).
+    filter_suffix: Option<String>,
+    /// Display label for logging.
+    label: &'static str,
+}
+
+impl EncoderPlan {
+    fn cpu() -> Self {
+        Self {
+            pre_input: Vec::new(),
+            encoder: vec![
+                "-c:v".into(), "libx264".into(),
+                "-preset".into(), "fast".into(),
+                "-crf".into(), "18".into(),
+                "-c:a".into(), "aac".into(),
+            ],
+            filter_suffix: None,
+            label: "libx264",
+        }
+    }
+
+    fn from_hwaccel(h: &HwAccelCapability) -> Option<Self> {
+        if !h.is_gpu() {
+            return None;
+        }
+        Some(match h.accel_type {
+            HwAccelType::Nvenc => Self {
+                pre_input: Vec::new(),
+                encoder: vec![
+                    "-c:v".into(), "h264_nvenc".into(),
+                    "-preset".into(), "p4".into(),
+                    "-cq".into(), "18".into(),
+                    "-c:a".into(), "aac".into(),
+                ],
+                filter_suffix: None,
+                label: "h264_nvenc",
+            },
+            HwAccelType::Amf => Self {
+                pre_input: Vec::new(),
+                encoder: vec![
+                    "-c:v".into(), "h264_amf".into(),
+                    "-quality".into(), "balanced".into(),
+                    "-rc".into(), "cqp".into(),
+                    "-qp_i".into(), "18".into(),
+                    "-qp_p".into(), "18".into(),
+                    "-c:a".into(), "aac".into(),
+                ],
+                filter_suffix: None,
+                label: "h264_amf",
+            },
+            HwAccelType::Vaapi => {
+                let device = h.device.clone().unwrap_or_else(|| "/dev/dri/renderD128".into());
+                Self {
+                    pre_input: vec!["-vaapi_device".into(), device],
+                    encoder: vec![
+                        "-c:v".into(), "h264_vaapi".into(),
+                        "-qp".into(), "18".into(),
+                        "-c:a".into(), "aac".into(),
+                    ],
+                    filter_suffix: Some("format=nv12,hwupload".into()),
+                    label: "h264_vaapi",
+                }
+            }
+            HwAccelType::Qsv => Self {
+                pre_input: vec![
+                    "-init_hw_device".into(), "qsv=qsv:hw".into(),
+                    "-filter_hw_device".into(), "qsv".into(),
+                ],
+                encoder: vec![
+                    "-c:v".into(), "h264_qsv".into(),
+                    "-preset".into(), "medium".into(),
+                    "-global_quality".into(), "18".into(),
+                    "-c:a".into(), "aac".into(),
+                ],
+                filter_suffix: Some("format=nv12,hwupload=extra_hw_frames=64".into()),
+                label: "h264_qsv",
+            },
+            HwAccelType::Cpu => unreachable!("filtered above by is_gpu()"),
+        })
+    }
+}
 
 /// Build the `-vf` video filter string from edit metadata.
 ///
@@ -65,6 +161,11 @@ pub fn build_video_filters(meta: &CropMeta) -> Vec<String> {
 /// with crop/rotation/brightness/trim edits.
 ///
 /// The returned `Vec<String>` can be passed directly to `Command::args()`.
+///
+/// CPU-only variant — kept for backwards compatibility with unit tests and
+/// callers that don't care about GPU acceleration. Internally delegates to
+/// [`build_ffmpeg_args_with_plan`] with a CPU encoder plan.
+#[allow(dead_code)] // Used by unit tests; production callers go through run_ffmpeg_render.
 pub fn build_ffmpeg_args(
     source: &Path,
     dest: &Path,
@@ -72,11 +173,27 @@ pub fn build_ffmpeg_args(
     meta: &CropMeta,
     ext: &str,
 ) -> Vec<String> {
-    let mut args: Vec<String> = vec![
-        "-y".into(),
-        "-i".into(),
-        source.to_string_lossy().into_owned(),
-    ];
+    build_ffmpeg_args_with_plan(source, dest, media_type, meta, ext, &EncoderPlan::cpu())
+}
+
+/// Build ffmpeg arguments using the given encoder plan (CPU or GPU).
+fn build_ffmpeg_args_with_plan(
+    source: &Path,
+    dest: &Path,
+    media_type: &str,
+    meta: &CropMeta,
+    ext: &str,
+    plan: &EncoderPlan,
+) -> Vec<String> {
+    let mut args: Vec<String> = Vec::with_capacity(32);
+    args.push("-y".into());
+
+    // Hwaccel-specific global flags (e.g. -vaapi_device, -init_hw_device qsv)
+    // must come before -i.
+    args.extend(plan.pre_input.iter().cloned());
+
+    args.push("-i".into());
+    args.push(source.to_string_lossy().into_owned());
 
     // Trim (output-side seeking for frame accuracy)
     if meta.has_trim_start() {
@@ -91,23 +208,17 @@ pub fn build_ffmpeg_args(
     let needs_filter = media_type == "video" && meta.needs_video_filter();
 
     if needs_filter {
-        let filters = build_video_filters(meta);
+        let mut filters = build_video_filters(meta);
+        if let Some(suffix) = &plan.filter_suffix {
+            filters.push(suffix.clone());
+        }
         if !filters.is_empty() {
             args.push("-vf".into());
             args.push(filters.join(","));
         }
 
-        // Re-encode: H.264 + AAC in a fast, high-quality preset
-        args.extend([
-            "-c:v".into(),
-            "libx264".into(),
-            "-preset".into(),
-            "fast".into(),
-            "-crf".into(),
-            "18".into(),
-            "-c:a".into(),
-            "aac".into(),
-        ]);
+        // Re-encode using the plan's encoder (libx264 / h264_nvenc / etc.)
+        args.extend(plan.encoder.iter().cloned());
     } else if meta.has_trim() {
         // Trim-only (or audio): copy streams losslessly
         args.extend(["-c".into(), "copy".into()]);
@@ -129,6 +240,11 @@ pub fn build_ffmpeg_args(
 ///
 /// Uses [`crate::process::run_with_timeout`] with the standard 120 s timeout,
 /// `stdin(null)`, and `kill_on_drop(true)`.
+///
+/// When a video re-encode is required and the system has GPU hardware
+/// acceleration registered (NVENC / QSV / VAAPI / AMF), the GPU encoder
+/// is tried first. On GPU failure (and `transcode.gpu_fallback_to_cpu = true`)
+/// the function transparently retries with libx264.
 pub async fn run_ffmpeg_render(
     source: &Path,
     dest: &Path,
@@ -136,7 +252,73 @@ pub async fn run_ffmpeg_render(
     meta: &CropMeta,
     ext: &str,
 ) -> Result<(), AppError> {
-    let args = build_ffmpeg_args(source, dest, media_type, meta, ext);
+    let needs_reencode = media_type == "video" && meta.needs_video_filter();
+
+    // Only video re-encodes benefit from GPU acceleration. Audio, trim-only,
+    // and no-op renders use stream copy and don't touch the encoder.
+    let gpu_plan = if needs_reencode {
+        crate::conversion::active_hwaccel()
+            .and_then(EncoderPlan::from_hwaccel)
+    } else {
+        None
+    };
+
+    if let Some(plan) = gpu_plan {
+        let args = build_ffmpeg_args_with_plan(source, dest, media_type, meta, ext, &plan);
+        tracing::info!(
+            "[editing/ffmpeg] GPU render ({}): src={}, dst={}, media_type={}",
+            plan.label, source.display(), dest.display(), media_type,
+        );
+        tracing::debug!("[editing/ffmpeg] GPU args: {:?}", args);
+
+        let started = std::time::Instant::now();
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(&args);
+        match run_with_timeout(&mut cmd, FFMPEG_RENDER_TIMEOUT).await {
+            Ok(output) if output.status.success() => {
+                tracing::info!(
+                    encoder = plan.label,
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "[editing/ffmpeg] GPU render succeeded"
+                );
+                return Ok(());
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let last_line = stderr.lines().last().unwrap_or("unknown error");
+                if !crate::conversion::cpu_fallback_enabled() {
+                    tracing::error!(
+                        encoder = plan.label,
+                        "[editing/ffmpeg] GPU render failed and CPU fallback disabled: {last_line}"
+                    );
+                    return Err(AppError::Internal(format!(
+                        "ffmpeg render failed ({}): {last_line}", plan.label
+                    )));
+                }
+                tracing::warn!(
+                    encoder = plan.label,
+                    "[editing/ffmpeg] GPU render failed — retrying with libx264: {last_line}"
+                );
+                let _ = tokio::fs::remove_file(dest).await;
+            }
+            Err(e) => {
+                if !crate::conversion::cpu_fallback_enabled() {
+                    return Err(AppError::Internal(format!("ffmpeg render: {e}")));
+                }
+                tracing::warn!(
+                    encoder = plan.label,
+                    "[editing/ffmpeg] GPU render errored — retrying with libx264: {e}"
+                );
+                let _ = tokio::fs::remove_file(dest).await;
+            }
+        }
+    }
+
+    // CPU path (libx264) — used when no GPU is available, when the operation
+    // doesn't require re-encoding, or as a fallback after GPU failure.
+    let args = build_ffmpeg_args_with_plan(
+        source, dest, media_type, meta, ext, &EncoderPlan::cpu(),
+    );
 
     tracing::info!("[editing/ffmpeg] args: {:?}", args);
     tracing::info!(
@@ -265,5 +447,111 @@ mod tests {
         // Audio: no -vf, no libx264
         assert!(!args.contains(&"-vf".to_string()));
         assert!(!args.contains(&"libx264".to_string()));
+    }
+
+    // ── DDT: GPU encoder plan selection ──────────────────────────────
+    //
+    // Verifies that `EncoderPlan::from_hwaccel` produces the correct
+    // FFmpeg encoder, pre-input flags, and filter suffix for every
+    // supported hardware-acceleration backend. CPU input must yield
+    // `None` so the runner falls through to `EncoderPlan::cpu()`.
+
+    fn cap(t: HwAccelType, encoder: &str, device: Option<&str>) -> HwAccelCapability {
+        HwAccelCapability {
+            accel_type: t,
+            video_encoder: encoder.into(),
+            device: device.map(|s| s.into()),
+        }
+    }
+
+    #[test]
+    fn encoder_plan_nvenc() {
+        let p = EncoderPlan::from_hwaccel(&cap(HwAccelType::Nvenc, "h264_nvenc", None)).unwrap();
+        assert_eq!(p.label, "h264_nvenc");
+        assert!(p.pre_input.is_empty());
+        assert!(p.encoder.iter().any(|s| s == "h264_nvenc"));
+        assert!(p.filter_suffix.is_none());
+    }
+
+    #[test]
+    fn encoder_plan_amf() {
+        let p = EncoderPlan::from_hwaccel(&cap(HwAccelType::Amf, "h264_amf", None)).unwrap();
+        assert_eq!(p.label, "h264_amf");
+        assert!(p.pre_input.is_empty());
+        assert!(p.encoder.iter().any(|s| s == "h264_amf"));
+        assert!(p.filter_suffix.is_none());
+    }
+
+    #[test]
+    fn encoder_plan_vaapi_uses_device_and_hwupload() {
+        let p = EncoderPlan::from_hwaccel(&cap(
+            HwAccelType::Vaapi, "h264_vaapi", Some("/dev/dri/renderD128"),
+        ))
+        .unwrap();
+        assert_eq!(p.label, "h264_vaapi");
+        assert_eq!(
+            p.pre_input,
+            vec!["-vaapi_device".to_string(), "/dev/dri/renderD128".to_string()]
+        );
+        assert!(p.encoder.iter().any(|s| s == "h264_vaapi"));
+        assert_eq!(p.filter_suffix.as_deref(), Some("format=nv12,hwupload"));
+    }
+
+    #[test]
+    fn encoder_plan_vaapi_default_device_when_missing() {
+        let p = EncoderPlan::from_hwaccel(&cap(HwAccelType::Vaapi, "h264_vaapi", None)).unwrap();
+        assert_eq!(p.pre_input[1], "/dev/dri/renderD128");
+    }
+
+    #[test]
+    fn encoder_plan_qsv() {
+        let p = EncoderPlan::from_hwaccel(&cap(HwAccelType::Qsv, "h264_qsv", None)).unwrap();
+        assert_eq!(p.label, "h264_qsv");
+        assert!(p.pre_input.iter().any(|s| s == "-init_hw_device"));
+        assert!(p.encoder.iter().any(|s| s == "h264_qsv"));
+        assert!(p.filter_suffix.as_deref().unwrap().contains("hwupload"));
+    }
+
+    #[test]
+    fn encoder_plan_cpu_returns_none() {
+        assert!(EncoderPlan::from_hwaccel(&cap(HwAccelType::Cpu, "libx264", None)).is_none());
+    }
+
+    #[test]
+    fn gpu_plan_appends_filter_suffix_after_user_filters() {
+        let src = PathBuf::from("/tmp/in.mp4");
+        let dst = PathBuf::from("/tmp/out.mp4");
+        let m = meta(r#"{"rotate":90}"#);
+        let plan = EncoderPlan::from_hwaccel(&cap(
+            HwAccelType::Vaapi, "h264_vaapi", Some("/dev/dri/renderD128"),
+        ))
+        .unwrap();
+        let args = build_ffmpeg_args_with_plan(&src, &dst, "video", &m, "mp4", &plan);
+        // -vaapi_device must appear BEFORE -i for FFmpeg to honour it.
+        let dev_pos = args.iter().position(|s| s == "-vaapi_device").unwrap();
+        let input_pos = args.iter().position(|s| s == "-i").unwrap();
+        assert!(dev_pos < input_pos, "global hwaccel flag must precede -i");
+
+        // Filter suffix must be appended after user filters, comma-joined.
+        let vf_idx = args.iter().position(|s| s == "-vf").unwrap();
+        let vf = &args[vf_idx + 1];
+        assert!(vf.starts_with("transpose=1"), "user filter first: {vf}");
+        assert!(vf.ends_with("format=nv12,hwupload"), "hw suffix last: {vf}");
+
+        // Encoder is hardware, NOT libx264.
+        assert!(args.iter().any(|s| s == "h264_vaapi"));
+        assert!(!args.iter().any(|s| s == "libx264"));
+    }
+
+    #[test]
+    fn gpu_plan_skipped_when_no_reencode() {
+        // Trim-only operations stream-copy regardless of encoder plan.
+        let src = PathBuf::from("/tmp/in.mp4");
+        let dst = PathBuf::from("/tmp/out.mp4");
+        let m = meta(r#"{"trimStart":1.0,"trimEnd":3.0}"#);
+        let plan = EncoderPlan::from_hwaccel(&cap(HwAccelType::Nvenc, "h264_nvenc", None)).unwrap();
+        let args = build_ffmpeg_args_with_plan(&src, &dst, "video", &m, "mp4", &plan);
+        assert!(args.iter().any(|s| s == "copy"));
+        assert!(!args.iter().any(|s| s == "h264_nvenc"));
     }
 }

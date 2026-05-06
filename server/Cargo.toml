@@ -66,15 +66,16 @@ libc = "0.2"
 rustix = { version = "1", features = ["process"] }
 
 # ── GPU acceleration features ───────────────────────────────────────
-# `install.sh` / `install.ps1` auto-detect NVIDIA hardware (nvidia-smi
-# or libcudart.so) on the build host and pass `--features cuda` when
-# present, so operators get GPU acceleration without any opt-in.
-# Hosts without a CUDA-capable GPU build the default (CPU-only)
-# variant — fully portable, no CUDA runtime required.
+# CUDA execution provider is baked into the default build. The ORT
+# CUDA EP loads `libcudart` / `libcublas` lazily at runtime (dlopen),
+# so a binary built with `--features cuda` runs unmodified on hosts
+# WITHOUT a GPU — `AiEngine::detect_cuda()` returns false and the
+# engine falls back to CPU. This means one binary ships everywhere,
+# no per-host rebuild dance for releases.
 #
-# Manual override (e.g. cross-compile for a CUDA box from a CPU host):
-#     cargo build --release --features cuda
+# Opt-out (very rare — e.g. minimal embedded targets):
+#     cargo build --release --no-default-features
 [features]
-default = []
+default = ["cuda"]
 cuda = ["ort/cuda"]
 tensorrt = ["ort/tensorrt"]
