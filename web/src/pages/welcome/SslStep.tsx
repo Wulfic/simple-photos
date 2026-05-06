@@ -8,6 +8,7 @@
  */
 import { useState } from "react";
 import { api } from "../../api/client";
+import { downloadRaw } from "../../api/core";
 import type { WizardStep, ServerRole } from "./types";
 import { getErrorMessage } from "../../utils/formatters";
 
@@ -23,7 +24,7 @@ export interface SslStepProps {
   serverRole?: ServerRole;
 }
 
-type SslMode = "skip" | "manual" | "letsencrypt";
+type SslMode = "skip" | "manual" | "letsencrypt" | "local_ca";
 
 export default function SslStep({ setStep, setError, error, serverRole }: SslStepProps) {
   const [mode, setMode] = useState<SslMode>("skip");
@@ -42,6 +43,15 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
   const [leChallengePort, setLeChallengePort] = useState("80");
   const [leProvisioning, setLeProvisioning] = useState(false);
   const [leSuccess, setLeSuccess] = useState<{ domain: string; staging: boolean } | null>(null);
+
+  // Self-signed local CA fields
+  const [lcLabel, setLcLabel] = useState("");
+  const [lcExtraHosts, setLcExtraHosts] = useState("");
+  const [lcGenerating, setLcGenerating] = useState(false);
+  const [lcDownloading, setLcDownloading] = useState(false);
+  const [lcSuccess, setLcSuccess] = useState<
+    { fingerprint: string; hosts: string[] } | null
+  >(null);
 
   async function handleSaveManual() {
     if (!certPath.trim() || !keyPath.trim()) {
@@ -114,7 +124,75 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
     }
   }
 
-  const isDone = saved || mode === "skip" || !!leSuccess;
+  /** Generate a self-signed root CA + leaf cert for LAN / offline use.
+   *
+   * Mirrors the flow in `SslSettings.tsx` but trimmed for the wizard:
+   * a dry-run validates the operator-supplied label / extra hosts, then
+   * a real generate writes the PEM files and a downloadable bundle.
+   * The success block exposes a one-click "Download install bundle"
+   * button so the operator can immediately push the CA to their
+   * devices and avoid browser warnings on first connect.
+   */
+  async function handleGenerateLocalCa() {
+    setError("");
+
+    const extras = lcExtraHosts
+      .split(/[\s,]+/)
+      .map((h) => h.trim())
+      .filter((h) => h.length > 0);
+
+    setLcGenerating(true);
+    try {
+      // Validate inputs first — cheap and avoids touching the filesystem
+      // if the operator typed a bad host.
+      await api.admin.provisionLocalCa({
+        label: lcLabel.trim() || undefined,
+        extra_hosts: extras,
+        dry_run: true,
+      });
+
+      const res = await api.admin.provisionLocalCa({
+        label: lcLabel.trim() || undefined,
+        extra_hosts: extras,
+        dry_run: false,
+      });
+      setLcSuccess({
+        fingerprint: res.fingerprint_sha256,
+        hosts: res.hosts,
+      });
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to generate local CA"));
+    } finally {
+      setLcGenerating(false);
+    }
+  }
+
+  /** Authenticated bundle download — the endpoint requires the admin
+   *  bearer token, so a plain `<a href>` won't work; we fetch the bytes,
+   *  wrap them in a Blob, and trigger a synthetic anchor click. */
+  async function handleDownloadLocalCaBundle() {
+    setError("");
+    setLcDownloading(true);
+    try {
+      const buf = await downloadRaw(api.admin.localCaBundleUrl());
+      const blob = new Blob([buf], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "simple-photos-ca-bundle.zip";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Safari needs a beat before revoke or the download aborts.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to download CA install bundle"));
+    } finally {
+      setLcDownloading(false);
+    }
+  }
+
+  const isDone = saved || mode === "skip" || !!leSuccess || !!lcSuccess;
 
   return (
     <>
@@ -138,6 +216,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           [
             ["skip", "Skip for now",    "Run on plain HTTP (can be configured later)."],
             ["letsencrypt", "Let's Encrypt (recommended)", "Automatically issue a free trusted certificate. Requires a public domain and port 80 reachable."],
+            ["local_ca", "Self-signed local CA", "Best for LAN-only or offline servers. Generates a private root CA you install on your devices once — no warnings, no public DNS required."],
             ["manual", "Manual certificate", "I already have a certificate and key file."],
           ] as const
         ).map(([value, label, desc]) => (
@@ -159,6 +238,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 setError("");
                 setSaved(false);
                 setLeSuccess(null);
+                setLcSuccess(null);
               }}
               className="mt-1 accent-blue-600"
             />
@@ -340,7 +420,99 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           </p>
         </div>
       )}
+      {/* ── Self-signed local CA form ────────────────────── */}
+      {mode === "local_ca" && !lcSuccess && (
+        <div className="space-y-3 mb-5 bg-gray-50 dark:bg-gray-700/40 rounded-lg p-4">
+          <p className="text-xs text-gray-600 dark:text-gray-400">
+            Creates a private root CA + leaf certificate covering
+            <span className="font-mono">&nbsp;localhost</span>, this server's hostname,
+            and any LAN IPs detected automatically. Install the bundled CA on
+            each device once and Simple Photos will load with no browser warnings.
+          </p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Friendly label <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={lcLabel}
+              onChange={(e) => setLcLabel(e.target.value)}
+              placeholder="Simple Photos — home NAS"
+              maxLength={128}
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={lcGenerating}
+            />
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Shown in your browser / OS as the certificate’s common name.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Extra hostnames / IPs <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={lcExtraHosts}
+              onChange={(e) => setLcExtraHosts(e.target.value)}
+              placeholder="photos.lan, 192.168.1.50, nas.local"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={lcGenerating}
+            />
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Comma- or space-separated. Up to 32 entries. Each must be a DNS
+              label or an IP address (no wildcards).
+            </p>
+          </div>
+          <button
+            onClick={handleGenerateLocalCa}
+            disabled={lcGenerating}
+            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+          >
+            {lcGenerating ? "Generating local CA…" : "Generate local CA"}
+          </button>
+        </div>
+      )}
 
+      {/* ── Self-signed local CA success ───────────────────── */}
+      {mode === "local_ca" && lcSuccess && (
+        <div className="mb-5 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="text-sm font-medium text-emerald-700 dark:text-emerald-300">
+              Local CA generated. Restart the server to serve HTTPS.
+            </span>
+          </div>
+          <div className="text-xs text-emerald-800 dark:text-emerald-300 ml-7 space-y-1">
+            <div>
+              <span className="font-semibold">Hosts covered:</span>{" "}
+              <span className="font-mono break-all">
+                {lcSuccess.hosts.join(", ")}
+              </span>
+            </div>
+            <div>
+              <span className="font-semibold">SHA-256 fingerprint:</span>{" "}
+              <span className="font-mono break-all">{lcSuccess.fingerprint}</span>
+            </div>
+          </div>
+          <button
+            onClick={handleDownloadLocalCaBundle}
+            disabled={lcDownloading}
+            className="w-full bg-emerald-600 text-white py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm font-medium"
+          >
+            {lcDownloading
+              ? "Preparing download…"
+              : "Download CA install bundle (.zip)"}
+          </button>
+          <p className="text-xs text-emerald-700 dark:text-emerald-400 ml-1">
+            The bundle includes <code>install-linux.sh</code>,{" "}
+            <code>install-windows.ps1</code>, and{" "}
+            <code>install-android.txt</code>. Run the appropriate script on
+            each device that should trust this server.
+          </p>
+        </div>
+      )}
       {error && (
         <p className="text-red-600 dark:text-red-400 text-sm mb-4 p-3 bg-red-50 dark:bg-red-900/30 rounded">
           {error}
@@ -355,7 +527,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             setStep("storage");
           }}
           className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 text-sm"
-          disabled={leProvisioning}
+          disabled={leProvisioning || lcGenerating}
         >
           ← Back
         </button>
@@ -367,7 +539,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             setStep(serverRole === "backup" ? "complete" : "users");
           }}
           className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 text-sm font-medium disabled:opacity-50"
-          disabled={leProvisioning}
+          disabled={leProvisioning || lcGenerating}
         >
           {isDone ? "Continue →" : "Skip →"}
         </button>
