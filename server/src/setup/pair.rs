@@ -196,9 +196,14 @@ pub struct VerifyBackupRequest {
     pub username: String,
     /// Admin password on the backup server
     pub password: String,
+    /// Optional 2FA code — required when the backup admin has TOTP enabled.
+    /// On the first attempt (without this field) the server responds with
+    /// `{ "requires_totp": true }` so the client can prompt for the code.
+    pub totp_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)] // kept as a stable shape reference for the wizard JSON; handler returns a raw Value to allow `requires_totp` responses.
 pub struct VerifyBackupResponse {
     pub address: String,
     pub name: String,
@@ -214,10 +219,15 @@ pub struct VerifyBackupResponse {
 ///
 /// # Security
 /// Only works during first-run setup (zero users in DB).
+///
+/// # 2FA
+/// If the backup admin has TOTP enabled, the first call (without `totp_code`)
+/// returns `200 { "requires_totp": true }` so the wizard can prompt for the
+/// code.  A second call carrying `totp_code` then completes verification.
 pub async fn verify_backup(
     State(state): State<AppState>,
     Json(req): Json<VerifyBackupRequest>,
-) -> Result<Json<VerifyBackupResponse>, AppError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     // ── Guard: only works when no users exist ────────────────────────────
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
         .fetch_one(&state.pool)
@@ -266,10 +276,25 @@ pub async fn verify_backup(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(AppError::BadRequest(format!(
-            "Backup server rejected the credentials (HTTP {}): {}",
-            status, body
-        )));
+        // Map 401 to a clearer message — the backup server intentionally
+        // returns "Invalid username or password" for both unknown-user and
+        // wrong-password cases (timing-safe). Surface that verbatim so the
+        // wizard's error matches what the user actually sees in the backup's
+        // UI, instead of a generic "rejected the credentials".
+        let msg = if status == reqwest::StatusCode::UNAUTHORIZED {
+            format!(
+                "The backup server rejected those credentials. Confirm the \
+                 admin username and password on the backup match what you \
+                 typed (HTTP 401: {})",
+                body.trim()
+            )
+        } else {
+            format!(
+                "Backup server rejected the credentials (HTTP {}): {}",
+                status, body
+            )
+        };
+        return Err(AppError::BadRequest(msg));
     }
 
     let login_data: serde_json::Value = resp
@@ -277,12 +302,88 @@ pub async fn verify_backup(
         .await
         .map_err(|e| AppError::Internal(format!("Failed to parse login response: {}", e)))?;
 
-    let access_token = login_data
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            AppError::Internal("No access_token in backup server login response".into())
+    // ── Handle 2FA challenge ─────────────────────────────────────────────
+    // The backup's `/api/auth/login` returns 200 with `requires_totp:true`
+    // when the admin has 2FA enabled.  Without a TOTP code, we bubble the
+    // challenge up to the wizard.  With a code, we complete login via
+    // `/api/auth/login/totp` to get a real access token.
+    let access_token: String = if login_data
+        .get("requires_totp")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let session_token = login_data
+            .get("totp_session_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::Internal(
+                    "Backup server reported requires_totp but did not return totp_session_token"
+                        .into(),
+                )
+            })?
+            .to_string();
+
+        let totp_code = match req.totp_code.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(c) => c.to_string(),
+            None => {
+                // Tell the wizard to prompt for the TOTP code and retry.
+                return Ok((
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "requires_totp": true,
+                        "message": "Backup admin has 2FA enabled — enter the 6-digit code."
+                    })),
+                ));
+            }
+        };
+
+        let totp_url = format!("{}/api/auth/login/totp", base_url);
+        let totp_body = serde_json::json!({
+            "totp_session_token": session_token,
+            "totp_code": totp_code,
+        });
+        let totp_resp = client
+            .post(&totp_url)
+            .header("Content-Type", "application/json")
+            .json(&totp_body)
+            .send()
+            .await
+            .map_err(|e| {
+                AppError::BadRequest(format!(
+                    "Cannot reach the backup server at {} for 2FA verification: {}",
+                    base_url, e
+                ))
+            })?;
+
+        if !totp_resp.status().is_success() {
+            let status = totp_resp.status();
+            let body = totp_resp.text().await.unwrap_or_default();
+            return Err(AppError::BadRequest(format!(
+                "Backup server rejected the 2FA code (HTTP {}): {}",
+                status,
+                body.trim()
+            )));
+        }
+
+        let totp_data: serde_json::Value = totp_resp.json().await.map_err(|e| {
+            AppError::Internal(format!("Failed to parse 2FA response: {}", e))
         })?;
+        totp_data
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::Internal("No access_token in backup 2FA response".into())
+            })?
+            .to_string()
+    } else {
+        login_data
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                AppError::Internal("No access_token in backup server login response".into())
+            })?
+            .to_string()
+    };
 
     // ── Get backup mode info (including API key) from the backup server ──
     let mode_url = format!("{}/api/admin/backup/mode", base_url);
@@ -343,11 +444,14 @@ pub async fn verify_backup(
         photo_count
     );
 
-    Ok(Json(VerifyBackupResponse {
-        address: req.address.trim().to_string(),
-        name: server_name,
-        version,
-        api_key,
-        photo_count,
-    }))
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "address": req.address.trim(),
+            "name": server_name,
+            "version": version,
+            "api_key": api_key,
+            "photo_count": photo_count,
+        })),
+    ))
 }

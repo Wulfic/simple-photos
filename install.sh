@@ -895,7 +895,24 @@ if [[ "$MODE" == "native" ]]; then
     # ── Build Rust server ─────────────────────────────────────────────────
     info "Building server (release)... may take a few minutes on first run."
     cd "$SCRIPT_DIR/server"
-    cargo build --release 2>&1 | tail -5
+
+    # Auto-detect CUDA so NVIDIA hosts get GPU-accelerated AI inference
+    # without an opt-in flag.  Hosts without nvidia-smi / libcudart fall
+    # through to the portable CPU build.
+    CARGO_FEATURES=()
+    if command -v nvidia-smi >/dev/null 2>&1 && \
+       nvidia-smi --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then
+        success "NVIDIA GPU detected — building with CUDA execution provider"
+        CARGO_FEATURES+=(--features cuda)
+    elif [[ -e /usr/local/cuda/lib64/libcudart.so ]] || \
+         [[ -e /usr/lib/x86_64-linux-gnu/libcudart.so ]]; then
+        success "CUDA runtime detected — building with CUDA execution provider"
+        CARGO_FEATURES+=(--features cuda)
+    else
+        info "No CUDA-capable GPU detected — building portable CPU server"
+    fi
+
+    cargo build --release "${CARGO_FEATURES[@]}" 2>&1 | tail -5
     success "Server built → server/target/release/simple-photos-server"
     cd "$SCRIPT_DIR"
 
@@ -1017,12 +1034,24 @@ elif [[ "$MODE" == "docker" ]]; then
     success "Config → docker-instances/${INSTANCE_NAME}/config.toml"
 
     # ── docker-compose.yml ────────────────────────────────────────────────
+    # Detect CUDA on the docker build host so containers built here pick
+    # up GPU-accelerated AI inference automatically. Same rule as native
+    # mode — no opt-in flag, no surprises.
+    DOCKER_CARGO_FEATURES=""
+    if command -v nvidia-smi >/dev/null 2>&1 && \
+       nvidia-smi --query-gpu=name --format=csv,noheader >/dev/null 2>&1; then
+        success "NVIDIA GPU detected — image will be built with CUDA execution provider"
+        DOCKER_CARGO_FEATURES="cuda"
+    fi
+
     cat > "$INSTANCE_DIR/docker-compose.yml" << YAML
 services:
   server:
     build:
       context: ${SCRIPT_DIR}/server
       dockerfile: Dockerfile
+      args:
+        CARGO_FEATURES: "${DOCKER_CARGO_FEATURES}"
     container_name: ${INSTANCE_NAME}
     restart: unless-stopped
     ports:

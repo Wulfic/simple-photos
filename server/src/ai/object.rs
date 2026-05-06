@@ -108,11 +108,7 @@ fn download_model(url: &str, dest: &Path, min_size: usize) -> Result<(), String>
 }
 
 fn load_onnx_cls(path: &Path) -> anyhow::Result<Session> {
-    let session = ort_err(ort_err(Session::builder())?
-        .with_intra_threads(1))?
-        .commit_from_file(path)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(session)
+    crate::ai::session::build_session(path)
 }
 
 // ── MobileNetV2 classification ──────────────────────────────────────

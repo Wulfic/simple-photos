@@ -173,19 +173,11 @@ pub(super) fn download_model(url: &str, dest: &Path, min_size: usize) -> Result<
 }
 
 fn load_onnx_det(path: &Path) -> anyhow::Result<Session> {
-    let session = ort_err(ort_err(Session::builder())?
-        .with_intra_threads(1))?
-        .commit_from_file(path)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(session)
+    crate::ai::session::build_session(path)
 }
 
 fn load_onnx_rec(path: &Path) -> anyhow::Result<Session> {
-    let session = ort_err(ort_err(Session::builder())?
-        .with_intra_threads(1))?
-        .commit_from_file(path)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(session)
+    crate::ai::session::build_session(path)
 }
 
 // ── Detection entry point ───────────────────────────────────────────

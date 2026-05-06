@@ -14,7 +14,9 @@ import {
   subscribeCastState,
   requestCastSession,
   endCastSession,
+  getCastUnsupportedReason,
   type CastState,
+  type CastUnsupportedReason,
 } from "../utils/cast";
 
 interface CastDialogProps {
@@ -35,6 +37,8 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
   const [device, setDevice] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unsupportedReason, setUnsupportedReason] =
+    useState<CastUnsupportedReason>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -45,6 +49,9 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
       if (!active) return;
       setState(s);
       setDevice(d);
+      // Refresh the reason whenever state flips — only meaningful when
+      // `s === "unsupported"`, but cheap to read otherwise.
+      setUnsupportedReason(getCastUnsupportedReason());
     });
     return () => {
       active = false;
@@ -95,10 +102,31 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
     case "unsupported":
       body = (
         <div className="space-y-3 text-sm text-gray-600 dark:text-gray-300">
-          <p>
-            Casting isn’t available in this browser. Google Cast requires a Chromium-based
-            browser (Chrome, Edge, Brave) on the same network as your Chromecast device.
-          </p>
+          {unsupportedReason === "insecure_origin" ? (
+            <>
+              <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-700 p-3">
+                <p className="font-semibold text-amber-900 dark:text-amber-200">
+                  Cast requires a secure connection (HTTPS).
+                </p>
+                <p className="mt-1 text-amber-800 dark:text-amber-300">
+                  This page is loaded over plain HTTP, so Chrome and Brave
+                  refuse to expose the Cast SDK. Reach the server over
+                  <code className="mx-1">https://</code> or open it on
+                  <code className="mx-1">http://localhost</code> to enable
+                  casting.
+                </p>
+              </div>
+              <p className="text-xs text-gray-500">
+                Configure TLS in the server’s welcome wizard or via
+                <code className="mx-1">config.toml</code>.
+              </p>
+            </>
+          ) : (
+            <p>
+              Casting isn’t available in this browser. Google Cast requires a Chromium-based
+              browser (Chrome, Edge, Brave) on the same network as your Chromecast device.
+            </p>
+          )}
           <details className="rounded-md border border-gray-200 dark:border-gray-700 p-3">
             <summary className="cursor-pointer font-medium">Brave: enable Media Router</summary>
             <ol className="list-decimal pl-5 mt-2 space-y-1">

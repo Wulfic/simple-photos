@@ -18,6 +18,8 @@ export default function RestoreStep({
   const [serverAddress, setServerAddress] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [needsTotp, setNeedsTotp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -69,6 +71,10 @@ export default function RestoreStep({
       setError("Please enter the admin password for the backup server.");
       return;
     }
+    if (needsTotp && !totpCode.trim()) {
+      setError("Enter the 6-digit code from your authenticator app.");
+      return;
+    }
 
     setLoading(true);
     try {
@@ -79,6 +85,7 @@ export default function RestoreStep({
           address: serverAddress.trim(),
           username: username.trim(),
           password,
+          totp_code: needsTotp ? totpCode.trim() : undefined,
         }),
       });
 
@@ -88,6 +95,18 @@ export default function RestoreStep({
       }
 
       const data = await res.json();
+
+      // The backup admin has 2FA enabled — prompt the user for the TOTP
+      // code and re-submit the form with `totp_code` populated.
+      if (data?.requires_totp === true) {
+        setNeedsTotp(true);
+        setError(
+          data?.message ??
+            "This backup admin has 2FA enabled. Enter the 6-digit code to continue."
+        );
+        return;
+      }
+
       onVerified({
         address: data.address,
         name: data.name,
@@ -349,6 +368,35 @@ export default function RestoreStep({
           </div>
         </div>
 
+        {/* 2FA prompt — appears only after the server reports requires_totp */}
+        {needsTotp && (
+          <div>
+            <label
+              htmlFor="totp"
+              className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
+              2FA Code
+            </label>
+            <input
+              id="totp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]*"
+              maxLength={8}
+              value={totpCode}
+              onChange={(e) => setTotpCode(e.target.value.replace(/\s+/g, ""))}
+              placeholder="123456"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm tracking-widest focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+              autoFocus
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Enter the 6-digit code from the backup admin&rsquo;s authenticator
+              app, or an 8-character backup code.
+            </p>
+          </div>
+        )}
+
         {error && (
           <div className="text-red-600 dark:text-red-400 text-sm p-3 bg-red-50 dark:bg-red-900/30 rounded-lg">
             {error}
@@ -369,7 +417,11 @@ export default function RestoreStep({
           <button
             type="submit"
             disabled={
-              loading || !serverAddress.trim() || !username.trim() || !password
+              loading ||
+              !serverAddress.trim() ||
+              !username.trim() ||
+              !password ||
+              (needsTotp && !totpCode.trim())
             }
             className="flex-[2] bg-amber-600 text-white py-2.5 rounded-lg hover:bg-amber-700 disabled:opacity-50 text-sm font-medium transition-colors"
           >

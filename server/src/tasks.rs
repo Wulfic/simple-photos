@@ -55,6 +55,7 @@ pub fn spawn_all(
     spawn_storage_health_monitor(storage_root_swap.clone(), storage_available.clone());
     spawn_dimension_repair(pool.clone(), config.storage.root.clone());
     spawn_thumbnail_orientation_repair(pool.clone(), config.storage.root.clone());
+    spawn_photo_subtype_backfill(pool.clone(), config.storage.root.clone());
     crate::ai::processor::spawn_ai_processor(
         pool.clone(),
         config.ai.clone(),
@@ -409,5 +410,32 @@ fn spawn_dimension_repair(pool: SqlitePool, storage_root: PathBuf) {
 fn spawn_thumbnail_orientation_repair(pool: SqlitePool, storage_root: PathBuf) {
     tokio::spawn(async move {
         crate::photos::thumbnail::repair_thumbnail_orientation(&pool, &storage_root).await;
+    });
+}
+
+/// One-time startup task: backfill `photo_subtype` for photos imported
+/// before XMP / aspect-ratio panorama detection landed.  Without this,
+/// users with existing libraries see panoramas and 360° photos rendered
+/// as ordinary stills (no PANO/360° badge, no panorama viewer) until they
+/// manually trigger a re-scan.  Bounded to 50 000 rows per boot so the
+/// startup cost stays predictable on huge libraries; subsequent boots
+/// pick up where this one left off.
+fn spawn_photo_subtype_backfill(pool: SqlitePool, storage_root: PathBuf) {
+    tokio::spawn(async move {
+        // Tiny delay so we don't compete with the heavier dimension /
+        // thumbnail repair tasks for I/O on first boot.
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        let n = crate::photos::metadata::backfill_photo_subtypes_all_users(
+            &pool,
+            &storage_root,
+            50_000,
+        )
+        .await;
+        if n > 0 {
+            tracing::info!(
+                "[startup] photo_subtype backfill tagged {} existing photos",
+                n
+            );
+        }
     });
 }

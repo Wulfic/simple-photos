@@ -34,6 +34,39 @@ let currentDevice: string | undefined;
 let initStarted = false;
 let initResolved = false;
 
+/**
+ * Cause of an `unsupported` state, set by `initCast()`. Surfaced to the
+ * UI by `getCastUnsupportedReason()` so the user gets actionable feedback
+ * (e.g. "Cast requires HTTPS") instead of a generic "unsupported".
+ */
+export type CastUnsupportedReason =
+  | "insecure_origin"
+  | "sdk_blocked"
+  | "sdk_load_timeout"
+  | "init_failed"
+  | null;
+
+let unsupportedReason: CastUnsupportedReason = null;
+
+export function getCastUnsupportedReason(): CastUnsupportedReason {
+  return unsupportedReason;
+}
+
+/**
+ * Returns true when the current page origin is one the Cast Sender SDK
+ * will accept. Cast requires a secure context — HTTPS, `localhost`, or
+ * `127.0.0.1`. Plain HTTP to a LAN IP silently fails because
+ * `window.chrome.cast` is never exposed in non-secure contexts.
+ */
+export function isCastOriginSupported(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.isSecureContext) return true;
+  const host = window.location.hostname;
+  // `isSecureContext` already covers localhost in modern browsers, but be
+  // defensive in case of a polyfill / older Chromium.
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
 function emit() {
   for (const l of listeners) {
     try {
@@ -83,6 +116,17 @@ export function initCast(): Promise<void> {
   }
   initStarted = true;
 
+  // Fail fast on insecure origins — the Cast SDK never exposes
+  // `window.chrome.cast` outside a secure context, so waiting 12s for the
+  // SDK callback just to land on "unsupported" wastes the user's time and
+  // hides the real cause.
+  if (!isCastOriginSupported()) {
+    initResolved = true;
+    unsupportedReason = "insecure_origin";
+    setState("unsupported");
+    return Promise.resolve();
+  }
+
   return new Promise((resolve) => {
     // Hard timeout: if the SDK never loads (offline / blocked / network slow),
     // report unsupported. Bumped to 12s because Brave + slow connections can
@@ -90,6 +134,7 @@ export function initCast(): Promise<void> {
     const timeout = window.setTimeout(() => {
       if (!initResolved) {
         initResolved = true;
+        unsupportedReason = "sdk_load_timeout";
         setState("unsupported");
         resolve();
       }
@@ -99,6 +144,7 @@ export function initCast(): Promise<void> {
       window.clearTimeout(timeout);
       if (!isAvailable || !window.cast?.framework) {
         initResolved = true;
+        unsupportedReason = "sdk_blocked";
         setState("unsupported");
         resolve();
         return;
@@ -146,6 +192,7 @@ export function initCast(): Promise<void> {
       } catch (e) {
         console.error("[cast] init failed", e);
         initResolved = true;
+        unsupportedReason = "init_failed";
         setState("unsupported");
         resolve();
       }

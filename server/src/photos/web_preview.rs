@@ -88,42 +88,13 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
             matches!(status, Ok(s) if s.success())
         }
         "mp4" => {
-            let mut args = vec!["-n", "19", "ffmpeg", "-y"];
-            let ext_lower = input_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            match ext_lower.as_str() {
-                "hevc" | "h265" => args.extend_from_slice(&["-f", "hevc"]),
-                "h264" => args.extend_from_slice(&["-f", "h264"]),
-                _ => {}
-            }
-            args.extend_from_slice(&[
-                "-i",
-                input_str,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "fast",
-                "-crf",
-                "23",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                "-movflags",
-                "+faststart",
-                output_str,
-            ]);
-            let status = tokio::process::Command::new("nice")
-                .args(&args)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await;
-            matches!(status, Ok(s) if s.success())
+            // Route through the shared GPU-aware video transcoder so
+            // on-the-fly previews honour the NVENC / QSV / VAAPI path
+            // configured at startup. Falls back to libx264 internally
+            // when no hwaccel is registered or the GPU encode fails.
+            let hwaccel = crate::conversion::active_hwaccel();
+            let fallback = crate::conversion::cpu_fallback_enabled();
+            crate::conversion::convert_video(input_str, output_str, hwaccel, fallback).await
         }
         _ => false,
     };

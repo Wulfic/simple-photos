@@ -67,6 +67,19 @@ impl AiEngine {
             ExecutionProvider::Cpu
         };
 
+        let num_threads = if config.threads == 0 {
+            num_cpus::get_physical()
+        } else {
+            config.threads
+        };
+
+        // Publish provider/threads BEFORE loading any models so the
+        // shared session builder picks them up.
+        crate::ai::session::init(crate::ai::session::SessionConfig {
+            provider,
+            num_threads,
+        });
+
         // Initialise face models (downloads if needed, loads via onnxruntime)
         crate::ai::face::init_face_model(&config.model_dir);
 
@@ -92,12 +105,6 @@ impl AiEngine {
         if !has_obj_det {
             tracing::warn!("AI engine: object_detection.onnx not found in {:?}", model_dir);
         }
-
-        let num_threads = if config.threads == 0 {
-            num_cpus::get_physical()
-        } else {
-            config.threads
-        };
 
         tracing::info!(
             "AI engine initialized: provider={}, threads={}, models: face_det={}, face_emb={}, obj_det={}",

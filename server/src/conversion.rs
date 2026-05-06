@@ -35,6 +35,19 @@ pub fn init_gpu_config(hwaccel: HwAccelCapability, fallback_to_cpu: bool) {
     let _ = GPU_CONFIG.set(GpuConversionConfig { hwaccel, fallback_to_cpu });
 }
 
+/// Public accessor for the active hardware-acceleration capability.
+/// Returns `None` when `init_gpu_config` has not been called yet.
+/// Used by the web-preview pipeline so on-the-fly mp4 transcodes
+/// honour the same NVENC/QSV/VAAPI path as bulk conversion.
+pub fn active_hwaccel() -> Option<&'static HwAccelCapability> {
+    GPU_CONFIG.get().map(|c| &c.hwaccel)
+}
+
+/// Public accessor for the configured CPU-fallback policy.
+pub fn cpu_fallback_enabled() -> bool {
+    GPU_CONFIG.get().map(|c| c.fallback_to_cpu).unwrap_or(true)
+}
+
 /// Get the current GPU config, or None if not initialized.
 fn gpu_config() -> Option<&'static GpuConversionConfig> {
     GPU_CONFIG.get()
@@ -307,7 +320,7 @@ async fn convert_image(input: &str, output: &str) -> bool {
 /// When a GPU `hwaccel` capability is provided, uses hardware-accelerated
 /// encoding.  Falls back to CPU (libx264) if the GPU transcode fails and
 /// `fallback_to_cpu` is true.
-async fn convert_video(
+pub(crate) async fn convert_video(
     input: &str,
     output: &str,
     hwaccel: Option<&HwAccelCapability>,

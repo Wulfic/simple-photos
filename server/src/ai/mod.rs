@@ -16,4 +16,5 @@ pub mod imagenet_labels;
 pub mod models;
 pub mod object;
 pub mod processor;
+pub mod session;
 pub mod tagging;

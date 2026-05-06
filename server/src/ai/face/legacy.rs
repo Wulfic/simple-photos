@@ -59,11 +59,7 @@ pub(super) fn init_legacy_model(model_dir: &Path, dir_exists: bool, scrfd_loaded
 }
 
 fn load_onnx_legacy(path: &Path) -> anyhow::Result<Session> {
-    let session = ort_err(ort_err(Session::builder())?
-        .with_intra_threads(1))?
-        .commit_from_file(path)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(session)
+    crate::ai::session::build_session(path)
 }
 
 /// If a legacy UltraFace model is loaded, run detection and return its

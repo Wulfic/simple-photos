@@ -718,6 +718,140 @@ pub(crate) async fn extract_xmp_subtype_async(path: std::path::PathBuf) -> Subty
         .unwrap_or_default()
 }
 
+/// Backfill `photo_subtype` for every photo with `photo_subtype IS NULL`,
+/// across **all users**, regardless of which user uploaded them.
+///
+/// This is the startup-time companion to the per-user logic in
+/// [`crate::photos::scan::scan_and_register`]: existing users who imported
+/// photos before subtype detection / aspect-ratio fallback was added would
+/// otherwise see panoramas keep showing as regular photos until they
+/// manually triggered a re-scan.  Running this once on boot upgrades the
+/// library in place.
+///
+/// Bounded by `max_files` to keep startup cost predictable on huge libraries.
+/// Photos that fail to update (missing on disk, IO error) are skipped and
+/// logged at debug level — nothing aborts the whole pass.
+///
+/// Returns the number of rows that were updated.
+pub async fn backfill_photo_subtypes_all_users(
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+    max_files: usize,
+) -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
+    let rows: Vec<(String, String, i64, i64)> = match sqlx::query_as(
+        "SELECT id, file_path, COALESCE(width, 0), COALESCE(height, 0) \
+         FROM photos \
+         WHERE photo_subtype IS NULL AND file_path != '' \
+         LIMIT ?",
+    )
+    .bind(max_files as i64)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "[subtype-backfill] DB query failed");
+            return 0;
+        }
+    };
+
+    if rows.is_empty() {
+        return 0;
+    }
+
+    tracing::info!(
+        candidates = rows.len(),
+        "[subtype-backfill] checking existing photos for missed XMP / aspect subtypes"
+    );
+
+    let sem = Arc::new(Semaphore::new(4));
+    let updated = Arc::new(AtomicI64::new(0));
+    let mut handles = Vec::with_capacity(rows.len());
+
+    for (pid, fpath, ph_w, ph_h) in rows {
+        let abs = storage_root.join(&fpath);
+        if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
+            continue;
+        }
+        let sem = sem.clone();
+        let pool = pool.clone();
+        let updated = updated.clone();
+
+        handles.push(tokio::spawn(async move {
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            let bytes = tokio::fs::read(&abs).await.unwrap_or_default();
+            if bytes.is_empty() {
+                return;
+            }
+            let mut sub = extract_xmp_subtype(&bytes);
+
+            // Re-extract dimensions for legacy rows missing width/height.
+            let (mut eff_w, mut eff_h) = (ph_w, ph_h);
+            if eff_w <= 0 || eff_h <= 0 {
+                let fname = abs
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let (rw, rh, _, _, _, _) =
+                    extract_media_metadata_from_bytes_async(bytes.clone(), fname).await;
+                if rw > 0 && rh > 0 {
+                    eff_w = rw;
+                    eff_h = rh;
+                    let _ = sqlx::query("UPDATE photos SET width = ?, height = ? WHERE id = ?")
+                        .bind(eff_w)
+                        .bind(eff_h)
+                        .bind(&pid)
+                        .execute(&pool)
+                        .await;
+                }
+            }
+
+            apply_aspect_subtype_fallback(&mut sub, eff_w, eff_h);
+
+            if let Some(ref subtype) = sub.photo_subtype {
+                let res = sqlx::query(
+                    "UPDATE photos \
+                     SET photo_subtype = ?, burst_id = COALESCE(burst_id, ?) \
+                     WHERE id = ? AND photo_subtype IS NULL",
+                )
+                .bind(subtype)
+                .bind(&sub.burst_id)
+                .bind(&pid)
+                .execute(&pool)
+                .await;
+                if let Ok(r) = res {
+                    if r.rows_affected() > 0 {
+                        updated.fetch_add(1, Ordering::Relaxed);
+                        tracing::debug!(
+                            photo_id = %pid,
+                            subtype = %subtype,
+                            "[subtype-backfill] tagged photo"
+                        );
+                    }
+                }
+            }
+        }));
+    }
+
+    for h in handles {
+        let _ = h.await;
+    }
+
+    let n = updated.load(Ordering::Relaxed);
+    if n > 0 {
+        tracing::info!(updated = n, "[subtype-backfill] complete");
+    }
+    n
+}
+
 /// Extract the embedded MP4 trailer from a motion photo JPEG.
 ///
 /// The MP4 starts at `file_size - offset` bytes from the end of the file.

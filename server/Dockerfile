@@ -8,12 +8,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libclang-dev \
     perl \
     && rm -rf /var/lib/apt/lists/*
+# Optional cargo features (e.g. "cuda") — set by install.sh when the
+# build host has an NVIDIA GPU. Empty by default for portable images.
+ARG CARGO_FEATURES=""
 WORKDIR /usr/src/app
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm src/main.rs
+RUN mkdir src && echo "fn main() {}" > src/main.rs && \
+    cargo build --release ${CARGO_FEATURES:+--features "$CARGO_FEATURES"} && \
+    rm src/main.rs
 COPY src ./src
 COPY migrations ./migrations
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && \
+    cargo build --release ${CARGO_FEATURES:+--features "$CARGO_FEATURES"}
 
 FROM debian:trixie-slim
 # Run full package upgrade first to pick up all bookworm-security backports,
