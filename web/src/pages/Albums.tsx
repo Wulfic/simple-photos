@@ -471,7 +471,10 @@ export default function Albums() {
       {/* ── Memories ───────────────────────────────────────────────────────── */}
       {memories.length > 0 && (
         <div className="mt-8">
-          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Memories</h2>
+          <h2
+            className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            onClick={() => navigate("/albums/smart-memories")}
+          >Memories</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
             {memories.map((memory) => (
               <div
@@ -508,7 +511,10 @@ export default function Albums() {
       {/* ── Trips (multi-day smart location albums) ───────────────────────── */}
       {trips.length > 0 && (
         <div className="mt-8">
-          <h2 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">Trips</h2>
+          <h2
+            className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            onClick={() => navigate("/albums/smart-trips")}
+          >Trips</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
             {trips.map((trip) => (
               <div

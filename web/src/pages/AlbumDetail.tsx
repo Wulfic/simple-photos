@@ -6,7 +6,7 @@
  * and sharing controls.
  */
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { useParams, useNavigate, Navigate } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
 import { db, type CachedPhoto, type CachedAlbum } from "../db";
@@ -68,7 +68,7 @@ export default function AlbumDetail() {
   }
   if (albumId === "smart-trips") {
     if (subId) return <TripDetailView tripId={subId} />;
-    return <Navigate to="/albums" replace />;
+    return <TripsView />;
   }
 
   // ── Smart album rendering (delegates to a separate sub-component) ───────
@@ -1053,6 +1053,116 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
   );
 }
 
+// ── Trips View (list of all multi-day smart location albums) ─────────────────
+
+function TripsView() {
+  const navigate = useNavigate();
+  const [trips, setTrips] = useState<Array<{
+    id: string; name: string; city: string; country: string;
+    country_code: string; start_date: string; end_date: string;
+    date_label: string; photo_count: number; day_count: number;
+    first_photo_id: string | null; first_thumb_path: string | null;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.geo.listTrips();
+        if (!cancelled) setTrips(data);
+      } catch { /* Geo may not be enabled */ }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Load thumbnails from IDB for representative photos
+  useEffect(() => {
+    if (trips.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const urls: Record<string, string> = {};
+      for (const t of trips) {
+        if (!t.first_photo_id) continue;
+        const photo = await db.photos.where("serverPhotoId").equals(t.first_photo_id).first()
+          ?? await db.photos.get(t.first_photo_id);
+        if (cancelled) return;
+        if (photo?.thumbnailData) {
+          const mime = photo.thumbnailMimeType || "image/jpeg";
+          urls[t.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        }
+      }
+      if (!cancelled) setThumbUrls(urls);
+    })();
+    return () => {
+      cancelled = true;
+      Object.values(thumbUrls).forEach(URL.revokeObjectURL);
+    };
+  }, [trips]);
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <AppHeader />
+      <main className="p-4">
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => navigate("/albums")}
+            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            title="Back to Albums"
+          >
+            <AppIcon name="back-arrow" size="w-5 h-5" />
+          </button>
+          <h2 className="text-xl font-semibold">Trips</h2>
+        </div>
+
+        {loading ? (
+          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+        ) : trips.length === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+            <p className="text-gray-500 dark:text-gray-400">No trips yet</p>
+            <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
+              Trips are auto-generated when you have photos from the same location across multiple days
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            {trips.map((trip) => (
+              <div
+                key={trip.id}
+                onClick={() => navigate(`/albums/smart-trips/${trip.id}`)}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
+              >
+                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                  {thumbUrls[trip.id] ? (
+                    <img
+                      src={thumbUrls[trip.id]}
+                      alt={trip.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" />
+                    </svg>
+                  )}
+                </div>
+                <div className="p-3">
+                  <p className="font-medium text-sm truncate">{trip.city}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{trip.date_label}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {trip.photo_count} photo{trip.photo_count !== 1 ? "s" : ""} · {trip.day_count} day{trip.day_count !== 1 ? "s" : ""} · {trip.country}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
 // ── Memory Detail View (photos from a specific memory cluster) ───────────────
 
 function MemoryDetailView({ memoryId }: { memoryId: string }) {
@@ -1074,10 +1184,11 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
         const summaries = await api.geo.listMemoryPhotos(memoryId);
         const photoIds = summaries.map(s => s.id);
 
-        // Look up photos in IDB by serverPhotoId
+        // Look up photos in IDB by serverPhotoId; fall back to blobId for server-side photos
         const found: CachedPhoto[] = [];
         for (const pid of photoIds) {
-          const photo = await db.photos.where("serverPhotoId").equals(pid).first();
+          const photo = await db.photos.where("serverPhotoId").equals(pid).first()
+            ?? await db.photos.get(pid);
           if (photo) found.push(photo);
         }
         if (!cancelled) setPhotos(found);
@@ -1208,7 +1319,8 @@ function TripDetailView({ tripId }: { tripId: string }) {
         const summaries = await api.geo.listTripPhotos(tripId);
         const found: CachedPhoto[] = [];
         for (const s of summaries) {
-          const photo = await db.photos.where("serverPhotoId").equals(s.id).first();
+          const photo = await db.photos.where("serverPhotoId").equals(s.id).first()
+            ?? await db.photos.get(s.id);
           if (photo) found.push(photo);
         }
         if (!cancelled) setPhotos(found);
@@ -1233,15 +1345,16 @@ function TripDetailView({ tripId }: { tripId: string }) {
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
-            onClick={() => navigate("/albums")}
+            onClick={() => navigate("/albums/smart-trips")}
             className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
-            title="Back to Albums"
+            title="Back to Trips"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
           </button>
           <h2 className="text-xl font-semibold truncate">{tripName}</h2>
           <span className="text-gray-400 text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
+            <>
             <button
               onClick={() => slideshow.start(0)}
               className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
@@ -1249,6 +1362,16 @@ function TripDetailView({ tripId }: { tripId: string }) {
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
+            <button
+              onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
+              </svg>
+            </button>
+            </>
           )}
         </div>
 
