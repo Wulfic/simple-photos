@@ -17,6 +17,7 @@ import SharedAlbumDetail from "./pages/SharedAlbumDetail";
 import Search from "./pages/Search";
 import Diagnostics from "./pages/Diagnostics";
 import ExportDownloads from "./pages/ExportDownloads";
+import CastReceiver from "./pages/CastReceiver";
 import EncryptionBanner from "./components/EncryptionBanner";
 import ConversionBanner from "./components/ConversionBanner";
 import SavingBanner from "./components/SavingBanner";
@@ -198,6 +199,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         {/* Public routes — no auth required */}
+        {/* Cast receiver — must be public so Chromecast can load it */}
+        <Route path="/cast-view" element={<CastReceiver />} />
         <Route path="/welcome" element={<Welcome />} />
         <Route
           path="/login"

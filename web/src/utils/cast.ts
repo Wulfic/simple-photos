@@ -1,269 +1,154 @@
 /**
  * Google Cast (Chromecast) sender integration.
  *
- * Loads lazily once the SDK script (added to index.html) signals readiness via
- * `window.__onGCastApiAvailable`. Exposes a tiny event-driven API used by the
- * CastDialog component and the AppHeader menu entry.
+ * Uses the browser-native **Presentation API** (W3C standard, built into
+ * Chrome / Brave / Edge 72+) instead of the Google Cast Web SDK script.
+ * This avoids the `cast_sender.js` CDN script that Brave Shields blocks —
+ * no external scripts, no extension required.
  *
- * Casting media: call `castMedia(url, contentType)` while a session is active.
- * For Simple Photos this is intended for HTTP(S)-reachable photo URLs — blob:
- * URLs (e.g. decrypted secure-album content) cannot be cast.
+ * The receiver page is served from this app at `/cast-view`.  It listens for
+ * `PresentationConnection` messages and renders the current photo full-screen.
+ *
+ * Known limitation: Chromecast fetches the receiver URL directly, so it must
+ * trust the server's TLS certificate.  For local self-signed certs add the CA
+ * to the SYSTEM trust store (not only the browser).  Alternatively use the
+ * browser's built-in "Cast tab" button — that streams the rendered page to the
+ * Chromecast without any direct certificate checks.
  */
-
-// Minimal ambient typings — we avoid pulling in @types/chromecast-caf-sender.
-declare global {
-  interface Window {
-    __onGCastApiAvailable?: (isAvailable: boolean) => void;
-    __castApiPreload?: {
-      received: boolean;
-      available: boolean;
-      listeners: ((isAvailable: boolean) => void)[];
-    };
-    chrome?: any;
-    cast?: any;
-  }
-}
 
 export type CastState = "no_devices" | "available" | "connecting" | "connected" | "unsupported";
 
 type Listener = (state: CastState, deviceName?: string) => void;
 
-const listeners = new Set<Listener>();
-let currentState: CastState = "no_devices";
-let currentDevice: string | undefined;
-let initStarted = false;
-let initResolved = false;
+const _listeners = new Set<Listener>();
+let _state: CastState = "no_devices";
+let _device: string | undefined;
 
-/**
- * Cause of an `unsupported` state, set by `initCast()`. Surfaced to the
- * UI by `getCastUnsupportedReason()` so the user gets actionable feedback
- * (e.g. "Cast requires HTTPS") instead of a generic "unsupported".
- */
-export type CastUnsupportedReason =
-  | "insecure_origin"
-  | "sdk_blocked"
-  | "sdk_load_timeout"
-  | "init_failed"
-  | null;
+let _req: PresentationRequest | null = null;
+let _avail: PresentationAvailability | null = null;
+let _conn: PresentationConnection | null = null;
+let _initDone = false;
 
-let unsupportedReason: CastUnsupportedReason = null;
-
-export function getCastUnsupportedReason(): CastUnsupportedReason {
-  return unsupportedReason;
-}
-
-/**
- * Returns true when the current page origin is one the Cast Sender SDK
- * will accept. Cast requires a secure context — HTTPS, `localhost`, or
- * `127.0.0.1`. Plain HTTP to a LAN IP silently fails because
- * `window.chrome.cast` is never exposed in non-secure contexts.
- */
-export function isCastOriginSupported(): boolean {
-  if (typeof window === "undefined") return false;
-  if (window.isSecureContext) return true;
-  const host = window.location.hostname;
-  // `isSecureContext` already covers localhost in modern browsers, but be
-  // defensive in case of a polyfill / older Chromium.
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+function receiverUrl(): string {
+  return `${window.location.origin}/cast-view`;
 }
 
 function emit() {
-  for (const l of listeners) {
-    try {
-      l(currentState, currentDevice);
-    } catch (e) {
-      console.error("[cast] listener error", e);
-    }
-  }
-}
-
-function setState(state: CastState, deviceName?: string) {
-  currentState = state;
-  currentDevice = deviceName;
-  emit();
-}
-
-/**
- * Subscribe to cast state changes. Returns unsubscribe function.
- * Listener is called immediately with the current state.
- */
-export function subscribeCastState(listener: Listener): () => void {
-  listeners.add(listener);
-  listener(currentState, currentDevice);
-  return () => listeners.delete(listener);
-}
-
-export function getCastState(): { state: CastState; device?: string } {
-  return { state: currentState, device: currentDevice };
-}
-
-/**
- * Initialise the Cast framework. Safe to call multiple times — subsequent
- * calls are no-ops. Returns a promise that resolves once the SDK reports
- * its initial availability.
- */
-export function initCast(): Promise<void> {
-  if (initResolved) return Promise.resolve();
-  if (initStarted) {
-    return new Promise((resolve) => {
-      const off = subscribeCastState(() => {
-        if (initResolved) {
-          off();
-          resolve();
-        }
-      });
-    });
-  }
-  initStarted = true;
-
-  // Fail fast on insecure origins — the Cast SDK never exposes
-  // `window.chrome.cast` outside a secure context, so waiting 12s for the
-  // SDK callback just to land on "unsupported" wastes the user's time and
-  // hides the real cause.
-  if (!isCastOriginSupported()) {
-    initResolved = true;
-    unsupportedReason = "insecure_origin";
-    setState("unsupported");
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    // Hard timeout: if the SDK never loads (offline / blocked / network slow),
-    // report unsupported. Bumped to 12s because Brave + slow connections can
-    // take >5s to fetch gstatic.com when Shields lazily allow the request.
-    const timeout = window.setTimeout(() => {
-      if (!initResolved) {
-        initResolved = true;
-        unsupportedReason = "sdk_load_timeout";
-        setState("unsupported");
-        resolve();
-      }
-    }, 12000);
-
-    const onAvailable = (isAvailable: boolean) => {
-      window.clearTimeout(timeout);
-      if (!isAvailable || !window.cast?.framework) {
-        initResolved = true;
-        unsupportedReason = "sdk_blocked";
-        setState("unsupported");
-        resolve();
-        return;
-      }
-
-      try {
-        const cf = window.cast.framework;
-        const ctx = cf.CastContext.getInstance();
-        ctx.setOptions({
-          // Default Media Receiver — plays generic image/video URLs.
-          receiverApplicationId:
-            window.chrome?.cast?.media?.DEFAULT_MEDIA_RECEIVER_APP_ID || "CC1AD845",
-          autoJoinPolicy: cf.AutoJoinPolicy.ORIGIN_SCOPED,
-        });
-
-        // Initial state mapping
-        const mapState = (s: string): CastState => {
-          switch (s) {
-            case "NO_DEVICES_AVAILABLE":
-              return "no_devices";
-            case "NOT_CONNECTED":
-              return "available";
-            case "CONNECTING":
-              return "connecting";
-            case "CONNECTED":
-              return "connected";
-            default:
-              return "available";
-          }
-        };
-
-        const refresh = () => {
-          const sdkState = ctx.getCastState();
-          const session = ctx.getCurrentSession();
-          const device = session?.getCastDevice?.()?.friendlyName;
-          setState(mapState(sdkState), device);
-        };
-
-        ctx.addEventListener(cf.CastContextEventType.CAST_STATE_CHANGED, refresh);
-        ctx.addEventListener(cf.CastContextEventType.SESSION_STATE_CHANGED, refresh);
-
-        refresh();
-        initResolved = true;
-        resolve();
-      } catch (e) {
-        console.error("[cast] init failed", e);
-        initResolved = true;
-        unsupportedReason = "init_failed";
-        setState("unsupported");
-        resolve();
-      }
-    };
-
-    // Two paths:
-    //   1. The inline preload script in index.html already received the SDK
-    //      callback before our React bundle ran — read the cached result.
-    //   2. The SDK has not arrived yet — register a listener with the preload
-    //      shim so we get notified when it does.
-    const preload = window.__castApiPreload;
-    if (preload?.received) {
-      onAvailable(preload.available);
-    } else if (preload) {
-      preload.listeners.push(onAvailable);
-    } else {
-      // No preload shim (older index.html) — fall back to overwriting the
-      // global directly. Race-prone but preserves backwards compatibility.
-      window.__onGCastApiAvailable = onAvailable;
-    }
+  _listeners.forEach((l) => {
+    try { l(_state, _device); } catch (e) { console.error("[cast] listener error", e); }
   });
 }
 
-/**
- * Show the native Chromecast device picker and connect to the chosen device.
- * Resolves once a session is established or the user cancels.
- */
-export async function requestCastSession(): Promise<void> {
-  await initCast();
-  if (!window.cast?.framework) throw new Error("Cast SDK not available");
-  const ctx = window.cast.framework.CastContext.getInstance();
-  try {
-    await ctx.requestSession();
-  } catch (e: any) {
-    // "cancel" is the normal user-cancel path — silence it.
-    if (e === "cancel" || e?.code === "cancel") return;
-    throw e;
-  }
+function setState(s: CastState, d?: string) {
+  _state = s;
+  _device = d;
+  emit();
 }
 
-/** End the current cast session, if any. */
-export async function endCastSession(stopCasting = true): Promise<void> {
-  if (!window.cast?.framework) return;
-  const ctx = window.cast.framework.CastContext.getInstance();
-  const session = ctx.getCurrentSession();
-  if (session) await session.endSession(stopCasting);
+/** Subscribe to cast state changes. Returns unsubscribe fn. Fires immediately with current state. */
+export function subscribeCastState(listener: Listener): () => void {
+  _listeners.add(listener);
+  listener(_state, _device);
+  return () => _listeners.delete(listener);
+}
+
+export function getCastState(): { state: CastState; device?: string } {
+  return { state: _state, device: _device };
 }
 
 /**
- * Send a media URL (image or video) to the active cast session.
- * No-op when no session is active. Resolves when the receiver loads media.
+ * Initialise cast using the native Presentation API.
+ * Safe to call multiple times — subsequent calls are no-ops.
  */
-export async function castMedia(
-  url: string,
-  contentType: string = "image/jpeg",
-  metadata?: { title?: string }
-): Promise<void> {
-  if (!window.cast?.framework || !window.chrome?.cast?.media) return;
-  if (!/^https?:/i.test(url)) {
-    // Chromecast cannot fetch blob:/data: URLs — silently skip.
+export async function initCast(): Promise<void> {
+  if (_initDone) return;
+  _initDone = true;
+
+  if (typeof window.PresentationRequest === "undefined") {
+    setState("unsupported");
     return;
   }
-  const ctx = window.cast.framework.CastContext.getInstance();
-  const session = ctx.getCurrentSession();
-  if (!session) return;
 
-  const mediaInfo = new window.chrome.cast.media.MediaInfo(url, contentType);
-  const meta = new window.chrome.cast.media.GenericMediaMetadata();
-  if (metadata?.title) meta.title = metadata.title;
-  mediaInfo.metadata = meta;
+  try {
+    _req = new PresentationRequest([receiverUrl()]);
 
-  const request = new window.chrome.cast.media.LoadRequest(mediaInfo);
-  await session.loadMedia(request);
+    // Register as the page's default presentation so browsers may show
+    // a Cast icon in the address bar automatically.
+    if (navigator.presentation) {
+      navigator.presentation.defaultRequest = _req;
+    }
+
+    const avail = await _req.getAvailability();
+    _avail = avail;
+    setState(avail.value ? "available" : "no_devices");
+
+    avail.onchange = () => {
+      if (_state === "connecting" || _state === "connected") return;
+      setState(avail.value ? "available" : "no_devices");
+    };
+  } catch (e) {
+    // SecurityError if page is not served over a secure context,
+    // or NotSupportedError if the browser does not implement this feature.
+    console.warn("[cast] initCast:", e);
+    setState("unsupported");
+  }
+}
+
+/** Wire lifecycle handlers onto a freshly-opened PresentationConnection. */
+function wireConnection(conn: PresentationConnection) {
+  _conn = conn;
+  setState("connected");
+
+  conn.onclose = () => {
+    _conn = null;
+    setState(_avail?.value ? "available" : "no_devices");
+  };
+  conn.onterminate = () => {
+    _conn = null;
+    setState(_avail?.value ? "available" : "no_devices");
+  };
+}
+
+/**
+ * Open the browser's native device picker and connect to the chosen Chromecast.
+ * Resolves when connected; throws on failure (but NOT when the user cancels).
+ */
+export async function requestCastSession(): Promise<void> {
+  if (!_req) await initCast();
+  if (!_req) throw new Error("Presentation API not available in this browser");
+
+  let conn: PresentationConnection;
+  try {
+    conn = await _req.start();
+  } catch (e: unknown) {
+    // AbortError / "cancel" = user dismissed the picker — not an error.
+    const name = (e instanceof Error) ? e.name : String(e);
+    if (name === "AbortError" || name === "cancel" || String(e).includes("cancel")) return;
+    throw e;
+  }
+
+  wireConnection(conn);
+}
+
+/** Terminate the current cast session, if any. */
+export async function endCastSession(): Promise<void> {
+  if (_conn) {
+    try { _conn.terminate(); } catch { /* already closed */ }
+    _conn = null;
+  }
+  setState(_avail?.value ? "available" : "no_devices");
+}
+
+/**
+ * Send a photo URL to the active receiver page over the PresentationConnection.
+ * No-op when no session is active or the URL is not HTTP(S).
+ */
+export function castMedia(url: string, _contentType = "image/jpeg"): void {
+  if (_conn?.state !== "connected") return;
+  if (!/^https?:/i.test(url)) return; // blob:/data: not reachable by Chromecast
+  try {
+    _conn.send(JSON.stringify({ type: "LOAD_MEDIA", url }));
+  } catch (e) {
+    console.warn("[cast] send failed", e);
+  }
 }
