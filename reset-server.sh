@@ -86,9 +86,14 @@ safe_purge_managed_subdirs() {
             continue
         fi
         echo "  Removing $target/..."
-        if ! timeout 10 rm -rf -- "$target"; then
-            echo "  WARN: deletion of '$target' timed out or failed (possibly a slow network drive)."
-            echo "        Please delete it manually: rm -rf '$target'"
+        if ! timeout 10 rm -rf -- "$target" 2>/dev/null; then
+            # Likely root-owned (e.g. logs from a previous systemd run, or
+            # files written by a Docker container running as another uid).
+            # Re-attempt under sudo before giving up.
+            if ! timeout 10 sudo rm -rf -- "$target" 2>/dev/null; then
+                echo "  WARN: deletion of '$target' timed out or failed (possibly a slow network drive or permissions)."
+                echo "        Please delete it manually: sudo rm -rf '$target'"
+            fi
         fi
     done
 }
@@ -368,13 +373,25 @@ if [[ -d "$BACKUP_DIR" ]]; then
                     ;;
             esac
         fi
-        # Recreate dirs and align ownership with the container's appuser (uid 999)
-        mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
-        timeout 10 chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || timeout 10 chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
+        # Recreate dirs and align ownership with the container's appuser (uid 999).
+        # Parent $BACKUP_DATA may itself be owned by uid 999 from a prior run,
+        # so try unprivileged mkdir first then fall back to sudo.
+        if ! mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage" 2>/dev/null; then
+            sudo mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
+        fi
+        timeout 10 sudo chown -R 999:999 "$BACKUP_DATA" 2>/dev/null \
+            || timeout 10 chown -R 999:999 "$BACKUP_DATA" 2>/dev/null \
+            || timeout 10 chmod -R 777 "$BACKUP_DATA" 2>/dev/null \
+            || true
         echo "  backup data wiped"
     else
-        mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
-        timeout 10 chown -R 999:999 "$BACKUP_DATA" 2>/dev/null || timeout 10 chmod -R 777 "$BACKUP_DATA" 2>/dev/null || true
+        if ! mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage" 2>/dev/null; then
+            sudo mkdir -p "$BACKUP_DATA/db" "$BACKUP_DATA/storage"
+        fi
+        timeout 10 sudo chown -R 999:999 "$BACKUP_DATA" 2>/dev/null \
+            || timeout 10 chown -R 999:999 "$BACKUP_DATA" 2>/dev/null \
+            || timeout 10 chmod -R 777 "$BACKUP_DATA" 2>/dev/null \
+            || true
     fi
 
     # Patch the compose ports line with the chosen backup port so Docker binds
@@ -456,10 +473,25 @@ else
     disown
 fi
 
+# Detect whether TLS is enabled in config.toml so the health-check probes the
+# correct scheme. Self-signed certs are accepted (-k) since the local CA root
+# isn't installed in the script's curl trust store.
+TLS_ENABLED=$(grep -E '^\s*enabled\s*=\s*true' "$CONFIG_FILE" 2>/dev/null \
+    | awk '{print "true"; exit}')
+if [[ "$TLS_ENABLED" == "true" ]]; then
+    SCHEME="https"
+    CURL_PROBE=(-sfk)   # health-check: silent, fail-on-error, accept self-signed
+    CURL_GET=(-sk)      # body fetch: silent, accept self-signed, allow non-2xx
+else
+    SCHEME="http"
+    CURL_PROBE=(-sf)
+    CURL_GET=(-s)
+fi
+
 # Wait for server to become responsive (up to 10 seconds)
 echo -n "Waiting for server"
 for i in $(seq 1 10); do
-    if curl -sf "http://localhost:${SERVER_PORT}/api/setup/status" > /dev/null 2>&1; then
+    if curl "${CURL_PROBE[@]}" "${SCHEME}://localhost:${SERVER_PORT}/api/setup/status" > /dev/null 2>&1; then
         echo " ready!"
         break
     fi
@@ -468,7 +500,7 @@ for i in $(seq 1 10); do
 done
 
 # Verify setup state
-STATUS=$(curl -s "http://localhost:${SERVER_PORT}/api/setup/status" 2>/dev/null || echo '{"error":"server not responding"}')
+STATUS=$(curl "${CURL_GET[@]}" "${SCHEME}://localhost:${SERVER_PORT}/api/setup/status" 2>/dev/null || echo '{"error":"server not responding"}')
 if echo "$STATUS" | grep -q '"error"'; then
     echo "WARNING: Server may have failed to start. Check $LOG_FILE"
     tail -20 "$LOG_FILE" 2>/dev/null
@@ -478,7 +510,7 @@ echo ""
 echo "╔══════════════════════════════════════════════════╗"
 echo "║           Reset complete — server addresses      ║"
 echo "╠══════════════════════════════════════════════════╣"
-printf "║  Primary :  http://localhost:%-20s║\n" "${SERVER_PORT}"
+printf "║  Primary :  %s://localhost:%-22s║\n" "${SCHEME}" "${SERVER_PORT}"
 if [[ -d "$BACKUP_DIR" ]] && command -v docker &>/dev/null; then
     printf "║  Backup  :  http://localhost:%-20s║\n" "${BACKUP_PORT}"
 fi
