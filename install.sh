@@ -304,6 +304,56 @@ install_android_sdk() {
     success "Android SDK installed at $sdk_root"
 }
 
+# ── Install CUDA runtime libraries for ONNX CUDA Execution Provider ──────────
+# The ONNX Runtime CUDA EP requires several CUDA 12 runtime libraries at
+# runtime. These are separate from the kernel driver — Ubuntu's multiverse
+# repo ships them individually. Called whenever NVIDIA driver is confirmed
+# working on an apt-based system.
+_install_cuda_runtime_libs() {
+    command -v apt-get &>/dev/null || return 0
+    # Check if already installed
+    if ldconfig -p 2>/dev/null | grep -q "libcublasLt.so.12"; then
+        success "CUDA runtime libraries already installed (libcublasLt.so.12 found)"
+        return 0
+    fi
+
+    info "Installing CUDA runtime libraries for AI inference (ONNX CUDA EP)..."
+    # Enable multiverse (houses the CUDA 12 runtime packages) — idempotent.
+    sudo add-apt-repository -y multiverse 2>/dev/null || true
+    sudo apt-get update -qq 2>/dev/null || true
+
+    # Core libraries required by ORT CUDA EP (CUDA 12):
+    #   libcublasLt.so.12, libcublas.so.12, libcurand.so.10,
+    #   libcufft.so.11, libcudart.so.12, libcudnn.so.9
+    local pkgs=(libcublaslt12 libcublas12 libcurand10 libcufft11 libcudart12)
+
+    # nvidia-cudnn is available from Ubuntu multiverse as an install-script
+    # package; add it if nvidia-cuda-dev is present (required dep).
+    if apt-cache show libcuda1 &>/dev/null 2>&1 || dpkg -l libcuda1 &>/dev/null 2>&1; then
+        pkgs+=(nvidia-cudnn)
+    else
+        pkgs+=(nvidia-cudnn)  # try anyway — apt will skip if deps unresolvable
+    fi
+
+    # shellcheck disable=SC2068
+    if sudo apt-get install -y -qq ${pkgs[@]} 2>/dev/null; then
+        success "CUDA runtime libraries installed: ${pkgs[*]}"
+        # Refresh linker cache so the new .so files are visible immediately.
+        sudo ldconfig 2>/dev/null || true
+    else
+        # Partial install — try without nvidia-cudnn (cuDNN needs extra deps)
+        local base_pkgs=(libcublaslt12 libcublas12 libcurand10 libcufft11 libcudart12)
+        # shellcheck disable=SC2068
+        sudo apt-get install -y -qq ${base_pkgs[@]} 2>/dev/null && {
+            success "CUDA base libraries installed (cuDNN skipped)"
+            sudo ldconfig 2>/dev/null || true
+        } || {
+            warn "Could not install CUDA runtime libraries — ONNX AI inference will run on CPU."
+            warn "Manual fix:  sudo apt install libcublaslt12 libcublas12 libcurand10 libcufft11 libcudart12 nvidia-cudnn"
+        }
+    fi
+}
+
 # ── NVIDIA GPU setup (optional, Linux only) ───────────────────────────────────
 # Detects an NVIDIA GPU and ensures the kernel module matching the *running*
 # kernel is installed, so NVENC transcoding and CUDA-accelerated AI inference
@@ -326,10 +376,11 @@ setup_gpu() {
 
     success "NVIDIA GPU detected"
 
-    # If nvidia-smi already works we're done.
+    # If nvidia-smi already works, still ensure CUDA runtime libs are present.
     if command -v nvidia-smi &>/dev/null && nvidia-smi -L &>/dev/null; then
         success "NVIDIA driver already loaded:"
         nvidia-smi -L | sed 's/^/    /'
+        _install_cuda_runtime_libs
         return 0
     fi
 
@@ -393,6 +444,7 @@ setup_gpu() {
     if command -v nvidia-smi &>/dev/null && nvidia-smi -L &>/dev/null; then
         success "NVIDIA driver loaded successfully:"
         nvidia-smi -L | sed 's/^/    /'
+        _install_cuda_runtime_libs
     else
         warn "Driver installed but module is not yet loaded."
         warn "A reboot is required before GPU transcoding and AI will work."
@@ -1080,6 +1132,21 @@ if [[ "$MODE" == "native" ]]; then
     if command -v systemctl &>/dev/null; then
         info "Setting up systemd service for auto-start on boot..."
         SERVICE_FILE="/etc/systemd/system/simple-photos.service"
+        # Determine LD_LIBRARY_PATH: use user-local CUDA lib dir if it exists,
+        # otherwise fall back to the extracted /tmp path if present.
+        CUDA_LD_PATH=""
+        if [ -d "/home/$(whoami)/.local/lib/cuda" ] && \
+           ls "/home/$(whoami)/.local/lib/cuda/libcudnn.so.9" &>/dev/null 2>&1; then
+            CUDA_LD_PATH="/home/$(whoami)/.local/lib/cuda"
+        fi
+
+        # Build the Environment= lines for the unit
+        ENV_LINES="Environment=RUST_LOG=info"
+        if [ -n "$CUDA_LD_PATH" ]; then
+            ENV_LINES="${ENV_LINES}
+Environment=LD_LIBRARY_PATH=${CUDA_LD_PATH}"
+        fi
+
         sudo tee "$SERVICE_FILE" > /dev/null << UNIT
 [Unit]
 Description=Simple Photos Server
@@ -1093,7 +1160,7 @@ WorkingDirectory=${SCRIPT_DIR}/server
 ExecStart=${SCRIPT_DIR}/server/target/release/simple-photos-server
 Restart=on-failure
 RestartSec=5
-Environment=RUST_LOG=info
+${ENV_LINES}
 
 [Install]
 WantedBy=multi-user.target

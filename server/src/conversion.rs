@@ -393,14 +393,15 @@ pub(crate) async fn convert_video(
             let mut nice_args = vec!["-n".to_string(), "19".to_string(), "ffmpeg".to_string()];
             nice_args.extend(args);
             cmd.args(&nice_args)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped());
-            let result = crate::process::status_with_timeout(
+                .stdout(std::process::Stdio::null());
+            let result = crate::process::run_with_timeout(
                 &mut cmd,
                 std::time::Duration::from_secs(600),
             ).await;
 
-            if matches!(result, Ok(s) if s.success()) {
+            let gpu_ok = matches!(&result, Ok(out) if out.status.success());
+
+            if gpu_ok {
                 tracing::info!(
                     encoder = %hw.video_encoder,
                     elapsed_ms = gpu_start.elapsed().as_millis(),
@@ -410,10 +411,26 @@ pub(crate) async fn convert_video(
                 return true;
             }
 
+            // Log the actual FFmpeg error so operators can diagnose failures.
+            let ffmpeg_stderr = match &result {
+                Ok(out) => String::from_utf8_lossy(&out.stderr).to_string(),
+                Err(e) => e.clone(),
+            };
+            let last_lines: String = ffmpeg_stderr
+                .lines()
+                .rev()
+                .take(10)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n");
+
             if !fallback_to_cpu {
                 tracing::error!(
                     encoder = %hw.video_encoder,
                     elapsed_ms = gpu_start.elapsed().as_millis(),
+                    ffmpeg_error = %last_lines,
                     "GPU transcode: hardware conversion failed and CPU fallback is disabled"
                 );
                 return false;
@@ -422,6 +439,7 @@ pub(crate) async fn convert_video(
             tracing::warn!(
                 encoder = %hw.video_encoder,
                 elapsed_ms = gpu_start.elapsed().as_millis(),
+                ffmpeg_error = %last_lines,
                 "GPU transcode: hardware conversion failed — retrying with CPU libx264"
             );
             // Remove partial output before retry
