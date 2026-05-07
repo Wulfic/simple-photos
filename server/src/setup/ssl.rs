@@ -50,13 +50,21 @@ pub struct UpdateSslRequest {
 // ── Handlers ────────────────────────────────────────────────────────────────
 
 /// GET /api/admin/ssl — Get current TLS configuration.
+///
+/// Reads the **on-disk** `config.toml` so changes made by the wizard or
+/// by `provision_letsencrypt` / `provision_local_ca` are reflected
+/// without needing a server restart.  The in-memory `state.config` is
+/// only updated on startup and would otherwise show stale values right
+/// after a successful provisioning run.
 pub async fn get_ssl(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<SslStatusResponse>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let tls = &state.config.tls;
+    // Try to read fresh TLS settings from disk; fall back to the
+    // in-memory snapshot if anything goes wrong (best-effort).
+    let tls = read_tls_from_disk().unwrap_or_else(|_| state.config.tls.clone());
     Ok(Json(SslStatusResponse {
         enabled: tls.enabled,
         cert_path: tls.cert_path.clone(),
@@ -69,6 +77,20 @@ pub async fn get_ssl(
         letsencrypt: tls.letsencrypt.clone(),
         local_ca: tls.local_ca.clone(),
     }))
+}
+
+/// Re-parse the on-disk config.toml and return only its `[tls]` block.
+///
+/// Used by [`get_ssl`] so the settings UI sees freshly-written values
+/// without waiting for a server restart.
+fn read_tls_from_disk() -> Result<crate::config::TlsConfig, AppError> {
+    let config_path =
+        std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
+    let contents = std::fs::read_to_string(&config_path)
+        .map_err(|e| AppError::Internal(format!("Failed to read config file: {}", e)))?;
+    let cfg: crate::config::AppConfig = toml::from_str(&contents)
+        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {}", e)))?;
+    Ok(cfg.tls)
 }
 
 /// PUT /api/admin/ssl — Update TLS configuration.

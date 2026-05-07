@@ -461,27 +461,45 @@ fn write_bundle(
     let file = std::fs::File::create(&tmp)
         .map_err(|e| AppError::Internal(format!("create bundle {}: {}", tmp.display(), e)))?;
     let mut zw = zip::ZipWriter::new(file);
-    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
-    let mut add = |name: &str, body: &[u8]| -> Result<(), AppError> {
-        zw.start_file(name, opts)
+    // Two option presets:
+    //   • `opts`      — plain files (0644)            → ca.pem, *.txt, *.md, *.ps1
+    //   • `exec_opts` — executable scripts (0755)     → install-linux.sh
+    //
+    // Without the executable bit on the shell script, `unzip` extracts it
+    // as 0644 and the operator gets "Permission denied" trying to run
+    // `./install-linux.sh` — even under sudo, because sudo doesn't grant
+    // an exec bit, it just changes the EUID.  We mark the shell script
+    // as 0755 so it Just Works after `unzip`.
+    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let exec_opts = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+
+    let mut add = |name: &str,
+                   body: &[u8],
+                   options: SimpleFileOptions|
+     -> Result<(), AppError> {
+        zw.start_file(name, options)
             .map_err(|e| AppError::Internal(format!("zip start {}: {}", name, e)))?;
         zw.write_all(body)
             .map_err(|e| AppError::Internal(format!("zip write {}: {}", name, e)))?;
         Ok(())
     };
 
-    add("ca.pem", ca_pem.as_bytes())?;
-    add("install-linux.sh", linux_script(fingerprint).as_bytes())?;
+    add("ca.pem", ca_pem.as_bytes(), opts)?;
+    add("install-linux.sh", linux_script(fingerprint).as_bytes(), exec_opts)?;
     add(
         "install-windows.ps1",
         windows_script(fingerprint).as_bytes(),
+        opts,
     )?;
     add(
         "install-android.txt",
         android_instructions(fingerprint).as_bytes(),
+        opts,
     )?;
-    add("README.md", readme(fingerprint, hosts).as_bytes())?;
+    add("README.md", readme(fingerprint, hosts).as_bytes(), opts)?;
 
     zw.finish()
         .map_err(|e| AppError::Internal(format!("zip finish: {}", e)))?;
@@ -688,6 +706,24 @@ tampered with on its way to your device.
 | `install-windows.ps1`    | Windows  | Run with PowerShell as administrator           |
 | `install-android.txt`    | Android  | Read the file — Android requires manual steps  |
 | `ca.pem`                 | All      | The certificate itself                         |
+
+### Linux — if `./install-linux.sh` says "Permission denied"
+
+Some unzip tools strip the executable bit even though the bundle ships
+it set.  Two equivalent workarounds:
+
+```bash
+chmod +x install-linux.sh && sudo ./install-linux.sh
+# — or —
+sudo bash install-linux.sh
+```
+
+If you see "bad interpreter" or stray `^M` in the error, the file was
+extracted with Windows-style line endings.  Convert in place:
+
+```bash
+sed -i 's/\r$//' install-linux.sh && sudo bash install-linux.sh
+```
 
 ## Removing the CA
 

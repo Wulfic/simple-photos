@@ -140,6 +140,16 @@ def test_local_ca_bundle_contains_install_scripts(
     _verify_pem_block(ca_pem, "CERTIFICATE")
     assert "PRIVATE KEY" not in ca_pem, "ca.pem must not contain a private key"
 
+    # Regression guard for "Permission denied OS error 13" — the shell
+    # script must ship with the executable bit set so `unzip` extracts
+    # it as 0755 and `./install-linux.sh` runs without `chmod +x`.
+    info = z.getinfo("install-linux.sh")
+    # zip stores Unix mode in the upper 16 bits of external_attr.
+    unix_mode = (info.external_attr >> 16) & 0o777
+    assert unix_mode & 0o111, (
+        f"install-linux.sh must be executable in the bundle, got mode {oct(unix_mode)}"
+    )
+
     # Each install script embeds the fingerprint that matches the API
     # response, so the script can refuse to install a tampered cert.
     fingerprint = fresh_local_ca["fingerprint_sha256"]
