@@ -193,6 +193,20 @@ async fn main() -> anyhow::Result<()> {
         &config.transcode.gpu_device,
     ));
 
+    // Loud, unambiguous banner so operators can see at a glance which
+    // encoder will be used for video conversion. `probe_hwaccel` already
+    // emits an info-level line, but it gets buried in the startup torrent.
+    if hw_accel.is_gpu() {
+        tracing::info!(
+            "═══ Video transcode: GPU acceleration ACTIVE ({} → {}) ═══",
+            hw_accel.accel_type, hw_accel.video_encoder,
+        );
+    } else {
+        tracing::warn!(
+            "═══ Video transcode: CPU-only (libx264). No GPU encoder detected. ═══"
+        );
+    }
+
     // Initialize global GPU config for the conversion pipeline.
     conversion::init_gpu_config(
         (*hw_accel).clone(),

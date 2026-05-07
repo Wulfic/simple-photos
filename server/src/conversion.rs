@@ -353,6 +353,25 @@ pub(crate) async fn convert_video(
     hwaccel: Option<&HwAccelCapability>,
     fallback_to_cpu: bool,
 ) -> bool {
+    // Diagnostics: log exactly which path was selected for every video.
+    // Without this, operators report "still using CPU!" and we have no
+    // way to tell whether the GPU branch was even considered.
+    match hwaccel {
+        Some(hw) if hw.is_gpu() => tracing::debug!(
+            input = %input,
+            encoder = %hw.video_encoder,
+            "convert_video: GPU path selected"
+        ),
+        Some(_) => tracing::warn!(
+            input = %input,
+            "convert_video: hwaccel registered as CPU (probe found no GPU encoder)"
+        ),
+        None => tracing::warn!(
+            input = %input,
+            "convert_video: no hwaccel config registered — init_gpu_config not called?"
+        ),
+    }
+
     // Try GPU path first if available
     if let Some(hw) = hwaccel {
         if hw.is_gpu() {

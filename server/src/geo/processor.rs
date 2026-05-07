@@ -142,25 +142,54 @@ async fn backfill_geo_locations(
         .await
         .unwrap_or_default();
 
-        // Update each photo with its resolved location
+        // Update each photo with its resolved location, OR mark it as
+        // "attempted but unresolved" using an empty-string sentinel.
+        //
+        // Without the sentinel, photos whose GPS coordinates don't match
+        // any city in the offline cities500 dataset (open ocean, remote
+        // wilderness, bogus 0,0 EXIF) stay `geo_city IS NULL` forever and
+        // the activity-status counter sticks at e.g. "23/31" because each
+        // backfill cycle re-fetches and re-fails to resolve the same rows.
+        // The empty-string sentinel exits them from the pending pool so
+        // progress reaches 31/31. Operators can re-run resolution by
+        // clearing the empty values: `UPDATE photos SET geo_city = NULL
+        // WHERE geo_city = ''`.
+        let mut resolved = 0usize;
+        let mut unresolved = 0usize;
         for (i, (photo_id, _, _)) in rows.iter().enumerate() {
-            if let Some(Some(loc)) = locations.get(i) {
-                sqlx::query(
-                    "UPDATE photos SET geo_city = ?1, geo_state = ?2, \
-                     geo_country = ?3, geo_country_code = ?4 \
-                     WHERE id = ?5"
-                )
-                .bind(&loc.city)
-                .bind(&loc.state)
-                .bind(&loc.country)
-                .bind(&loc.country_code)
-                .bind(photo_id)
-                .execute(pool)
-                .await?;
+            match locations.get(i) {
+                Some(Some(loc)) => {
+                    sqlx::query(
+                        "UPDATE photos SET geo_city = ?1, geo_state = ?2, \
+                         geo_country = ?3, geo_country_code = ?4 \
+                         WHERE id = ?5"
+                    )
+                    .bind(&loc.city)
+                    .bind(&loc.state)
+                    .bind(&loc.country)
+                    .bind(&loc.country_code)
+                    .bind(photo_id)
+                    .execute(pool)
+                    .await?;
+                    resolved += 1;
+                }
+                _ => {
+                    sqlx::query(
+                        "UPDATE photos SET geo_city = '' \
+                         WHERE id = ?1 AND geo_city IS NULL"
+                    )
+                    .bind(photo_id)
+                    .execute(pool)
+                    .await?;
+                    unresolved += 1;
+                }
             }
         }
 
-        tracing::info!(photos = count, "Backfilled geo locations");
+        tracing::info!(
+            photos = count, resolved, unresolved,
+            "Backfilled geo locations"
+        );
 
         // If we got a full batch, there may be more
         if (count as i64) < batch_size {
