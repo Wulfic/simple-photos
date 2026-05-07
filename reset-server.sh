@@ -340,6 +340,93 @@ if [[ -f "$CONFIG_FILE" ]]; then
     fi
 fi
 
+# ── Reset TLS state to plain-HTTP defaults ───────────────────────────────────
+# A reset is intended to mimic a fresh install: the server boots on plain
+# HTTP and the operator picks a TLS option in the setup wizard.  Without
+# this, a previously-provisioned local-CA / Let's Encrypt / manual cert
+# would survive the reset and the server would come back up on HTTPS.
+#
+# We rewrite the `[tls]` table in config.toml so:
+#   • enabled         → false
+#   • cert_path/key_path lines are removed (wizard re-issues them)
+#   • Any `[tls.local_ca]` / `[tls.letsencrypt]` subsections are dropped
+#   • base_url scheme is forced back to http://
+# Other sections of config.toml are left untouched.
+if [[ -f "$CONFIG_FILE" ]]; then
+    echo "Resetting TLS state in config.toml (enabled = false)..."
+    python3 - "$CONFIG_FILE" <<'PYTLS' || echo "  WARN: TLS reset failed — please flip [tls].enabled to false manually"
+import re, sys, pathlib
+p = pathlib.Path(sys.argv[1])
+text = p.read_text()
+out = []
+in_tls = False
+in_tls_sub = False
+saw_enabled = False
+for line in text.splitlines(keepends=True):
+    s = line.strip()
+    # Section header?
+    m = re.match(r'^\s*\[([^\]]+)\]\s*$', line)
+    if m:
+        sect = m.group(1).strip()
+        if sect == "tls":
+            in_tls, in_tls_sub = True, False
+            out.append(line)
+            continue
+        if sect.startswith("tls."):
+            # Drop entire subsection.
+            in_tls, in_tls_sub = False, True
+            continue
+        # Leaving any tls context.
+        if in_tls and not saw_enabled:
+            out.append("enabled = false\n")
+            saw_enabled = True
+        in_tls, in_tls_sub = False, False
+        out.append(line)
+        continue
+    if in_tls_sub:
+        continue
+    if in_tls:
+        if re.match(r'^\s*enabled\s*=', line):
+            out.append("enabled = false\n")
+            saw_enabled = True
+            continue
+        if re.match(r'^\s*(cert_path|key_path|http_redirect_port|redirect_http)\s*=', line):
+            continue
+        out.append(line)
+        continue
+    # base_url scheme: force http
+    line = re.sub(r'(\bbase_url\s*=\s*")https://', r'\1http://', line)
+    out.append(line)
+# If file ended while still in [tls] without an `enabled =` line, add it.
+if in_tls and not saw_enabled:
+    out.append("enabled = false\n")
+text = "".join(out)
+# Ensure a [tls] section exists at all (a fresh-cloned config.example.toml has one).
+if not re.search(r'^\s*\[tls\]\s*$', text, flags=re.MULTILINE):
+    text = text.rstrip() + "\n\n[tls]\nenabled = false\n"
+p.write_text(text)
+PYTLS
+fi
+
+# Also wipe the local-CA material on disk so the wizard starts from a
+# blank slate.  data/local_ca/ holds the previously-issued root + leaf
+# certs and ca.key — leaving them behind means the new wizard run could
+# re-use stale material.  Keep the directory itself so permissions stay
+# right.
+LOCAL_CA_DIR="$SERVER_DIR/data/local_ca"
+if [[ -d "$LOCAL_CA_DIR" ]]; then
+    if ! timeout 5 rm -rf "$LOCAL_CA_DIR"/* 2>/dev/null; then
+        timeout 5 sudo rm -rf "$LOCAL_CA_DIR"/* 2>/dev/null || true
+    fi
+fi
+# Same for the Let's Encrypt account / cert cache, if present.
+LE_DIR="$SERVER_DIR/data/acme"
+if [[ -d "$LE_DIR" ]]; then
+    if ! timeout 5 rm -rf "$LE_DIR" 2>/dev/null; then
+        timeout 5 sudo rm -rf "$LE_DIR" 2>/dev/null || true
+    fi
+fi
+
 # Reset Docker backup instance (simple-photos-backup)
 # (Container was already stopped above before the port scan.)
 if [[ -d "$BACKUP_DIR" ]]; then
