@@ -130,6 +130,12 @@ export default function AiRecognitionSection({
             <p className="text-xs text-gray-500 dark:text-gray-400">People</p>
           </div>
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
+            <p className="text-xl font-bold text-orange-600 dark:text-orange-400">
+              {status.pet_clusters ?? 0}
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Pets</p>
+          </div>
+          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
             <p className="text-xl font-bold text-purple-600 dark:text-purple-400">
               {status.object_detections}
             </p>
@@ -142,7 +148,8 @@ export default function AiRecognitionSection({
       {status && (
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
           Execution: {status.gpu_available ? "GPU (CUDA)" : "CPU"} &middot;{" "}
-          {status.face_detections} face detections total
+          {status.face_detections} face detections &middot;{" "}
+          {status.pet_detections ?? 0} pet detections
         </p>
       )}
 

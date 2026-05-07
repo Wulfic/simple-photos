@@ -62,6 +62,10 @@ export default function AlbumDetail() {
     if (subId) return <PersonDetailView clusterId={Number(subId)} />;
     return <PeopleView />;
   }
+  if (albumId === "smart-pets") {
+    if (subId) return <PetDetailView clusterId={Number(subId)} />;
+    return <PetsView />;
+  }
   if (albumId === "smart-memories") {
     if (subId) return <MemoryDetailView memoryId={subId} />;
     return <MemoriesView />;
@@ -768,6 +772,285 @@ function PeopleView() {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+// ── Pets View (smart album for detected animal clusters) ─────────────────────
+
+function PetsView() {
+  const navigate = useNavigate();
+  const [clusters, setClusters] = useState<Array<{
+    id: number; label: string | null; species: string; photo_count: number;
+    representative: string | null;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [thumbUrls, setThumbUrls] = useState<Record<number, string>>({});
+  const { accessToken } = useAuthStore();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.ai.listPetClusters();
+        if (!cancelled) setClusters(data);
+      } catch { /* AI may not be enabled */ }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (clusters.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const urls: Record<number, string> = {};
+      for (const c of clusters) {
+        if (!c.representative) continue;
+        const photo = await db.photos.where("serverPhotoId").equals(c.representative).first();
+        if (cancelled) return;
+        if (photo?.thumbnailData) {
+          const mime = photo.thumbnailMimeType || "image/jpeg";
+          urls[c.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        } else {
+          urls[c.id] = accessToken
+            ? `${api.photos.thumbUrl(c.representative)}?token=${accessToken}`
+            : api.photos.thumbUrl(c.representative);
+        }
+      }
+      if (!cancelled) setThumbUrls(urls);
+    })();
+    return () => {
+      cancelled = true;
+      Object.values(thumbUrls).forEach(URL.revokeObjectURL);
+    };
+  }, [clusters]);
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <AppHeader />
+      <main className="p-4">
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => navigate("/albums")}
+            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            title="Back to Albums"
+          >
+            <AppIcon name="back-arrow" size="w-5 h-5" />
+          </button>
+          <h2 className="text-xl font-semibold">Pets</h2>
+        </div>
+
+        {loading ? (
+          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+        ) : clusters.length === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+            <p className="text-gray-500 dark:text-gray-400">No pets detected yet</p>
+            <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
+              Enable AI processing in Settings to detect pets in your photos
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+            {clusters.map((cluster) => (
+              <div
+                key={cluster.id}
+                onClick={() => navigate(`/albums/smart-pets/${cluster.id}`)}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
+              >
+                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
+                  {thumbUrls[cluster.id] ? (
+                    <img
+                      src={thumbUrls[cluster.id]}
+                      alt={cluster.label || cluster.species}
+                      className="w-full h-full object-cover rounded-full"
+                    />
+                  ) : (
+                    <svg className="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
+                    </svg>
+                  )}
+                </div>
+                <p className="font-medium text-center text-sm truncate capitalize">
+                  {cluster.label || `Unknown ${cluster.species}`}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                  {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function PetDetailView({ clusterId }: { clusterId: number }) {
+  const navigate = useNavigate();
+  const [clusterName, setClusterName] = useState<string>("Pet");
+  const [species, setSpecies] = useState<string>("");
+  const [photos, setPhotos] = useState<CachedPhoto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const clusters = await api.ai.listPetClusters();
+        const cluster = clusters.find(c => c.id === clusterId);
+        if (!cancelled && cluster) {
+          setClusterName(cluster.label || `Unknown ${cluster.species}`);
+          setSpecies(cluster.species);
+          setNameInput(cluster.label || "");
+        }
+
+        const detections = await api.ai.listPetClusterPhotos(clusterId);
+        const photoIds = [...new Set(detections.map(d => d.photo_id))];
+
+        const found: CachedPhoto[] = [];
+        for (const pid of photoIds) {
+          const photo = await db.photos.where("serverPhotoId").equals(pid).first();
+          if (photo) found.push(photo);
+        }
+        if (!cancelled) setPhotos(found);
+      } catch { /* cluster may not exist */ }
+      if (!cancelled) setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [clusterId]);
+
+  async function saveName() {
+    try {
+      await api.ai.renamePetCluster(clusterId, nameInput.trim());
+      setClusterName(nameInput.trim() || `Unknown ${species}`);
+      setEditing(false);
+    } catch { /* ignore */ }
+  }
+
+  const blobIds = useMemo(() => photos.map(p => p.blobId), [photos]);
+  const mediaTypeMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of photos) m.set(p.blobId, p.mediaType);
+    return m;
+  }, [photos]);
+  const slideshow = useSlideshow(blobIds, mediaTypeMap);
+  const hasPhotos = photos.some(p => p.mediaType === "photo" || p.mediaType === "gif");
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <AppHeader />
+      <main className="p-4">
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => navigate("/albums/smart-pets")}
+            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            title="Back to Pets"
+          >
+            <AppIcon name="back-arrow" size="w-5 h-5" />
+          </button>
+          {editing ? (
+            <form onSubmit={(e) => { e.preventDefault(); saveName(); }} className="flex items-center gap-2">
+              <input
+                type="text"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                className="border rounded px-2 py-1 text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                autoFocus
+                maxLength={100}
+              />
+              <button type="submit" className="text-blue-600 text-sm font-medium">Save</button>
+              <button type="button" onClick={() => setEditing(false)} className="text-gray-400 text-sm">Cancel</button>
+            </form>
+          ) : (
+            <>
+              <h2 className="text-xl font-semibold truncate capitalize">{clusterName}</h2>
+              <button
+                onClick={() => setEditing(true)}
+                className="text-gray-400 hover:text-gray-600 text-sm"
+                title="Rename"
+              >
+                ✏️
+              </button>
+            </>
+          )}
+          <span className="text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          {hasPhotos && (
+            <>
+            <button
+              onClick={() => slideshow.start(0)}
+              className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              title="Start Slideshow"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+            </button>
+            <button
+              onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
+              </svg>
+            </button>
+            </>
+          )}
+        </div>
+
+        {loading ? (
+          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+        ) : photos.length === 0 ? (
+          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+            <p className="text-gray-500 dark:text-gray-400">No photos found for this pet</p>
+          </div>
+        ) : (
+          <JustifiedGrid
+            items={photos}
+            getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
+            getKey={(p) => p.blobId}
+            renderItem={(photo, idx) => (
+              <AlbumTile
+                photo={photo}
+                isSelectionMode={false}
+                isSelected={false}
+                onClick={() => {
+                  navigate(`/photo/${photo.blobId}`, {
+                    state: {
+                      photoIds: photos.map(p => p.blobId),
+                      currentIndex: idx,
+                      albumId: `smart-pets/${clusterId}`,
+                    },
+                  });
+                }}
+                onLongPress={() => {}}
+                onRemove={() => {}}
+              />
+            )}
+          />
+        )}
+      </main>
+
+      {slideshow.isActive && (
+        <Slideshow
+          currentBlobId={slideshow.currentBlobId}
+          isPlaying={slideshow.isPlaying}
+          currentSlide={slideshow.currentSlide}
+          totalSlides={slideshow.totalSlides}
+          shuffleEnabled={slideshow.shuffleEnabled}
+          intervalMs={slideshow.intervalMs}
+          transition={slideshow.transition}
+          direction={slideshow.direction}
+          onTogglePlay={slideshow.togglePlay}
+          onNext={slideshow.next}
+          onPrev={slideshow.prev}
+          onToggleShuffle={slideshow.toggleShuffle}
+          onSetSpeed={slideshow.setSpeed}
+          onSetTransition={slideshow.setTransition}
+          onExit={slideshow.stop}
+        />
+      )}
     </div>
   );
 }

@@ -75,6 +75,20 @@ pub async fn ai_status(
     .fetch_one(&state.pool)
     .await?;
 
+    let pet_det_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM pet_detections WHERE user_id = ?1"
+    )
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    let pet_cluster_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM pet_clusters WHERE user_id = ?1"
+    )
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
     // Re-derive model availability the same way AiEngine does so the
     // status report is honest about whether real ONNX models are loaded.
     let model_dir = std::path::PathBuf::from(&config.model_dir);
@@ -102,6 +116,8 @@ pub async fn ai_status(
         face_detections: face_count.0,
         face_clusters: cluster_count.0,
         object_detections: object_count.0,
+        pet_detections: pet_det_count.0,
+        pet_clusters: pet_cluster_count.0,
         face_model_loaded,
         object_model_loaded,
         degraded_mode,
@@ -161,6 +177,14 @@ pub async fn ai_reprocess(
                 .execute(&state.pool)
                 .await?;
 
+                sqlx::query(
+                    "DELETE FROM pet_detections WHERE photo_id = ?1 AND user_id = ?2"
+                )
+                .bind(id)
+                .bind(&auth.user_id)
+                .execute(&state.pool)
+                .await?;
+
                 // Remove from processed list so the background processor picks it up
                 let result = sqlx::query(
                     "DELETE FROM ai_processed_photos WHERE photo_id = ?1 AND user_id = ?2"
@@ -183,6 +207,15 @@ pub async fn ai_reprocess(
             .bind(&auth.user_id)
             .execute(&state.pool)
             .await?;
+
+            // Clean up orphaned pet clusters
+            sqlx::query(
+                "DELETE FROM pet_clusters WHERE user_id = ?1 AND id NOT IN \
+                 (SELECT DISTINCT cluster_id FROM pet_detections WHERE user_id = ?1 AND cluster_id IS NOT NULL)"
+            )
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
             count
         }
         _ => {
@@ -193,6 +226,17 @@ pub async fn ai_reprocess(
                 .await?;
 
             sqlx::query("DELETE FROM object_detections WHERE user_id = ?1")
+                .bind(&auth.user_id)
+                .execute(&state.pool)
+                .await?;
+
+            // Clear pet detections and clusters
+            sqlx::query("DELETE FROM pet_detections WHERE user_id = ?1")
+                .bind(&auth.user_id)
+                .execute(&state.pool)
+                .await?;
+
+            sqlx::query("DELETE FROM pet_clusters WHERE user_id = ?1")
                 .bind(&auth.user_id)
                 .execute(&state.pool)
                 .await?;
@@ -210,7 +254,7 @@ pub async fn ai_reprocess(
 
             // Clear all AI tags for this user
             sqlx::query(
-                "DELETE FROM photo_tags WHERE user_id = ?1 AND (tag LIKE 'person:%' OR tag LIKE 'object:%')"
+                "DELETE FROM photo_tags WHERE user_id = ?1 AND (tag LIKE 'person:%' OR tag LIKE 'object:%' OR tag LIKE 'pet:%')"
             )
             .bind(&auth.user_id)
             .execute(&state.pool)
@@ -526,4 +570,161 @@ pub async fn list_object_photos(
     .await?;
 
     Ok(Json(detections))
+}
+
+// ── Pet clusters ────────────────────────────────────────────────────
+
+/// GET /api/ai/pets — list all pet clusters for the current user.
+pub async fn list_pet_clusters(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<PetClusterSummary>>, AppError> {
+    let clusters: Vec<PetClusterSummary> = sqlx::query_as(
+        "SELECT pc.id, pc.label, pc.species, pc.photo_count, \
+                COALESCE(\
+                    pc.representative, \
+                    (SELECT pd.photo_id FROM pet_detections pd \
+                     WHERE pd.cluster_id = pc.id \
+                     ORDER BY pd.confidence DESC LIMIT 1) \
+                ) AS representative, \
+                pc.created_at, pc.updated_at \
+         FROM pet_clusters pc \
+         WHERE pc.user_id = ?1 \
+         ORDER BY pc.photo_count DESC, pc.species ASC"
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(clusters))
+}
+
+/// GET /api/ai/pets/:cluster_id/photos — list photos in a pet cluster.
+pub async fn list_pet_cluster_photos(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cluster_id): Path<i64>,
+) -> Result<Json<Vec<PetDetectionRecord>>, AppError> {
+    // Verify cluster belongs to user
+    let _cluster: (i64,) = sqlx::query_as(
+        "SELECT id FROM pet_clusters WHERE id = ?1 AND user_id = ?2"
+    )
+    .bind(cluster_id)
+    .bind(&auth.user_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let detections: Vec<PetDetectionRecord> = sqlx::query_as(
+        "SELECT id, photo_id, cluster_id, species, confidence, created_at \
+         FROM pet_detections \
+         WHERE cluster_id = ?1 AND user_id = ?2 \
+         ORDER BY confidence DESC"
+    )
+    .bind(cluster_id)
+    .bind(&auth.user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(detections))
+}
+
+/// PUT /api/ai/pets/:cluster_id/name — rename a pet cluster.
+pub async fn rename_pet_cluster(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(cluster_id): Path<i64>,
+    Json(body): Json<RenameFaceRequest>,
+) -> Result<StatusCode, AppError> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("Name cannot be empty".into()));
+    }
+    if name.len() > 100 {
+        return Err(AppError::BadRequest("Name too long (max 100 chars)".into()));
+    }
+
+    let result = sqlx::query(
+        "UPDATE pet_clusters SET label = ?1, updated_at = datetime('now') \
+         WHERE id = ?2 AND user_id = ?3"
+    )
+    .bind(name)
+    .bind(cluster_id)
+    .bind(&auth.user_id)
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    // Update all photo tags for this cluster
+    tagging::rename_pet_cluster_tags(&state.pool, &auth.user_id, cluster_id, name).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/ai/pets/merge — merge multiple pet clusters into one.
+pub async fn merge_pet_clusters(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<MergeFacesRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if body.cluster_ids.len() < 2 {
+        return Err(AppError::BadRequest("Need at least 2 clusters to merge".into()));
+    }
+
+    let target_id = body.cluster_ids[0];
+
+    for cid in &body.cluster_ids {
+        let exists: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM pet_clusters WHERE id = ?1 AND user_id = ?2"
+        )
+        .bind(cid)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?;
+
+        if exists.is_none() {
+            return Err(AppError::BadRequest(format!("Pet cluster {} not found", cid)));
+        }
+    }
+
+    for cid in &body.cluster_ids[1..] {
+        sqlx::query(
+            "UPDATE pet_detections SET cluster_id = ?1 WHERE cluster_id = ?2 AND user_id = ?3"
+        )
+        .bind(target_id)
+        .bind(cid)
+        .bind(&auth.user_id)
+        .execute(&state.pool)
+        .await?;
+
+        sqlx::query("DELETE FROM pet_clusters WHERE id = ?1 AND user_id = ?2")
+            .bind(cid)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT photo_id) FROM pet_detections WHERE cluster_id = ?1 AND user_id = ?2"
+    )
+    .bind(target_id)
+    .bind(&auth.user_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    sqlx::query(
+        "UPDATE pet_clusters SET photo_count = ?1, updated_at = datetime('now') WHERE id = ?2"
+    )
+    .bind(count.0)
+    .bind(target_id)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "merged_into": target_id,
+        "photo_count": count.0
+    })))
 }

@@ -702,3 +702,40 @@ fn compute_region_edge_density(
     let (cw, ch) = cropped.dimensions();
     compute_edge_density(&cropped, cw, ch)
 }
+
+// ── Pet embedding extraction ─────────────────────────────────────────
+
+/// Extract the raw 1000-dim MobileNetV2 logit vector from an image.
+///
+/// This is used by the animal clustering module as a per-individual embedding:
+/// the same pet photographed multiple times produces very similar logit
+/// distributions, enabling cosine-similarity clustering for re-identification.
+///
+/// Runs entirely on the already-loaded `CLS_MODEL` singleton — no additional
+/// model download is required. GPU acceleration follows the global
+/// `SessionConfig` set at startup (CUDA → CPU fallback).
+///
+/// Returns `None` when the model is not loaded (degraded / heuristic-only mode).
+pub fn extract_raw_logits(img: &DynamicImage) -> Option<Vec<f32>> {
+    let model_arc = CLS_MODEL.get()?.as_ref()?;
+    let mut session = model_arc.lock().unwrap_or_else(|p| p.into_inner());
+
+    let resized = img.resize_exact(CLS_WIDTH as u32, CLS_HEIGHT as u32, FilterType::Triangle);
+    let rgb = resized.to_rgb8();
+
+    let mut input = ndarray::Array4::<f32>::zeros((1, 3, CLS_HEIGHT, CLS_WIDTH));
+    for y in 0..CLS_HEIGHT {
+        for x in 0..CLS_WIDTH {
+            let pixel = rgb.get_pixel(x as u32, y as u32);
+            for c in 0..3 {
+                input[[0, c, y, x]] =
+                    (pixel[c] as f32 / 255.0 - IMAGENET_MEAN[c]) / IMAGENET_STD[c];
+            }
+        }
+    }
+
+    let tensor = ort::value::Tensor::from_array(input).ok()?;
+    let outputs = session.run(ort::inputs![tensor]).ok()?;
+    let (_shape, data) = outputs[0].try_extract_tensor::<f32>().ok()?;
+    Some(data.to_vec())
+}

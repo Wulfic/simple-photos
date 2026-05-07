@@ -14,7 +14,7 @@ import AppIcon from "../components/AppIcon";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
-import type { FaceCluster } from "../api/ai";
+import type { FaceCluster, PetCluster } from "../api/ai";
 
 type SharedAlbumInfo = {
   id: string;
@@ -50,6 +50,10 @@ export default function Albums() {
   const [peopleClusters, setPeopleClusters] = useState<FaceCluster[]>([]);
   const [peopleThumbUrls, setPeopleThumbUrls] = useState<Record<number, string>>({});
 
+  // Pet clusters
+  const [petClusters, setPetClusters] = useState<PetCluster[]>([]);
+  const [petThumbUrls, setPetThumbUrls] = useState<Record<number, string>>({});
+
   // Memories
   const [memories, setMemories] = useState<Array<{
     id: string; name: string; city: string; country: string;
@@ -76,6 +80,7 @@ export default function Albums() {
     loadAlbums();
     loadSharedAlbums();
     loadPeopleClusters();
+    loadPetClusters();
     loadMemories();
     loadTrips();
   }, []);
@@ -84,6 +89,13 @@ export default function Albums() {
     try {
       const data = await api.ai.listFaceClusters();
       setPeopleClusters(data);
+    } catch { /* AI may not be enabled */ }
+  }
+
+  async function loadPetClusters() {
+    try {
+      const data = await api.ai.listPetClusters();
+      setPetClusters(data);
     } catch { /* AI may not be enabled */ }
   }
 
@@ -125,6 +137,30 @@ export default function Albums() {
     })();
     return () => { cancelled = true; };
   }, [peopleClusters, accessToken]);
+
+  // Load thumbnails for pet clusters
+  useEffect(() => {
+    if (petClusters.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const urls: Record<number, string> = {};
+      for (const c of petClusters) {
+        if (!c.representative) continue;
+        const photo = await db.photos.where("serverPhotoId").equals(c.representative).first();
+        if (cancelled) return;
+        if (photo?.thumbnailData) {
+          const mime = photo.thumbnailMimeType || "image/jpeg";
+          urls[c.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+        } else {
+          urls[c.id] = accessToken
+            ? `${api.photos.thumbUrl(c.representative)}?token=${accessToken}`
+            : api.photos.thumbUrl(c.representative);
+        }
+      }
+      if (!cancelled) setPetThumbUrls(urls);
+    })();
+    return () => { cancelled = true; };
+  }, [petClusters, accessToken]);
 
   // Load thumbnails for memories
   useEffect(() => {
@@ -458,6 +494,45 @@ export default function Albums() {
                 </div>
                 <p className="font-medium text-center text-sm truncate">
                   {cluster.label || "Unknown Person"}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                  {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Pets ───────────────────────────────────────────────────────────── */}
+      {petClusters.length > 0 && (
+        <div className="mt-8">
+          <h2
+            className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            onClick={() => navigate("/albums/smart-pets")}
+          >Pets</h2>
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
+            {petClusters.map((cluster) => (
+              <div
+                key={cluster.id}
+                onClick={() => navigate(`/albums/smart-pets/${cluster.id}`)}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
+              >
+                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
+                  {petThumbUrls[cluster.id] ? (
+                    <img
+                      src={petThumbUrls[cluster.id]}
+                      alt={cluster.label || cluster.species}
+                      className="w-full h-full object-cover rounded-full"
+                    />
+                  ) : (
+                    <svg className="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
+                    </svg>
+                  )}
+                </div>
+                <p className="font-medium text-center text-sm truncate">
+                  {cluster.label || `Unknown ${cluster.species}`}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
                   {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}

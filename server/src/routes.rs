@@ -649,6 +649,11 @@ fn ai_routes() -> Router<AppState> {
         // Object detections
         .route("/ai/objects", get(crate::ai::handlers::list_object_classes))
         .route("/ai/objects/{class_name}/photos", get(crate::ai::handlers::list_object_photos))
+        // Pet clusters
+        .route("/ai/pets", get(crate::ai::handlers::list_pet_clusters))
+        .route("/ai/pets/merge", post(crate::ai::handlers::merge_pet_clusters))
+        .route("/ai/pets/{cluster_id}/photos", get(crate::ai::handlers::list_pet_cluster_photos))
+        .route("/ai/pets/{cluster_id}/name", put(crate::ai::handlers::rename_pet_cluster))
 }
 
 // ── Geolocation & timeline ──────────────────────────────────────────

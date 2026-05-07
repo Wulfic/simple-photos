@@ -8,6 +8,7 @@
 //! When disabled, no background tasks are spawned and all endpoints
 //! return 404 or indicate disabled status.
 
+pub mod animal;
 pub mod clustering;
 pub mod engine;
 pub mod face;

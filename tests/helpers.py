@@ -487,6 +487,26 @@ class APIClient:
         r.raise_for_status()
         return r.json()
 
+    # ── Pet cluster helpers ──────────────────────────────────────────
+
+    def ai_list_pet_clusters(self) -> list:
+        r = self.get("/api/ai/pets")
+        r.raise_for_status()
+        return r.json()
+
+    def ai_list_pet_cluster_photos(self, cluster_id: int) -> list:
+        r = self.get(f"/api/ai/pets/{cluster_id}/photos")
+        r.raise_for_status()
+        return r.json()
+
+    def ai_rename_pet_cluster(self, cluster_id: int, name: str) -> "requests.Response":
+        return self.put(f"/api/ai/pets/{cluster_id}/name", json_data={"name": name})
+
+    def ai_merge_pet_clusters(self, cluster_ids: list) -> dict:
+        r = self.post("/api/ai/pets/merge", json_data={"cluster_ids": cluster_ids})
+        r.raise_for_status()
+        return r.json()
+
     # ── Geolocation helpers ──────────────────────────────────────────
 
     def geo_settings(self) -> dict:

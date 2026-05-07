@@ -42,6 +42,8 @@ pub struct AiStatusResponse {
     pub face_detections: i64,
     pub face_clusters: i64,
     pub object_detections: i64,
+    pub pet_detections: i64,
+    pub pet_clusters: i64,
     /// True when the SCRFD or UltraFace ONNX detection model is loaded.
     pub face_model_loaded: bool,
     /// True when the MobileNetV2 ONNX classification model is loaded.
@@ -76,6 +78,29 @@ pub struct FaceDetectionRecord {
     pub bbox_y: f64,
     pub bbox_w: f64,
     pub bbox_h: f64,
+    pub confidence: f64,
+    pub created_at: String,
+}
+
+/// Pet cluster summary for the pet clusters list endpoint.
+#[derive(Debug, Serialize, FromRow)]
+pub struct PetClusterSummary {
+    pub id: i64,
+    pub label: Option<String>,
+    pub species: String,
+    pub photo_count: i64,
+    pub representative: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Pet detection record returned by the photos-in-cluster endpoint.
+#[derive(Debug, Serialize, FromRow)]
+pub struct PetDetectionRecord {
+    pub id: i64,
+    pub photo_id: String,
+    pub cluster_id: Option<i64>,
+    pub species: String,
     pub confidence: f64,
     pub created_at: String,
 }

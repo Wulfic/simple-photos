@@ -352,6 +352,12 @@ pub struct AiConfig {
     /// Lower = stricter matching, higher = more permissive grouping.
     #[serde(default = "AiConfig::default_face_similarity_threshold")]
     pub face_similarity_threshold: f32,
+    /// Cosine similarity threshold for pet individual clustering (0.0–1.0).
+    /// MobileNetV2 logit vectors of the same pet score ~0.90–0.98;
+    /// different pets of the same species score ~0.70–0.88.
+    /// Default 0.85 balances recall vs. cross-pet merge rate.
+    #[serde(default = "AiConfig::default_pet_similarity_threshold")]
+    pub pet_similarity_threshold: f32,
     /// Directory containing ONNX model files.
     #[serde(default = "AiConfig::default_model_dir")]
     pub model_dir: String,
@@ -387,6 +393,7 @@ impl AiConfig {
     /// fragment into many singleton clusters when their pose, lighting,
     /// or expression varied (e.g. group photos, candid shots).
     fn default_face_similarity_threshold() -> f32 { 0.42 }
+    fn default_pet_similarity_threshold() -> f32 { 0.85 }
     fn default_model_dir() -> String { "models".into() }
     fn default_quality() -> String { "high".into() }
 
@@ -411,6 +418,7 @@ impl Default for AiConfig {
             face_confidence: 0.7,
             object_confidence: 0.5,
             face_similarity_threshold: 0.42,
+            pet_similarity_threshold: 0.85,
             model_dir: "models".into(),
             quality: "high".into(),
             allow_heuristic_fallback: false,

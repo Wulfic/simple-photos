@@ -19,6 +19,7 @@ use crate::ai::clustering;
 use crate::ai::engine::AiEngine;
 use crate::ai::face;
 use crate::ai::object;
+use crate::ai::animal;
 use crate::ai::tagging;
 use crate::config::AiConfig;
 
@@ -183,6 +184,19 @@ async fn process_batch(
     for (user_id,) in &users_with_new {
         if let Err(e) = run_clustering(pool, user_id, config.face_similarity_threshold).await {
             tracing::warn!("AI processor: clustering failed for user {}: {}", user_id, e);
+        }
+    }
+
+    // Run pet clustering for users with new unclustered pet detections.
+    let users_with_new_pets: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT user_id FROM pet_detections WHERE cluster_id IS NULL"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (user_id,) in &users_with_new_pets {
+        if let Err(e) = run_pet_clustering(pool, user_id, config.pet_similarity_threshold).await {
+            tracing::warn!("AI processor: pet clustering failed for user {}: {}", user_id, e);
         }
     }
 
@@ -387,6 +401,57 @@ async fn process_single_photo(
 
         // Apply object tag immediately
         tagging::apply_object_tag(pool, user_id, photo_id, &det.class_name).await?;
+    }
+
+    // ── Pet detection ────────────────────────────────────────────────────
+    // For each pet-class object detection, extract an embedding and store
+    // a pet_detections row for later clustering.  We deduplicate by species
+    // so a photo with two "dog" detections produces one pet row.
+    let mut seen_pet_species: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for det in &obj_detections {
+        if let Some(species) = animal::map_to_species(&det.class_name) {
+            if !seen_pet_species.insert(species.to_string()) {
+                continue; // already wrote a row for this species in this photo
+            }
+            let pet_start = Instant::now();
+            match animal::extract_pet_embedding(&img) {
+                Some(embedding) => {
+                    let emb_bytes: Vec<u8> = embedding
+                        .iter()
+                        .flat_map(|f| f.to_le_bytes())
+                        .collect();
+                    sqlx::query(
+                        "INSERT INTO pet_detections \
+                         (photo_id, user_id, species, confidence, embedding) \
+                         VALUES (?1, ?2, ?3, ?4, ?5)"
+                    )
+                    .bind(photo_id)
+                    .bind(user_id)
+                    .bind(species)
+                    .bind(det.confidence)
+                    .bind(&emb_bytes)
+                    .execute(pool)
+                    .await?;
+
+                    // Apply a generic pet species tag immediately
+                    tagging::apply_pet_tag(pool, user_id, photo_id, None, species).await?;
+
+                    tracing::debug!(
+                        photo_id = %photo_id,
+                        species = %species,
+                        elapsed_ms = pet_start.elapsed().as_millis(),
+                        "AI: pet embedding stored"
+                    );
+                }
+                None => {
+                    tracing::debug!(
+                        photo_id = %photo_id,
+                        species = %species,
+                        "AI: no pet embedding model available — skipping pet re-ID"
+                    );
+                }
+            }
+        }
     }
 
     mark_processed(pool, photo_id, user_id).await?;
@@ -619,6 +684,185 @@ async fn run_clustering(
         updated_clusters = clusters_updated,
         elapsed_ms = cluster_start.elapsed().as_millis(),
         "AI clustering: complete"
+    );
+
+    Ok(())
+}
+
+/// Run pet individual clustering for a user.
+///
+/// Mirrors `run_clustering` but operates on `pet_detections` /
+/// `pet_clusters`.  Pets of different species are never merged — we only
+/// compare embeddings within the same species bucket.
+async fn run_pet_clustering(
+    pool: &SqlitePool,
+    user_id: &str,
+    similarity_threshold: f32,
+) -> anyhow::Result<()> {
+    // Load all pet detections with embeddings for this user, grouped by species
+    let rows: Vec<(i64, String, Vec<u8>)> = sqlx::query_as(
+        "SELECT id, species, embedding FROM pet_detections \
+         WHERE user_id = ?1 AND embedding IS NOT NULL"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    // Group by species so we only cluster within-species
+    let mut by_species: std::collections::HashMap<String, Vec<(i64, Vec<f32>)>> =
+        std::collections::HashMap::new();
+
+    for (id, species, bytes) in rows {
+        if bytes.len() % 4 != 0 {
+            continue;
+        }
+        let embedding: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        by_species.entry(species).or_default().push((id, embedding));
+    }
+
+    let cluster_start = Instant::now();
+    let mut total_assigned = 0usize;
+
+    for (species, pets) in &by_species {
+        tracing::info!(
+            user_id = %user_id,
+            species = %species,
+            detections = pets.len(),
+            threshold = similarity_threshold,
+            "AI pet clustering: running"
+        );
+
+        // Use the same agglomerative algorithm as face clustering
+        let assignments = clustering::cluster_faces(pets, similarity_threshold);
+
+        // Deduplicate cluster indices
+        let mut unique_clusters: Vec<i64> = assignments.iter().map(|(_, c)| *c).collect();
+        unique_clusters.sort();
+        unique_clusters.dedup();
+
+        // Fetch existing pet clusters for this user+species
+        let existing: Vec<(i64,)> = sqlx::query_as(
+            "SELECT id FROM pet_clusters WHERE user_id = ?1 AND species = ?2 ORDER BY id"
+        )
+        .bind(user_id)
+        .bind(species)
+        .fetch_all(pool)
+        .await?;
+
+        let mut cluster_id_map: std::collections::HashMap<i64, i64> =
+            std::collections::HashMap::new();
+
+        for cluster_idx in &unique_clusters {
+            let count = assignments.iter().filter(|(_, c)| c == cluster_idx).count() as i64;
+
+            // Check if any detection in this cluster is already assigned to a DB cluster
+            let mut matched_db_cluster: Option<i64> = None;
+            for (det_id, c) in &assignments {
+                if c != cluster_idx {
+                    continue;
+                }
+                let row: Option<(Option<i64>,)> = sqlx::query_as(
+                    "SELECT cluster_id FROM pet_detections WHERE id = ?1"
+                )
+                .bind(det_id)
+                .fetch_optional(pool)
+                .await?;
+                if let Some((Some(cid),)) = row {
+                    matched_db_cluster = Some(cid);
+                    break;
+                }
+            }
+
+            let db_cluster_id = if let Some(cid) = matched_db_cluster {
+                // Update photo count on existing cluster
+                sqlx::query(
+                    "UPDATE pet_clusters SET photo_count = ?1, updated_at = datetime('now') \
+                     WHERE id = ?2"
+                )
+                .bind(count)
+                .bind(cid)
+                .execute(pool)
+                .await?;
+                cid
+            } else {
+                // Create new cluster
+                let result = sqlx::query(
+                    "INSERT INTO pet_clusters (user_id, species, photo_count, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))"
+                )
+                .bind(user_id)
+                .bind(species)
+                .bind(count)
+                .execute(pool)
+                .await?;
+                result.last_insert_rowid()
+            };
+
+            cluster_id_map.insert(*cluster_idx, db_cluster_id);
+        }
+
+        // Assign detections to clusters and apply tags
+        for (det_id, cluster_idx) in &assignments {
+            if let Some(db_cluster_id) = cluster_id_map.get(cluster_idx) {
+                sqlx::query(
+                    "UPDATE pet_detections SET cluster_id = ?1 WHERE id = ?2"
+                )
+                .bind(db_cluster_id)
+                .bind(det_id)
+                .execute(pool)
+                .await?;
+
+                // Re-apply cluster-aware pet tag
+                let info: Option<(String, Option<String>)> = sqlx::query_as(
+                    "SELECT pd.photo_id, pc.label \
+                     FROM pet_detections pd \
+                     LEFT JOIN pet_clusters pc ON pc.id = pd.cluster_id \
+                     WHERE pd.id = ?1"
+                )
+                .bind(det_id)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some((photo_id, label)) = info {
+                    tagging::apply_pet_tag(
+                        pool,
+                        user_id,
+                        &photo_id,
+                        Some(*db_cluster_id),
+                        label.as_deref().unwrap_or(species),
+                    ).await?;
+                }
+
+                // Set representative thumbnail (highest-confidence photo)
+                sqlx::query(
+                    "UPDATE pet_clusters SET representative = \
+                     COALESCE(representative, (SELECT photo_id FROM pet_detections \
+                      WHERE cluster_id = ?1 ORDER BY confidence DESC LIMIT 1)) \
+                     WHERE id = ?1"
+                )
+                .bind(db_cluster_id)
+                .execute(pool)
+                .await?;
+
+                total_assigned += 1;
+            }
+        }
+
+        let _ = existing; // suppress unused warning
+    }
+
+    tracing::info!(
+        user_id = %user_id,
+        assigned = total_assigned,
+        elapsed_ms = cluster_start.elapsed().as_millis(),
+        "AI pet clustering: complete"
     );
 
     Ok(())

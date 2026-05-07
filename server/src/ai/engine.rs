@@ -101,6 +101,9 @@ impl AiEngine {
         // Initialise object classification model (MobileNetV2, downloads if needed)
         crate::ai::object::init_classification_model(&config.model_dir);
 
+        // Initialise optional dedicated pet-embedding model (Phase 2, no download).
+        crate::ai::animal::init_pet_embedding_model(&config.model_dir);
+
         // Check for model files (SCRFD or legacy UltraFace for detection,
         // ArcFace w600k_r50 for recognition)
         let has_face_det = model_dir.join("det_10g.onnx").exists()

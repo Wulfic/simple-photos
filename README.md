@@ -3,7 +3,7 @@
 A self-hosted photo & video library with end-to-end encryption, multi-server backup & restore, and web + Android access.
 
 ### PROJECT STATUS: BETA
-This project is in early development and not yet recommended for production use. Expect breaking changes, missing features, and rough edges. Feedback and contributions are very welcome! I expect to have a proper release by early summer 2026. Once this reaches a first release, I don't anticipate any new major features for a long time, and will primarily be focused on bug fixes, performance improvements, and polish. That being said I dont have access to apple hardware for testing, so if anyone wants to help with the apple side of things (Live Photo support, HEIC conversion, iOS app development, etc) that would be a huge help!
+This project is in early development and not yet recommended for production use. I expect to have a proper release by early summer 2026. Once this reaches a first release, I don't anticipate any new major features for a long time, and will primarily be focused on bug fixes, performance improvements, and polish. That being said I dont have access to apple hardware for testing, so if anyone wants to help with the apple side of things (Live Photo support, HEIC conversion, iOS app development, etc) that would be a huge help!
 
 ### Authors Note
 Simple Photos was born out of a desire for a secure, private, and user-friendly photo management solution that I could host myself. But found that other solutions lacked one critical thing, backup servers! Forcing users to choose between only having one backup target, or use multiple solutions; So I decided to build something from the ground up that met all my needs — and hopefully yours too!

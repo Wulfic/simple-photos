@@ -15,6 +15,8 @@ export interface AiStatus {
   face_detections: number;
   face_clusters: number;
   object_detections: number;
+  pet_detections: number;
+  pet_clusters: number;
 }
 
 export interface FaceCluster {
@@ -53,6 +55,25 @@ export interface ObjectDetectionRecord {
   bbox_y: number;
   bbox_w: number;
   bbox_h: number;
+  created_at: string;
+}
+
+export interface PetCluster {
+  id: number;
+  label: string | null;
+  species: string;
+  photo_count: number;
+  representative: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PetDetectionRecord {
+  id: number;
+  photo_id: string;
+  cluster_id: number | null;
+  species: string;
+  confidence: number;
   created_at: string;
 }
 
@@ -113,4 +134,25 @@ export const aiApi = {
     request<ObjectDetectionRecord[]>(
       `/ai/objects/${encodeURIComponent(className)}/photos`
     ),
+
+  /** List all pet clusters */
+  listPetClusters: () => request<PetCluster[]>("/ai/pets"),
+
+  /** List photos in a specific pet cluster */
+  listPetClusterPhotos: (clusterId: number) =>
+    request<PetDetectionRecord[]>(`/ai/pets/${clusterId}/photos`),
+
+  /** Rename a pet cluster */
+  renamePetCluster: (clusterId: number, name: string) =>
+    request<void>(`/ai/pets/${clusterId}/name`, {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    }),
+
+  /** Merge multiple pet clusters into one */
+  mergePetClusters: (clusterIds: number[]) =>
+    request<{ merged_into: number; photo_count: number }>("/ai/pets/merge", {
+      method: "POST",
+      body: JSON.stringify({ cluster_ids: clusterIds }),
+    }),
 };
