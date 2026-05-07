@@ -22,6 +22,7 @@ import BackupRecoverySection from "../components/settings/BackupRecoverySection"
 import AiRecognitionSection from "../components/settings/AiRecognitionSection";
 import GeolocationSection from "../components/settings/GeolocationSection";
 // Migration is now fully server-side — no browser-based worker needed
+import CastDialog, { CastIcon } from "../components/CastDialog";
 import { getErrorMessage } from "../utils/formatters";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 
@@ -54,6 +55,13 @@ export default function Settings() {
   const [audioBackupEnabled, setAudioBackupEnabled] = useState(false);
   const [audioBackupLoading, setAudioBackupLoading] = useState(true);
   const [togglingAudioBackup, setTogglingAudioBackup] = useState(false);
+
+  // ── Restart server state ──────────────────────────────────────────────
+  const [restartLoading, setRestartLoading] = useState(false);
+  const [restartConfirm, setRestartConfirm] = useState(false);
+
+  // ── Cast dialog state ─────────────────────────────────────────────────
+  const [castDialogOpen, setCastDialogOpen] = useState(false);
 
   // ── Storage stats state ─────────────────────────────────────────────────
   type StorageStats = {
@@ -119,6 +127,26 @@ export default function Settings() {
       // Setting may not exist yet — default to false
     } finally {
       setAudioBackupLoading(false);
+    }
+  }
+
+  async function handleRestartServer() {
+    if (!restartConfirm) {
+      setRestartConfirm(true);
+      return;
+    }
+    setRestartLoading(true);
+    setError("");
+    setRestartConfirm(false);
+    try {
+      await api.admin.restart();
+      setSuccess("Server restart initiated. The page will reload shortly.");
+      // Give the server a moment, then reload
+      setTimeout(() => window.location.reload(), 4000);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Failed to restart server."));
+    } finally {
+      setRestartLoading(false);
     }
   }
 
@@ -544,6 +572,62 @@ export default function Settings() {
       )}
 
 
+
+      {/* ── Cast (HTTPS only) ────────────────────────────────────────────── */}
+      {window.location.protocol === "https:" && (
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+          <h2 className="text-lg font-semibold mb-3">Cast</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Stream your gallery slideshow to a Chromecast or compatible receiver on your local network.
+          </p>
+          <button
+            onClick={() => setCastDialogOpen(true)}
+            className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm"
+          >
+            <CastIcon className="w-4 h-4" />
+            Cast to device…
+          </button>
+          <CastDialog open={castDialogOpen} onClose={() => setCastDialogOpen(false)} />
+        </section>
+      )}
+
+      {/* ── Restart Server (admin only) ─────────────────────────────────── */}
+      {isAdmin && (
+        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+          <h2 className="text-lg font-semibold mb-3">Server</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            Restart the server process. The page will automatically reload once the server comes back up.
+          </p>
+          {restartConfirm ? (
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-amber-700 dark:text-amber-400 font-medium">
+                Are you sure? The server will briefly be unavailable.
+              </span>
+              <button
+                onClick={handleRestartServer}
+                disabled={restartLoading}
+                className="inline-flex items-center gap-1.5 bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 text-sm disabled:opacity-50"
+              >
+                {restartLoading ? "Restarting…" : "Yes, restart"}
+              </button>
+              <button
+                onClick={() => setRestartConfirm(false)}
+                disabled={restartLoading}
+                className="inline-flex items-center gap-1.5 bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleRestartServer}
+              className="inline-flex items-center gap-1.5 bg-amber-600 text-white px-4 py-2 rounded-md hover:bg-amber-700 text-sm"
+            >
+              Restart Server
+            </button>
+          )}
+        </section>
+      )}
 
       {/* ── About ───────────────────────────────────────────────────────────── */}
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">

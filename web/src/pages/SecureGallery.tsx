@@ -5,8 +5,8 @@
  * library, and unlock them with a password. Photos inside secure galleries
  * are hidden from the main gallery view.
  */
-import { useState, useCallback, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { encrypt, sha256Hex } from "../crypto/crypto";
 import { db, type CachedPhoto } from "../db";
@@ -45,6 +45,7 @@ interface GalleryItem {
  */
 export default function SecureGallery() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const isBackupServer = useIsBackupServer();
 
   // Auth gate state
@@ -81,6 +82,22 @@ export default function SecureGallery() {
   const cachedPhotos = useLiveQuery(() =>
     db.photos.orderBy("takenAt").reverse().toArray()
   );
+
+  // A ref so the URL-sync effect can read the current gallery without being
+  // in its dependency array (avoids infinite-loop risk).
+  const selectedGalleryRef = useRef(selectedGallery);
+  useEffect(() => { selectedGalleryRef.current = selectedGallery; }, [selectedGallery]);
+
+  // When the browser Back button removes the ?album param, return to the
+  // album list without navigating away from the page entirely.
+  useEffect(() => {
+    if (!searchParams.get("album") && selectedGalleryRef.current !== null) {
+      setSelectedGallery(null);
+      setItems([]);
+      setShowAddPhotos(false);
+      setSelectedPhotos(new Set());
+    }
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load galleries after auth
   const loadGalleries = useCallback(async () => {
@@ -431,6 +448,9 @@ export default function SecureGallery() {
                   setItems([]);
                   setShowAddPhotos(false);
                   setSelectedPhotos(new Set());
+                  // Replace the current history entry so the browser Back
+                  // button returns to the album list, not an orphaned URL.
+                  navigate("/secure-gallery", { replace: true });
                 }}
                 className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-1"
               >
@@ -709,7 +729,13 @@ export default function SecureGallery() {
               <div
                 key={g.id}
                 className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex items-center justify-between hover:ring-2 hover:ring-blue-200 dark:hover:ring-blue-800 transition-all cursor-pointer"
-                onClick={() => setSelectedGallery(g)}
+                onClick={() => {
+                  setSelectedGallery(g);
+                  // Push a history entry so the browser Back button returns
+                  // here to the album list rather than jumping to the
+                  // previous page (e.g. the main gallery).
+                  navigate(`/secure-gallery?album=${g.id}`);
+                }}
               >
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
