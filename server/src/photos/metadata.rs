@@ -636,22 +636,14 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
 /// viewer (panorama scrubber or 360° sphere) is offered.
 ///
 /// Rules (only applied when `info.photo_subtype` is `None`):
-/// * `width >= 1024` is required to avoid mislabeling small banners.
-/// * If the aspect ratio is between 1.95 and 2.05 (inclusive) **and**
-///   `width >= 1500`, the image is treated as `equirectangular` (true
-///   2:1 360° panorama).
-/// * Otherwise, an aspect ratio `>= 2.0` ⇒ `panorama` (cylindrical /
-///   wide stitch).
-///
-/// Width/height of `0` (unknown) are treated as a no-op.
-/// Apply aspect-ratio fallback to detect panoramas / 360° photos when XMP
-/// metadata is missing.
-///
-/// Triggers only when `info.photo_subtype` is `None`. Marks images with
-/// aspect ratio ≥ 1.8 (or ≤ 1/1.8 for vertical panoramas) and a long edge
-/// of at least 1024 px as panoramas.  Photos at exactly 2:1 (±2.5%) and
-/// ≥ 1500 px wide are tagged as `equirectangular` (likely 360° photo
-/// sphere with stripped GPano XMP).
+/// * `width.max(height) >= 2048` — avoids mis-tagging banners/screenshots.
+/// * Horizontal: aspect `>= 2.0` ⇒ `panorama` (cylindrical / wide stitch).
+///   Tightened from the previous 1.8 threshold which over-matched cinematic
+///   crops and 16:9 landscape shots.
+/// * Vertical: `h/w >= 2.5` ⇒ `panorama` (rare Samsung "vertical pano").
+/// * Equirectangular (360°): aspect ∈ [1.97, 2.03] **and** `width >= 4000`.
+///   Real 360° photo spheres are 4K+ wide; tightening this avoids false
+///   positives on ordinary 2:1 wallpapers.
 ///
 /// Width/height of `0` (unknown) are treated as a no-op.
 pub(crate) fn apply_aspect_subtype_fallback(
@@ -665,27 +657,35 @@ pub(crate) fn apply_aspect_subtype_fallback(
     if width <= 0 || height <= 0 {
         return;
     }
-    // Long edge must be at least 1024 px so we don't tag tiny thumbnails.
-    if width.max(height) < 1024 {
+    // Long edge must be at least 2048 px so we don't tag wide-but-small
+    // crops, banners, screenshots, or social-media exports.  Real panoramas
+    // are stitched from multiple frames and almost always have a long edge
+    // well above 2K pixels.
+    if width.max(height) < 2048 {
         return;
     }
     let w = width as f64;
     let h = height as f64;
     let aspect = w / h;
-    // Horizontal panorama: w/h ≥ 1.8 (covers 16:9 phone panos, classic 2:1
-    // 360°, ultra-wide stitched panoramas, etc.).
-    // Vertical panorama: h/w ≥ 1.8 (rare but exists — Samsung "vertical pano").
-    let is_horizontal_pano = aspect >= 1.8;
-    let is_vertical_pano = (1.0 / aspect) >= 1.8;
+    // Horizontal panorama: w/h ≥ 2.0.  The previous 1.8 threshold was too
+    // permissive — common ultra-wide phone landscape shots (~1.8:1) and
+    // 18:9 / 19.5:9 cinematic crops were getting tagged as panoramas.
+    // Vertical panorama: h/w ≥ 2.5.  True vertical panos (Samsung "vertical
+    // pano") are extremely tall; raising this floor stops portrait videos
+    // and tall screenshots from being misclassified.
+    let is_horizontal_pano = aspect >= 2.0;
+    let is_vertical_pano = (1.0 / aspect) >= 2.5;
     if !is_horizontal_pano && !is_vertical_pano {
         return;
     }
+    // Equirectangular requires a TIGHT 2:1 ratio AND a high-resolution
+    // long edge.  A real 360° photo sphere is typically ≥ 4K wide
+    // (Pixel: 7680×3840, RICOH Theta: 5376×2688).  A random 2:1 wallpaper
+    // or landscape crop should NOT be flagged as 360°.
     let subtype = if is_horizontal_pano
-        && (1.95..=2.05).contains(&aspect)
-        && width >= 1500
+        && (1.97..=2.03).contains(&aspect)
+        && width >= 4000
     {
-        // 2:1 ratio and large enough — most likely an equirectangular 360°
-        // capture whose GPano XMP was stripped during conversion / sharing.
         "equirectangular"
     } else {
         "panorama"
@@ -1068,9 +1068,19 @@ mod xmp_tests {
 
     #[test]
     fn aspect_fallback_equirectangular_2to1() {
+        // True 360° photo sphere — 2:1 ratio AND ≥ 4000 px wide.
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 5760, 2880);
+        assert_eq!(info.photo_subtype.as_deref(), Some("equirectangular"));
+    }
+
+    #[test]
+    fn aspect_fallback_2to1_below_4k_is_panorama_not_equirect() {
+        // 2:1 but only 3000 px wide — likely a regular wide stitch, not a
+        // 360° sphere.  Treated as panorama.
         let mut info = SubtypeInfo::default();
         apply_aspect_subtype_fallback(&mut info, 3000, 1500);
-        assert_eq!(info.photo_subtype.as_deref(), Some("equirectangular"));
+        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
     }
 
     #[test]
@@ -1081,11 +1091,11 @@ mod xmp_tests {
     }
 
     #[test]
-    fn aspect_fallback_small_2to1_is_panorama_not_equirect() {
-        // Below 1500 px wide but still 2:1 — treated as panorama, not 360°.
+    fn aspect_fallback_small_long_edge_is_skipped() {
+        // Long edge < 2048 — not enough resolution to be a real panorama.
         let mut info = SubtypeInfo::default();
         apply_aspect_subtype_fallback(&mut info, 1200, 600);
-        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
+        assert_eq!(info.photo_subtype, None);
     }
 
     #[test]
@@ -1122,11 +1132,20 @@ mod xmp_tests {
     // ── New regression coverage for the lowered aspect threshold ────────
 
     #[test]
-    fn aspect_fallback_phone_panorama_18to1() {
-        // Modern phone panoramas often land at ~1.8:1 (16:9-ish stitching).
-        // The old 2.0 cutoff missed these and they showed up as plain photos.
+    fn aspect_fallback_18to1_is_normal_photo() {
+        // 1.8:1 is a common cinematic / ultra-wide landscape ratio.  The
+        // old fallback over-matched these as panoramas; the tightened
+        // threshold (>= 2.0) correctly leaves them untagged.
         let mut info = SubtypeInfo::default();
         apply_aspect_subtype_fallback(&mut info, 5760, 3200); // 1.8:1
+        assert_eq!(info.photo_subtype, None);
+    }
+
+    #[test]
+    fn aspect_fallback_real_phone_panorama() {
+        // Real stitched phone panoramas are typically ≥ 3:1.
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 9000, 2000); // 4.5:1
         assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
     }
 
@@ -1141,9 +1160,17 @@ mod xmp_tests {
 
     #[test]
     fn aspect_fallback_vertical_panorama() {
-        // Samsung "vertical pano" — height/width ≥ 1.8.
+        // Samsung "vertical pano" — h/w ≥ 2.5.
         let mut info = SubtypeInfo::default();
-        apply_aspect_subtype_fallback(&mut info, 1080, 4000);
+        apply_aspect_subtype_fallback(&mut info, 1080, 4000); // h/w ≈ 3.7
         assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
+    }
+
+    #[test]
+    fn aspect_fallback_portrait_video_is_not_panorama() {
+        // 9:16 portrait video (h/w ≈ 1.78) must NOT be tagged.
+        let mut info = SubtypeInfo::default();
+        apply_aspect_subtype_fallback(&mut info, 2160, 3840);
+        assert_eq!(info.photo_subtype, None);
     }
 }

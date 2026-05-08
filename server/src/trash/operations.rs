@@ -465,6 +465,13 @@ pub async fn restore_from_trash(
         .await?;
 
         let now = chrono::Utc::now().to_rfc3339();
+        // Preserve the photo's original creation/capture timestamp when
+        // restoring.  If the trashed entry has a `taken_at` (EXIF / metadata
+        // capture date) we use that — it is what the gallery groups by and
+        // what the user expects "the date metadata" to be.  Falling back to
+        // `now` would make every restored photo appear in today's date
+        // section, which is the bug we are fixing here.
+        let original_created_at: &str = photo_core.9.as_deref().unwrap_or(&now);
 
         sqlx::query(
             "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
@@ -486,7 +493,7 @@ pub async fn restore_from_trash(
         .bind(photo_extra.0)    // latitude
         .bind(photo_extra.1)    // longitude
         .bind(&photo_extra.2)   // thumb_path
-        .bind(&now)             // created_at
+        .bind(original_created_at) // created_at — preserve original date
         .bind(photo_extra.3)    // is_favorite
         .bind(&photo_extra.4)   // crop_metadata
         .bind(&photo_extra.5)   // camera_model
