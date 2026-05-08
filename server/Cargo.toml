@@ -8,7 +8,7 @@ axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "limit", "fs", "compression-gzip", "compression-br"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "tls-rustls"] }
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 bcrypt = "0.15"
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 uuid = { version = "1", features = ["v4", "v7"] }
