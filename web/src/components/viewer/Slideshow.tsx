@@ -68,8 +68,29 @@ export default function Slideshow({
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(
+    typeof document !== "undefined" && !!document.fullscreenElement,
+  );
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevUrlRef = useRef<string | null>(null);
+
+  // Toggle the document into / out of fullscreen. Shared between the
+  // keyboard `F` shortcut and the on-bar button so the two stay in sync.
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  }, []);
+
+  // Keep `isFullscreen` reactive to OS-level changes (Esc out of FS, etc.)
+  // so the button icon flips correctly.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
 
   // ── Load current photo ─────────────────────────────────────────────────
 
@@ -218,17 +239,13 @@ export default function Slideshow({
           break;
         case "f":
         case "F":
-          if (document.fullscreenElement) {
-            document.exitFullscreen();
-          } else {
-            document.documentElement.requestFullscreen().catch(() => {});
-          }
+          toggleFullscreen();
           break;
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [onTogglePlay, onPrev, onNext, onToggleShuffle, onExit]);
+  }, [onTogglePlay, onPrev, onNext, onToggleShuffle, onExit, toggleFullscreen]);
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -366,6 +383,27 @@ export default function Slideshow({
                 </button>
               ))}
             </div>
+
+            {/* Divider */}
+            <div className="w-px h-6 bg-white/30" />
+
+            {/* Fullscreen toggle */}
+            <button
+              onClick={toggleFullscreen}
+              className="text-white hover:bg-white/20 w-10 h-10 rounded-full flex items-center justify-center transition-colors"
+              title={isFullscreen ? "Exit Fullscreen (F)" : "Enter Fullscreen (F)"}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+            >
+              {isFullscreen ? (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V5H5m14 0h-4v4m0 6v4h4M5 15v4h4" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4h4m8 0h4v4m0 8v4h-4M8 20H4v-4" />
+                </svg>
+              )}
+            </button>
 
             {/* Divider */}
             <div className="w-px h-6 bg-white/30" />

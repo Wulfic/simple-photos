@@ -472,8 +472,10 @@ export default function Albums() {
             className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
             onClick={() => navigate("/albums/smart-people")}
           >People</h2>
+          {/* One-row layout: cap to lg-grid-cols (6). When more exist, the
+              last slot becomes a "See N more" tile that opens the full page. */}
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
-            {peopleClusters.map((cluster) => (
+            {(peopleClusters.length > 6 ? peopleClusters.slice(0, 5) : peopleClusters).map((cluster) => (
               <div
                 key={cluster.id}
                 onClick={() => navigate(`/albums/smart-people/${cluster.id}`)}
@@ -500,6 +502,21 @@ export default function Albums() {
                 </p>
               </div>
             ))}
+            {peopleClusters.length > 6 && (
+              <div
+                onClick={() => navigate("/albums/smart-people")}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow flex flex-col items-center justify-center text-center"
+              >
+                <div className="w-20 h-20 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mb-2">
+                  <svg className="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+                <p className="font-medium text-sm text-blue-600 dark:text-blue-400">
+                  See {peopleClusters.length - 5} more
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -511,8 +528,9 @@ export default function Albums() {
             className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
             onClick={() => navigate("/albums/smart-pets")}
           >Pets</h2>
+          {/* One-row layout — see People section comment. */}
           <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
-            {petClusters.map((cluster) => (
+            {(petClusters.length > 6 ? petClusters.slice(0, 5) : petClusters).map((cluster) => (
               <div
                 key={cluster.id}
                 onClick={() => navigate(`/albums/smart-pets/${cluster.id}`)}
@@ -539,6 +557,21 @@ export default function Albums() {
                 </p>
               </div>
             ))}
+            {petClusters.length > 6 && (
+              <div
+                onClick={() => navigate("/albums/smart-pets")}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow flex flex-col items-center justify-center text-center"
+              >
+                <div className="w-20 h-20 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mb-2">
+                  <svg className="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+                <p className="font-medium text-sm text-blue-600 dark:text-blue-400">
+                  See {petClusters.length - 5} more
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -550,8 +583,10 @@ export default function Albums() {
             className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
             onClick={() => navigate("/albums/smart-memories")}
           >Memories</h2>
+          {/* One-row layout: cap to md-grid-cols (4). When more exist, the
+              last slot becomes a "See N more" tile that opens the full page. */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {memories.map((memory) => (
+            {(memories.length > 4 ? memories.slice(0, 3) : memories).map((memory) => (
               <div
                 key={memory.id}
                 onClick={() => navigate(`/albums/smart-memories/${memory.id}`)}
@@ -579,6 +614,21 @@ export default function Albums() {
                 </div>
               </div>
             ))}
+            {memories.length > 4 && (
+              <div
+                onClick={() => navigate("/albums/smart-memories")}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden flex flex-col items-center justify-center text-center p-6"
+              >
+                <div className="w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mb-2">
+                  <svg className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+                <p className="font-medium text-sm text-blue-600 dark:text-blue-400">
+                  See {memories.length - 3} more
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -590,8 +640,9 @@ export default function Albums() {
             className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
             onClick={() => navigate("/albums/smart-trips")}
           >Trips</h2>
+          {/* One-row layout — see Memories section comment. */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {trips.map((trip) => (
+            {(trips.length > 4 ? trips.slice(0, 3) : trips).map((trip) => (
               <div
                 key={trip.id}
                 onClick={() => navigate(`/albums/smart-trips/${trip.id}`)}
@@ -621,6 +672,21 @@ export default function Albums() {
                 </div>
               </div>
             ))}
+            {trips.length > 4 && (
+              <div
+                onClick={() => navigate("/albums/smart-trips")}
+                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden flex flex-col items-center justify-center text-center p-6"
+              >
+                <div className="w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mb-2">
+                  <svg className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+                <p className="font-medium text-sm text-blue-600 dark:text-blue-400">
+                  See {trips.length - 3} more
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

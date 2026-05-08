@@ -166,7 +166,19 @@ export const photosApi = {
     data: ArrayBuffer,
     filename: string,
     mimeType: string,
-    overrides?: { takenAt?: string; latitude?: number; longitude?: number },
+    overrides?: {
+      takenAt?: string;
+      latitude?: number;
+      longitude?: number;
+      /**
+       * File's last-modified timestamp in epoch milliseconds (browser
+       * `File.lastModified`). Used as a fallback for `taken_at` when EXIF
+       * and any explicit takenAt sidecar value are absent — mirrors the
+       * autoscan pipeline's behaviour of preferring file mtime over "now",
+       * so uploads land in the correct timeline slot rather than at the top.
+       */
+      fileModifiedAt?: number;
+    },
   ): Promise<{
     photo_id: string;
     filename: string;
@@ -184,6 +196,13 @@ export const photosApi = {
     }
     if (typeof overrides?.longitude === "number") {
       headers["X-Longitude"] = overrides.longitude.toString();
+    }
+    if (
+      typeof overrides?.fileModifiedAt === "number" &&
+      Number.isFinite(overrides.fileModifiedAt) &&
+      overrides.fileModifiedAt > 0
+    ) {
+      headers["X-File-Modified-At"] = Math.floor(overrides.fileModifiedAt).toString();
     }
     return request("/photos/upload", {
       method: "POST",

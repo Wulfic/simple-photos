@@ -274,3 +274,33 @@ class TestPetSmartAlbumE2E:
             f"Expected 0 pet_detections after reprocess, "
             f"got {status_after.get('pet_detections')}"
         )
+
+
+# ── Smart-album single-detection filter (DDT) ───────────────────────────────
+
+# (endpoint_label, lister_attr) — both /api/ai/faces and /api/ai/pets
+# must hide clusters that only have a single photo. This stops random
+# strangers in group photos / lone misclassifications from polluting the
+# People & Pets smart albums.
+SINGLE_DETECTION_FILTER_CASES = [
+    pytest.param("faces", "ai_list_face_clusters", id="people-cards-min-2"),
+    pytest.param("pets", "ai_list_pet_clusters", id="pet-cards-min-2"),
+]
+
+
+class TestSmartAlbumThresholdDDT:
+    """Verify the smart-album endpoints never expose single-detection clusters."""
+
+    @pytest.mark.parametrize("label,lister", SINGLE_DETECTION_FILTER_CASES)
+    def test_clusters_meet_min_photo_count(
+        self,
+        label: str,
+        lister: str,
+        user_client: APIClient,
+    ) -> None:
+        clusters = getattr(user_client, lister)()
+        for c in clusters:
+            assert c.get("photo_count", 0) >= 2, (
+                f"{label}: cluster {c.get('id')} surfaced with photo_count="
+                f"{c.get('photo_count')}; smart-album rule requires ≥ 2."
+            )

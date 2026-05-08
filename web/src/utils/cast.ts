@@ -140,14 +140,31 @@ export async function endCastSession(): Promise<void> {
 }
 
 /**
- * Send a photo URL to the active receiver page over the PresentationConnection.
- * No-op when no session is active or the URL is not HTTP(S).
+ * Send a photo or video URL to the active receiver page over the
+ * PresentationConnection. No-op when no session is active or the URL is not
+ * HTTP(S).
+ *
+ * `mediaKind` selects the receiver's render path: `"video"` triggers a
+ * `<video>` element, anything else falls through to an `<img>`. Without
+ * this, videos cast as `<img>` and the receiver displays a broken-image
+ * icon instead of the clip.
  */
-export function castMedia(url: string, _contentType = "image/jpeg"): void {
+export function castMedia(
+  url: string,
+  contentType = "image/jpeg",
+  mediaKind: "photo" | "video" = "photo",
+): void {
   if (_conn?.state !== "connected") return;
   if (!/^https?:/i.test(url)) return; // blob:/data: not reachable by Chromecast
   try {
-    _conn.send(JSON.stringify({ type: "LOAD_MEDIA", url }));
+    _conn.send(
+      JSON.stringify({
+        type: "LOAD_MEDIA",
+        url,
+        contentType,
+        mediaKind,
+      }),
+    );
   } catch (e) {
     console.warn("[cast] send failed", e);
   }

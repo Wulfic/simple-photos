@@ -312,6 +312,14 @@ pub async fn upload_photo(
     // headers when sidecars supply data the file's EXIF lacks. EXIF still
     // wins when present so that on-device camera metadata isn't overridden
     // by stale sidecar values.
+    //
+    // X-File-Modified-At carries the browser File's `lastModified` (epoch
+    // milliseconds). It's used ONLY as a fallback when both EXIF and any
+    // explicit X-Taken-At sidecar value are missing. This mirrors the
+    // autoscan pipeline (which falls back to on-disk mtime), so a manually
+    // uploaded EXIF-less photo lands in the same timeline slot as it would
+    // if it had been dropped on the import directory and autoscanned —
+    // instead of being stamped "now" and floating to the top.
     let header_taken_at: Option<String> = headers
         .get("X-Taken-At")
         .and_then(|v| v.to_str().ok())
@@ -327,10 +335,18 @@ pub async fn upload_photo(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<f64>().ok())
         .filter(|f| f.is_finite() && (-180.0..=180.0).contains(f) && *f != 0.0);
+    let header_file_modified_at: Option<String> = headers
+        .get("X-File-Modified-At")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|ms| *ms > 0)
+        .and_then(|ms| chrono::DateTime::<Utc>::from_timestamp_millis(ms))
+        .map(|dt| dt.to_rfc3339());
 
     let final_taken_at = exif_taken
         .map(|t| normalize_iso_timestamp(&t))
         .or_else(|| header_taken_at.as_deref().map(normalize_iso_timestamp))
+        .or(header_file_modified_at)
         .unwrap_or_else(|| now.clone());
 
     let resolved_lat = exif_lat.or(header_latitude);

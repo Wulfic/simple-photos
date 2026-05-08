@@ -14,8 +14,13 @@
  */
 import { useEffect, useState } from "react";
 
+interface CastMedia {
+  url: string;
+  kind: "photo" | "video";
+}
+
 export default function CastReceiver() {
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [media, setMedia] = useState<CastMedia | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,9 +42,22 @@ export default function CastReceiver() {
     function attachHandlers(conn: PresentationConnection) {
       conn.onmessage = (evt: MessageEvent) => {
         try {
-          const msg = JSON.parse(evt.data as string) as { type: string; url?: string };
+          const msg = JSON.parse(evt.data as string) as {
+            type: string;
+            url?: string;
+            contentType?: string;
+            mediaKind?: "photo" | "video";
+          };
           if (msg.type === "LOAD_MEDIA" && msg.url) {
-            setPhotoUrl(msg.url);
+            // Prefer the explicit mediaKind. Fall back to sniffing the
+            // contentType so older senders (which only sent { type, url })
+            // continue to work for photos.
+            const kind: "photo" | "video" =
+              msg.mediaKind === "video" ||
+              (msg.contentType?.startsWith("video/") ?? false)
+                ? "video"
+                : "photo";
+            setMedia({ url: msg.url, kind });
           }
         } catch {
           // malformed message — ignore
@@ -47,10 +65,10 @@ export default function CastReceiver() {
       };
       conn.onclose = () => {
         // Session ended — show waiting state
-        setPhotoUrl(null);
+        setMedia(null);
       };
       conn.onterminate = () => {
-        setPhotoUrl(null);
+        setMedia(null);
       };
     }
 
@@ -77,7 +95,7 @@ export default function CastReceiver() {
   }
 
   // ── Waiting for content ─────────────────────────────────────────────────
-  if (!photoUrl) {
+  if (!media) {
     return (
       <div className="min-h-screen bg-black flex flex-col items-center justify-center gap-6">
         <svg viewBox="0 0 24 24" fill="white" className="w-16 h-16 opacity-30" aria-hidden="true">
@@ -88,15 +106,29 @@ export default function CastReceiver() {
     );
   }
 
-  // ── Photo display ───────────────────────────────────────────────────────
+  // ── Media display ───────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-black flex items-center justify-center">
-      <img
-        src={photoUrl}
-        alt=""
-        className="max-w-full max-h-screen object-contain"
-        style={{ width: "100vw", height: "100vh" }}
-      />
+      {media.kind === "video" ? (
+        <video
+          // `key` forces a fresh element when the URL changes, otherwise the
+          // previous video keeps playing.
+          key={media.url}
+          src={media.url}
+          autoPlay
+          controls={false}
+          playsInline
+          className="max-w-full max-h-screen"
+          style={{ width: "100vw", height: "100vh", objectFit: "contain" }}
+        />
+      ) : (
+        <img
+          src={media.url}
+          alt=""
+          className="max-w-full max-h-screen object-contain"
+          style={{ width: "100vw", height: "100vh" }}
+        />
+      )}
     </div>
   );
 }

@@ -34,6 +34,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
+import com.simplephotos.data.local.entities.SyncStatus
 import java.io.File
 import com.simplephotos.R
 import androidx.compose.ui.res.painterResource
@@ -445,7 +446,8 @@ private fun AlbumPhotoTile(
             }
         }
 
-        // Media type badge
+        // Media type badge — moved to BottomStart so the cloud-backup badge
+        // can own BottomEnd without overlapping.
         if (photo.mediaType == "video") {
             val durationStr = photo.durationSecs?.let { secs ->
                 val m = (secs / 60).toInt()
@@ -453,7 +455,7 @@ private fun AlbumPhotoTile(
                 "%d:%02d".format(m, s)
             } ?: "\u25B6"
             Surface(
-                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                modifier = Modifier.align(Alignment.BottomStart).padding(4.dp),
                 color = Color.Black.copy(alpha = 0.6f),
                 shape = MaterialTheme.shapes.extraSmall
             ) {
@@ -461,12 +463,24 @@ private fun AlbumPhotoTile(
             }
         } else if (photo.mediaType == "gif") {
             Surface(
-                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                modifier = Modifier.align(Alignment.BottomStart).padding(4.dp),
                 color = Color.Black.copy(alpha = 0.6f),
                 shape = MaterialTheme.shapes.extraSmall
             ) {
                 Text("GIF", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
             }
+        }
+
+        // Cloud-backup badge — backed up to server AND still on device.
+        if (photo.syncStatus == SyncStatus.SYNCED && photo.localPath != null) {
+            AsyncImage(
+                model = R.drawable.ic_cloud,
+                contentDescription = "Backed up to cloud",
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .size(18.dp)
+            )
         }
 
         // Selection circle (top-right) — only visible in selection mode

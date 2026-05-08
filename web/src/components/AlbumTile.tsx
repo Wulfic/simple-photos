@@ -101,20 +101,35 @@ export default function AlbumTile({ photo, isSelectionMode, isSelected, onClick,
         <ThumbnailImg photo={photo} />
       </div>
 
-      {/* Selection circle */}
-      {isSelectionMode && (
-        <div className={`absolute top-1.5 right-1.5 w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+      {/* Selection circle — always visible (top-right). Tapping toggles selection
+          and enters selection mode if not already active. */}
+      <button
+        type="button"
+        aria-label={isSelected ? "Deselect" : "Select"}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (isSelectionMode) {
+            onClick();
+          } else {
+            onLongPress();
+          }
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        className={`absolute top-1.5 right-1.5 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all z-10 ${
           isSelected
-            ? "bg-green-500 border-green-500"
-            : "bg-white/80 border-gray-400/50"
-        }`}>
-          {isSelected && (
-            <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-            </svg>
-          )}
-        </div>
-      )}
+            ? "bg-green-500 border-green-500 shadow"
+            : isSelectionMode
+              ? "bg-white/80 border-gray-400 hover:bg-white"
+              : "bg-white/40 border-white/70 opacity-70 hover:opacity-100 hover:bg-white/80 shadow-sm"
+        }`}
+      >
+        {isSelected && (
+          <svg className="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+          </svg>
+        )}
+      </button>
 
       {/* Media type badge */}
       {photo.mediaType === "video" && (
@@ -131,7 +146,8 @@ export default function AlbumTile({ photo, isSelectionMode, isSelected, onClick,
         </div>
       )}
 
-      {/* Remove button on hover (only when NOT in selection mode) */}
+      {/* Remove button on hover (only when NOT in selection mode) — moved to
+          top-left so it doesn't fight the selection circle. */}
       {!isSelectionMode && (
         <button
           onClick={(e) => {
@@ -139,7 +155,7 @@ export default function AlbumTile({ photo, isSelectionMode, isSelected, onClick,
             onRemove();
           }}
           onPointerDown={(e) => e.stopPropagation()}
-          className="absolute top-1 right-1 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+          className="absolute top-1 left-1 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs"
           title="Remove from album"
         >
           ×

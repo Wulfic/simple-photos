@@ -89,7 +89,13 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     // reject audio uploads; keep this call so future client-side filtering
     // (e.g. a UI hint when audio is disabled) has the value cached.
     void mediaTypeFromMime(mimeType);
-    await api.photos.upload(arrayBuf, file.name, mimeType);
+    // Forward the File's lastModified so the server can use it as the
+    // taken_at fallback when EXIF is missing — mirrors the autoscan
+    // pipeline (which uses on-disk mtime) so manually uploaded files land
+    // in the correct timeline slot instead of always "now".
+    await api.photos.upload(arrayBuf, file.name, mimeType, {
+      fileModifiedAt: file.lastModified,
+    });
   }
 
   /** Recursively collect all File objects from a DataTransferItem entry. */

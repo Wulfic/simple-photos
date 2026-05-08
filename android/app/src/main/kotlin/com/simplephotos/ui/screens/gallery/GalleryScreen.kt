@@ -609,25 +609,41 @@ private fun MediaTile(
             }
         }
 
-        // Media type badges
+        // Media type badges (moved to BottomStart so the cloud-backup badge can
+        // own BottomEnd without overlapping).
         if (photo.mediaType == "video") {
-            Surface(modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp), shape = MaterialTheme.shapes.extraSmall, color = Color.Black.copy(alpha = 0.6f)) {
+            Surface(modifier = Modifier.align(Alignment.BottomStart).padding(4.dp), shape = MaterialTheme.shapes.extraSmall, color = Color.Black.copy(alpha = 0.6f)) {
                 Text(
                     text = if (photo.durationSecs != null) { val m = (photo.durationSecs / 60).toInt(); val s = (photo.durationSecs % 60).toInt(); "\u25B6 $m:${s.toString().padStart(2, '0')}" } else "\u25B6",
                     color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                 )
             }
         } else if (photo.mediaType == "gif") {
-            Surface(modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp), shape = MaterialTheme.shapes.extraSmall, color = Color.Black.copy(alpha = 0.6f)) {
+            Surface(modifier = Modifier.align(Alignment.BottomStart).padding(4.dp), shape = MaterialTheme.shapes.extraSmall, color = Color.Black.copy(alpha = 0.6f)) {
                 Text("GIF", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
             }
         } else if (photo.mediaType == "audio") {
-            Surface(modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp), shape = MaterialTheme.shapes.extraSmall, color = Color.Black.copy(alpha = 0.6f)) {
+            Surface(modifier = Modifier.align(Alignment.BottomStart).padding(4.dp), shape = MaterialTheme.shapes.extraSmall, color = Color.Black.copy(alpha = 0.6f)) {
                 Text(
                     text = if (photo.durationSecs != null) { val m = (photo.durationSecs / 60).toInt(); val s = (photo.durationSecs % 60).toInt(); "\u266B $m:${s.toString().padStart(2, '0')}" } else "\u266B",
                     color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                 )
             }
+        }
+
+        // Cloud-backup badge — shown at bottom-right when the photo has been
+        // backed up to the server AND still exists on the device. Gives the
+        // user an at-a-glance signal that the original is safely synced and
+        // could be freed up locally if needed.
+        if (photo.syncStatus == SyncStatus.SYNCED && photo.localPath != null) {
+            AsyncImage(
+                model = R.drawable.ic_cloud,
+                contentDescription = "Backed up to cloud",
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .size(18.dp)
+            )
         }
 
         // Sync status indicator (only when not in selection mode)

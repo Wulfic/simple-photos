@@ -280,6 +280,9 @@ pub async fn list_face_clusters(
     // `representative` is not yet populated by the processor; fall back to
     // the highest-confidence face detection's photo so the People grid in
     // the UI shows a real thumbnail instead of a generic placeholder.
+    // Smart-album rule: require at least 2 distinct photos before surfacing a
+    // person card. This prevents random faces in group photos / crowds from
+    // creating noisy single-photo "People" entries.
     let clusters: Vec<FaceClusterSummary> = sqlx::query_as(
         "SELECT fc.id, fc.label, fc.photo_count, \
                 COALESCE(\
@@ -290,7 +293,7 @@ pub async fn list_face_clusters(
                 ) AS representative, \
                 fc.created_at, fc.updated_at \
          FROM face_clusters fc \
-         WHERE fc.user_id = ?1 \
+         WHERE fc.user_id = ?1 AND fc.photo_count >= 2 \
          ORDER BY fc.photo_count DESC"
     )
     .bind(&auth.user_id)
@@ -579,6 +582,8 @@ pub async fn list_pet_clusters(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<PetClusterSummary>>, AppError> {
+    // Smart-album rule: require at least 2 distinct photos before surfacing a
+    // pet card. Same rationale as faces — a single lone detection is noise.
     let clusters: Vec<PetClusterSummary> = sqlx::query_as(
         "SELECT pc.id, pc.label, pc.species, pc.photo_count, \
                 COALESCE(\
@@ -589,7 +594,7 @@ pub async fn list_pet_clusters(
                 ) AS representative, \
                 pc.created_at, pc.updated_at \
          FROM pet_clusters pc \
-         WHERE pc.user_id = ?1 \
+         WHERE pc.user_id = ?1 AND pc.photo_count >= 2 \
          ORDER BY pc.photo_count DESC, pc.species ASC"
     )
     .bind(&auth.user_id)

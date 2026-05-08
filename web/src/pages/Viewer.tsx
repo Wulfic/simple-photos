@@ -153,9 +153,26 @@ export default function Viewer() {
     if (!id) return;
     const { state } = getCastState();
     if (state !== "connected") return;
-    const { accessToken } = useAuthStore.getState();
-    const castUrl = `${window.location.origin}/api/photos/${id}/file${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ""}`;
-    castMedia(castUrl, mimeType || "image/jpeg");
+    let cancelled = false;
+    (async () => {
+      // The route param `id` is the IndexedDB blobId for encrypted galleries
+      // (random UUID, not the server's photo id). The server's serve route
+      // `/api/photos/:id/file` is keyed by the server photo id, so casting
+      // the blobId straight through 404s on the receiver. Resolve to the
+      // real serverPhotoId via the local cache; fall back to the route id
+      // for non-encrypted galleries where the two are the same.
+      const cached = await db.photos.get(id);
+      if (cancelled) return;
+      const serverId = cached?.serverPhotoId ?? id;
+      const { accessToken } = useAuthStore.getState();
+      const castUrl = `${window.location.origin}/api/photos/${serverId}/file${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ""}`;
+      const kind: "photo" | "video" =
+        cached?.mediaType === "video" || (mimeType ?? "").startsWith("video/")
+          ? "video"
+          : "photo";
+      castMedia(castUrl, mimeType || "image/jpeg", kind);
+    })();
+    return () => { cancelled = true; };
   }, [id, mediaUrl, mimeType]);
 
   // ── Actions (from hook) ────────────────────────────────────────────────

@@ -272,10 +272,19 @@ export default function Import() {
     // EXIF/GPS extraction, audio_backup_enabled enforcement, AI/geo backfill,
     // and ingest encryption (via the stored encryption key). This keeps the
     // /import page result identical to the setup-time autoscan path.
+    //
+    // Forward the local File's lastModified (when this is a browser-picked
+    // file, not a server-scan path) so the server can use it as the
+    // taken_at fallback when EXIF is absent. Without this, EXIF-less files
+    // get stamped with `now` and end up at the top of the timeline instead
+    // of where their mtime would place them — diverging from the autoscan
+    // pipeline.
+    const fileModifiedAt = item.file?.lastModified;
     await api.photos.upload(rawData, filename, mimeType, {
       takenAt,
       latitude,
       longitude,
+      fileModifiedAt,
     });
   }
 
