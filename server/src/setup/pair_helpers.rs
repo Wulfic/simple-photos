@@ -428,3 +428,69 @@ pub(crate) fn trigger_initial_sync(base_url: &str, remote_token: &str, server_id
         );
     }
 }
+
+/// Validate an operator-supplied backup public URL.
+///
+/// Rejects values that obviously cannot be reached by a remote primary:
+/// empty hosts, loopback addresses, the unspecified address, and link-local
+/// hosts. We deliberately do **not** reject RFC1918 private IPs — pairing
+/// a backup over a VPN/Tailscale tunnel where the primary sees the backup
+/// at a private address is a legitimate use case.
+pub(crate) fn validate_backup_public_url(url: &str) -> Result<(), AppError> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(
+            "Backup public URL is empty.".into(),
+        ));
+    }
+
+    // Strip scheme to inspect the host:port portion.
+    let host_port = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed)
+        .split('/')
+        .next()
+        .unwrap_or("");
+
+    if host_port.is_empty() {
+        return Err(AppError::BadRequest(
+            "Backup public URL has no host.".into(),
+        ));
+    }
+
+    // Extract just the host (drop :port). For IPv6 the address may appear
+    // in [bracket] notation; strip the brackets for the loopback check.
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("").to_string()
+    } else {
+        host_port.split(':').next().unwrap_or("").to_string()
+    };
+
+    let host_lc = host.to_ascii_lowercase();
+    let is_loopback = host_lc == "localhost"
+        || host_lc.starts_with("127.")
+        || host_lc == "::1"
+        || host_lc == "0.0.0.0"
+        || host_lc == "::";
+    if is_loopback {
+        return Err(AppError::BadRequest(format!(
+            "Backup public URL '{}' is a loopback/unspecified address — \
+             the primary server will not be able to reach it. \
+             Enter the backup's externally-reachable URL (a public IP, \
+             DNS hostname, or VPN address).",
+            host
+        )));
+    }
+
+    // 169.254.0.0/16 link-local is unreachable from a remote primary.
+    if host_lc.starts_with("169.254.") {
+        return Err(AppError::BadRequest(format!(
+            "Backup public URL '{}' is a link-local address — \
+             the primary server will not be able to reach it.",
+            host
+        )));
+    }
+
+    Ok(())
+}

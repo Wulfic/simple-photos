@@ -72,6 +72,20 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 
 ## Getting Started
 
+### Pre-built installers (recommended)
+
+Download the latest installer from the [Releases page](https://github.com/Wulfic/simple-photos/releases):
+
+| Platform | Artefact | Notes |
+|----------|----------|-------|
+| Debian / Ubuntu (amd64) | `simple-photos_<version>_amd64.deb` | `sudo apt install ./simple-photos_*.deb`, then run `sudo systemctl start simple-photos` and open `http://<host>:3000`. The first-run wizard chooses the photo storage location. |
+| Windows 10/11 (x64)     | `simple-photos-<version>-windows-x64-setup.exe` | The installer prompts for an install location, registers a Windows Service, and opens TCP 3000 in the firewall. |
+| Android 8.0+            | `simple-photos-<version>.apk` | Sideload via `adb install` or transfer to the device. Production builds require enabling the keystore secrets in CI (see [packaging/README.md](packaging/README.md)); otherwise the APK is debug-signed. |
+
+Verify with `sha256sum -c SHA256SUMS.txt`. AI models + GeoNames data (~225 MB) are fetched post-install — see [packaging/README.md](packaging/README.md).
+
+### Build from source
+
 The install scripts handle everything — building the server, web frontend, and (optionally) the Android APK. They support both Docker and bare-metal (native) installations.
 
 ### CLI Flags

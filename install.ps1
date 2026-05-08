@@ -15,11 +15,12 @@
 .PARAMETER Name
     Instance name (for Docker containers). Default: auto-generated
 
-.PARAMETER StoragePath
-    Path to photo storage directory
-
 .PARAMETER Uninstall
     Remove an existing installation: "native" or "docker"
+
+.NOTES
+    The photo storage location is configured by the first-run setup wizard
+    (web UI). The installer scaffolds a default directory only.
 
 .PARAMETER NoBuildAndroid
     Skip Android APK build prompt
@@ -47,7 +48,6 @@ param(
     [int]$Port = 0,
 
     [string]$Name = "",
-    [string]$StoragePath = "",
     [string]$Uninstall = "",
     [string]$LetsEncryptDomain = "",
     [string]$LetsEncryptEmail = "",
@@ -287,7 +287,7 @@ if ($Uninstall) {
             }
             Write-Host ""
             Write-Ok "Docker uninstall complete."
-            Write-Warn "Photo storage data was NOT removed from any custom -StoragePath paths."
+            Write-Warn "Photo storage data outside the default scaffold path was NOT removed; remove any custom storage roots configured in the setup wizard manually."
             Write-Info "Remove it manually if no longer needed."
             exit 0
         }
@@ -516,17 +516,16 @@ if (-not $Name) {
 }
 Write-Ok "Instance: $Name"
 
-if (-not $StoragePath) {
-    if ($Mode -eq "docker") {
-        $StoragePath = Join-Path $ScriptDir "docker-instances\$Name\data\storage"
-    } else {
-        $StoragePath = Join-Path $ScriptDir "server\data\storage"
-    }
+# Default scaffold path; storage root is finalised in the first-run setup wizard.
+if ($Mode -eq "docker") {
+    $StoragePath = Join-Path $ScriptDir "docker-instances\$Name\data\storage"
+} else {
+    $StoragePath = Join-Path $ScriptDir "server\data\storage"
 }
 if (-not (Test-Path $StoragePath)) {
     New-Item -ItemType Directory -Path $StoragePath -Force | Out-Null
 }
-Write-Ok "Storage: $StoragePath"
+Write-Ok "Storage (default scaffold): $StoragePath"
 
 $JwtSecret = New-SecureKey
 

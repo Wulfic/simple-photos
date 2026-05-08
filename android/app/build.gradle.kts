@@ -19,10 +19,40 @@ android {
         testInstrumentationRunner = "com.simplephotos.HiltTestRunner"
     }
 
+    // ── Release signing (CI-driven) ──────────────────────────────────────
+    // Populated only when ALL four env vars are set (the GitHub Actions
+    // release workflow decodes a base64 keystore secret to a file before
+    // invoking gradle). Local developers don't need to set anything — the
+    // debug keystore is used automatically (see buildTypes.release below).
+    val ksFile      = System.getenv("ANDROID_KEYSTORE_FILE")
+    val ksPassword  = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    val keyAlias    = System.getenv("ANDROID_KEY_ALIAS")
+    val keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+    val hasReleaseSigning = !ksFile.isNullOrBlank() && !ksPassword.isNullOrBlank() &&
+        !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank() &&
+        file(ksFile).exists()
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(ksFile!!)
+                storePassword = ksPassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Use release keystore in CI; fall back to debug keystore so
+            // local `assembleRelease` builds still produce an installable APK.
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

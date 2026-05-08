@@ -1,0 +1,101 @@
+name: CI
+
+# Quick build/test loop on every push and PR.  The Release workflow handles
+# producing artefacts; this one just keeps `main` green.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  RUST_TOOLCHAIN: "1.83"
+  NODE_VERSION: "20"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  rust:
+    name: Rust (build + clippy + test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server -> target
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev cmake make g++ libclang-dev perl
+
+      - name: Format check
+        working-directory: server
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (CPU build, all warnings = errors)
+        working-directory: server
+        run: cargo clippy --no-default-features --all-targets --locked -- -D warnings
+
+      - name: Build
+        working-directory: server
+        run: cargo build --no-default-features --locked
+
+      - name: Unit tests
+        working-directory: server
+        run: cargo test --no-default-features --locked
+
+  web:
+    name: Web (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - working-directory: web
+        run: npm ci
+
+      - working-directory: web
+        run: npm run build
+
+  python-tests:
+    name: Python E2E (smoke)
+    runs-on: ubuntu-22.04
+    needs: [rust, web]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: 'tests/requirements.txt'
+
+      - name: Install pinned test deps
+        run: pip install --require-hashes -r tests/requirements.txt || pip install -r tests/requirements.txt
+
+      - name: Verify pin policy (no >= or ~=)
+        shell: bash
+        run: |
+          if grep -E '^[A-Za-z][^#]*[~>]=' tests/requirements.txt; then
+            echo "::error::tests/requirements.txt must use exact `==` pins."
+            exit 1
+          fi

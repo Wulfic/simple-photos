@@ -1,0 +1,187 @@
+; ============================================================================
+;  Simple Photos — Windows Installer (Inno Setup 6.x)
+; ============================================================================
+;
+;  Builds a self-contained .exe installer that:
+;    1. Asks the user for an install location (default: %ProgramFiles%\SimplePhotos).
+;    2. Copies the pre-built server.exe + web\ + migrations\ into that location.
+;    3. Generates %ProgramData%\SimplePhotos\config.toml with a random JWT secret.
+;    4. Registers a Windows Service (auto-start, recovery, runs as LocalSystem).
+;    5. Adds a Start Menu shortcut and a firewall rule for port 3000 (Private+Domain).
+;    6. Schedules the post-install asset fetcher (ONNX + GeoNames) as a one-shot task.
+;
+;  Build with:  iscc packaging\windows\simple-photos.iss
+;  CI invokes this from .github\workflows\release.yml (windows-latest runner).
+;
+;  Pre-requisites for the build (CI installs these automatically):
+;    - The compiled binary at:  ..\..\server\target\release\simple-photos-server.exe
+;    - The web build output:    ..\..\web\dist\
+;    - The migrations folder:   ..\..\server\migrations\
+;    - NSSM (https://nssm.cc) bundled at:  vendor\nssm.exe   (32 KB)
+; ============================================================================
+
+#define AppName        "Simple Photos"
+#define AppPublisher   "Wulfic"
+#define AppURL         "https://github.com/Wulfic/simple-photos"
+#define AppExeName     "simple-photos-server.exe"
+#define AppId          "{{B7A3F8C2-9D1E-4F2B-8E5A-1C2D3E4F5A6B}"
+; SP_VERSION is supplied by CI via /DSP_VERSION=x.y.z. Falls back to 0.6.9.
+#ifndef SP_VERSION
+  #define SP_VERSION "0.6.9"
+#endif
+
+[Setup]
+AppId={#AppId}
+AppName={#AppName}
+AppVersion={#SP_VERSION}
+AppPublisher={#AppPublisher}
+AppPublisherURL={#AppURL}
+AppSupportURL={#AppURL}/issues
+AppUpdatesURL={#AppURL}/releases
+DefaultDirName={autopf}\SimplePhotos
+DefaultGroupName=Simple Photos
+DisableProgramGroupPage=no
+DisableDirPage=no
+LicenseFile=..\..\LICENSE
+OutputDir=..\..\dist
+OutputBaseFilename=simple-photos-{#SP_VERSION}-windows-x64-setup
+Compression=lzma2/ultra
+SolidCompression=yes
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequired=admin
+PrivilegesRequiredOverridesAllowed=dialog
+WizardStyle=modern
+UninstallDisplayIcon={app}\{#AppExeName}
+SetupLogging=yes
+CloseApplications=yes
+RestartApplications=no
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "service";    Description: "Install Simple Photos as a Windows Service (auto-start)"; GroupDescription: "Service:"; Flags: unchecked
+Name: "firewall";   Description: "Add Windows Firewall rule for TCP port 3000 (Private + Domain networks)"; GroupDescription: "Network:"
+Name: "fetchmodels";Description: "Download AI models + GeoNames dataset after install (~225 MB)"; GroupDescription: "Optional:"
+
+[Files]
+; ── Server binary ──────────────────────────────────────────────────────────
+Source: "..\..\server\target\release\simple-photos-server.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+; ── Web frontend ───────────────────────────────────────────────────────────
+Source: "..\..\web\dist\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+; ── DB migrations ──────────────────────────────────────────────────────────
+Source: "..\..\server\migrations\*"; DestDir: "{app}\migrations"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+; ── NSSM (service wrapper) ─────────────────────────────────────────────────
+; A tiny, BSD-licensed service shim — Simple Photos is a console app and
+; Windows Services need a hosting wrapper. NSSM also gives us automatic
+; restart on crash and clean log rotation.
+Source: "vendor\nssm.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
+
+; ── Post-install asset fetcher ─────────────────────────────────────────────
+Source: "fetch-assets.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
+
+; ── Documentation ──────────────────────────────────────────────────────────
+Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+
+[Dirs]
+; Data root lives in ProgramData (per-machine, survives upgrades).
+Name: "{commonappdata}\SimplePhotos";          Permissions: users-modify
+Name: "{commonappdata}\SimplePhotos\db";       Permissions: users-modify
+Name: "{commonappdata}\SimplePhotos\storage";  Permissions: users-modify
+Name: "{commonappdata}\SimplePhotos\models";   Permissions: users-modify
+Name: "{commonappdata}\SimplePhotos\logs";     Permissions: users-modify
+
+[Icons]
+Name: "{group}\Open Simple Photos in browser"; Filename: "http://localhost:3000"
+Name: "{group}\Start service";                 Filename: "{sys}\sc.exe"; Parameters: "start SimplePhotos"; Tasks: service
+Name: "{group}\Stop service";                  Filename: "{sys}\sc.exe"; Parameters: "stop SimplePhotos"; Tasks: service
+Name: "{group}\Run server (foreground)";       Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
+Name: "{group}\Open data folder";              Filename: "{commonappdata}\SimplePhotos"
+Name: "{group}\Uninstall Simple Photos";       Filename: "{uninstallexe}"
+
+[Run]
+; ── Generate config.toml on first install ─────────────────────────────────
+Filename: "powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-assets.ps1"" -GenerateConfig -InstallDir ""{app}"" -DataDir ""{commonappdata}\SimplePhotos"""; \
+    StatusMsg: "Generating configuration..."; \
+    Flags: runhidden
+
+; ── Install + start service (optional task) ───────────────────────────────
+Filename: "{app}\bin\nssm.exe"; \
+    Parameters: "install SimplePhotos ""{app}\{#AppExeName}"""; \
+    Flags: runhidden; \
+    Tasks: service
+Filename: "{app}\bin\nssm.exe"; \
+    Parameters: "set SimplePhotos AppDirectory ""{app}"""; \
+    Flags: runhidden; \
+    Tasks: service
+Filename: "{app}\bin\nssm.exe"; \
+    Parameters: "set SimplePhotos AppEnvironmentExtra SIMPLE_PHOTOS_CONFIG=""{commonappdata}\SimplePhotos\config.toml"" RUST_LOG=info"; \
+    Flags: runhidden; \
+    Tasks: service
+Filename: "{app}\bin\nssm.exe"; \
+    Parameters: "set SimplePhotos AppStdout ""{commonappdata}\SimplePhotos\logs\server.log"""; \
+    Flags: runhidden; \
+    Tasks: service
+Filename: "{app}\bin\nssm.exe"; \
+    Parameters: "set SimplePhotos AppStderr ""{commonappdata}\SimplePhotos\logs\server.log"""; \
+    Flags: runhidden; \
+    Tasks: service
+Filename: "{app}\bin\nssm.exe"; \
+    Parameters: "set SimplePhotos Start SERVICE_AUTO_START"; \
+    Flags: runhidden; \
+    Tasks: service
+Filename: "{sys}\sc.exe"; \
+    Parameters: "start SimplePhotos"; \
+    StatusMsg: "Starting Simple Photos service..."; \
+    Flags: runhidden; \
+    Tasks: service
+
+; ── Firewall rule ─────────────────────────────────────────────────────────
+Filename: "powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""New-NetFirewallRule -DisplayName 'SimplePhotos-Port-3000' -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow -Profile Private,Domain -ErrorAction SilentlyContinue | Out-Null"""; \
+    StatusMsg: "Adding firewall rule..."; \
+    Flags: runhidden; \
+    Tasks: firewall
+
+; ── Optional: download AI models + GeoNames in the background ────────────
+Filename: "powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-assets.ps1"" -DataDir ""{commonappdata}\SimplePhotos"""; \
+    StatusMsg: "Downloading AI models + GeoNames (~225 MB) ..."; \
+    Tasks: fetchmodels
+
+; ── Open the browser when finished ───────────────────────────────────────
+Filename: "http://localhost:3000"; \
+    Description: "Open Simple Photos in your browser"; \
+    Flags: postinstall shellexec skipifsilent
+
+[UninstallRun]
+Filename: "{sys}\sc.exe"; Parameters: "stop SimplePhotos"; Flags: runhidden; RunOnceId: "StopSvc"
+Filename: "{app}\bin\nssm.exe"; Parameters: "remove SimplePhotos confirm"; Flags: runhidden; RunOnceId: "RemoveSvc"
+Filename: "powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-NetFirewallRule -DisplayName 'SimplePhotos-Port-3000' -ErrorAction SilentlyContinue"""; \
+    Flags: runhidden; RunOnceId: "RemoveFirewall"
+
+[UninstallDelete]
+; Application files only — preserve photo data in ProgramData.
+; Operators must `rmdir /s /q "%ProgramData%\SimplePhotos"` themselves.
+Type: filesandordirs; Name: "{app}"
+
+[Code]
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  // Reject Windows < 10 — the Rust binary uses APIs (e.g. WriteFileGather) that
+  // are not present on 7/8.1. Fail fast instead of producing a confusing
+  // "entry point not found" dialog at first run.
+  if not (GetWindowsVersion >= $0A000000) then
+  begin
+    MsgBox('Simple Photos requires Windows 10 or later.', mbCriticalError, MB_OK);
+    Result := False;
+  end;
+end;

@@ -1,0 +1,123 @@
+# Simple Photos — Release Packaging
+
+This directory holds the assets and scripts used by `.github/workflows/release.yml`
+to produce the official Linux `.deb` and Windows `.exe` installers attached to
+each GitHub release.
+
+```
+packaging/
+├── debian/                       # cargo-deb inputs
+│   ├── config.toml               # bundled config (placeholder JWT secret)
+│   ├── postinst                  # creates simple-photos user, randomises secret
+│   ├── prerm
+│   ├── postrm                    # purges config but PRESERVES /var/lib/simple-photos
+│   ├── simple-photos.service     # systemd unit (hardened sandbox)
+│   ├── fetch-assets.sh           # post-install ONNX + GeoNames fetcher
+│   └── README.Debian
+└── windows/
+    ├── simple-photos.iss         # Inno Setup 6 installer script
+    ├── fetch-assets.ps1          # config generator + asset fetcher
+    └── vendor/                   # NSSM is downloaded by CI, not committed
+```
+
+## Building locally
+
+### Linux `.deb`
+
+```bash
+# 1. Build the web frontend (output goes to web/dist/)
+cd web && npm ci && npm run build && cd ..
+
+# 2. Build the server in release mode (CPU only — keeps the .deb portable)
+cd server && cargo build --release --no-default-features --locked
+
+# 3. Build the .deb via cargo-deb metadata in server/Cargo.toml
+cargo install cargo-deb --version ^2 --locked
+cargo deb --no-build --no-strip
+# → server/target/debian/simple-photos_<version>_amd64.deb
+
+# 4. Install + smoke test
+sudo apt install ./server/target/debian/simple-photos_*_amd64.deb
+sudo systemctl status simple-photos
+```
+
+The `.deb` does **not** bundle the ~225 MB of ONNX models or the GeoNames
+dataset.  Run this once after install:
+
+```bash
+sudo -u simple-photos /usr/share/simple-photos/fetch-assets.sh
+sudo systemctl restart simple-photos
+```
+
+### Windows `.exe`
+
+```powershell
+# 1. Web build
+cd web; npm ci; npm run build; cd ..
+
+# 2. Server release build
+cd server; cargo build --release --no-default-features --locked; cd ..
+
+# 3. Drop NSSM (https://nssm.cc/release/nssm-2.24.zip) into:
+#       packaging\windows\vendor\nssm.exe
+
+# 4. Build with Inno Setup 6
+iscc /DSP_VERSION=0.6.9 packaging\windows\simple-photos.iss
+# → dist\simple-photos-0.6.9-windows-x64-setup.exe
+```
+
+The installer asks for an install location, registers the server as a
+Windows Service via NSSM, opens TCP 3000 in the firewall, and (optionally)
+downloads the AI models + GeoNames in the background.
+
+## CI/CD
+
+Pushing a tag matching `v*.*.*` triggers `.github/workflows/release.yml`:
+
+1. Resolve version from the tag (e.g. `v0.7.0` → `0.7.0`).
+2. Build `web/dist` once and share it across both server-side jobs.
+3. Build the `.deb` on `ubuntu-22.04` (oldest glibc we support).
+4. Build the `.exe` on `windows-latest`.
+5. Build the Android `.apk` on `ubuntu-latest` (JDK 17 + Android SDK 34).
+6. Compute `SHA256SUMS.txt` and create a **draft** GitHub Release with all
+   artefacts attached.
+
+A maintainer must manually publish the draft release after smoke-testing.
+Manual `workflow_dispatch` runs build artefacts but do not create a release.
+
+### Android signing
+
+The Android job uses a release keystore when these repository secrets are set:
+
+| Secret | Description |
+|--------|-------------|
+| `ANDROID_KEYSTORE_BASE64`   | `base64 release.jks` (one line, no wrap) |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
+| `ANDROID_KEY_ALIAS`         | key alias inside the keystore |
+| `ANDROID_KEY_PASSWORD`      | key password |
+
+Generate a keystore once with:
+
+```bash
+keytool -genkeypair -v -keystore release.jks -keyalg RSA -keysize 4096 \
+        -validity 10000 -alias simple-photos
+base64 -w0 release.jks   # paste the output into ANDROID_KEYSTORE_BASE64
+```
+
+If the secrets are absent the workflow still produces an installable APK, but
+it is signed with the AGP debug keystore (handy for previews — unsuitable for
+playground/Play distribution because subsequent releases must keep the same
+signing key).
+
+## Pinned versions
+
+Reproducibility is enforced by lockfiles:
+
+| Component | Lockfile                  | Notes                                              |
+|-----------|---------------------------|----------------------------------------------------|
+| Rust      | `server/Cargo.lock`       | committed; CI uses `--locked`                      |
+| Web       | `web/package-lock.json`   | committed; CI uses `npm ci`                        |
+| Python    | `tests/requirements.txt`  | exact `==` pins; CI rejects `>=`/`~=` in `ci.yml`  |
+| Toolchain | `RUST_TOOLCHAIN`/`NODE_VERSION` env vars in workflows | bumped via PR |
+
+Bumping any pin should be a deliberate, reviewed change.

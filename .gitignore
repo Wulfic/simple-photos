@@ -24,8 +24,8 @@ server/models/
 server/certs/
 **/*.rs.bk
 install.sh.bak
-# Keep in libraries; optional for binaries
-Cargo.lock
+# NOTE: server/Cargo.lock IS committed (this is a binary application — pinning
+# transitive deps is required for reproducible release builds).
 
 # ── Web (Node / Vite) ────────────────────────────────────────────────────────
 node_modules/

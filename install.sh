@@ -13,8 +13,10 @@
 # ║    --mode <native|docker>  Installation mode                             ║
 # ║    --port <number>         Starting port (auto-increments if busy)       ║
 # ║    --name <string>         Instance name (for Docker containers)         ║
-# ║    --storage <path>        Path to photo storage directory               ║
 # ║    --uninstall <native|docker>  Remove an existing installation          ║
+# ║                                                                          ║
+# ║  NOTE: photo storage location is now configured in the first-run setup   ║
+# ║  wizard (web UI). The installer scaffolds a default directory only.      ║
 # ║    --letsencrypt-domain <fqdn>   Pre-seed Let's Encrypt domain in       ║
 # ║                                  config.toml [tls.letsencrypt]          ║
 # ║    --letsencrypt-email <addr>    Pre-seed Let's Encrypt contact email   ║
@@ -167,6 +169,8 @@ download_geo_data() {
 MODE=""
 PORT=""
 INSTANCE_NAME=""
+# Default scaffold path; the running server's first-run setup wizard
+# is the canonical place to choose the photo storage root.
 STORAGE_PATH=""
 UNINSTALL=""
 LE_DOMAIN=""
@@ -194,7 +198,6 @@ while [[ $# -gt 0 ]]; do
         --mode)           MODE="$2"; shift 2 ;;
         --port)           PORT="$2"; shift 2 ;;
         --name)           INSTANCE_NAME="$2"; shift 2 ;;
-        --storage)        STORAGE_PATH="$2"; shift 2 ;;
         --uninstall)      UNINSTALL="$2"; shift 2 ;;
         --letsencrypt-domain)    LE_DOMAIN="$2"; shift 2 ;;
         --letsencrypt-email)     LE_EMAIL="$2"; shift 2 ;;
@@ -535,7 +538,7 @@ if [ -n "${UNINSTALL:-}" ]; then
             done
             echo ""
             success "Docker uninstall complete."
-            warn "Photo storage data was NOT removed from any custom --storage paths."
+            warn "Photo storage data outside the default scaffold path was NOT removed; remove any custom storage roots configured in the setup wizard manually."
             info "Remove it manually if no longer needed."
             exit 0
             ;;

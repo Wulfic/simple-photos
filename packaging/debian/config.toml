@@ -1,0 +1,34 @@
+[server]
+host = "0.0.0.0"
+port = 3000
+base_url = "http://localhost:3000"
+trust_proxy = false
+
+[database]
+path = "/var/lib/simple-photos/db/simple-photos.db"
+max_connections = 16
+
+[storage]
+# This default is created by the postinst script. The first-run setup
+# wizard (web UI) is the canonical place to choose the photo storage
+# root — it can be moved to any path the `simple-photos` user can read.
+root = "/var/lib/simple-photos/storage"
+default_quota_bytes = 10737418240
+max_blob_size_bytes = 5368709120
+
+[auth]
+# REQUIRED: replaced by the postinst script with a 64-char random hex.
+# Do NOT commit a real secret here.
+jwt_secret = "CHANGE_ME_AT_INSTALL_TIME"
+access_token_ttl_secs = 3600
+refresh_token_ttl_days = 30
+allow_registration = true
+bcrypt_cost = 12
+
+[web]
+static_root = "/usr/share/simple-photos/web"
+
+[backup]
+
+[tls]
+enabled = false

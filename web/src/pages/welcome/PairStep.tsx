@@ -16,6 +16,37 @@ export interface PairStepProps {
   }) => void;
 }
 
+/**
+ * Heuristic: does the given host look like an RFC1918/private/loopback
+ * address? Used to decide whether to warn the operator that the primary
+ * server may not be able to dial back to this backup over the WAN.
+ */
+function isPrivateOrLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/:\d+$/, "");
+  if (!h) return true;
+  if (h === "localhost" || h.endsWith(".local") || h.endsWith(".lan")) return true;
+  if (h === "::1" || h === "0.0.0.0" || h === "::") return true;
+  if (h.startsWith("127.")) return true;
+  if (h.startsWith("10.")) return true;
+  if (h.startsWith("192.168.")) return true;
+  if (h.startsWith("169.254.")) return true;
+  // 172.16.0.0 — 172.31.255.255
+  const m = h.match(/^172\.(\d+)\./);
+  if (m) {
+    const second = parseInt(m[1], 10);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
+/** Extract the host[:port] portion of a server address or URL. */
+function extractHost(addr: string): string {
+  let s = addr.trim();
+  s = s.replace(/^https?:\/\//i, "");
+  s = s.split("/")[0];
+  return s;
+}
+
 export default function PairStep({
   setStep,
   setError,
@@ -29,6 +60,15 @@ export default function PairStep({
   const [requiresTotp, setRequiresTotp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  // Backup's externally-reachable URL — what the primary will dial back to.
+  // Pre-filled with the URL the operator is currently using to reach this
+  // backup in their browser; that is, by definition, a working address —
+  // though if it's a LAN address and the primary is on the WAN it will
+  // need to be replaced. The UI surfaces a warning when that mismatch is
+  // detected.
+  const [backupPublicUrl, setBackupPublicUrl] = useState<string>(
+    typeof window !== "undefined" ? window.location.origin : "",
+  );
 
   // Auto-discovery state
   const [discovering, setDiscovering] = useState(false);
@@ -89,6 +129,9 @@ export default function PairStep({
       };
       if (requiresTotp && totpCode.trim()) {
         payload.totp_code = totpCode.trim();
+      }
+      if (backupPublicUrl.trim()) {
+        payload.backup_public_url = backupPublicUrl.trim();
       }
 
       const res = await fetch("/api/setup/pair", {
@@ -231,6 +274,84 @@ export default function PairStep({
           </p>
         </div>
 
+        {/* Backup public URL — what the primary will connect *back* to. */}
+        {(() => {
+          const primaryHost = extractHost(serverAddress);
+          const backupHost = extractHost(backupPublicUrl);
+          const primaryRemote =
+            primaryHost.length > 0 && !isPrivateOrLoopbackHost(primaryHost);
+          const backupPrivate =
+            backupHost.length > 0 && isPrivateOrLoopbackHost(backupHost);
+          const mismatchWarning = primaryRemote && backupPrivate;
+          return (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                This Backup Server&rsquo;s Public URL
+              </label>
+              <input
+                type="text"
+                value={backupPublicUrl}
+                onChange={(e) => setBackupPublicUrl(e.target.value)}
+                placeholder="e.g. https://backup.example.com or http://203.0.113.5:8080"
+                maxLength={500}
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
+              />
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                The URL the <strong>primary</strong> server will use to push
+                photos to this backup. The primary must be able to reach this
+                URL over the network.
+              </p>
+              <div
+                className={`mt-2 rounded-lg p-3 text-xs ${
+                  mismatchWarning
+                    ? "bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700"
+                    : "bg-gray-50 dark:bg-gray-700/40 text-gray-600 dark:text-gray-400"
+                }`}
+              >
+                <p className="font-semibold mb-1">
+                  {mismatchWarning
+                    ? "⚠ Action required: this address looks unreachable from your primary server"
+                    : "Port forwarding may be required"}
+                </p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>
+                    Backup replication is <strong>push-only</strong>: the
+                    primary server connects out to this backup. If the primary
+                    cannot reach the URL above, no photos will sync.
+                  </li>
+                  <li>
+                    For a backup behind NAT/a home router, you must
+                    {" "}
+                    <strong>open and forward the port</strong> on your router
+                    to this machine, then use your{" "}
+                    <strong>public IP or DNS hostname</strong> here (not a
+                    LAN/private address).
+                  </li>
+                  <li>
+                    Tunnels (Tailscale, Cloudflare Tunnel, WireGuard, ngrok,
+                    etc.) work too — use the tunnel&rsquo;s public hostname.
+                  </li>
+                  <li>
+                    Self-signed TLS? The primary&rsquo;s{" "}
+                    <code>backup.accept_invalid_certs</code> config flag must
+                    be enabled, otherwise use plain <code>http://</code> or a
+                    valid certificate (e.g. Let&rsquo;s Encrypt).
+                  </li>
+                </ul>
+                {mismatchWarning && (
+                  <p className="mt-2">
+                    The primary at <code>{primaryHost}</code> is on the public
+                    internet, but the backup URL points at{" "}
+                    <code>{backupHost}</code>, which looks like a private/LAN
+                    address. The primary will likely fail to connect. Replace
+                    it with the backup&rsquo;s externally-reachable address.
+                  </p>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Divider */}
         <div className="relative py-2">
           <div className="absolute inset-0 flex items-center">
@@ -345,7 +466,7 @@ export default function PairStep({
           </button>
           <button
             type="submit"
-            disabled={loading || !serverAddress.trim() || !username.trim() || !password || (requiresTotp && totpCode.length !== 6)}
+            disabled={loading || !serverAddress.trim() || !username.trim() || !password || !backupPublicUrl.trim() || (requiresTotp && totpCode.length !== 6)}
             className="flex-[2] bg-green-600 text-white py-2.5 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium transition-colors"
           >
             {loading ? (

@@ -1,0 +1,36 @@
+#!/bin/sh
+# postrm — Simple Photos
+#
+# We deliberately do NOT delete /var/lib/simple-photos on remove — users will
+# rightfully panic if `apt remove` nukes their photo library.  `apt purge`
+# triggers the `purge` case below which removes config, but we still leave
+# user data in place; admins can `rm -rf /var/lib/simple-photos` themselves.
+
+set -e
+
+case "$1" in
+    purge)
+        # Remove config and the system user — but never the data directory.
+        rm -f /etc/simple-photos/config.toml
+        rmdir --ignore-fail-on-non-empty /etc/simple-photos 2>/dev/null || true
+        if getent passwd simple-photos >/dev/null; then
+            deluser --quiet --system simple-photos >/dev/null || true
+        fi
+        if getent group simple-photos >/dev/null; then
+            delgroup --quiet --system --only-if-empty simple-photos >/dev/null || true
+        fi
+        echo "simple-photos: configuration and system user removed."
+        echo "simple-photos: photo data in /var/lib/simple-photos was preserved."
+        echo "simple-photos: remove it manually with: rm -rf /var/lib/simple-photos"
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,349 @@
+name: Release
+
+# Builds and publishes release artifacts:
+#   • simple-photos_<version>_amd64.deb           (Ubuntu 22.04 / Debian 12+)
+#   • simple-photos-<version>-windows-x64-setup.exe (Windows 10+ via Inno Setup)
+#
+# Triggered by:
+#   • A pushed tag matching v*.*.* (production release)
+#   • Manual `workflow_dispatch` (dev/preview build)
+#
+# A draft GitHub Release is created automatically and both artifacts are
+# attached. Promote it to "published" manually after smoke-testing.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag for preview build (e.g. 0.6.9-dev1)'
+        required: true
+        default: '0.0.0-dev'
+
+permissions:
+  contents: write       # required to create/upload the GitHub Release
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  # Pin toolchains for reproducible release builds.
+  RUST_TOOLCHAIN: "1.83"
+  NODE_VERSION: "20"
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────
+  #  Resolve version once and share with all downstream jobs.
+  # ───────────────────────────────────────────────────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $v"
+
+  # ───────────────────────────────────────────────────────────────────────
+  #  Web frontend build — shared by both .deb and .exe so we build once.
+  # ───────────────────────────────────────────────────────────────────────
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      # `npm ci` enforces package-lock.json — no "latest" version drift.
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build web frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Upload web/dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 1
+
+  # ───────────────────────────────────────────────────────────────────────
+  #  .deb package — Ubuntu 22.04 (glibc 2.35) gives us the broadest compat
+  #  window down to Debian 12 / Ubuntu 22.04+.
+  # ───────────────────────────────────────────────────────────────────────
+  deb:
+    needs: [version, web]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server -> target
+          key: deb-${{ env.RUST_TOOLCHAIN }}
+
+      - name: Install build deps (cmake, clang, perl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev cmake make g++ libclang-dev perl
+
+      - name: Download web build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --version ^2 --locked
+
+      # Release builds drop the CUDA feature so the .deb runs on any host —
+      # the ORT CUDA EP is loaded lazily, so users that want GPU support can
+      # simply install nvidia-cuda-toolkit and pick up acceleration without
+      # rebuilding. (See server/Cargo.toml comment.)
+      - name: Build server (release, CPU)
+        working-directory: server
+        run: cargo build --release --no-default-features --locked
+
+      - name: Build .deb
+        working-directory: server
+        run: cargo deb --no-build --no-strip
+
+      - name: Rename artefact with resolved version
+        run: |
+          mkdir -p dist
+          cp server/target/debian/*.deb dist/simple-photos_${{ needs.version.outputs.version }}_amd64.deb
+          ls -la dist/
+
+      - name: Lint .deb with lintian (best-effort)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends lintian
+          lintian --no-tag-display-limit dist/*.deb || true
+
+      - name: Smoke-test .deb install
+        run: |
+          sudo apt-get install -y ./dist/simple-photos_${{ needs.version.outputs.version }}_amd64.deb
+          systemctl status simple-photos --no-pager || true
+          test -x /usr/bin/simple-photos-server
+          test -f /etc/simple-photos/config.toml
+          test -d /var/lib/simple-photos/storage
+          ! grep -q "CHANGE_ME_AT_INSTALL_TIME" /etc/simple-photos/config.toml
+          sudo apt-get remove -y simple-photos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simple-photos-deb
+          path: dist/*.deb
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────────
+  #  Windows installer — builds the .exe + bundles NSSM + Inno Setup.
+  # ───────────────────────────────────────────────────────────────────────
+  windows:
+    needs: [version, web]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server -> target
+          key: win-${{ env.RUST_TOOLCHAIN }}
+
+      - name: Download web build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Build server (release, CPU)
+        working-directory: server
+        run: cargo build --release --no-default-features --locked
+
+      - name: Fetch NSSM 2.24
+        shell: pwsh
+        run: |
+          $url = "https://nssm.cc/release/nssm-2.24.zip"
+          $zip = "$env:RUNNER_TEMP\nssm.zip"
+          $dst = "$env:RUNNER_TEMP\nssm"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dst -Force
+          New-Item -ItemType Directory -Path packaging\windows\vendor -Force | Out-Null
+          Copy-Item "$dst\nssm-2.24\win64\nssm.exe" packaging\windows\vendor\nssm.exe -Force
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup --version=6.2.2 -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+              "/DSP_VERSION=${{ needs.version.outputs.version }}" `
+              packaging\windows\simple-photos.iss
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simple-photos-windows
+          path: dist/*.exe
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────────
+  #  Android APK — release build, signed if the keystore secrets are set
+  #  in the repo, otherwise produced unsigned-but-debug-signed (still
+  #  installable, just not from Play / not auto-updatable). To enable
+  #  proper release signing, configure these repository secrets:
+  #
+  #    ANDROID_KEYSTORE_BASE64    — base64 of release.jks
+  #    ANDROID_KEYSTORE_PASSWORD  — keystore password
+  #    ANDROID_KEY_ALIAS          — key alias
+  #    ANDROID_KEY_PASSWORD       — key password
+  #
+  #  See android/app/build.gradle.kts for how these are consumed.
+  # ───────────────────────────────────────────────────────────────────────
+  android:
+    needs: [version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Decode release keystore (if configured)
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "No ANDROID_KEYSTORE_BASE64 secret set — release APK will be signed with the debug keystore."
+            echo "ks=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p android/app/keystore
+          ks=android/app/keystore/release.jks
+          echo "$KEYSTORE_BASE64" | base64 -d > "$ks"
+          if [ ! -s "$ks" ]; then
+            echo "::error::Decoded keystore is empty — check ANDROID_KEYSTORE_BASE64 secret."
+            exit 1
+          fi
+          echo "ks=$(pwd)/$ks" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_FILE:     ${{ steps.keystore.outputs.ks }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS:         ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD:      ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleRelease
+
+      - name: Stage APK with versioned name
+        run: |
+          mkdir -p dist
+          src=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          if [ -z "$src" ]; then
+            echo "::error::No APK produced under android/app/build/outputs/apk/release/"
+            exit 1
+          fi
+          cp "$src" "dist/simple-photos-${{ needs.version.outputs.version }}.apk"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simple-photos-android
+          path: dist/*.apk
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────────
+  #  Compute SHA256 sums and create the draft GitHub Release.
+  # ───────────────────────────────────────────────────────────────────────
+  release:
+    if: github.event_name == 'push'
+    needs: [version, deb, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: simple-photos-deb
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: simple-photos-windows
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: simple-photos-android
+          path: dist
+
+      - name: Compute checksums
+        working-directory: dist
+        run: |
+          sha256sum *.deb *.exe *.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: "Simple Photos ${{ needs.version.outputs.version }}"
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.deb
+            dist/*.exe
+            dist/*.apk
+            dist/SHA256SUMS.txt

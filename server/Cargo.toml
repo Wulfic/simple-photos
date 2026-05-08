@@ -2,6 +2,11 @@
 name = "simple-photos-server"
 version = "0.6.9"
 edition = "2021"
+description = "Self-hosted, end-to-end encrypted photo & video library server"
+license = "AGPL-3.0-or-later"
+homepage = "https://github.com/Wulfic/simple-photos"
+repository = "https://github.com/Wulfic/simple-photos"
+readme = "../README.md"
 
 [dependencies]
 axum = { version = "0.8", features = ["macros"] }
@@ -84,3 +89,51 @@ rustix = { version = "1", features = ["process"] }
 default = ["cuda"]
 cuda = ["ort/cuda"]
 tensorrt = ["ort/tensorrt"]
+
+# ── cargo-deb metadata ──────────────────────────────────────────────────────
+# Build a Debian/Ubuntu .deb with:  cargo install cargo-deb && cargo deb --no-build
+# (call after `cargo build --release --no-default-features` for a CPU-only,
+# distributable package — CUDA is a runtime opt-in handled by the ORT EP).
+#
+# The package layout:
+#   /usr/bin/simple-photos-server                  — release binary
+#   /usr/share/simple-photos/web/                  — built React frontend
+#   /usr/share/simple-photos/migrations/           — SQLx migrations
+#   /etc/simple-photos/config.toml                 — config (conffile, preserved on upgrade)
+#   /lib/systemd/system/simple-photos.service      — systemd unit
+#   /var/lib/simple-photos/                        — data root (created by postinst)
+#
+# The postinst script creates the `simple-photos` system user, scaffolds the
+# data dirs, and enables the service. Storage root is finalised by the
+# first-run setup wizard (web UI on :3000) — the .deb only seeds defaults.
+[package.metadata.deb]
+name = "simple-photos"
+maintainer = "Wulfic <noreply@github.com>"
+copyright = "2026, Wulfic"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+Self-hosted, end-to-end encrypted photo and video library with face/object \
+recognition, reverse geocoding, multi-user albums, and a Progressive Web App. \
+The first-run setup wizard configures the photo storage location."""
+section = "web"
+priority = "optional"
+depends = "$auto, libc6, libssl3 | libssl1.1, ca-certificates, ffmpeg, adduser"
+recommends = "nvidia-cuda-toolkit"
+suggests = "cifs-utils"
+assets = [
+    ["target/release/simple-photos-server", "usr/bin/", "755"],
+    ["migrations/**/*", "usr/share/simple-photos/migrations/", "644"],
+    ["../web/dist/**/*", "usr/share/simple-photos/web/", "644"],
+    ["../packaging/debian/config.toml", "etc/simple-photos/config.toml", "640"],
+    ["../packaging/debian/README.Debian", "usr/share/doc/simple-photos/", "644"],
+    ["../packaging/debian/fetch-assets.sh", "usr/share/simple-photos/fetch-assets.sh", "755"],
+]
+conf-files = ["/etc/simple-photos/config.toml"]
+maintainer-scripts = "../packaging/debian/"
+systemd-units = { unit-name = "simple-photos", unit-scripts = "../packaging/debian/", enable = true, start = false, restart-after-upgrade = true }
+
+# Build profile tuned for shipping binaries: thin LTO, stripped, single
+# codegen unit. Slower link, materially smaller artefact.
+[package.metadata.deb.variants.release]
+features = []
+default-features = false

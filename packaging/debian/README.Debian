@@ -1,0 +1,37 @@
+simple-photos for Debian / Ubuntu
+=================================
+
+This package installs the Simple Photos server as a systemd service.
+
+Files
+-----
+  /usr/bin/simple-photos-server               Server binary
+  /usr/share/simple-photos/web/               Web frontend (static)
+  /usr/share/simple-photos/migrations/        SQLx schema migrations
+  /etc/simple-photos/config.toml              Configuration (conffile)
+  /lib/systemd/system/simple-photos.service   systemd unit
+  /var/lib/simple-photos/                     Data root (db, storage, models)
+
+First-run
+---------
+After install, start the service and open http://<host>:3000 in a browser.
+The first-run setup wizard creates the admin user and lets you select the
+final photo storage location (any path readable by the `simple-photos`
+system user, including SMB/NFS mounts).
+
+  sudo systemctl start simple-photos
+  sudo systemctl status simple-photos
+
+AI models & GeoNames dataset
+----------------------------
+The .deb does NOT bundle the ~225 MB of ONNX models or the GeoNames
+cities500 dataset. Download them after install with:
+
+  sudo -u simple-photos /usr/share/simple-photos/fetch-assets.sh
+
+Without these the server runs in degraded mode: face/object recognition
+is disabled and reverse-geocoding leaves geo_city/geo_country empty.
+
+Logs
+----
+  journalctl -u simple-photos -f

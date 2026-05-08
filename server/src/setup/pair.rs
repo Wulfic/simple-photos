@@ -21,7 +21,8 @@ use crate::state::AppState;
 use super::pair_helpers::{
     authenticate_with_primary, configure_backup_mode, create_local_admin,
     determine_backup_address, normalize_server_url, register_backup_on_primary,
-    trigger_initial_sync, verify_primary_is_not_backup, PrimaryAuthOutcome,
+    trigger_initial_sync, validate_backup_public_url, verify_primary_is_not_backup,
+    PrimaryAuthOutcome,
 };
 
 // ── Backup Pairing ──────────────────────────────────────────────────────────
@@ -38,6 +39,13 @@ pub struct PairRequest {
     /// On the first attempt (without this field) the server responds with
     /// `{ "requires_totp": true }` so the client can prompt for the code.
     pub totp_code: Option<String>,
+    /// Optional: this backup server's externally-reachable URL, as the
+    /// **primary** must be able to dial it (e.g. `"https://backup.example.com"`
+    /// or `"http://203.0.113.5:8080"`). When provided, this overrides the
+    /// auto-detected LAN address that would otherwise be registered on the
+    /// primary. Required for cross-WAN deployments where the primary cannot
+    /// reach this backup over a private LAN address.
+    pub backup_public_url: Option<String>,
 }
 
 // ── Backup Pairing Handler ──────────────────────────────────────────────────
@@ -114,7 +122,27 @@ pub async fn pair(
         .map(|k| k.to_string())
         .unwrap_or_else(|| Uuid::new_v4().to_string().replace('-', ""));
 
-    let backup_address = determine_backup_address(&state.config, &headers);
+    let backup_address = match req
+        .backup_public_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw) => {
+            // Operator-supplied public URL — normalize and validate that it
+            // looks like a real externally-reachable address before we ask
+            // the primary to register it.
+            let normalized = normalize_server_url(raw);
+            validate_backup_public_url(&normalized)?;
+            tracing::info!(
+                provided = %raw,
+                normalized = %normalized,
+                "Using operator-supplied backup_public_url for primary registration"
+            );
+            normalized
+        }
+        None => determine_backup_address(&state.config, &headers),
+    };
     tracing::info!(
         backup_address = %backup_address,
         base_url = %state.config.server.base_url,

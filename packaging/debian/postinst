@@ -1,0 +1,66 @@
+#!/bin/sh
+# postinst — Simple Photos
+#
+# Runs after the .deb is unpacked.  Responsibilities:
+#   1. Create the `simple-photos` system user and group (idempotent).
+#   2. Scaffold /var/lib/simple-photos/{db,storage,models} with correct perms.
+#   3. Generate a random JWT secret on first install (preserve on upgrade).
+#   4. Hand off to dh_installsystemd / cargo-deb's systemd handler.
+#
+# The actual photo storage root is finalised in the first-run setup wizard,
+# which can move data to any user-readable path.
+
+set -e
+
+USER=simple-photos
+GROUP=simple-photos
+DATA=/var/lib/simple-photos
+CONF=/etc/simple-photos/config.toml
+
+case "$1" in
+    configure)
+        # 1. Create system user (locked password, no shell).
+        if ! getent group "$GROUP" >/dev/null; then
+            addgroup --system "$GROUP"
+        fi
+        if ! getent passwd "$USER" >/dev/null; then
+            adduser --system --ingroup "$GROUP" \
+                    --home "$DATA" \
+                    --shell /usr/sbin/nologin \
+                    --gecos "Simple Photos server" \
+                    "$USER"
+        fi
+
+        # 2. Data directories.
+        mkdir -p "$DATA/db" "$DATA/storage" "$DATA/models" "$DATA/certs"
+        chown -R "$USER:$GROUP" "$DATA"
+        chmod 750 "$DATA"
+
+        # 3. Random JWT secret on first install (only if the placeholder is
+        #    still present — we must not clobber an admin-rotated secret on
+        #    upgrade).
+        if [ -f "$CONF" ] && grep -q 'CHANGE_ME_AT_INSTALL_TIME' "$CONF"; then
+            SECRET=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+            # Use a tab as sed delimiter to dodge slashes in any value.
+            sed -i "s\tCHANGE_ME_AT_INSTALL_TIME\t${SECRET}\t" "$CONF"
+            chown "$USER:$GROUP" "$CONF"
+            chmod 640 "$CONF"
+            echo "simple-photos: generated random JWT secret in $CONF"
+        fi
+        # Always tighten config perms (root:simple-photos 640).
+        if [ -f "$CONF" ]; then
+            chown root:"$GROUP" "$CONF"
+            chmod 640 "$CONF"
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
