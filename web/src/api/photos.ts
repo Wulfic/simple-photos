@@ -147,4 +147,49 @@ export const photosApi = {
       thumb_path: string | null;
     }>>(`/photos/burst/${encodeURIComponent(burstId)}`),
 
+  /**
+   * POST /photos/upload — upload a raw media file for full server-side
+   * processing (EXIF/GPS extraction, server-side conversion of HEIC/MKV/etc.,
+   * audio_backup_enabled enforcement, AI/geo backfill, ingest encryption).
+   *
+   * This is the single canonical "manual upload" path — both the gallery
+   * upload button and the bulk Import page route through this endpoint so
+   * that manually-added files end up in the same `photos` table as files
+   * registered by the autoscan/setup-import pipeline. That guarantees
+   * identical ordering, metadata, conversions, and policy enforcement.
+   *
+   * Optional `takenAt`, `latitude`, `longitude` overrides are forwarded
+   * via headers when sidecar metadata (e.g. Google Photos Takeout JSON)
+   * supplies values the file's EXIF lacks.
+   */
+  upload: async (
+    data: ArrayBuffer,
+    filename: string,
+    mimeType: string,
+    overrides?: { takenAt?: string; latitude?: number; longitude?: number },
+  ): Promise<{
+    photo_id: string;
+    filename: string;
+    file_path: string;
+    size_bytes: number;
+    photo_hash: string | null;
+  }> => {
+    const headers: Record<string, string> = {
+      "X-Filename": filename,
+      "X-Mime-Type": mimeType,
+    };
+    if (overrides?.takenAt) headers["X-Taken-At"] = overrides.takenAt;
+    if (typeof overrides?.latitude === "number") {
+      headers["X-Latitude"] = overrides.latitude.toString();
+    }
+    if (typeof overrides?.longitude === "number") {
+      headers["X-Longitude"] = overrides.longitude.toString();
+    }
+    return request("/photos/upload", {
+      method: "POST",
+      headers,
+      body: data,
+    });
+  },
+
 };

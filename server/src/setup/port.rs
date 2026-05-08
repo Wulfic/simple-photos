@@ -299,11 +299,13 @@ pub async fn restart_server(
 
     tracing::info!("Server restart requested by admin — shutting down in 1 second");
 
-    // Spawn a task that exits after a brief delay so the HTTP response is sent first
+    // Spawn a task that exits after a brief delay so the HTTP response is sent first.
+    // Exit code 1 ensures systemd `Restart=on-failure` (and similar supervisors)
+    // treat this as a restartable event rather than a clean shutdown.
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         tracing::info!("Exiting for restart…");
-        std::process::exit(0);
+        std::process::exit(1);
     });
 
     Ok(Json(RestartResponse {

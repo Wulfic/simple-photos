@@ -440,8 +440,14 @@ class TestEncryptionBannerCounts:
         )
 
     def test_single_batch_counts_are_correct(self, user_client, primary_admin):
-        """For the very first batch (empty library), total and pending are equal
-        and the banner counting is consistent regardless of approach."""
+        """For the very first batch on a fresh library, the upload count and
+        the encrypted-sync total must agree, and the banner accounting must be
+        internally consistent (encrypted + pending == batch).
+
+        Note: uploads now auto-trigger the encryption pipeline (parity with
+        autoscan), so by the time we poll, some photos may already be
+        encrypted. The invariant we care about is that every upload landed
+        in the photos table and the banner math balances."""
         COUNT = 5
 
         for i in range(COUNT):
@@ -449,17 +455,17 @@ class TestEncryptionBannerCounts:
 
         photos = self._fetch_all_encrypted_sync(user_client)
         pending = [p for p in photos if not p.get("encrypted_blob_id")]
+        encrypted = [p for p in photos if p.get("encrypted_blob_id")]
         total = len(photos)
 
-        # On a fresh library with no prior encryption, pending == total
-        assert len(pending) == COUNT, f"Expected {COUNT} pending, got {len(pending)}"
-        assert total == COUNT
+        # All uploads must be registered in the library
+        assert total == COUNT, f"Expected {COUNT} photos, got {total}"
 
-        # In this case both "batch" and "library" total are the same
-        # Banner should show "0/COUNT" → "COUNT/COUNT"
-        banner_total = len(pending)  # correct: track batch
-        assert banner_total == total, (
-            "For first batch, batch total should equal library total"
+        # Banner accounting: encrypted + pending must equal the batch total
+        banner_total = COUNT  # batch == library total on fresh library
+        assert len(pending) + len(encrypted) == banner_total, (
+            f"Banner math broken: {len(pending)} pending + {len(encrypted)} "
+            f"encrypted != {banner_total} batch total"
         )
 
     def test_banner_never_shows_negative_remaining(self, user_client, primary_admin):

@@ -1,29 +1,28 @@
 /**
  * Import page — bulk photo/video import from server paths or local files.
  *
- * Reads files client-side, encrypts with AES-256-GCM, and uploads blobs.
- * Supports Google Photos Takeout metadata matching and deduplication via
- * content hashes.
+ * Reads files (server-side via `/admin/import/*` or via the browser file
+ * picker) and streams each one to `/api/photos/upload`. The server handles
+ * thumbnail generation, format conversion (HEIC/MKV/etc.), EXIF/GPS
+ * extraction, audio_backup_enabled enforcement, and ingest encryption —
+ * giving identical results to the setup-time autoscan path.
+ *
+ * Google Photos Takeout sidecars are still parsed locally so their
+ * `photoTakenTime` / `geoData` are forwarded as override headers when the
+ * file's EXIF is missing those fields.
  */
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
+import { hasCryptoKey } from "../crypto/crypto";
 import { api } from "../api/client";
-import { db, blobTypeFromMime, mediaTypeFromMime } from "../db";
 import AppHeader from "../components/AppHeader";
 import { useProcessingStore } from "../store/processing";
 
 import type { ImportItem, ServerFile, GooglePhotosMetadata } from "../utils/importTypes";
 import {
-  arrayBufferToBase64,
-  getDimensionsFromBuffer,
-  getVideoDurationFromBuffer,
   guessMimeFromName,
   matchMetadataToFiles,
-  createFallbackThumbnail,
-  createAudioFallbackThumbnail,
 } from "../utils/media";
-import { generateThumbnail } from "../gallery";
 import { formatBytes } from "../utils/formatters";
 import ImportFileList from "./import/ImportFileList";
 
@@ -231,24 +230,24 @@ export default function Import() {
       throw new Error("No file data source");
     }
 
-    const data = new Uint8Array(rawData);
     const mimeType = item.mimeType || guessMimeFromName(item.name);
-    const mediaType = mediaTypeFromMime(mimeType);
-    const serverBlobType = blobTypeFromMime(mimeType);
     const filename = item.metadata?.title || item.name;
 
-    let takenAt = new Date().toISOString();
+    // Pull Google Photos Takeout sidecar values, when present, as fallbacks
+    // for the server-side EXIF extractor. EXIF still wins on the server so
+    // on-device camera metadata isn't overridden by stale sidecar data.
+    let takenAt: string | undefined;
     let latitude: number | undefined;
     let longitude: number | undefined;
 
     if (item.metadata) {
       if (item.metadata.photoTakenTime?.timestamp) {
         takenAt = new Date(
-          parseInt(item.metadata.photoTakenTime.timestamp) * 1000
+          parseInt(item.metadata.photoTakenTime.timestamp) * 1000,
         ).toISOString();
       } else if (item.metadata.creationTime?.timestamp) {
         takenAt = new Date(
-          parseInt(item.metadata.creationTime.timestamp) * 1000
+          parseInt(item.metadata.creationTime.timestamp) * 1000,
         ).toISOString();
       }
 
@@ -269,86 +268,14 @@ export default function Import() {
       }
     }
 
-    const dims = await getDimensionsFromBuffer(rawData, mimeType);
-
-    let duration: number | undefined;
-    if (mediaType === "video") {
-      duration = await getVideoDurationFromBuffer(rawData, mimeType);
-    }
-
-    let thumbnailData: ArrayBuffer;
-    let thumbnailMimeType = "image/jpeg";
-    if (mediaType === "audio") {
-      thumbnailData = await createAudioFallbackThumbnail();
-    } else {
-      try {
-        const thumbResult = await generateThumbnail(rawData, { size: 512, mimeType });
-        thumbnailData = thumbResult.data;
-        thumbnailMimeType = thumbResult.mimeType;
-      } catch {
-        console.warn(`Thumbnail generation failed for ${item.name}, using fallback`);
-        thumbnailData = await createFallbackThumbnail();
-      }
-    }
-
-    // Decode thumbnail to get actual dimensions
-    const thumbDims = await new Promise<{ w: number; h: number }>((resolve) => {
-      const img = new Image();
-      const url = URL.createObjectURL(new Blob([thumbnailData], { type: thumbnailMimeType }));
-      img.onload = () => { URL.revokeObjectURL(url); resolve({ w: img.naturalWidth, h: img.naturalHeight }); };
-      img.onerror = () => { URL.revokeObjectURL(url); resolve({ w: 512, h: 512 }); };
-      img.src = url;
-    });
-    const thumbPayload = JSON.stringify({
-      v: 1,
-      photo_blob_id: "",
-      width: thumbDims.w,
-      height: thumbDims.h,
-      data: arrayBufferToBase64(thumbnailData),
-    });
-    const encThumb = await encrypt(new TextEncoder().encode(thumbPayload));
-    const thumbHash = await sha256Hex(new Uint8Array(encThumb));
-    const thumbBlobType =
-      mediaType === "video" ? "video_thumbnail" : "thumbnail";
-    const thumbRes = await api.blobs.upload(encThumb, thumbBlobType, thumbHash);
-
-    const photoPayload = JSON.stringify({
-      v: 1,
-      filename,
-      taken_at: takenAt,
-      mime_type: mimeType,
-      media_type: mediaType,
-      width: dims.width,
-      height: dims.height,
-      duration,
+    // Single canonical upload path — server handles thumbnail, conversion,
+    // EXIF/GPS extraction, audio_backup_enabled enforcement, AI/geo backfill,
+    // and ingest encryption (via the stored encryption key). This keeps the
+    // /import page result identical to the setup-time autoscan path.
+    await api.photos.upload(rawData, filename, mimeType, {
+      takenAt,
       latitude,
       longitude,
-      album_ids: [],
-      thumbnail_blob_id: thumbRes.blob_id,
-      data: arrayBufferToBase64(data),
-    });
-
-    const encPhoto = await encrypt(new TextEncoder().encode(photoPayload));
-    const photoHash = await sha256Hex(new Uint8Array(encPhoto));
-    // Content hash: short hash of original raw bytes for cross-platform alignment
-    const contentHash = (await sha256Hex(new Uint8Array(data))).substring(0, 12);
-    const res = await api.blobs.upload(encPhoto, serverBlobType, photoHash, contentHash);
-
-    await db.photos.put({
-      blobId: res.blob_id,
-      thumbnailBlobId: thumbRes.blob_id,
-      filename,
-      takenAt: new Date(takenAt).getTime(),
-      mimeType,
-      mediaType,
-      width: dims.width,
-      height: dims.height,
-      duration,
-      latitude,
-      longitude,
-      albumIds: [],
-      thumbnailData,
-      contentHash,
     });
   }
 

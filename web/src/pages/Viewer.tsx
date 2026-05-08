@@ -30,6 +30,8 @@ import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import useSlideshow from "../hooks/useSlideshow";
 import Slideshow from "../components/viewer/Slideshow";
 import { diagnosticLogger } from "../utils/diagnosticLogger";
+import { castMedia, getCastState } from "../utils/cast";
+import { useAuthStore } from "../store/auth";
 import type { PhotoInfoData } from "../hooks/useViewerMedia";
 
 // ── Navigation context passed via location.state ─────────────────────────────
@@ -145,6 +147,16 @@ export default function Viewer() {
     videoError, setVideoError,
     loadEncryptedMedia,
   } = useViewerMedia(preloadCache);
+
+  // ── Cast: push current photo to Chromecast whenever the viewed photo changes
+  useEffect(() => {
+    if (!id) return;
+    const { state } = getCastState();
+    if (state !== "connected") return;
+    const { accessToken } = useAuthStore.getState();
+    const castUrl = `${window.location.origin}/api/photos/${id}/file${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ""}`;
+    castMedia(castUrl, mimeType || "image/jpeg");
+  }, [id, mediaUrl, mimeType]);
 
   // ── Actions (from hook) ────────────────────────────────────────────────
   const {

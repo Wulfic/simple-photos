@@ -140,9 +140,19 @@ export default function Settings() {
     setRestartConfirm(false);
     try {
       await api.admin.restart();
-      setSuccess("Server restart initiated. The page will reload shortly.");
-      // Give the server a moment, then reload
-      setTimeout(() => window.location.reload(), 4000);
+      setSuccess("Server restarting… page will reload when it comes back up.");
+      // Poll /health until the server responds again, then reload.
+      const poll = setInterval(async () => {
+        try {
+          const r = await fetch("/health", { cache: "no-store" });
+          if (r.ok) {
+            clearInterval(poll);
+            window.location.reload();
+          }
+        } catch {
+          // Server still down — keep polling
+        }
+      }, 2000);
     } catch (err: unknown) {
       setError(getErrorMessage(err, "Failed to restart server."));
     } finally {

@@ -306,9 +306,41 @@ pub async fn upload_photo(
         }
     }
 
+    // ── Optional client-supplied metadata overrides ─────────────────────
+    // Sidecar-aware uploaders (e.g. the web Import page processing Google
+    // Photos Takeout JSON) can pass X-Taken-At / X-Latitude / X-Longitude
+    // headers when sidecars supply data the file's EXIF lacks. EXIF still
+    // wins when present so that on-device camera metadata isn't overridden
+    // by stale sidecar values.
+    let header_taken_at: Option<String> = headers
+        .get("X-Taken-At")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let header_latitude: Option<f64> = headers
+        .get("X-Latitude")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|f| f.is_finite() && (-90.0..=90.0).contains(f) && *f != 0.0);
+    let header_longitude: Option<f64> = headers
+        .get("X-Longitude")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|f| f.is_finite() && (-180.0..=180.0).contains(f) && *f != 0.0);
+
     let final_taken_at = exif_taken
         .map(|t| normalize_iso_timestamp(&t))
+        .or_else(|| header_taken_at.as_deref().map(normalize_iso_timestamp))
         .unwrap_or_else(|| now.clone());
+
+    let resolved_lat = exif_lat.or(header_latitude);
+    let resolved_lon = exif_lon.or(header_longitude);
+    // GPS is meaningless without both coordinates — drop the partial value
+    // so callers can't poison the DB by supplying only one.
+    let (resolved_lat, resolved_lon) = match (resolved_lat, resolved_lon) {
+        (Some(la), Some(lo)) => (Some(la), Some(lo)),
+        _ => (None, None),
+    };
 
     // ── Geo scrubbing ───────────────────────────────────────────────────
     // If the user has geo-scrubbing enabled, null out GPS coordinates before
@@ -316,7 +348,7 @@ pub async fn upload_photo(
     let (insert_lat, insert_lon) = if crate::geo::scrub::is_scrub_enabled(&state.pool, &auth.user_id).await {
         (None, None)
     } else {
-        (exif_lat, exif_lon)
+        (resolved_lat, resolved_lon)
     };
 
     sqlx::query(
@@ -413,6 +445,29 @@ pub async fn upload_photo(
             } else {
                 tracing::warn!("Failed to generate thumbnail for uploaded file");
             }
+        });
+    }
+
+    // ── Hand off to the unified post-scan pipeline ──────────────────────
+    // The autoscan flow registers a row, then runs:
+    //   auto_migrate_after_scan (native encrypt) → run_conversion_pass.
+    // Manual uploads must trigger the EXACT same sequence so we don't end
+    // up with two divergent schemes (one that encrypts on the next 5-min
+    // autoscan tick, one that encrypts immediately). Spawning keeps the
+    // HTTP response fast — the migrator dedupes via a global lock so
+    // bursts of uploads coalesce into a single batch instead of racing.
+    {
+        let pool_clone = state.pool.clone();
+        let root_clone = storage_root.clone();
+        let jwt_secret = state.config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::photos::server_migrate::auto_migrate_after_scan(
+                pool_clone.clone(),
+                root_clone.clone(),
+                jwt_secret.clone(),
+            )
+            .await;
+            crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
         });
     }
 
