@@ -40,6 +40,28 @@ data class PhotoUploadResponse(
     @SerializedName("size_bytes") val sizeBytes: Long
 )
 
+// ── Photo register (non-encrypted) ────────────────────────────────────────────
+
+data class RegisterPhotoRequest(
+    val filename: String,
+    @SerializedName("file_path") val filePath: String,
+    @SerializedName("mime_type") val mimeType: String,
+    @SerializedName("media_type") val mediaType: String? = null,
+    @SerializedName("size_bytes") val sizeBytes: Long,
+    val width: Int? = null,
+    val height: Int? = null,
+    @SerializedName("duration_secs") val durationSecs: Double? = null,
+    @SerializedName("taken_at") val takenAt: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+)
+
+data class RegisterPhotoResponse(
+    @SerializedName("photo_id") val photoId: String,
+    @SerializedName("thumb_path") val thumbPath: String? = null,
+    @SerializedName("photo_hash") val photoHash: String? = null,
+)
+
 
 // ── Encrypted-mode sync (lightweight manifest from photos table) ─────────────
 
@@ -58,7 +80,11 @@ data class EncryptedSyncRecord(
     @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
     @SerializedName("is_favorite") val isFavorite: Boolean = false,
     @SerializedName("crop_metadata") val cropMetadata: String? = null,
-    @SerializedName("photo_hash") val photoHash: String? = null
+    @SerializedName("photo_hash") val photoHash: String? = null,
+    @SerializedName("source_path") val sourcePath: String? = null,
+    @SerializedName("photo_subtype") val photoSubtype: String? = null,
+    @SerializedName("burst_id") val burstId: String? = null,
+    @SerializedName("motion_video_blob_id") val motionVideoBlobId: String? = null,
 )
 
 data class EncryptedSyncResponse(
@@ -205,9 +231,53 @@ data class BackupServer(
     val id: String,
     val name: String,
     val address: String,
-    @SerializedName("api_key") val apiKey: String,
+    @SerializedName("api_key") val apiKey: String? = null,
     val enabled: Boolean,
-    @SerializedName("sync_frequency_hours") val syncFrequencyHours: Int
+    @SerializedName("sync_frequency_hours") val syncFrequencyHours: Int,
+    @SerializedName("last_sync_at") val lastSyncAt: String? = null,
+    @SerializedName("last_sync_status") val lastSyncStatus: String? = null,
+    @SerializedName("last_sync_error") val lastSyncError: String? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+)
+
+data class UpdateBackupServerRequest(
+    val name: String? = null,
+    val address: String? = null,
+    @SerializedName("api_key") val apiKey: String? = null,
+    @SerializedName("sync_frequency_hours") val syncFrequencyHours: Int? = null,
+    val enabled: Boolean? = null,
+)
+
+data class BackupServerStatusResponse(
+    val reachable: Boolean,
+    val version: String? = null,
+    val error: String? = null,
+)
+
+data class BackupSyncLog(
+    val id: String,
+    @SerializedName("server_id") val serverId: String,
+    @SerializedName("started_at") val startedAt: String,
+    @SerializedName("completed_at") val completedAt: String? = null,
+    val status: String,
+    @SerializedName("photos_synced") val photosSynced: Int = 0,
+    @SerializedName("bytes_synced") val bytesSynced: Long = 0,
+    val error: String? = null,
+)
+
+data class BackupSyncStartedResponse(
+    val message: String,
+    @SerializedName("sync_id") val syncId: String? = null,
+)
+
+data class BackupDiscoverServer(
+    val address: String,
+    val name: String,
+    val version: String,
+)
+
+data class BackupDiscoverResponse(
+    val servers: List<BackupDiscoverServer>,
 )
 
 data class BackupServerListResponse(
@@ -217,8 +287,8 @@ data class BackupServerListResponse(
 data class AddBackupServerRequest(
     val name: String,
     val address: String,
-    @SerializedName("api_key") val apiKey: String,
-    @SerializedName("sync_frequency_hours") val syncFrequencyHours: Int
+    @SerializedName("api_key") val apiKey: String? = null,
+    @SerializedName("sync_frequency_hours") val syncFrequencyHours: Int? = null,
 )
 
 data class RecoverResponse(val message: String)

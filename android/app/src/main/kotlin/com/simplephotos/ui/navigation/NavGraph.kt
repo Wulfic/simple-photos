@@ -27,6 +27,16 @@ import com.simplephotos.ui.screens.search.SearchScreen
 import com.simplephotos.ui.screens.diagnostics.DiagnosticsScreen
 import com.simplephotos.ui.screens.securegallery.SecureGalleryScreen
 import com.simplephotos.ui.screens.sharing.SharedAlbumsScreen
+import com.simplephotos.ui.screens.library.LibraryScreen
+import com.simplephotos.ui.screens.library.PeopleScreen
+import com.simplephotos.ui.screens.library.PetsScreen
+import com.simplephotos.ui.screens.library.ThingsScreen
+import com.simplephotos.ui.screens.library.MapScreen
+import com.simplephotos.ui.screens.library.TimelineScreen
+import com.simplephotos.ui.screens.library.MemoriesScreen
+import com.simplephotos.ui.screens.library.TripsScreen
+import com.simplephotos.ui.screens.library.LocationsScreen
+import com.simplephotos.ui.screens.library.ExportScreen
 
 /**
  * Top-level navigation host. Routes are defined in [Screen].
@@ -73,6 +83,7 @@ fun NavGraph() {
                 onSecureGalleryClick = { navController.navigate(Screen.SecureGallery.route) },
                 onSharedAlbumsClick = { navController.navigate(Screen.SharedAlbums.route) },
                 onDiagnosticsClick = { navController.navigate(Screen.Diagnostics.route) },
+                onLibraryClick = { navController.navigate(Screen.Library.route) },
                 onLogout = { navController.navigate(Screen.Login.route) { popUpTo(0) } },
                 isAdmin = isAdmin
             )
@@ -173,5 +184,28 @@ fun NavGraph() {
                 onBack = { navController.popBackStack() }
             )
         }
+        composable(Screen.Library.route) {
+            LibraryScreen(
+                onBack = { navController.popBackStack() },
+                onPeople = { navController.navigate(Screen.People.route) },
+                onPets = { navController.navigate(Screen.Pets.route) },
+                onThings = { navController.navigate(Screen.Things.route) },
+                onMap = { navController.navigate(Screen.Map.route) },
+                onTimeline = { navController.navigate(Screen.Timeline.route) },
+                onMemories = { navController.navigate(Screen.Memories.route) },
+                onTrips = { navController.navigate(Screen.Trips.route) },
+                onLocations = { navController.navigate(Screen.Locations.route) },
+                onExport = { navController.navigate(Screen.Export.route) },
+            )
+        }
+        composable(Screen.People.route) { PeopleScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.Pets.route) { PetsScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.Things.route) { ThingsScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.Map.route) { MapScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.Timeline.route) { TimelineScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.Memories.route) { MemoriesScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.Trips.route) { TripsScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.Locations.route) { LocationsScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.Export.route) { ExportScreen(onBack = { navController.popBackStack() }) }
     }
 }

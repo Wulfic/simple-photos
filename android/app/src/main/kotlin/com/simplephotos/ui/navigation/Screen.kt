@@ -27,4 +27,15 @@ sealed class Screen(val route: String) {
     data object SecureGallery : Screen("secure_gallery")
     data object SharedAlbums : Screen("shared_albums")
     data object Diagnostics : Screen("diagnostics")
+    // ── Library hub + sub-pages ────────────────────────────────────────────
+    data object Library : Screen("library")
+    data object People : Screen("library/people")
+    data object Pets : Screen("library/pets")
+    data object Things : Screen("library/things")
+    data object Map : Screen("library/map")
+    data object Timeline : Screen("library/timeline")
+    data object Memories : Screen("library/memories")
+    data object Trips : Screen("library/trips")
+    data object Locations : Screen("library/locations")
+    data object Export : Screen("library/export")
 }

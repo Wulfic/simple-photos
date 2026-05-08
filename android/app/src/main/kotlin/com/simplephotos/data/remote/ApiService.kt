@@ -335,4 +335,307 @@ interface ApiService {
 
     @PUT("api/admin/diagnostics/config")
     suspend fun updateDiagnosticsConfig(@Body request: UpdateDiagnosticsConfigRequest): DiagnosticsConfigResponse
+
+    // ── Diagnostics (admin) — full report ────────────────────────────────
+    @GET("api/admin/diagnostics")
+    suspend fun getDiagnostics(): DiagnosticsResponse
+
+    // ── Audit logs (admin) ───────────────────────────────────────────────
+    @GET("api/admin/audit-logs")
+    suspend fun listAuditLogs(
+        @Query("event_type") eventType: String? = null,
+        @Query("user_id") userId: String? = null,
+        @Query("ip_address") ipAddress: String? = null,
+        @Query("after") after: String? = null,
+        @Query("before") before: String? = null,
+        @Query("limit") limit: Int? = null,
+    ): AuditLogListResponse
+
+    // ── AI ───────────────────────────────────────────────────────────────
+    @GET("api/ai/status")
+    suspend fun getAiStatus(): AiStatusResponse
+
+    @POST("api/ai/toggle")
+    suspend fun toggleAi(@Body request: AiToggleRequest): AiToggleResponse
+
+    @POST("api/ai/reprocess")
+    suspend fun reprocessAi(@Body request: AiReprocessRequest): AiReprocessResponse
+
+    @GET("api/ai/faces")
+    suspend fun listFaceClusters(): FaceClusterListResponse
+
+    @POST("api/ai/faces/merge")
+    suspend fun mergeFaceClusters(@Body request: FaceClusterMergeRequest): MessageResponse
+
+    @POST("api/ai/faces/split")
+    suspend fun splitFaceCluster(@Body request: FaceClusterSplitRequest): MessageResponse
+
+    @GET("api/ai/faces/{cluster_id}/photos")
+    suspend fun listFaceClusterPhotos(@Path("cluster_id") clusterId: String): FaceClusterPhotosResponse
+
+    @PUT("api/ai/faces/{cluster_id}/name")
+    suspend fun renameFaceCluster(
+        @Path("cluster_id") clusterId: String,
+        @Body request: FaceClusterRenameRequest,
+    ): MessageResponse
+
+    @GET("api/ai/objects")
+    suspend fun listObjectClasses(): ObjectClassListResponse
+
+    @GET("api/ai/objects/{class_name}/photos")
+    suspend fun listObjectClassPhotos(@Path("class_name") className: String): ObjectClassPhotosResponse
+
+    @GET("api/ai/pets")
+    suspend fun listPetClusters(): PetClusterListResponse
+
+    @POST("api/ai/pets/merge")
+    suspend fun mergePetClusters(@Body request: PetClusterMergeRequest): MessageResponse
+
+    @GET("api/ai/pets/{cluster_id}/photos")
+    suspend fun listPetClusterPhotos(@Path("cluster_id") clusterId: String): PetClusterPhotosResponse
+
+    @PUT("api/ai/pets/{cluster_id}/name")
+    suspend fun renamePetCluster(
+        @Path("cluster_id") clusterId: String,
+        @Body request: PetClusterRenameRequest,
+    ): MessageResponse
+
+    // ── Geo ──────────────────────────────────────────────────────────────
+    @GET("api/settings/geo")
+    suspend fun getGeoSettings(): GeoSettings
+
+    @POST("api/settings/geo")
+    suspend fun updateGeoSettings(@Body request: UpdateGeoSettingsRequest): GeoSettings
+
+    @POST("api/geo/scrub")
+    suspend fun scrubGeoData(): GeoScrubResponse
+
+    @GET("api/geo/countries")
+    suspend fun listGeoCountries(): GeoCountryListResponse
+
+    @GET("api/geo/locations")
+    suspend fun listGeoLocations(): GeoLocationListResponse
+
+    @GET("api/geo/locations/{country}/{city}")
+    suspend fun listGeoLocationPhotos(
+        @Path("country") country: String,
+        @Path("city") city: String,
+    ): GeoLocationPhotosResponse
+
+    @GET("api/geo/map")
+    suspend fun listGeoMapPhotos(): GeoMapResponse
+
+    @GET("api/geo/timeline")
+    suspend fun listGeoTimeline(): GeoTimelineResponse
+
+    @GET("api/geo/timeline/{year}")
+    suspend fun listGeoTimelineYear(@Path("year") year: Int): GeoTimelineResponse
+
+    @GET("api/geo/timeline/{year}/{month}")
+    suspend fun listGeoTimelineMonthPhotos(
+        @Path("year") year: Int,
+        @Path("month") month: Int,
+    ): GeoTimelinePhotosResponse
+
+    @GET("api/geo/memories")
+    suspend fun listGeoMemories(): GeoMemoryListResponse
+
+    @GET("api/geo/memories/{memory_id}/photos")
+    suspend fun listGeoMemoryPhotos(@Path("memory_id") memoryId: String): GeoMemoryPhotosResponse
+
+    @GET("api/geo/trips")
+    suspend fun listGeoTrips(): GeoTripListResponse
+
+    @GET("api/geo/trips/{trip_id}/photos")
+    suspend fun listGeoTripPhotos(@Path("trip_id") tripId: String): GeoTripPhotosResponse
+
+    // ── Activity / processing status ─────────────────────────────────────
+    @GET("api/status/activity")
+    suspend fun getActivityStatus(): ActivityStatusResponse
+
+    @GET("api/transcode/status")
+    suspend fun getTranscodeStatus(): TranscodeStatusResponse
+
+    // ── Edit copies ──────────────────────────────────────────────────────
+    @GET("api/photos/{id}/copies")
+    suspend fun listEditCopies(@Path("id") photoId: String): EditCopyListResponse
+
+    @POST("api/photos/{id}/copies")
+    suspend fun createEditCopy(
+        @Path("id") photoId: String,
+        @Body request: CreateEditCopyRequest,
+    ): CreateEditCopyResponse
+
+    @DELETE("api/photos/{id}/copies/{copy_id}")
+    suspend fun deleteEditCopy(
+        @Path("id") photoId: String,
+        @Path("copy_id") copyId: String,
+    ): DeleteEditCopyResponse
+
+    @POST("api/photos/{id}/render")
+    @Streaming
+    suspend fun renderPhoto(
+        @Path("id") photoId: String,
+        @Body request: RenderPhotoRequest,
+    ): ResponseBody
+
+    @GET("api/photos/{id}/source-file")
+    @Streaming
+    suspend fun photoSourceFile(@Path("id") photoId: String): ResponseBody
+
+    @GET("api/photos/{id}/web")
+    @Streaming
+    suspend fun photoWebFile(@Path("id") photoId: String): ResponseBody
+
+    // ── Photo metadata sidecars ──────────────────────────────────────────
+    @POST("api/import/metadata")
+    suspend fun importMetadata(@Body request: ImportMetadataRequest): ImportMetadataResponse
+
+    @POST("api/import/metadata/batch")
+    suspend fun importMetadataBatch(@Body request: ImportMetadataBatchRequest): ImportMetadataBatchResponse
+
+    @POST("api/import/metadata/upload")
+    suspend fun importMetadataUpload(
+        @Body body: RequestBody,
+        @Header("X-Photo-Id") photoId: String? = null,
+        @Header("X-Blob-Id") blobId: String? = null,
+    ): ImportMetadataResponse
+
+    @GET("api/photos/{id}/metadata")
+    suspend fun listPhotoMetadata(@Path("id") photoId: String): PhotoMetadataListResponse
+
+    @DELETE("api/photos/{id}/metadata")
+    suspend fun deletePhotoMetadata(@Path("id") photoId: String): Response<Unit>
+
+    // ── Export ───────────────────────────────────────────────────────────
+    @POST("api/export")
+    suspend fun startExport(@Body request: ExportStartRequest): ExportStartResponse
+
+    @GET("api/export/status")
+    suspend fun getExportStatus(): ExportStatusResponse
+
+    @GET("api/export/files")
+    suspend fun listExportFiles(): ExportFileListResponse
+
+    @GET("api/export/files/{id}/download")
+    @Streaming
+    suspend fun downloadExportFile(@Path("id") fileId: String): ResponseBody
+
+    // ── Setup wizard ─────────────────────────────────────────────────────
+    @GET("api/discover/info")
+    suspend fun discoverInfo(): DiscoverInfoResponse
+
+    @GET("api/setup/status")
+    suspend fun getSetupStatus(): SetupStatusResponse
+
+    @POST("api/setup/init")
+    suspend fun setupInit(@Body request: SetupInitRequest): SetupInitResponse
+
+    @POST("api/setup/finalize")
+    suspend fun setupFinalize(@Body request: SetupFinalizeRequest): SetupFinalizeResponse
+
+    @GET("api/setup/discover")
+    suspend fun setupDiscover(): SetupDiscoverResponse
+
+    @POST("api/setup/pair")
+    suspend fun setupPair(@Body request: SetupPairRequest): SetupPairResponse
+
+    @POST("api/setup/verify-backup")
+    suspend fun setupVerifyBackup(@Body request: VerifyBackupRequest): VerifyBackupResponse
+
+    // ── Admin server controls ────────────────────────────────────────────
+    @GET("api/admin/storage")
+    suspend fun getStoragePath(): StoragePathResponse
+
+    @PUT("api/admin/storage")
+    suspend fun updateStoragePath(@Body request: UpdateStoragePathRequest): StoragePathResponse
+
+    @GET("api/admin/browse")
+    suspend fun browseDirectory(@Query("path") path: String? = null): BrowseResponse
+
+    @GET("api/admin/port")
+    suspend fun getServerPort(): PortResponse
+
+    @PUT("api/admin/port")
+    suspend fun updateServerPort(@Body request: UpdatePortRequest): PortResponse
+
+    @POST("api/admin/restart")
+    suspend fun restartServer(): RestartResponse
+
+    @PUT("api/admin/ssl")
+    suspend fun updateSslConfig(@Body request: UpdateSslRequest): SslStatusResponse
+
+    @GET("api/admin/ssl/local-ca/bundle")
+    @Streaming
+    suspend fun downloadLocalCaBundle(): ResponseBody
+
+    @POST("api/admin/photos/auto-scan")
+    suspend fun autoScanPhotos(): AutoScanResponse
+
+    // ── Server-side import (admin) ───────────────────────────────────────
+    @GET("api/admin/import/scan")
+    suspend fun adminImportScan(@Query("path") path: String? = null): ImportScanResponse
+
+    @GET("api/admin/import/file")
+    @Streaming
+    suspend fun adminImportFile(@Query("path") path: String): ResponseBody
+
+    @GET("api/admin/import/google-photos/scan")
+    suspend fun adminGooglePhotosScan(@Query("path") path: String): GooglePhotosScanResponse
+
+    @POST("api/admin/import/google-photos")
+    suspend fun adminGooglePhotosImport(@Body request: GooglePhotosImportRequest): GooglePhotosImportResponse
+
+    // ── Admin 2FA management ─────────────────────────────────────────────
+    @POST("api/admin/users/{id}/2fa/setup")
+    suspend fun adminSetup2fa(@Path("id") userId: String): TotpSetupResponse
+
+    @POST("api/admin/users/{id}/2fa/confirm")
+    suspend fun adminConfirm2fa(
+        @Path("id") userId: String,
+        @Body request: TotpConfirmRequest,
+    ): MessageResponse
+
+    // ── Backup mode + extended backup-server admin ───────────────────────
+    @GET("api/admin/backup/mode")
+    suspend fun getBackupMode(): BackupModeResponse
+
+    @POST("api/admin/backup/mode")
+    suspend fun setBackupMode(@Body request: SetBackupModeRequest): BackupModeResponse
+
+    @PUT("api/admin/backup/servers/{id}")
+    suspend fun updateBackupServer(
+        @Path("id") serverId: String,
+        @Body request: UpdateBackupServerRequest,
+    ): MessageResponse
+
+    @DELETE("api/admin/backup/servers/{id}")
+    suspend fun deleteBackupServer(@Path("id") serverId: String): Response<Unit>
+
+    @GET("api/admin/backup/servers/{id}/status")
+    suspend fun backupServerStatus(@Path("id") serverId: String): BackupServerStatusResponse
+
+    @GET("api/admin/backup/servers/{id}/logs")
+    suspend fun backupServerLogs(@Path("id") serverId: String): List<BackupSyncLog>
+
+    @POST("api/admin/backup/servers/{id}/sync")
+    suspend fun triggerBackupSync(@Path("id") serverId: String): BackupSyncStartedResponse
+
+    @GET("api/admin/backup/discover")
+    suspend fun discoverBackupServers(): BackupDiscoverResponse
+
+    // ── Photo register (non-encrypted) ───────────────────────────────────
+    @POST("api/photos/register")
+    suspend fun registerPhoto(@Body request: RegisterPhotoRequest): RegisterPhotoResponse
+
+    // ── Secure gallery item delete ───────────────────────────────────────
+    @DELETE("api/galleries/secure/{id}/items/{item_id}")
+    suspend fun deleteSecureGalleryItem(
+        @Path("id") galleryId: String,
+        @Path("item_id") itemId: String,
+    ): Response<Unit>
+
+    // ── External diagnostics (Basic auth) ────────────────────────────────
+    // Not declared here; called via separate ApiService instance with Basic
+    // auth interceptor when admin enables external diagnostics access.
 }

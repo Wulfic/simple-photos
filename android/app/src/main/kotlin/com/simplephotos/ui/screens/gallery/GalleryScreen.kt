@@ -92,6 +92,7 @@ fun GalleryScreen(
     onSecureGalleryClick: () -> Unit = {},
     onSharedAlbumsClick: () -> Unit = {},
     onDiagnosticsClick: () -> Unit = {},
+    onLibraryClick: () -> Unit = {},
     onLogout: () -> Unit,
     isAdmin: Boolean = false,
     viewModel: GalleryViewModel = hiltViewModel()
@@ -188,6 +189,7 @@ fun GalleryScreen(
                         onSecureGalleryClick = onSecureGalleryClick,
                         onSharedAlbumsClick = onSharedAlbumsClick,
                         onDiagnosticsClick = onDiagnosticsClick,
+                        onLibraryClick = onLibraryClick,
                         onLogout = { viewModel.logout(onLogout) },
                         onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
                         isAdmin = isAdmin

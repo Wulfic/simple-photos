@@ -4,10 +4,10 @@
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
+# `vulnerability` / `notice` keys removed in cargo-deny 0.16+: vulnerabilities
+# in non-ignored crates always fail the check; notice is now informational.
 unmaintained = "workspace"
 yanked = "warn"
-notice = "warn"
 ignore = [
     # rsa Marvin Attack (RUSTSEC-2023-0071) — transitive via sqlx-mysql, no fix available
     "RUSTSEC-2023-0071",
@@ -20,7 +20,9 @@ ignore = [
 ]
 
 [licenses]
-unlicensed = "deny"
+# `unlicensed` / `copyleft` keys removed in cargo-deny 0.16+: an explicit
+# allowlist below is now the sole license-policy mechanism. Anything not in
+# `allow` fails the check.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -35,7 +37,6 @@ allow = [
     "CC0-1.0",
     "MPL-2.0",
 ]
-copyleft = "warn"
 
 [bans]
 multiple-versions = "warn"
