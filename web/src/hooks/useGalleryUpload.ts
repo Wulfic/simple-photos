@@ -39,10 +39,13 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
 
     // Browser-native + convertible extensions accepted by the server
     // (`is_supported_extension` ∪ `is_convertible`). Drop other files at
-    // the boundary so the user sees an immediate filter rather than a
-    // server 400.
+    // the boundary so unrecognised formats are silently skipped rather
+    // than producing a server 400 shown to the user.
+    // NOTE: camera RAW formats (cr2, nef, arw, dng, raf, orf, rw2, etc.)
+    // are intentionally excluded — the server cannot convert them and they
+    // are silently ignored rather than surfacing an error.
     const ACCEPTED_EXTENSIONS =
-      /\.(jpe?g|png|gif|webp|avif|bmp|ico|svg|mp4|webm|mp3|flac|ogg|wav|heic|heif|tiff?|mkv|avi|mov|wmv|wma|m4a|aiff?|3gp|cr2|nef|arw|dng|raf|orf|rw2)$/i;
+      /\.(jpe?g|png|gif|webp|avif|bmp|ico|svg|mp4|webm|mp3|flac|ogg|wav|heic|heif|tiff?|mkv|avi|mov|wmv|wma|m4a|aiff?|3gp)$/i;
     const fileArray = Array.from(files).filter(
       (f) =>
         f.type.startsWith("image/") ||
