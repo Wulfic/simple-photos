@@ -302,7 +302,7 @@ fun ServerSetupScreen(
                         value = viewModel.serverUrl,
                         onValueChange = { viewModel.serverUrl = it },
                         label = { Text("Server URL") },
-                        placeholder = { Text("http://192.168.1.100:8080") },
+                        placeholder = { Text("http://192.168.1.100:8080 or http://photos.example.com:8080") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
