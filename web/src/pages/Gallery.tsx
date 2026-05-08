@@ -277,9 +277,9 @@ export default function Gallery() {
       <AppHeader />
 
       <main className="p-4">
-        {/* ── Selection mode bar (sticky to top of viewport) ──────────── */}
+        {/* ── Selection mode bar (sticky just under the fixed AppHeader) ── */}
         {selectionMode && !isBackupView && !isBackupServer && (
-          <div className="sticky top-0 z-40 -mx-4 mb-4 flex items-center justify-between bg-gray-200/95 dark:bg-gray-800/95 backdrop-blur px-4 py-2 shadow-sm">
+          <div className="sticky top-14 z-40 -mx-4 mb-4 flex items-center justify-between bg-gray-200/95 dark:bg-gray-800/95 backdrop-blur px-4 py-2 shadow-sm">
             <div className="flex items-center gap-3">
               <button onClick={clearSelection} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white transition-colors" aria-label="Cancel selection">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>

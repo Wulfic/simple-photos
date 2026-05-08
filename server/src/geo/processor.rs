@@ -214,10 +214,15 @@ async fn backfill_geo_locations(
         // WHERE geo_city = ''`.
         let mut resolved = 0usize;
         let mut unresolved = 0usize;
-        // Wrap the per-row UPDATEs in a single transaction so SQLite
-        // doesn't fsync between every row — on a CPU-only VPS this turned
-        // a several-second batch into ~50 ms of writes.
+        // Wrap per-row UPDATEs in transactions so SQLite doesn't fsync
+        // between every row — but commit in small chunks so the
+        // activity-status reader pool sees progress mid-batch.
+        // Without chunked commits the GeoBanner would jump from 0/N to
+        // N/N because all writes were invisible to readers until the
+        // single end-of-batch commit.
+        const COMMIT_CHUNK: usize = 10;
         let mut tx = pool.begin().await?;
+        let mut in_chunk = 0usize;
         for (i, (photo_id, _, _)) in rows.iter().enumerate() {
             match locations.get(i) {
                 Some(Some(loc)) => {
@@ -246,8 +251,19 @@ async fn backfill_geo_locations(
                     unresolved += 1;
                 }
             }
+            in_chunk += 1;
+            if in_chunk >= COMMIT_CHUNK {
+                tx.commit().await?;
+                tx = pool.begin().await?;
+                in_chunk = 0;
+            }
         }
-        tx.commit().await?;
+        if in_chunk > 0 {
+            tx.commit().await?;
+        } else {
+            // Nothing pending — drop the empty transaction.
+            drop(tx);
+        }
 
         tracing::info!(
             photos = count, resolved, unresolved,
