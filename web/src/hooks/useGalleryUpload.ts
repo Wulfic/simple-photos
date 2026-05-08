@@ -37,21 +37,25 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     startTask("upload");
     setError("");
 
+    // Camera RAW formats are not supported — explicitly block them first so
+    // they are silently dropped even if the browser reports an image/ MIME type
+    // (e.g. image/x-canon-cr2). Extension check takes priority over MIME type.
+    const RAW_EXTENSIONS =
+      /\.(cr2|cr3|nef|arw|dng|raf|orf|rw2|rw1|pef|sr2|srf|raw|3fr|erf|kdc|mef|mrw|nrw|ptx|r3d|rwl|srw|x3f)$/i;
+
     // Browser-native + convertible extensions accepted by the server
     // (`is_supported_extension` ∪ `is_convertible`). Drop other files at
     // the boundary so unrecognised formats are silently skipped rather
     // than producing a server 400 shown to the user.
-    // NOTE: camera RAW formats (cr2, nef, arw, dng, raf, orf, rw2, etc.)
-    // are intentionally excluded — the server cannot convert them and they
-    // are silently ignored rather than surfacing an error.
     const ACCEPTED_EXTENSIONS =
       /\.(jpe?g|png|gif|webp|avif|bmp|ico|svg|mp4|webm|mp3|flac|ogg|wav|heic|heif|tiff?|mkv|avi|mov|wmv|wma|m4a|aiff?|3gp)$/i;
     const fileArray = Array.from(files).filter(
       (f) =>
-        f.type.startsWith("image/") ||
-        f.type.startsWith("video/") ||
-        f.type.startsWith("audio/") ||
-        ACCEPTED_EXTENSIONS.test(f.name),
+        !RAW_EXTENSIONS.test(f.name) &&
+        (f.type.startsWith("image/") ||
+          f.type.startsWith("video/") ||
+          f.type.startsWith("audio/") ||
+          ACCEPTED_EXTENSIONS.test(f.name)),
     );
 
     setUploadProgress({ done: 0, total: fileArray.length });
