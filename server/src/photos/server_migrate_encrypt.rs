@@ -615,8 +615,14 @@ async fn build_thumbnail(
     file_data: &[u8],
     storage_root: &std::path::Path,
 ) -> Option<Vec<u8>> {
+    // Match the extension that upload.rs / autoscan write — animated GIFs
+    // are cached as `.thumb.gif` so the migration path can reuse them.
+    // Hardcoding `.jpg` here used to force every GIF through
+    // `generate_thumbnail_for_migration` (image::open → static frame),
+    // losing animation in the encrypted thumbnail blob.
+    let thumb_ext = if photo.mime_type == "image/gif" { "gif" } else { "jpg" };
     let cached_thumb_path =
-        storage_root.join(format!(".thumbnails/{}.thumb.jpg", photo.id));
+        storage_root.join(format!(".thumbnails/{}.thumb.{}", photo.id, thumb_ext));
 
     if tokio::fs::try_exists(&cached_thumb_path)
         .await

@@ -351,8 +351,13 @@ pub async fn upload_photo(
         (resolved_lat, resolved_lon)
     };
 
-    sqlx::query(
-        "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+    // Use INSERT OR IGNORE so a concurrent upload race (two near-simultaneous
+    // uploads of identical content from different clients) doesn't surface as
+    // a 500 from the (user_id, photo_hash) UNIQUE constraint. If we lose the
+    // race, look up the row that won and return that — same semantics as
+    // hitting the dedup check above.
+    let insert_result = sqlx::query(
+        "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
          size_bytes, width, height, taken_at, latitude, longitude, camera_model, \
          thumb_path, created_at, photo_hash, photo_subtype, burst_id) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -377,6 +382,41 @@ pub async fn upload_photo(
     .bind(&subtype_info.burst_id)
     .execute(&state.pool)
     .await?;
+
+    if insert_result.rows_affected() == 0 {
+        // Lost the race to another concurrent upload of identical content —
+        // remove the orphan file we just wrote and return the winning row.
+        let _ = tokio::fs::remove_file(&file_path).await;
+        let winner: Option<(String, String, String, i64, Option<String>)> = sqlx::query_as(
+            "SELECT id, filename, file_path, size_bytes, photo_hash FROM photos \
+             WHERE user_id = ? AND photo_hash = ? LIMIT 1",
+        )
+        .bind(&auth.user_id)
+        .bind(&photo_hash)
+        .fetch_optional(&state.read_pool)
+        .await?;
+        if let Some((eid, efn, efp, esz, ehash)) = winner {
+            tracing::info!(
+                user_id = %auth.user_id,
+                filename = %efn,
+                photo_hash = %photo_hash,
+                "Concurrent upload race resolved — returning winner's record"
+            );
+            return Ok((
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "photo_id": eid,
+                    "filename": efn,
+                    "file_path": efp,
+                    "size_bytes": esz,
+                    "photo_hash": ehash,
+                })),
+            ));
+        }
+        return Err(AppError::Internal(
+            "Photo insert ignored but no existing row found".to_string(),
+        ));
+    }
 
     // ── Inline geo & timeline backfill ──────────────────────────────────
     // Set photo_year/photo_month from taken_at timestamp
@@ -433,19 +473,23 @@ pub async fn upload_photo(
         }
     }
 
-    // Generate thumbnail immediately so it's available for the first gallery load.
-    // Runs in the background — the upload response isn't delayed if this is slow.
+    // ── Generate thumbnail SYNCHRONOUSLY (parity with autoscan) ─────────
+    // Autoscan awaits thumbnail generation BEFORE handing off to encryption,
+    // so by the time `auto_migrate_after_scan` runs the cache file at
+    // `.thumbnails/{id}.thumb.{ext}` already exists and `build_thumbnail`
+    // reuses it. Spawning the thumbnail here instead would race encryption:
+    // when encryption wins, it falls back to `generate_thumbnail_for_migration`
+    // (basic 512×512 resize, no panorama awareness, no FFmpeg path for
+    // video/GIF) — that's the encrypted thumbnail the gallery serves
+    // forever. Cost: a few hundred ms added to the upload response. Worth it
+    // for correctness.
     {
         let thumb_abs = storage_root.join(&thumb_rel);
-        let file_path_clone = file_path.clone();
-        let mime_clone = mime_type.clone();
-        tokio::spawn(async move {
-            if generate_thumbnail_file(&file_path_clone, &thumb_abs, &mime_clone, None).await {
-                tracing::debug!("Generated thumbnail for uploaded file");
-            } else {
-                tracing::warn!("Failed to generate thumbnail for uploaded file");
-            }
-        });
+        if generate_thumbnail_file(&file_path, &thumb_abs, &mime_type, None).await {
+            tracing::debug!("Generated thumbnail for uploaded file");
+        } else {
+            tracing::warn!("Failed to generate thumbnail for uploaded file");
+        }
     }
 
     // ── Hand off to the unified post-scan pipeline ──────────────────────
