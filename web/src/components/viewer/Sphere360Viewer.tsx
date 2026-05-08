@@ -105,18 +105,44 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
     stateRef.current.mesh = mesh;
 
     // Load texture asynchronously so we don't block first paint.
-    const loader = new THREE.TextureLoader();
-    loader.setCrossOrigin("anonymous");
-    loader.load(
-      mediaUrl,
-      (tex) => {
-        // Clamp to texture max size — extremely wide 360 images can exceed
-        // the GPU limit; let three.js downscale via the internal format.
+    //
+    // We avoid `THREE.TextureLoader` because it sets `crossorigin="anonymous"`
+    // on its internal <img>, which breaks `blob:` object URLs (the form
+    // used by the gallery's decrypted media pipeline).  We also avoid a
+    // plain `new Image()` because some browsers flag the resulting image
+    // as cross-origin tainted when uploaded to WebGL, leaving the sphere
+    // black.  `fetch` + `createImageBitmap` is the modern, CORS-safe path
+    // for WebGL textures and is widely supported.
+    let cancelled = false;
+    const loadTexture = async () => {
+      try {
+        let source: ImageBitmap | HTMLImageElement;
+        if (typeof createImageBitmap === "function") {
+          const resp = await fetch(mediaUrl);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const blob = await resp.blob();
+          source = await createImageBitmap(blob);
+        } else {
+          // Fallback for older browsers without createImageBitmap.
+          source = await new Promise<HTMLImageElement>((resolve, reject) => {
+            const img = new Image();
+            img.decoding = "async";
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error("image load failed"));
+            img.src = mediaUrl;
+          });
+        }
+        if (cancelled) {
+          if ("close" in source) (source as ImageBitmap).close();
+          return;
+        }
+        const tex = new THREE.Texture(source as HTMLImageElement);
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.minFilter = THREE.LinearFilter;
         tex.magFilter = THREE.LinearFilter;
         tex.wrapS = THREE.ClampToEdgeWrapping;
         tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.needsUpdate = true;
         const mat = new THREE.MeshBasicMaterial({ map: tex });
         if (stateRef.current.mesh) {
           (stateRef.current.mesh.material as THREE.Material).dispose();
@@ -124,10 +150,15 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
         }
         stateRef.current.texture = tex;
         setReady(true);
-      },
-      undefined,
-      () => setError("Failed to load panorama image."),
-    );
+      } catch (e) {
+        if (!cancelled) {
+          // eslint-disable-next-line no-console
+          console.error("[Sphere360Viewer] texture load failed:", e);
+          setError("Failed to load panorama image.");
+        }
+      }
+    };
+    loadTexture();
 
     // ── Render loop ───────────────────────────────────────────────────────
     const tick = () => {
@@ -161,6 +192,7 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
 
     // ── Cleanup ─────────────────────────────────────────────────────────
     return () => {
+      cancelled = true;
       ro.disconnect();
       const s = stateRef.current;
       if (s.raf) cancelAnimationFrame(s.raf);
@@ -280,7 +312,13 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
       onTouchEnd={onTouchEnd}
       style={{ touchAction: "none", cursor: "grab" }}
     >
-      <div ref={mountRef} className="absolute inset-0" />
+      {/* WebGL mount.  Hidden (not unmounted) when an error occurs so the
+          init useEffect can still keep its ref and run cleanup correctly. */}
+      <div
+        ref={mountRef}
+        className="absolute inset-0"
+        style={{ visibility: error ? "hidden" : "visible" }}
+      />
 
       {!ready && !error && (
         <div className="absolute inset-0 flex items-center justify-center text-white text-sm">
@@ -288,9 +326,18 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
         </div>
       )}
       {error && (
-        <div className="absolute inset-0 flex items-center justify-center text-red-400 text-sm">
-          {error}
-        </div>
+        <>
+          {/* Flat fallback so the user still sees the image when WebGL or
+              the texture load fails. */}
+          <img
+            src={mediaUrl}
+            alt="Panorama"
+            className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+          />
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded-full bg-red-600/80 text-white text-xs">
+            {error}
+          </div>
+        </>
       )}
 
       <button
