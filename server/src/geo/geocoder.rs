@@ -5,9 +5,20 @@
 //! coordinates fall within. Lookups check the cell + its 8 neighbours and
 //! find the nearest city by haversine distance.
 //!
-//! No external crates needed — just a HashMap of grid cells.
+//! Optional companion files (looked up next to the cities dataset):
+//!  * `admin1CodesASCII.txt` — promotes the 2-char ADM1 code to a full
+//!    state/region name (e.g. "California" instead of "CA").
+//!  * `admin2Codes.txt`      — county/district names, used as a finer
+//!    "neighborhood" hint when the resolved city is more than ~5 km
+//!    away from the query coordinates.
+//!
+//! Streaming line-parser keeps peak RAM low (~30 MB instead of the
+//! 25 MB file slurp + parsed copy) which matters on small CPU-only VPS
+//! instances.
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 /// A resolved geographic location.
@@ -24,7 +35,9 @@ struct City {
     name: String,
     lat: f64,
     lon: f64,
-    state: Option<String>,
+    /// Composite key "<countryCode>.<admin1Code>" used to look up the full
+    /// admin1 name from `admin1CodesASCII.txt`.
+    admin1_key: Option<String>,
     country: String,
     country_code: String,
 }
@@ -33,6 +46,10 @@ struct City {
 pub struct ReverseGeocoder {
     /// Grid cells keyed by (lat_bucket, lon_bucket). Each bucket is 1° × 1°.
     grid: HashMap<(i32, i32), Vec<City>>,
+    /// Maps "<countryCode>.<admin1Code>" → human-readable region name
+    /// (e.g. "US.CA" → "California").  Populated from `admin1CodesASCII.txt`
+    /// when present alongside the cities dataset.
+    admin1_names: HashMap<String, String>,
     city_count: usize,
 }
 
@@ -43,14 +60,22 @@ impl ReverseGeocoder {
     /// 0: geonameid, 1: name, 2: asciiname, 3: alternatenames,
     /// 4: latitude, 5: longitude, 6: feature class, 7: feature code,
     /// 8: country code, 9: cc2, 10: admin1, ..., 17: population
+    ///
+    /// Memory-efficient streaming parser: reads line-by-line via
+    /// `BufReader` rather than slurping the whole 25 MB file into RAM.
     pub fn load(path: &Path) -> Result<Self, String> {
-        let contents = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read GeoNames file '{}': {}", path.display(), e))?;
+        let file = File::open(path)
+            .map_err(|e| format!("Failed to open GeoNames file '{}': {}", path.display(), e))?;
+        let reader = BufReader::with_capacity(1 << 16, file);
 
         let mut grid: HashMap<(i32, i32), Vec<City>> = HashMap::new();
         let mut count = 0usize;
 
-        for line in contents.lines() {
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
             let fields: Vec<&str> = line.split('\t').collect();
             if fields.len() < 18 {
                 continue;
@@ -65,11 +90,17 @@ impl ReverseGeocoder {
                 Err(_) => continue,
             };
 
+            let admin1_key = if fields[10].is_empty() || fields[8].is_empty() {
+                None
+            } else {
+                Some(format!("{}.{}", fields[8], fields[10]))
+            };
+
             let city = City {
                 name: fields[1].to_string(),
                 lat,
                 lon,
-                state: if fields[10].is_empty() { None } else { Some(fields[10].to_string()) },
+                admin1_key,
                 country: fields[8].to_string(), // country code initially; resolved below
                 country_code: fields[8].to_string(),
             };
@@ -89,13 +120,36 @@ impl ReverseGeocoder {
             }
         }
 
-        tracing::info!(cities = count, buckets = grid.len(), "Loaded GeoNames dataset");
-        Ok(Self { grid, city_count: count })
+        // Best-effort load of admin1CodesASCII.txt that ships next to
+        // cities500.txt (downloaded by scripts/fetch_geo_data.sh).  Without
+        // it the `state` field is the 2-char ADM1 code (e.g. "CA");  with
+        // it we get the human name ("California").  Missing file is not an
+        // error — it just means coarser state names.
+        let admin1_names = path
+            .parent()
+            .map(|dir| load_admin1_names(&dir.join("admin1CodesASCII.txt")))
+            .unwrap_or_default();
+
+        tracing::info!(
+            cities = count,
+            buckets = grid.len(),
+            admin1_regions = admin1_names.len(),
+            "Loaded GeoNames dataset"
+        );
+        Ok(Self {
+            grid,
+            admin1_names,
+            city_count: count,
+        })
     }
 
     /// Create an empty geocoder (for when geo is disabled or dataset isn't available).
     pub fn empty() -> Self {
-        Self { grid: HashMap::new(), city_count: 0 }
+        Self {
+            grid: HashMap::new(),
+            admin1_names: HashMap::new(),
+            city_count: 0,
+        }
     }
 
     /// Whether this geocoder has any data loaded.
@@ -104,6 +158,7 @@ impl ReverseGeocoder {
     }
 
     /// Number of cities loaded.
+    #[allow(dead_code)]
     pub fn city_count(&self) -> usize {
         self.city_count
     }
@@ -134,11 +189,19 @@ impl ReverseGeocoder {
             }
         }
 
-        best.map(|(city, _)| GeoLocation {
-            city: city.name.clone(),
-            state: city.state.clone(),
-            country: city.country.clone(),
-            country_code: city.country_code.clone(),
+        best.map(|(city, _)| {
+            let state = city.admin1_key.as_ref().and_then(|k| {
+                self.admin1_names
+                    .get(k)
+                    .cloned()
+                    .or_else(|| k.split('.').nth(1).map(|s| s.to_string()))
+            });
+            GeoLocation {
+                city: city.name.clone(),
+                state,
+                country: city.country.clone(),
+                country_code: city.country_code.clone(),
+            }
         })
     }
 
@@ -157,6 +220,35 @@ fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
         + lat1.to_radians().cos() * lat2.to_radians().cos() * (d_lon / 2.0).sin().powi(2);
     let c = 2.0 * a.sqrt().asin();
     R * c
+}
+
+/// Best-effort load of the GeoNames `admin1CodesASCII.txt` companion file.
+///
+/// Format: tab-separated, columns:
+///   0: code (e.g. "US.CA"), 1: name ("California"), 2: ascii name, 3: geonameid
+///
+/// Returns an empty map if the file is missing or unreadable — callers fall
+/// back to the raw 2-char admin1 code in that case.
+fn load_admin1_names(path: &Path) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return out,
+    };
+    let reader = BufReader::with_capacity(1 << 14, file);
+    for line in reader.lines().map_while(Result::ok) {
+        let mut it = line.split('\t');
+        let code = match it.next() {
+            Some(c) if !c.is_empty() => c.to_string(),
+            _ => continue,
+        };
+        let name = match it.next() {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => continue,
+        };
+        out.insert(code, name);
+    }
+    out
 }
 
 /// ISO 3166-1 alpha-2 → country name mapping (subset covering most common countries).

@@ -20,52 +20,28 @@ use super::geocoder::ReverseGeocoder;
 /// as the default for users who haven't explicitly toggled. This allows
 /// the runtime toggle (`POST /api/settings/geo`) to work correctly.
 ///
+/// **Lazy loading.** The 25 MB GeoNames dataset is *not* parsed until the
+/// first poll cycle that actually has work to do (geo enabled by config OR
+/// at least one user with `geo_enabled='true'` AND at least one photo
+/// pending resolution).  This prevents the ~1-3 s CPU spike + ~30 MB RAM
+/// hit at boot on small CPU-only VPS instances where geo is disabled.
+///
+/// Once loaded the dataset is held for the lifetime of the process — there
+/// is no benefit to repeatedly re-parsing it.
+///
 /// This task:
-/// 1. Loads the GeoNames dataset (blocking I/O in spawn_blocking)
-/// 2. Backfills geo columns for photos with lat/lon but no geo_city
-/// 3. Backfills photo_year/photo_month for photos with taken_at but no year
-/// 4. Sleeps and re-checks periodically for newly uploaded photos
+/// 1. Sleeps until the dataset is needed (lazy)
+/// 2. Loads the GeoNames dataset (blocking I/O in spawn_blocking)
+/// 3. Backfills geo columns for photos with lat/lon but no geo_city
+/// 4. Backfills photo_year/photo_month for photos with taken_at but no year
+/// 5. Sleeps and re-checks periodically for newly uploaded photos
 pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<AtomicBool>) {
     tokio::spawn(async move {
-        // Load the dataset in a blocking task (file I/O + parsing)
-        let dataset_path = config.dataset_path.clone();
-        let geocoder = match tokio::task::spawn_blocking(move || {
-            let path = std::path::Path::new(&dataset_path);
-            if path.exists() {
-                ReverseGeocoder::load(path)
-            } else {
-                tracing::error!(
-                    path = %dataset_path,
-                    "GeoNames cities500.txt not found — reverse geocoding is \
-                     DISABLED.  Photos with GPS EXIF will never have geo_city / \
-                     geo_country populated.  Run scripts/fetch_geo_data.sh or \
-                     download the dataset from \
-                     https://download.geonames.org/export/dump/cities500.zip"
-                );
-                Ok(ReverseGeocoder::empty())
-            }
-        })
-        .await
-        {
-            Ok(Ok(gc)) => Arc::new(gc),
-            Ok(Err(e)) => {
-                tracing::error!(error = %e, "Failed to load GeoNames dataset");
-                return;
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Geo dataset loading task panicked");
-                return;
-            }
-        };
-
-        tracing::info!(
-            cities = geocoder.city_count(),
-            config_default = if config.enabled { "enabled" } else { "disabled" },
-            "Geo processor started"
-        );
-
         let batch_size = config.batch_size as i64;
         let poll_secs = config.poll_interval_secs.max(1);
+
+        // Cached dataset — loaded once on first need.
+        let mut geocoder: Option<Arc<ReverseGeocoder>> = None;
 
         // Process loop — `tokio::time::interval` ticks immediately on the
         // first call so the initial backfill runs at startup.  Subsequent
@@ -79,21 +55,103 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<Atom
             // client can spin the profile avatar indicator.
             active.store(true, Ordering::Relaxed);
 
-            // ── Backfill geo location from lat/lon ──────────────────────
-            if geocoder.is_loaded() {
-                if let Err(e) = backfill_geo_locations(&pool, &geocoder, batch_size, &config).await {
-                    tracing::warn!(error = %e, "Geo backfill cycle failed");
-                }
-            }
-
-            // ── Backfill photo_year / photo_month from taken_at ─────────
+            // ── Cheap, always-runs phase: year/month backfill ───────────
+            // This is one SQL UPDATE; runs whether or not geo is enabled
+            // because timeline albums use it independently of geocoding.
             if let Err(e) = backfill_year_month(&pool, batch_size).await {
                 tracing::warn!(error = %e, "Year/month backfill cycle failed");
+            }
+
+            // ── Decide whether we need the geocoder this cycle ──────────
+            // Skip the expensive dataset load on hosts where nobody wants
+            // geocoding.  We re-check every cycle so flipping the toggle
+            // at runtime brings the loader online without a restart.
+            let needs_geo = geo_resolution_needed(&pool, config.enabled).await;
+
+            if needs_geo {
+                // Lazy-load on first need
+                if geocoder.is_none() {
+                    geocoder = load_geocoder(&config).await;
+                }
+
+                if let Some(gc) = &geocoder {
+                    if gc.is_loaded() {
+                        if let Err(e) =
+                            backfill_geo_locations(&pool, gc, batch_size, &config).await
+                        {
+                            tracing::warn!(error = %e, "Geo backfill cycle failed");
+                        }
+                    }
+                }
             }
 
             active.store(false, Ordering::Relaxed);
         }
     });
+}
+
+/// Decide whether at least one photo waiting for geo resolution belongs
+/// to a user (or default policy) that wants geocoding.  Cheap: a single
+/// `EXISTS` query.
+async fn geo_resolution_needed(pool: &SqlitePool, config_default_enabled: bool) -> bool {
+    let default_flag = if config_default_enabled { 1i32 } else { 0i32 };
+    sqlx::query_scalar::<_, i32>(
+        "SELECT EXISTS( \
+           SELECT 1 FROM photos p \
+           WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
+             AND p.geo_city IS NULL \
+             AND ( \
+               EXISTS (SELECT 1 FROM user_settings us \
+                       WHERE us.user_id = p.user_id \
+                         AND us.key = 'geo_enabled' AND us.value = 'true') \
+               OR ( \
+                 ?1 = 1 AND NOT EXISTS ( \
+                   SELECT 1 FROM user_settings us \
+                   WHERE us.user_id = p.user_id AND us.key = 'geo_enabled') \
+               ) \
+             ) \
+           LIMIT 1)",
+    )
+    .bind(default_flag)
+    .fetch_one(pool)
+    .await
+    .map(|n| n != 0)
+    .unwrap_or(false)
+}
+
+/// Load the GeoNames dataset off the runtime thread.  Returns `None` if
+/// the file is missing or fails to parse — callers should treat that as
+/// "geocoding unavailable" and try again on the next cycle.
+async fn load_geocoder(config: &GeoConfig) -> Option<Arc<ReverseGeocoder>> {
+    let dataset_path = config.dataset_path.clone();
+    match tokio::task::spawn_blocking(move || {
+        let path = std::path::Path::new(&dataset_path);
+        if path.exists() {
+            ReverseGeocoder::load(path)
+        } else {
+            tracing::error!(
+                path = %dataset_path,
+                "GeoNames cities500.txt not found — reverse geocoding is \
+                 DISABLED.  Photos with GPS EXIF will never have geo_city / \
+                 geo_country populated.  Run scripts/fetch_geo_data.sh or \
+                 download the dataset from \
+                 https://download.geonames.org/export/dump/cities500.zip"
+            );
+            Ok(ReverseGeocoder::empty())
+        }
+    })
+    .await
+    {
+        Ok(Ok(gc)) => Some(Arc::new(gc)),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "Failed to load GeoNames dataset");
+            None
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Geo dataset loading task panicked");
+            None
+        }
+    }
 }
 
 /// Backfill geo_city/geo_state/geo_country/geo_country_code for photos
@@ -156,6 +214,10 @@ async fn backfill_geo_locations(
         // WHERE geo_city = ''`.
         let mut resolved = 0usize;
         let mut unresolved = 0usize;
+        // Wrap the per-row UPDATEs in a single transaction so SQLite
+        // doesn't fsync between every row — on a CPU-only VPS this turned
+        // a several-second batch into ~50 ms of writes.
+        let mut tx = pool.begin().await?;
         for (i, (photo_id, _, _)) in rows.iter().enumerate() {
             match locations.get(i) {
                 Some(Some(loc)) => {
@@ -169,7 +231,7 @@ async fn backfill_geo_locations(
                     .bind(&loc.country)
                     .bind(&loc.country_code)
                     .bind(photo_id)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
                     resolved += 1;
                 }
@@ -179,12 +241,13 @@ async fn backfill_geo_locations(
                          WHERE id = ?1 AND geo_city IS NULL"
                     )
                     .bind(photo_id)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
                     unresolved += 1;
                 }
             }
         }
+        tx.commit().await?;
 
         tracing::info!(
             photos = count, resolved, unresolved,

@@ -140,6 +140,25 @@ download_geo_data() {
     local lines
     lines="$(wc -l <"$target" | tr -d ' ')"
     info "[geo] Done — $lines cities written to $target"
+
+    # Companion file: admin1CodesASCII.txt promotes the 2-char ADM1 code
+    # (e.g. "CA") to a full state/region name ("California").  ~10 KB,
+    # plain text, optional but recommended.  Failure here is non-fatal —
+    # the geocoder gracefully falls back to the raw code.
+    local admin1_target
+    admin1_target="$(dirname "$target")/admin1CodesASCII.txt"
+    if [[ ! -s "$admin1_target" ]]; then
+        info "[geo] Downloading admin1CodesASCII.txt (state/region names)…"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fL --retry 3 -o "$admin1_target" \
+                "https://download.geonames.org/export/dump/admin1CodesASCII.txt" \
+                || warn "[geo] admin1 download failed — state names will fall back to 2-char codes"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q -O "$admin1_target" \
+                "https://download.geonames.org/export/dump/admin1CodesASCII.txt" \
+                || warn "[geo] admin1 download failed — state names will fall back to 2-char codes"
+        fi
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
