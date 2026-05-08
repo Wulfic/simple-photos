@@ -15,6 +15,8 @@ import { base64ToUint8Array } from "../../utils/media";
 import type { MediaPayload } from "../../types/media";
 import SlideshowTransitions from "./SlideshowTransitions";
 import type { SlideshowTransition } from "../../hooks/useSlideshow";
+import { castMedia, getCastState } from "../../utils/cast";
+import { useAuthStore } from "../../store/auth";
 
 interface Props {
   currentBlobId: string | undefined;
@@ -191,12 +193,44 @@ export default function Slideshow({
     // The hook already handles preloading via the viewer's pipeline.
   }, [currentBlobId, currentSlide, totalSlides]);
 
-  // Cleanup on unmount.
+  // Cleanup on unmount.  Also exit document fullscreen so closing the
+  // slideshow returns the browser to its normal windowed state — without
+  // this the gallery underneath would still render in fullscreen until
+  // the user pressed Esc a second time.
   useEffect(() => {
     return () => {
       if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
     };
   }, []);
+
+  // ── Cast: mirror the current slide to a connected Chromecast ──────────
+  // When a cast session is active and the user starts a slideshow, the
+  // slides should appear on the TV (replacing whatever was last sent from
+  // the regular Viewer).  We resolve the local IndexedDB blobId to the
+  // server's photo id so `/api/photos/:id/file` returns the correct photo.
+  useEffect(() => {
+    if (!currentBlobId) return;
+    const { state } = getCastState();
+    if (state !== "connected") return;
+    let cancelled = false;
+    (async () => {
+      const cached = await db.photos.get(currentBlobId).catch(() => undefined);
+      if (cancelled) return;
+      const serverId = cached?.serverPhotoId ?? cached?.storageBlobId ?? currentBlobId;
+      const { accessToken } = useAuthStore.getState();
+      const castUrl =
+        `${window.location.origin}/api/photos/${encodeURIComponent(serverId)}/file` +
+        (accessToken ? `?token=${encodeURIComponent(accessToken)}` : "");
+      const mime = cached?.mimeType ?? "image/jpeg";
+      const kind: "photo" | "video" =
+        cached?.mediaType === "video" || mime.startsWith("video/") ? "video" : "photo";
+      castMedia(castUrl, mime, kind);
+    })();
+    return () => { cancelled = true; };
+  }, [currentBlobId]);
 
   // ── Auto-hide controls ─────────────────────────────────────────────────
 
