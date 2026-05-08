@@ -414,7 +414,7 @@ async fn process_single_photo(
                 continue; // already wrote a row for this species in this photo
             }
             let pet_start = Instant::now();
-            match animal::extract_pet_embedding(&img) {
+            match animal::extract_pet_embedding(&img, Some(&det.bbox)) {
                 Some(embedding) => {
                     let emb_bytes: Vec<u8> = embedding
                         .iter()

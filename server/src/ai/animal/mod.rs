@@ -30,6 +30,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use ort::session::Session;
 use tracing;
 
+use crate::ai::models::BoundingBox;
+
 // ── Phase-2 dedicated model (optional) ──────────────────────────────
 
 const PET_EMB_FILENAME: &str = "pet_embedding.onnx";
@@ -98,7 +100,47 @@ pub fn map_to_species(class_name: &str) -> Option<&'static str> {
 
 // ── Embedding extraction ─────────────────────────────────────────────
 
+/// Crop the image to the bbox (normalised 0..1) with `pad` extra context
+/// on each side, clamped to image bounds.  Returns the original image if
+/// cropping would produce a zero-sized region.
+fn crop_with_padding(img: &DynamicImage, bbox: &BoundingBox, pad: f32) -> DynamicImage {
+    let iw = img.width() as f32;
+    let ih = img.height() as f32;
+
+    let x = (bbox.x - bbox.w * pad).clamp(0.0, 1.0);
+    let y = (bbox.y - bbox.h * pad).clamp(0.0, 1.0);
+    let w = (bbox.w * (1.0 + 2.0 * pad)).min(1.0 - x);
+    let h = (bbox.h * (1.0 + 2.0 * pad)).min(1.0 - y);
+
+    let px = (x * iw) as u32;
+    let py = (y * ih) as u32;
+    let pw = (w * iw).max(1.0) as u32;
+    let ph = (h * ih).max(1.0) as u32;
+
+    if pw < 8 || ph < 8 {
+        return img.clone();
+    }
+    img.crop_imm(px, py, pw, ph)
+}
+
+/// L2-normalise a vector in place; returns the same vector for chaining.
+/// Does nothing for the zero vector.
+fn l2_normalize(mut v: Vec<f32>) -> Vec<f32> {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-9 {
+        for x in &mut v {
+            *x /= norm;
+        }
+    }
+    v
+}
+
 /// Extract a per-individual pet embedding from `img`.
+///
+/// When `bbox` is supplied the image is cropped (with 15% padding) to the
+/// detected animal before embedding — this dramatically reduces the
+/// influence of background scenery on the resulting vector.  The output is
+/// always L2-normalised so cosine similarity is well behaved.
 ///
 /// Priority:
 /// 1. Phase-2 dedicated `pet_embedding.onnx` (if loaded) — runs
@@ -109,13 +151,24 @@ pub fn map_to_species(class_name: &str) -> Option<&'static str> {
 ///    MobileNetV2 logit vector from the already-loaded classification model.
 ///
 /// Returns `None` when no model is available (degraded mode).
-pub fn extract_pet_embedding(img: &DynamicImage) -> Option<Vec<f32>> {
+pub fn extract_pet_embedding(
+    img: &DynamicImage,
+    bbox: Option<&BoundingBox>,
+) -> Option<Vec<f32>> {
+    // Crop to the animal first when a bbox is provided.  15% padding gives
+    // the network a little context (fur boundary, ears) without letting the
+    // background dominate the activations.
+    let crop: DynamicImage = match bbox {
+        Some(b) => crop_with_padding(img, b, 0.15),
+        None => img.clone(),
+    };
+
     // Phase 2: dedicated model
-    if let Some(emb) = try_phase2_embedding(img) {
-        return Some(emb);
+    if let Some(emb) = try_phase2_embedding(&crop) {
+        return Some(l2_normalize(emb));
     }
     // Phase 1: MobileNetV2 logits
-    crate::ai::object::extract_raw_logits(img)
+    crate::ai::object::extract_raw_logits(&crop).map(l2_normalize)
 }
 
 fn try_phase2_embedding(img: &DynamicImage) -> Option<Vec<f32>> {

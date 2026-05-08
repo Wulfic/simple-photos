@@ -393,7 +393,7 @@ impl AiConfig {
     /// fragment into many singleton clusters when their pose, lighting,
     /// or expression varied (e.g. group photos, candid shots).
     fn default_face_similarity_threshold() -> f32 { 0.42 }
-    fn default_pet_similarity_threshold() -> f32 { 0.85 }
+    fn default_pet_similarity_threshold() -> f32 { 0.70 }
     fn default_model_dir() -> String { "models".into() }
     fn default_quality() -> String { "high".into() }
 
@@ -418,7 +418,7 @@ impl Default for AiConfig {
             face_confidence: 0.7,
             object_confidence: 0.5,
             face_similarity_threshold: 0.42,
-            pet_similarity_threshold: 0.85,
+            pet_similarity_threshold: 0.70,
             model_dir: "models".into(),
             quality: "high".into(),
             allow_heuristic_fallback: false,

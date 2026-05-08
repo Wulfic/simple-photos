@@ -47,7 +47,7 @@ PET_DETECTION_CASES = [
 # Phase 2 (pet_embedding.onnx) would tighten this to ≤2.
 PET_CLUSTERING_CASES = [
     pytest.param(2, 2, id="two-bubs-photos-max-2-clusters"),
-    pytest.param(4, 4, id="four-bubs-photos-max-4-clusters"),
+    pytest.param(4, 2, id="four-bubs-photos-max-2-clusters"),
 ]
 
 # (invalid_name, expected_error_fragment)
