@@ -50,7 +50,7 @@ pub async fn upload_photo(
         return Err(AppError::BadRequest(format!(
             "Unsupported file format: '{}'. Accepted: browser-native formats \
              (JPEG, PNG, GIF, WebP, AVIF, BMP, ICO, MP4, WebM, MP3, FLAC, OGG, WAV) \
-             and convertible formats (HEIC, TIFF, RAW, MKV, AVI, MOV, WMA, AIFF, M4A, etc.).",
+             and convertible formats (HEIC, TIFF, MKV, AVI, MOV, WMA, AIFF, M4A, etc.).",
             filename.rsplit('.').next().unwrap_or("unknown")
         )));
     }

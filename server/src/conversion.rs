@@ -142,16 +142,6 @@ pub fn conversion_target(filename: &str) -> Option<ConversionTarget> {
         // ── Images → JPEG ────────────────────────────────────────────
         "heic" | "heif"                                     // Apple
         | "tiff" | "tif"                                    // Tagged Image
-        | "cr2" | "cr3"                                     // Canon RAW
-        | "dng"                                             // Adobe DNG
-        | "nef"                                             // Nikon RAW
-        | "arw"                                             // Sony RAW
-        | "orf"                                             // Olympus RAW
-        | "rw2"                                             // Panasonic RAW
-        | "pef"                                             // Pentax RAW
-        | "sr2" | "srf"                                     // Sony RAW (older)
-        | "raf"                                             // Fujifilm RAW
-        | "raw"                                             // Generic RAW
         | "hdr"                                             // Radiance HDR
         | "exr"                                             // OpenEXR
         | "psd"                                             // Photoshop
