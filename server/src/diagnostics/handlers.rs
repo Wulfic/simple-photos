@@ -4,11 +4,11 @@
 //! diagnostics enable/disable configuration, and paginated audit log viewing.
 
 use axum::extract::{Query, State};
-use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::IntoResponse;
 use axum::Json;
-use std::time::Instant;
 use futures_util::stream::Stream;
+use std::time::Instant;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
@@ -401,7 +401,17 @@ pub async fn list_audit_logs(
         .into_iter()
         .take(limit as usize)
         .map(
-            |(id, event_type, user_id, username, ip_address, user_agent, details, created_at, source_server)| {
+            |(
+                id,
+                event_type,
+                user_id,
+                username,
+                ip_address,
+                user_agent,
+                details,
+                created_at,
+                source_server,
+            )| {
                 AuditLogEntry {
                     id,
                     event_type,

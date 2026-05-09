@@ -9,7 +9,7 @@
 
 use super::ort_err;
 use crate::ai::models::{BoundingBox, FaceDetection};
-use image::{DynamicImage, GenericImageView, RgbImage, imageops::FilterType};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage};
 use ort::session::Session;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -86,7 +86,11 @@ fn detect_faces_legacy(
         return Ok(vec![]);
     }
 
-    let resized = img.resize_exact(LEGACY_WIDTH as u32, LEGACY_HEIGHT as u32, FilterType::Triangle);
+    let resized = img.resize_exact(
+        LEGACY_WIDTH as u32,
+        LEGACY_HEIGHT as u32,
+        FilterType::Triangle,
+    );
     let rgb = resized.to_rgb8();
 
     let mut input = ndarray::Array4::<f32>::zeros([1, 3, LEGACY_HEIGHT, LEGACY_WIDTH]);
@@ -128,7 +132,12 @@ fn detect_faces_legacy(
         }
 
         detections.push(FaceDetection {
-            bbox: BoundingBox { x: x_min, y: y_min, w: bw, h: bh },
+            bbox: BoundingBox {
+                x: x_min,
+                y: y_min,
+                w: bw,
+                h: bh,
+            },
             confidence: face_conf,
             embedding: Vec::new(),
         });
@@ -220,10 +229,7 @@ pub(super) fn detect_faces_heuristic(
 // ── Histogram embedding (shared fallback) ───────────────────────────
 
 /// Histogram-based 128-dim embedding (fallback when no ArcFace model).
-pub(super) fn extract_histogram_embedding(
-    img: &DynamicImage,
-    bbox: &BoundingBox,
-) -> Vec<f32> {
+pub(super) fn extract_histogram_embedding(img: &DynamicImage, bbox: &BoundingBox) -> Vec<f32> {
     let (iw, ih) = img.dimensions();
 
     let margin = 0.2;
@@ -276,7 +282,11 @@ pub(super) fn extract_histogram_embedding(
         }
     }
     let grad_total: u32 = grad_hist.iter().sum();
-    let grad_norm = if grad_total > 0 { grad_total as f32 } else { 1.0 };
+    let grad_norm = if grad_total > 0 {
+        grad_total as f32
+    } else {
+        1.0
+    };
     for i in 0..32 {
         embedding.push(grad_hist[i] as f32 / grad_norm);
     }
@@ -367,17 +377,15 @@ fn iou(a: &BoundingBox, b: &BoundingBox) -> f32 {
     let area_b = b.w * b.h;
     let union = area_a + area_b - inter;
 
-    if union < 1e-6 { 0.0 } else { inter / union }
+    if union < 1e-6 {
+        0.0
+    } else {
+        inter / union
+    }
 }
 
 /// Skin-colour density using YCbCr colour space (heuristic fallback).
-fn skin_density_score_ycbcr(
-    rgb: &RgbImage,
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
-) -> f32 {
+fn skin_density_score_ycbcr(rgb: &RgbImage, x: u32, y: u32, w: u32, h: u32) -> f32 {
     let sample_step = (w / 8).max(1);
     let mut skin_count = 0u32;
     let mut total = 0u32;
@@ -392,8 +400,11 @@ fn skin_density_score_ycbcr(
             let b = p[2] as f32;
             let cb = 128.0 + (-0.169 * r - 0.331 * g + 0.500 * b);
             let cr = 128.0 + (0.500 * r - 0.419 * g - 0.081 * b);
-            if (77.0..=127.0).contains(&cb) && (133.0..=173.0).contains(&cr)
-                && r > 80.0 && g > 30.0 && b > 15.0
+            if (77.0..=127.0).contains(&cb)
+                && (133.0..=173.0).contains(&cr)
+                && r > 80.0
+                && g > 30.0
+                && b > 15.0
             {
                 skin_count += 1;
             }
@@ -414,13 +425,7 @@ fn skin_density_score_ycbcr(
 }
 
 /// Face-like structure score (heuristic fallback).
-fn face_structure_score(
-    rgb: &RgbImage,
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
-) -> f32 {
+fn face_structure_score(rgb: &RgbImage, x: u32, y: u32, w: u32, h: u32) -> f32 {
     if w < 16 || h < 16 {
         return 0.0;
     }

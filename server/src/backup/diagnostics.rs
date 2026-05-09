@@ -119,13 +119,11 @@ pub async fn receive_forwarded_logs(
     let server_id = validate_backup_api_key(&state, &headers).await?;
 
     // Look up backup server name for the source_server column
-    let server_name: String = sqlx::query_scalar(
-        "SELECT name FROM backup_servers WHERE id = ?",
-    )
-    .bind(&server_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .unwrap_or_else(|| server_id.clone());
+    let server_name: String = sqlx::query_scalar("SELECT name FROM backup_servers WHERE id = ?")
+        .bind(&server_id)
+        .fetch_optional(&state.read_pool)
+        .await?
+        .unwrap_or_else(|| server_id.clone());
 
     let count = payload.logs.len();
     if count == 0 {
@@ -133,7 +131,11 @@ pub async fn receive_forwarded_logs(
     }
 
     // Cap batch size to prevent abuse
-    let logs = if count > 1000 { &payload.logs[..1000] } else { &payload.logs };
+    let logs = if count > 1000 {
+        &payload.logs[..1000]
+    } else {
+        &payload.logs
+    };
 
     for entry in logs {
         // Use a prefixed ID to avoid collisions with local audit IDs
@@ -188,7 +190,9 @@ pub async fn receive_forwarded_logs(
         "Stored forwarded audit logs from backup server"
     );
 
-    Ok(Json(ForwardLogsResponse { accepted: logs.len() }))
+    Ok(Json(ForwardLogsResponse {
+        accepted: logs.len(),
+    }))
 }
 
 // ── Primary-side: read the latest report ────────────────────────────────────
@@ -579,14 +583,13 @@ pub async fn background_log_forward_task(
             }
 
             // Re-check mode periodically — break inner loop to re-evaluate
-            let mode: String = sqlx::query_scalar(
-                "SELECT value FROM server_settings WHERE key = 'backup_mode'",
-            )
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "primary".to_string());
+            let mode: String =
+                sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'backup_mode'")
+                    .fetch_optional(&pool)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "primary".to_string());
 
             if mode != "backup" {
                 break;
@@ -596,58 +599,64 @@ pub async fn background_log_forward_task(
 }
 
 /// Fetch local audit log entries that haven't been forwarded yet (by cursor).
-async fn fetch_unsent_logs(
-    pool: &sqlx::SqlitePool,
-) -> Vec<super::models::ForwardedAuditLog> {
+async fn fetch_unsent_logs(pool: &sqlx::SqlitePool) -> Vec<super::models::ForwardedAuditLog> {
     use super::models::ForwardedAuditLog;
 
-    let last_forwarded: Option<String> = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'last_forwarded_log_at'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let last_forwarded: Option<String> =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'last_forwarded_log_at'")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
 
-    let rows: Vec<(String, String, Option<String>, String, String, String, String)> =
-        if let Some(ref cursor) = last_forwarded {
-            sqlx::query_as(
-                "SELECT id, event_type, user_id, ip_address, user_agent, details, created_at \
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+        String,
+    )> = if let Some(ref cursor) = last_forwarded {
+        sqlx::query_as(
+            "SELECT id, event_type, user_id, ip_address, user_agent, details, created_at \
                  FROM audit_log \
                  WHERE source_server IS NULL AND created_at > ? \
                  ORDER BY created_at ASC \
                  LIMIT 500",
-            )
-            .bind(cursor)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default()
-        } else {
-            let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
-            sqlx::query_as(
-                "SELECT id, event_type, user_id, ip_address, user_agent, details, created_at \
+        )
+        .bind(cursor)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+    } else {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        sqlx::query_as(
+            "SELECT id, event_type, user_id, ip_address, user_agent, details, created_at \
                  FROM audit_log \
                  WHERE source_server IS NULL AND created_at > ? \
                  ORDER BY created_at ASC \
                  LIMIT 500",
-            )
-            .bind(&cutoff)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default()
-        };
+        )
+        .bind(&cutoff)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+    };
 
     rows.into_iter()
-        .map(|(id, event_type, user_id, ip_address, user_agent, details, created_at)| {
-            ForwardedAuditLog {
-                id,
-                event_type,
-                user_id,
-                ip_address,
-                user_agent,
-                details,
-                created_at,
-            }
-        })
+        .map(
+            |(id, event_type, user_id, ip_address, user_agent, details, created_at)| {
+                ForwardedAuditLog {
+                    id,
+                    event_type,
+                    user_id,
+                    ip_address,
+                    user_agent,
+                    details,
+                    created_at,
+                }
+            },
+        )
         .collect()
 }

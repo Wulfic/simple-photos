@@ -79,14 +79,10 @@ pub async fn apply_object_tag(
 /// Remove all AI-generated tags (person:, object:, and pet:) for a photo.
 ///
 /// Called before re-processing to avoid stale tags.
-pub async fn clear_ai_tags(
-    pool: &SqlitePool,
-    user_id: &str,
-    photo_id: &str,
-) -> anyhow::Result<()> {
+pub async fn clear_ai_tags(pool: &SqlitePool, user_id: &str, photo_id: &str) -> anyhow::Result<()> {
     sqlx::query(
         "DELETE FROM photo_tags WHERE photo_id = ?1 AND user_id = ?2 \
-         AND (tag LIKE 'person:%' OR tag LIKE 'object:%' OR tag LIKE 'pet:%')"
+         AND (tag LIKE 'person:%' OR tag LIKE 'object:%' OR tag LIKE 'pet:%')",
     )
     .bind(photo_id)
     .bind(user_id)
@@ -115,7 +111,7 @@ pub async fn rename_cluster_tags(
 
     // Find all photos in this cluster
     let photo_ids: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT photo_id FROM face_detections WHERE cluster_id = ?1 AND user_id = ?2"
+        "SELECT DISTINCT photo_id FROM face_detections WHERE cluster_id = ?1 AND user_id = ?2",
     )
     .bind(cluster_id)
     .bind(user_id)
@@ -126,7 +122,7 @@ pub async fn rename_cluster_tags(
     for (photo_id,) in &photo_ids {
         // Remove old person tags for this photo that came from this cluster
         sqlx::query(
-            "DELETE FROM photo_tags WHERE photo_id = ?1 AND user_id = ?2 AND tag LIKE 'person:%'"
+            "DELETE FROM photo_tags WHERE photo_id = ?1 AND user_id = ?2 AND tag LIKE 'person:%'",
         )
         .bind(photo_id)
         .bind(user_id)
@@ -137,7 +133,7 @@ pub async fn rename_cluster_tags(
         let clusters: Vec<(i64, Option<String>)> = sqlx::query_as(
             "SELECT DISTINCT fc.id, fc.label FROM face_clusters fc \
              JOIN face_detections fd ON fd.cluster_id = fc.id \
-             WHERE fd.photo_id = ?1 AND fd.user_id = ?2"
+             WHERE fd.photo_id = ?1 AND fd.user_id = ?2",
         )
         .bind(photo_id)
         .bind(user_id)
@@ -194,7 +190,7 @@ pub async fn apply_pet_tag(
 
     sqlx::query(
         "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag, created_at) \
-         VALUES (?1, ?2, ?3, datetime('now'))"
+         VALUES (?1, ?2, ?3, datetime('now'))",
     )
     .bind(photo_id)
     .bind(user_id)
@@ -222,7 +218,7 @@ pub async fn rename_pet_cluster_tags(
     let new_tag = format!("pet:{}", new_label);
 
     let photo_ids: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT photo_id FROM pet_detections WHERE cluster_id = ?1 AND user_id = ?2"
+        "SELECT DISTINCT photo_id FROM pet_detections WHERE cluster_id = ?1 AND user_id = ?2",
     )
     .bind(cluster_id)
     .bind(user_id)
@@ -233,7 +229,7 @@ pub async fn rename_pet_cluster_tags(
     for (photo_id,) in &photo_ids {
         // Remove all pet: tags for this photo
         sqlx::query(
-            "DELETE FROM photo_tags WHERE photo_id = ?1 AND user_id = ?2 AND tag LIKE 'pet:%'"
+            "DELETE FROM photo_tags WHERE photo_id = ?1 AND user_id = ?2 AND tag LIKE 'pet:%'",
         )
         .bind(photo_id)
         .bind(user_id)
@@ -245,7 +241,7 @@ pub async fn rename_pet_cluster_tags(
             "SELECT DISTINCT pc.id, pc.label, pc.species \
              FROM pet_clusters pc \
              JOIN pet_detections pd ON pd.cluster_id = pc.id \
-             WHERE pd.photo_id = ?1 AND pd.user_id = ?2"
+             WHERE pd.photo_id = ?1 AND pd.user_id = ?2",
         )
         .bind(photo_id)
         .bind(user_id)
@@ -263,7 +259,7 @@ pub async fn rename_pet_cluster_tags(
             };
             sqlx::query(
                 "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag, created_at) \
-                 VALUES (?1, ?2, ?3, datetime('now'))"
+                 VALUES (?1, ?2, ?3, datetime('now'))",
             )
             .bind(photo_id)
             .bind(user_id)

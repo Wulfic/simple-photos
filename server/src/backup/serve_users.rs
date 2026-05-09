@@ -123,14 +123,13 @@ pub async fn backup_upsert_user(
             );
 
             // Find the conflicting local user id
-            let local_id: Option<String> = sqlx::query_scalar(
-                "SELECT id FROM users WHERE username = ? AND id != ?",
-            )
-            .bind(&username)
-            .bind(&id)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None);
+            let local_id: Option<String> =
+                sqlx::query_scalar("SELECT id FROM users WHERE username = ? AND id != ?")
+                    .bind(&username)
+                    .bind(&id)
+                    .fetch_optional(&state.pool)
+                    .await
+                    .unwrap_or(None);
 
             if let Some(ref old_id) = local_id {
                 // Reassign all content from the local user to the primary user id.
@@ -164,12 +163,10 @@ pub async fn backup_upsert_user(
 
                 // Also reparent encrypted_galleries and encryption_user_keys
                 // (keyed on user_id TEXT PRIMARY KEY — needs special handling)
-                let _ = sqlx::query(
-                    "DELETE FROM encrypted_galleries WHERE user_id = ?",
-                )
-                .bind(old_id)
-                .execute(&state.pool)
-                .await;
+                let _ = sqlx::query("DELETE FROM encrypted_galleries WHERE user_id = ?")
+                    .bind(old_id)
+                    .execute(&state.pool)
+                    .await;
 
                 // Remove the old local user
                 let _ = sqlx::query("DELETE FROM users WHERE id = ?")
@@ -220,11 +217,7 @@ pub async fn backup_upsert_user(
             }
         } else {
             // Some other DB error — report it
-            tracing::error!(
-                "backup_upsert_user: unexpected error for id={}: {}",
-                id,
-                e
-            );
+            tracing::error!("backup_upsert_user: unexpected error for id={}: {}", id, e);
             return Err(AppError::Internal(format!(
                 "Failed to create backup user record for id={}: {}",
                 id, e

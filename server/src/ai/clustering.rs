@@ -20,10 +20,7 @@ pub type ClusterAssignment = (i64, i64);
 /// This is O(n²) on the number of faces — suitable for personal photo
 /// libraries (typically < 100k faces). For larger datasets, consider
 /// approximate nearest neighbour algorithms.
-pub fn cluster_faces(
-    faces: &[(i64, Vec<f32>)],
-    threshold: f32,
-) -> Vec<ClusterAssignment> {
+pub fn cluster_faces(faces: &[(i64, Vec<f32>)], threshold: f32) -> Vec<ClusterAssignment> {
     if faces.is_empty() {
         return vec![];
     }
@@ -58,9 +55,7 @@ pub fn cluster_faces(
     }
 
     // Sort by similarity descending
-    similarities.sort_by(|a, b| {
-        b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    similarities.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
     tracing::debug!(
         candidate_pairs = similarities.len(),
@@ -89,8 +84,7 @@ pub fn cluster_faces(
     }
 
     // Flatten cluster IDs to contiguous values
-    let mut cluster_map: std::collections::HashMap<usize, i64> =
-        std::collections::HashMap::new();
+    let mut cluster_map: std::collections::HashMap<usize, i64> = std::collections::HashMap::new();
     let mut next_id: i64 = 1;
 
     let result: Vec<ClusterAssignment> = faces
@@ -175,11 +169,7 @@ mod tests {
     #[test]
     fn test_cluster_identical_faces() {
         let emb = vec![1.0, 0.0, 0.0, 0.0];
-        let faces = vec![
-            (1, emb.clone()),
-            (2, emb.clone()),
-            (3, emb.clone()),
-        ];
+        let faces = vec![(1, emb.clone()), (2, emb.clone()), (3, emb.clone())];
         let assignments = cluster_faces(&faces, 0.7);
         assert_eq!(assignments.len(), 3);
         // All should be in the same cluster
@@ -224,9 +214,7 @@ mod tests {
     #[test]
     fn test_cluster_uses_cosine_similarity_512d() {
         // Build a 512-d vector that looks like a real ArcFace embedding.
-        let base: Vec<f32> = (0..512)
-            .map(|i| ((i as f32) * 0.0123).sin())
-            .collect();
+        let base: Vec<f32> = (0..512).map(|i| ((i as f32) * 0.0123).sin()).collect();
         let l2 = base.iter().map(|v| v * v).sum::<f32>().sqrt();
         let normed: Vec<f32> = base.iter().map(|v| v / l2).collect();
 
@@ -270,8 +258,7 @@ mod tests {
         let assignments = cluster_faces(&faces, 0.6);
 
         // Map face_id → cluster_id.
-        let cid: std::collections::HashMap<i64, i64> =
-            assignments.iter().copied().collect();
+        let cid: std::collections::HashMap<i64, i64> = assignments.iter().copied().collect();
 
         assert_eq!(
             cid[&101], cid[&102],
@@ -303,12 +290,8 @@ mod tests {
         assert!((sim - 0.6).abs() < 0.01, "test setup wrong: sim={sim}");
 
         // Strict threshold (0.7) must keep them apart.
-        let strict = cluster_faces(
-            &[(1, a.clone()), (2, b.clone())],
-            0.7,
-        );
-        let strict_map: std::collections::HashMap<i64, i64> =
-            strict.iter().copied().collect();
+        let strict = cluster_faces(&[(1, a.clone()), (2, b.clone())], 0.7);
+        let strict_map: std::collections::HashMap<i64, i64> = strict.iter().copied().collect();
         assert_ne!(
             strict_map[&1], strict_map[&2],
             "threshold=0.7 should reject pairs with sim={sim:.3}"
@@ -316,8 +299,7 @@ mod tests {
 
         // Lenient threshold (0.5) must merge them.
         let lenient = cluster_faces(&[(1, a), (2, b)], 0.5);
-        let lenient_map: std::collections::HashMap<i64, i64> =
-            lenient.iter().copied().collect();
+        let lenient_map: std::collections::HashMap<i64, i64> = lenient.iter().copied().collect();
         assert_eq!(
             lenient_map[&1], lenient_map[&2],
             "threshold=0.5 should merge pairs with sim={sim:.3}"

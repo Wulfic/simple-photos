@@ -15,8 +15,8 @@
 //! provider/threads pair; every subsequent `load_onnx_*` helper calls
 //! [`build_session`] to commit a model file with those settings.
 
-use ort::session::Session;
 use ort::session::builder::SessionBuilder;
+use ort::session::Session;
 use std::path::Path;
 use std::sync::OnceLock;
 

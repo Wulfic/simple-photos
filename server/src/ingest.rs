@@ -69,12 +69,11 @@ pub async fn run_conversion_pass(
         let max_wait = std::time::Duration::from_secs(300); // 5 min ceiling
         let start = std::time::Instant::now();
         loop {
-            let unencrypted: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL",
-            )
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(0);
+            let unencrypted: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or(0);
 
             if unencrypted == 0 {
                 break;
@@ -249,7 +248,11 @@ pub async fn run_conversion_pass(
                 let now = utc_now_iso();
                 let work_mime = candidate.target.mime_type;
                 let work_media_type = conversion::media_type_str(candidate.target.category);
-                let thumb_ext = if work_mime == "image/gif" { "gif" } else { "jpg" };
+                let thumb_ext = if work_mime == "image/gif" {
+                    "gif"
+                } else {
+                    "jpg"
+                };
                 let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
 
                 // Extract metadata from the ORIGINAL file first — it has the real
@@ -382,13 +385,12 @@ pub async fn run_conversion_pass(
 
     // ── Step 5: Encrypt the newly converted files ────────────────────────
     if registered > 0 {
-        tracing::info!("[INGEST] Triggering encryption for {} newly converted files", registered);
-        crate::photos::server_migrate::auto_migrate_after_scan(
-            pool,
-            storage_root,
-            jwt_secret,
-        )
-        .await;
+        tracing::info!(
+            "[INGEST] Triggering encryption for {} newly converted files",
+            registered
+        );
+        crate::photos::server_migrate::auto_migrate_after_scan(pool, storage_root, jwt_secret)
+            .await;
         tracing::info!("[INGEST] Encryption of converted files complete");
     }
 }

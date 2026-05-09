@@ -36,10 +36,7 @@ const MIN_BURST_SIZE: usize = 2;
 /// Only processes photos that don't already have a `burst_id` and have a
 /// valid `taken_at` timestamp. Groups photos from the same camera model
 /// within `BURST_GAP_SECS` of each other.
-pub async fn detect_bursts_for_user(
-    pool: &SqlitePool,
-    user_id: &str,
-) -> anyhow::Result<u64> {
+pub async fn detect_bursts_for_user(pool: &SqlitePool, user_id: &str) -> anyhow::Result<u64> {
     // Fetch photos eligible for timestamp-based burst grouping.
     // Exclude photos that already have a burst_id (already grouped) or a
     // photo_subtype (already categorised as motion/panorama/hdr/etc. —
@@ -49,7 +46,7 @@ pub async fn detect_bursts_for_user(
          WHERE user_id = ?1 AND burst_id IS NULL AND photo_subtype IS NULL \
          AND taken_at IS NOT NULL \
          AND id NOT IN (SELECT blob_id FROM encrypted_gallery_items) \
-         ORDER BY COALESCE(camera_model, ''), taken_at ASC"
+         ORDER BY COALESCE(camera_model, ''), taken_at ASC",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -127,7 +124,7 @@ async fn flush_group(
         for photo_id in group.iter() {
             sqlx::query(
                 "UPDATE photos SET burst_id = ?1, photo_subtype = 'burst' \
-                 WHERE id = ?2 AND burst_id IS NULL"
+                 WHERE id = ?2 AND burst_id IS NULL",
             )
             .bind(&burst_id)
             .bind(photo_id)
@@ -151,14 +148,17 @@ async fn flush_group(
 /// Parse an ISO 8601 timestamp string to seconds since epoch.
 fn parse_timestamp(ts: &str) -> Option<f64> {
     // Handle common formats: "2024-01-15T14:30:00Z", "2024-01-15 14:30:00", etc.
-    let cleaned = ts.trim()
+    let cleaned = ts
+        .trim()
         .replace('T', " ")
         .trim_end_matches('Z')
         .to_string();
 
     // Try chrono parsing
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&cleaned, "%Y-%m-%d %H:%M:%S%.f") {
-        return Some(dt.and_utc().timestamp() as f64 + dt.and_utc().timestamp_subsec_nanos() as f64 / 1e9);
+        return Some(
+            dt.and_utc().timestamp() as f64 + dt.and_utc().timestamp_subsec_nanos() as f64 / 1e9,
+        );
     }
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&cleaned, "%Y-%m-%d %H:%M:%S") {
         return Some(dt.and_utc().timestamp() as f64);

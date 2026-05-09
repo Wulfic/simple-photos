@@ -78,8 +78,11 @@ pub async fn background_auto_scan_task(
         tokio::spawn(async move {
             if count > 0 {
                 crate::photos::server_migrate::auto_migrate_after_scan(
-                    pool_clone.clone(), root_clone.clone(), jwt_clone.clone(),
-                ).await;
+                    pool_clone.clone(),
+                    root_clone.clone(),
+                    jwt_clone.clone(),
+                )
+                .await;
             }
             crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_clone).await;
         });
@@ -120,8 +123,11 @@ pub async fn background_auto_scan_task(
             tokio::spawn(async move {
                 if count > 0 {
                     crate::photos::server_migrate::auto_migrate_after_scan(
-                        pool_clone.clone(), root_clone.clone(), jwt_clone.clone(),
-                    ).await;
+                        pool_clone.clone(),
+                        root_clone.clone(),
+                        jwt_clone.clone(),
+                    )
+                    .await;
                 }
                 crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_clone).await;
             });
@@ -189,8 +195,11 @@ pub async fn trigger_auto_scan(
         tokio::spawn(async move {
             if count > 0 {
                 crate::photos::server_migrate::auto_migrate_after_scan(
-                    pool_clone.clone(), root_clone.clone(), jwt_secret.clone(),
-                ).await;
+                    pool_clone.clone(),
+                    root_clone.clone(),
+                    jwt_secret.clone(),
+                )
+                .await;
             }
             crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
         });

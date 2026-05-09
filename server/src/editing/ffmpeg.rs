@@ -12,8 +12,8 @@ use tokio::process::Command;
 
 use crate::error::AppError;
 use crate::process::{run_with_timeout, FFMPEG_RENDER_TIMEOUT};
-use crate::transcode::HwAccelCapability;
 use crate::transcode::gpu_probe::HwAccelType;
+use crate::transcode::HwAccelCapability;
 
 use super::models::CropMeta;
 
@@ -40,10 +40,14 @@ impl EncoderPlan {
         Self {
             pre_input: Vec::new(),
             encoder: vec![
-                "-c:v".into(), "libx264".into(),
-                "-preset".into(), "fast".into(),
-                "-crf".into(), "18".into(),
-                "-c:a".into(), "aac".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-preset".into(),
+                "fast".into(),
+                "-crf".into(),
+                "18".into(),
+                "-c:a".into(),
+                "aac".into(),
             ],
             filter_suffix: None,
             label: "libx264",
@@ -58,10 +62,14 @@ impl EncoderPlan {
             HwAccelType::Nvenc => Self {
                 pre_input: Vec::new(),
                 encoder: vec![
-                    "-c:v".into(), "h264_nvenc".into(),
-                    "-preset".into(), "p4".into(),
-                    "-cq".into(), "18".into(),
-                    "-c:a".into(), "aac".into(),
+                    "-c:v".into(),
+                    "h264_nvenc".into(),
+                    "-preset".into(),
+                    "p4".into(),
+                    "-cq".into(),
+                    "18".into(),
+                    "-c:a".into(),
+                    "aac".into(),
                 ],
                 filter_suffix: None,
                 label: "h264_nvenc",
@@ -69,24 +77,36 @@ impl EncoderPlan {
             HwAccelType::Amf => Self {
                 pre_input: Vec::new(),
                 encoder: vec![
-                    "-c:v".into(), "h264_amf".into(),
-                    "-quality".into(), "balanced".into(),
-                    "-rc".into(), "cqp".into(),
-                    "-qp_i".into(), "18".into(),
-                    "-qp_p".into(), "18".into(),
-                    "-c:a".into(), "aac".into(),
+                    "-c:v".into(),
+                    "h264_amf".into(),
+                    "-quality".into(),
+                    "balanced".into(),
+                    "-rc".into(),
+                    "cqp".into(),
+                    "-qp_i".into(),
+                    "18".into(),
+                    "-qp_p".into(),
+                    "18".into(),
+                    "-c:a".into(),
+                    "aac".into(),
                 ],
                 filter_suffix: None,
                 label: "h264_amf",
             },
             HwAccelType::Vaapi => {
-                let device = h.device.clone().unwrap_or_else(|| "/dev/dri/renderD128".into());
+                let device = h
+                    .device
+                    .clone()
+                    .unwrap_or_else(|| "/dev/dri/renderD128".into());
                 Self {
                     pre_input: vec!["-vaapi_device".into(), device],
                     encoder: vec![
-                        "-c:v".into(), "h264_vaapi".into(),
-                        "-qp".into(), "18".into(),
-                        "-c:a".into(), "aac".into(),
+                        "-c:v".into(),
+                        "h264_vaapi".into(),
+                        "-qp".into(),
+                        "18".into(),
+                        "-c:a".into(),
+                        "aac".into(),
                     ],
                     filter_suffix: Some("format=nv12,hwupload".into()),
                     label: "h264_vaapi",
@@ -94,14 +114,20 @@ impl EncoderPlan {
             }
             HwAccelType::Qsv => Self {
                 pre_input: vec![
-                    "-init_hw_device".into(), "qsv=qsv:hw".into(),
-                    "-filter_hw_device".into(), "qsv".into(),
+                    "-init_hw_device".into(),
+                    "qsv=qsv:hw".into(),
+                    "-filter_hw_device".into(),
+                    "qsv".into(),
                 ],
                 encoder: vec![
-                    "-c:v".into(), "h264_qsv".into(),
-                    "-preset".into(), "medium".into(),
-                    "-global_quality".into(), "18".into(),
-                    "-c:a".into(), "aac".into(),
+                    "-c:v".into(),
+                    "h264_qsv".into(),
+                    "-preset".into(),
+                    "medium".into(),
+                    "-global_quality".into(),
+                    "18".into(),
+                    "-c:a".into(),
+                    "aac".into(),
                 ],
                 filter_suffix: Some("format=nv12,hwupload=extra_hw_frames=64".into()),
                 label: "h264_qsv",
@@ -128,13 +154,13 @@ pub fn build_video_filters(meta: &CropMeta) -> Vec<String> {
     // crop coordinates are interpreted in the rotated coordinate system the
     // user saw in the editor.
     match meta.rotation_degrees() {
-        90  => filters.push("transpose=1".into()),
+        90 => filters.push("transpose=1".into()),
         180 => {
             filters.push("vflip".into());
             filters.push("hflip".into());
         }
         270 => filters.push("transpose=2".into()),
-        _   => {}
+        _ => {}
     }
 
     // Crop (fractional coordinates evaluated at runtime via ffmpeg expressions)
@@ -143,9 +169,7 @@ pub fn build_video_filters(meta: &CropMeta) -> Vec<String> {
         let y = meta.y.unwrap_or(0.0);
         let w = meta.width.unwrap_or(1.0);
         let h = meta.height.unwrap_or(1.0);
-        filters.push(format!(
-            "crop=iw*{w:.6}:ih*{h:.6}:iw*{x:.6}:ih*{y:.6}"
-        ));
+        filters.push(format!("crop=iw*{w:.6}:ih*{h:.6}:iw*{x:.6}:ih*{y:.6}"));
     }
 
     // Brightness via eq filter (-1.0 to 1.0; our scale is -100 to +100)
@@ -257,8 +281,7 @@ pub async fn run_ffmpeg_render(
     // Only video re-encodes benefit from GPU acceleration. Audio, trim-only,
     // and no-op renders use stream copy and don't touch the encoder.
     let gpu_plan = if needs_reencode {
-        crate::conversion::active_hwaccel()
-            .and_then(EncoderPlan::from_hwaccel)
+        crate::conversion::active_hwaccel().and_then(EncoderPlan::from_hwaccel)
     } else {
         None
     };
@@ -267,7 +290,10 @@ pub async fn run_ffmpeg_render(
         let args = build_ffmpeg_args_with_plan(source, dest, media_type, meta, ext, &plan);
         tracing::info!(
             "[editing/ffmpeg] GPU render ({}): src={}, dst={}, media_type={}",
-            plan.label, source.display(), dest.display(), media_type,
+            plan.label,
+            source.display(),
+            dest.display(),
+            media_type,
         );
         tracing::debug!("[editing/ffmpeg] GPU args: {:?}", args);
 
@@ -292,7 +318,8 @@ pub async fn run_ffmpeg_render(
                         "[editing/ffmpeg] GPU render failed and CPU fallback disabled: {last_line}"
                     );
                     return Err(AppError::Internal(format!(
-                        "ffmpeg render failed ({}): {last_line}", plan.label
+                        "ffmpeg render failed ({}): {last_line}",
+                        plan.label
                     )));
                 }
                 tracing::warn!(
@@ -316,17 +343,21 @@ pub async fn run_ffmpeg_render(
 
     // CPU path (libx264) — used when no GPU is available, when the operation
     // doesn't require re-encoding, or as a fallback after GPU failure.
-    let args = build_ffmpeg_args_with_plan(
-        source, dest, media_type, meta, ext, &EncoderPlan::cpu(),
-    );
+    let args =
+        build_ffmpeg_args_with_plan(source, dest, media_type, meta, ext, &EncoderPlan::cpu());
 
     tracing::info!("[editing/ffmpeg] args: {:?}", args);
     tracing::info!(
         "[editing/ffmpeg] Rendering: src={}, dst={}, media_type={}, \
          has_crop={}, has_rotation={}, rotation={}°, has_brightness={}, has_trim={}",
-        source.display(), dest.display(), media_type,
-        meta.has_crop(), meta.has_rotation(), meta.rotation_degrees(),
-        meta.has_brightness(), meta.has_trim(),
+        source.display(),
+        dest.display(),
+        media_type,
+        meta.has_crop(),
+        meta.has_rotation(),
+        meta.rotation_degrees(),
+        meta.has_brightness(),
+        meta.has_trim(),
     );
 
     let mut cmd = Command::new("ffmpeg");
@@ -485,13 +516,18 @@ mod tests {
     #[test]
     fn encoder_plan_vaapi_uses_device_and_hwupload() {
         let p = EncoderPlan::from_hwaccel(&cap(
-            HwAccelType::Vaapi, "h264_vaapi", Some("/dev/dri/renderD128"),
+            HwAccelType::Vaapi,
+            "h264_vaapi",
+            Some("/dev/dri/renderD128"),
         ))
         .unwrap();
         assert_eq!(p.label, "h264_vaapi");
         assert_eq!(
             p.pre_input,
-            vec!["-vaapi_device".to_string(), "/dev/dri/renderD128".to_string()]
+            vec![
+                "-vaapi_device".to_string(),
+                "/dev/dri/renderD128".to_string()
+            ]
         );
         assert!(p.encoder.iter().any(|s| s == "h264_vaapi"));
         assert_eq!(p.filter_suffix.as_deref(), Some("format=nv12,hwupload"));
@@ -523,7 +559,9 @@ mod tests {
         let dst = PathBuf::from("/tmp/out.mp4");
         let m = meta(r#"{"rotate":90}"#);
         let plan = EncoderPlan::from_hwaccel(&cap(
-            HwAccelType::Vaapi, "h264_vaapi", Some("/dev/dri/renderD128"),
+            HwAccelType::Vaapi,
+            "h264_vaapi",
+            Some("/dev/dri/renderD128"),
         ))
         .unwrap();
         let args = build_ffmpeg_args_with_plan(&src, &dst, "video", &m, "mp4", &plan);

@@ -19,10 +19,9 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 use super::pair_helpers::{
-    authenticate_with_primary, configure_backup_mode, create_local_admin,
-    determine_backup_address, normalize_server_url, register_backup_on_primary,
-    trigger_initial_sync, validate_backup_public_url, verify_primary_is_not_backup,
-    PrimaryAuthOutcome,
+    authenticate_with_primary, configure_backup_mode, create_local_admin, determine_backup_address,
+    normalize_server_url, register_backup_on_primary, trigger_initial_sync,
+    validate_backup_public_url, verify_primary_is_not_backup, PrimaryAuthOutcome,
 };
 
 // ── Backup Pairing ──────────────────────────────────────────────────────────
@@ -199,7 +198,12 @@ pub async fn pair(
         base_url
     );
 
-    trigger_initial_sync(&base_url, &remote_token, backup_server_id, state.config.backup.accept_invalid_certs);
+    trigger_initial_sync(
+        &base_url,
+        &remote_token,
+        backup_server_id,
+        state.config.backup.accept_invalid_certs,
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -351,7 +355,12 @@ pub async fn verify_backup(
             })?
             .to_string();
 
-        let totp_code = match req.totp_code.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let totp_code = match req
+            .totp_code
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(c) => c.to_string(),
             None => {
                 // Tell the wizard to prompt for the TOTP code and retry.
@@ -393,15 +402,14 @@ pub async fn verify_backup(
             )));
         }
 
-        let totp_data: serde_json::Value = totp_resp.json().await.map_err(|e| {
-            AppError::Internal(format!("Failed to parse 2FA response: {}", e))
-        })?;
+        let totp_data: serde_json::Value = totp_resp
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to parse 2FA response: {}", e)))?;
         totp_data
             .get("access_token")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                AppError::Internal("No access_token in backup 2FA response".into())
-            })?
+            .ok_or_else(|| AppError::Internal("No access_token in backup 2FA response".into()))?
             .to_string()
     } else {
         login_data

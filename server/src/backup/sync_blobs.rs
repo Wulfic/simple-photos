@@ -82,7 +82,8 @@ pub async fn sync_blobs(
     if skipped_missing > 0 {
         tracing::warn!(
             "sync_blobs: skipped {} blobs with missing/empty files out of {} total",
-            skipped_missing, blobs.len()
+            skipped_missing,
+            blobs.len()
         );
     }
 

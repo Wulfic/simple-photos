@@ -10,12 +10,12 @@
 
 use crate::ai::imagenet_labels::{self, IMAGENET_LABELS};
 use crate::ai::models::{BoundingBox, ObjectDetection};
-use image::{DynamicImage, GenericImageView, imageops::FilterType};
+use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tracing;
 use ort::session::Session;
+use tracing;
 
 /// Convert ort errors (which aren't Send+Sync) to anyhow errors.
 fn ort_err<R>(r: Result<R, impl std::fmt::Display>) -> anyhow::Result<R> {
@@ -62,7 +62,10 @@ pub fn init_classification_model(model_dir: &str) {
             }
             tracing::info!("MobileNetV2 model not found at {:?}, downloading…", p);
             if let Err(e) = download_model(CLS_MODEL_URL, &p, 5_000_000) {
-                tracing::warn!("MobileNetV2 download failed: {}. Using heuristic fallback.", e);
+                tracing::warn!(
+                    "MobileNetV2 download failed: {}. Using heuristic fallback.",
+                    e
+                );
                 return None;
             }
         }
@@ -72,7 +75,10 @@ pub fn init_classification_model(model_dir: &str) {
                 Some(Arc::new(Mutex::new(session)))
             }
             Err(e) => {
-                tracing::warn!("Failed to load MobileNetV2: {}. Using heuristic fallback.", e);
+                tracing::warn!(
+                    "Failed to load MobileNetV2: {}. Using heuristic fallback.",
+                    e
+                );
                 None
             }
         }
@@ -144,7 +150,10 @@ fn classify_mobilenet(
     let logits_slice: Vec<f32> = logits_data.to_vec();
 
     // Softmax
-    let max_logit = logits_slice.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let max_logit = logits_slice
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
     let exp_sum: f32 = logits_slice.iter().map(|&x| (x - max_logit).exp()).sum();
     let probs: Vec<f32> = logits_slice
         .iter()
@@ -287,7 +296,12 @@ fn detect_scenes_heuristic(
         return Ok(vec![]);
     }
 
-    let full_bbox = BoundingBox { x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
+    let full_bbox = BoundingBox {
+        x: 0.0,
+        y: 0.0,
+        w: 1.0,
+        h: 1.0,
+    };
     let mut detections = Vec::new();
 
     // ── Pass 1: Global colour & luminance statistics ─────────────────
@@ -326,19 +340,45 @@ fn detect_scenes_heuristic(
         lum_sq_sum += (lum as f64) * (lum as f64);
         sat_sum += sat as f64;
 
-        if g > r * 1.2 && g > b * 1.2 && g > 60.0 { green_count += 1; }
-        if b > r * 1.3 && b > g * 1.1 && b > 80.0 { blue_count += 1; }
-        if r > 80.0 && g > 40.0 && g < r && b < g && r - b > 30.0 { brown_count += 1; }
-        if lum > 200.0 { bright_count += 1; }
-        if lum < 40.0 { dark_count += 1; }
-        if r > 180.0 && g < 80.0 && b < 80.0 { red_count += 1; }
-        if r > 180.0 && g > 100.0 && g < 180.0 && b < 80.0 { orange_count += 1; }
-        if r > 150.0 && g > 100.0 && b < 100.0 { warm_count += 1; }
-        if lum > 230.0 && chroma < 20.0 { white_count += 1; }
-        if r > 180.0 && g > 180.0 && b < 80.0 { yellow_count += 1; }
-        if chroma < 20.0 && lum > 50.0 && lum < 200.0 { grey_count += 1; }
-        if sat > 0.6 { saturated_count += 1; }
-        if sat < 0.15 { desaturated_count += 1; }
+        if g > r * 1.2 && g > b * 1.2 && g > 60.0 {
+            green_count += 1;
+        }
+        if b > r * 1.3 && b > g * 1.1 && b > 80.0 {
+            blue_count += 1;
+        }
+        if r > 80.0 && g > 40.0 && g < r && b < g && r - b > 30.0 {
+            brown_count += 1;
+        }
+        if lum > 200.0 {
+            bright_count += 1;
+        }
+        if lum < 40.0 {
+            dark_count += 1;
+        }
+        if r > 180.0 && g < 80.0 && b < 80.0 {
+            red_count += 1;
+        }
+        if r > 180.0 && g > 100.0 && g < 180.0 && b < 80.0 {
+            orange_count += 1;
+        }
+        if r > 150.0 && g > 100.0 && b < 100.0 {
+            warm_count += 1;
+        }
+        if lum > 230.0 && chroma < 20.0 {
+            white_count += 1;
+        }
+        if r > 180.0 && g > 180.0 && b < 80.0 {
+            yellow_count += 1;
+        }
+        if chroma < 20.0 && lum > 50.0 && lum < 200.0 {
+            grey_count += 1;
+        }
+        if sat > 0.6 {
+            saturated_count += 1;
+        }
+        if sat < 0.15 {
+            desaturated_count += 1;
+        }
     }
 
     let green_ratio = green_count as f32 / total_pixels;
@@ -361,7 +401,8 @@ fn detect_scenes_heuristic(
     let mean_sat = (sat_sum / total_pixels as f64) as f32;
 
     tracing::debug!(
-        img_w = w, img_h = h,
+        img_w = w,
+        img_h = h,
         green = format!("{:.3}", green_ratio),
         blue = format!("{:.3}", blue_ratio),
         brown = format!("{:.3}", brown_ratio),
@@ -408,29 +449,71 @@ fn detect_scenes_heuristic(
 
         if y < top_third_h {
             top_total += 1;
-            if b > r * 1.3 && b > g * 1.1 && b > 80.0 { top_blue += 1; }
-            if lum > 200.0 { top_bright += 1; }
+            if b > r * 1.3 && b > g * 1.1 && b > 80.0 {
+                top_blue += 1;
+            }
+            if lum > 200.0 {
+                top_bright += 1;
+            }
         }
         if y >= bottom_third_start {
             bottom_total += 1;
-            if g > r * 1.2 && g > b * 1.2 && g > 60.0 { bottom_green += 1; }
-            if r > 80.0 && g > 40.0 && g < r && b < g { bottom_brown += 1; }
-            if b > r * 1.3 && b > g * 1.1 && b > 80.0 { bottom_blue += 1; }
+            if g > r * 1.2 && g > b * 1.2 && g > 60.0 {
+                bottom_green += 1;
+            }
+            if r > 80.0 && g > 40.0 && g < r && b < g {
+                bottom_brown += 1;
+            }
+            if b > r * 1.3 && b > g * 1.1 && b > 80.0 {
+                bottom_blue += 1;
+            }
         }
         if x >= cx_start && x < cx_end && y >= cy_start && y < cy_end {
             centre_total += 1;
-            if r > 150.0 && g > 100.0 && b < 100.0 { centre_warm += 1; }
-            if sat > 0.5 { centre_sat += 1; }
+            if r > 150.0 && g > 100.0 && b < 100.0 {
+                centre_warm += 1;
+            }
+            if sat > 0.5 {
+                centre_sat += 1;
+            }
         }
     }
 
-    let top_blue_ratio = if top_total > 0 { top_blue as f32 / top_total as f32 } else { 0.0 };
-    let top_bright_ratio = if top_total > 0 { top_bright as f32 / top_total as f32 } else { 0.0 };
-    let bottom_green_ratio = if bottom_total > 0 { bottom_green as f32 / bottom_total as f32 } else { 0.0 };
-    let bottom_brown_ratio = if bottom_total > 0 { bottom_brown as f32 / bottom_total as f32 } else { 0.0 };
-    let bottom_blue_ratio = if bottom_total > 0 { bottom_blue as f32 / bottom_total as f32 } else { 0.0 };
-    let _centre_warm_ratio = if centre_total > 0 { centre_warm as f32 / centre_total as f32 } else { 0.0 };
-    let _centre_sat_ratio = if centre_total > 0 { centre_sat as f32 / centre_total as f32 } else { 0.0 };
+    let top_blue_ratio = if top_total > 0 {
+        top_blue as f32 / top_total as f32
+    } else {
+        0.0
+    };
+    let top_bright_ratio = if top_total > 0 {
+        top_bright as f32 / top_total as f32
+    } else {
+        0.0
+    };
+    let bottom_green_ratio = if bottom_total > 0 {
+        bottom_green as f32 / bottom_total as f32
+    } else {
+        0.0
+    };
+    let bottom_brown_ratio = if bottom_total > 0 {
+        bottom_brown as f32 / bottom_total as f32
+    } else {
+        0.0
+    };
+    let bottom_blue_ratio = if bottom_total > 0 {
+        bottom_blue as f32 / bottom_total as f32
+    } else {
+        0.0
+    };
+    let _centre_warm_ratio = if centre_total > 0 {
+        centre_warm as f32 / centre_total as f32
+    } else {
+        0.0
+    };
+    let _centre_sat_ratio = if centre_total > 0 {
+        centre_sat as f32 / centre_total as f32
+    } else {
+        0.0
+    };
 
     // ── Pass 3: Edge density (gradient magnitude) ────────────────────
     let edge_density = if quality != DetectionQuality::Fast {
@@ -455,8 +538,10 @@ fn detect_scenes_heuristic(
     }
 
     // Sunset / sunrise — warm tones in upper portion, gradient
-    if warm_ratio > 0.15 && (orange_ratio > 0.05 || red_ratio > 0.03)
-        && top_bright_ratio > 0.1 && mean_sat > 0.3
+    if warm_ratio > 0.15
+        && (orange_ratio > 0.05 || red_ratio > 0.03)
+        && top_bright_ratio > 0.1
+        && mean_sat > 0.3
     {
         let conf = ((warm_ratio + orange_ratio) * 1.5).clamp(0.4, 0.85);
         push_if(&mut detections, "sunset", conf, min_confidence, &full_bbox);
@@ -470,8 +555,15 @@ fn detect_scenes_heuristic(
 
     // Landscape — blue sky top + green/brown bottom
     if top_blue_ratio > 0.2 && (bottom_green_ratio > 0.15 || bottom_brown_ratio > 0.15) {
-        let conf = ((top_blue_ratio + bottom_green_ratio.max(bottom_brown_ratio)) * 0.9).clamp(0.4, 0.85);
-        push_if(&mut detections, "landscape", conf, min_confidence, &full_bbox);
+        let conf =
+            ((top_blue_ratio + bottom_green_ratio.max(bottom_brown_ratio)) * 0.9).clamp(0.4, 0.85);
+        push_if(
+            &mut detections,
+            "landscape",
+            conf,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // Nature / forest — lots of green with moderate edge density
@@ -487,9 +579,7 @@ fn detect_scenes_heuristic(
     }
 
     // Water / ocean / lake — blue bottom or overall with moderate texture
-    if blue_ratio > 0.25 && (bottom_blue_ratio > 0.3 || blue_ratio > 0.4)
-        && edge_density < 0.15
-    {
+    if blue_ratio > 0.25 && (bottom_blue_ratio > 0.3 || blue_ratio > 0.4) && edge_density < 0.15 {
         let conf = (blue_ratio * 1.2).clamp(0.4, 0.82);
         push_if(&mut detections, "water", conf, min_confidence, &full_bbox);
     }
@@ -507,12 +597,19 @@ fn detect_scenes_heuristic(
     }
 
     // Mountain — blue sky top + grey/brown bottom + high edge density
-    if top_blue_ratio > 0.15 && edge_density > 0.06
+    if top_blue_ratio > 0.15
+        && edge_density > 0.06
         && (grey_ratio > 0.1 || brown_ratio > 0.1)
         && !is_portrait_aspect
     {
         let conf = ((edge_density * 3.0 + top_blue_ratio) * 0.6).clamp(0.4, 0.75);
-        push_if(&mut detections, "mountain", conf, min_confidence, &full_bbox);
+        push_if(
+            &mut detections,
+            "mountain",
+            conf,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // Clouds — bright top, low saturation in upper region
@@ -522,8 +619,11 @@ fn detect_scenes_heuristic(
     }
 
     // Food — warm centre, moderate saturation, usually close-up
-    if warm_ratio > 0.15 && mean_sat > 0.3 && brown_ratio > 0.05
-        && !is_panoramic && edge_density > 0.04
+    if warm_ratio > 0.15
+        && mean_sat > 0.3
+        && brown_ratio > 0.05
+        && !is_panoramic
+        && edge_density > 0.04
         && yellow_ratio + orange_ratio + red_ratio > 0.08
     {
         let conf = ((warm_ratio + mean_sat) * 0.6).clamp(0.4, 0.72);
@@ -531,7 +631,9 @@ fn detect_scenes_heuristic(
     }
 
     // Flower — high saturation centre, moderate green around it
-    if saturated_ratio > 0.2 && green_ratio > 0.1 && mean_sat > 0.35
+    if saturated_ratio > 0.2
+        && green_ratio > 0.1
+        && mean_sat > 0.35
         && (red_ratio > 0.05 || yellow_ratio > 0.05 || orange_ratio > 0.03)
     {
         let conf = ((saturated_ratio + mean_sat) * 0.7).clamp(0.4, 0.78);
@@ -539,24 +641,40 @@ fn detect_scenes_heuristic(
     }
 
     // Architecture / building — high edge density, lots of straight lines, grey/brown
-    if edge_density > 0.08 && (grey_ratio > 0.15 || brown_ratio > 0.1)
-        && desaturated_ratio > 0.2 && green_ratio < 0.15
+    if edge_density > 0.08
+        && (grey_ratio > 0.15 || brown_ratio > 0.1)
+        && desaturated_ratio > 0.2
+        && green_ratio < 0.15
     {
         let conf = (edge_density * 2.5 + grey_ratio).clamp(0.4, 0.78);
-        push_if(&mut detections, "architecture", conf, min_confidence, &full_bbox);
+        push_if(
+            &mut detections,
+            "architecture",
+            conf,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // Cityscape — high edge density + grey + various colours
-    if edge_density > 0.07 && grey_ratio > 0.1 && lum_std > 50.0
-        && !is_portrait_aspect
-    {
+    if edge_density > 0.07 && grey_ratio > 0.1 && lum_std > 50.0 && !is_portrait_aspect {
         let conf = ((edge_density + grey_ratio) * 1.5).clamp(0.4, 0.72);
-        push_if(&mut detections, "cityscape", conf, min_confidence, &full_bbox);
+        push_if(
+            &mut detections,
+            "cityscape",
+            conf,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // Indoor — low saturation, moderate/even luminance, warm tones
-    if desaturated_ratio > 0.3 && lum_std < 60.0 && mean_lum > 80.0
-        && mean_lum < 200.0 && blue_ratio < 0.1 && green_ratio < 0.1
+    if desaturated_ratio > 0.3
+        && lum_std < 60.0
+        && mean_lum > 80.0
+        && mean_lum < 200.0
+        && blue_ratio < 0.1
+        && green_ratio < 0.1
     {
         let conf = (desaturated_ratio * 0.9).clamp(0.4, 0.7);
         push_if(&mut detections, "indoor", conf, min_confidence, &full_bbox);
@@ -564,36 +682,59 @@ fn detect_scenes_heuristic(
 
     // Document / text — very high contrast, mostly white/black, high edges
     if (white_ratio > 0.5 || bright_ratio > 0.6)
-        && dark_ratio > 0.05 && edge_density > 0.1
+        && dark_ratio > 0.05
+        && edge_density > 0.1
         && desaturated_ratio > 0.6
     {
         let conf = ((white_ratio + edge_density) * 0.8).clamp(0.45, 0.82);
-        push_if(&mut detections, "document", conf, min_confidence, &full_bbox);
+        push_if(
+            &mut detections,
+            "document",
+            conf,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // Autumn / fall — orange + brown + yellow mix
-    if orange_ratio > 0.05 && brown_ratio > 0.1 && yellow_ratio > 0.03
-        && green_ratio < 0.15
-    {
+    if orange_ratio > 0.05 && brown_ratio > 0.1 && yellow_ratio > 0.03 && green_ratio < 0.15 {
         let conf = ((orange_ratio + brown_ratio + yellow_ratio) * 1.2).clamp(0.4, 0.78);
         push_if(&mut detections, "autumn", conf, min_confidence, &full_bbox);
     }
 
     // Panorama scene tag
     if is_panoramic {
-        push_if(&mut detections, "panoramic", 0.9, min_confidence, &full_bbox);
+        push_if(
+            &mut detections,
+            "panoramic",
+            0.9,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // Black and white / monochrome
     if desaturated_ratio > 0.85 && mean_sat < 0.05 {
         let conf = (desaturated_ratio * 0.95).clamp(0.6, 0.92);
-        push_if(&mut detections, "monochrome", conf, min_confidence, &full_bbox);
+        push_if(
+            &mut detections,
+            "monochrome",
+            conf,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // High contrast / dramatic
     if lum_std > 80.0 && saturated_ratio > 0.15 {
         let conf = ((lum_std / 128.0) * 0.7).clamp(0.4, 0.75);
-        push_if(&mut detections, "dramatic", conf, min_confidence, &full_bbox);
+        push_if(
+            &mut detections,
+            "dramatic",
+            conf,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // Bright / high-key lighting
@@ -608,17 +749,25 @@ fn detect_scenes_heuristic(
 
     // Portrait-like framing (vertical aspect, moderate variance, warm centre)
     if is_portrait_aspect && lum_std > 30.0 && mean_sat > 0.15 {
-        push_if(&mut detections, "portrait", 0.55, min_confidence, &full_bbox);
+        push_if(
+            &mut detections,
+            "portrait",
+            0.55,
+            min_confidence,
+            &full_bbox,
+        );
     }
 
     // Macro / close-up — very high saturation centre, low depth-of-field hint
-    if quality == DetectionQuality::High && mean_sat > 0.4
-        && edge_density > 0.05 && !is_panoramic
+    if quality == DetectionQuality::High
+        && mean_sat > 0.4
+        && edge_density > 0.05
+        && !is_panoramic
         && saturated_ratio > 0.25
     {
         // Check if centre is sharper than edges (depth-of-field)
-        let centre_edge = compute_region_edge_density(img, w, h,
-            w / 4, h / 4, w * 3 / 4, h * 3 / 4);
+        let centre_edge =
+            compute_region_edge_density(img, w, h, w / 4, h / 4, w * 3 / 4, h * 3 / 4);
         let border_edge = edge_density;
         if centre_edge > border_edge * 1.3 {
             push_if(&mut detections, "macro", 0.55, min_confidence, &full_bbox);
@@ -626,9 +775,7 @@ fn detect_scenes_heuristic(
     }
 
     // Fire / flames
-    if red_ratio > 0.08 && orange_ratio > 0.06 && yellow_ratio > 0.03
-        && warm_ratio > 0.25
-    {
+    if red_ratio > 0.08 && orange_ratio > 0.06 && yellow_ratio > 0.03 && warm_ratio > 0.25 {
         let conf = ((red_ratio + orange_ratio) * 2.0).clamp(0.4, 0.72);
         push_if(&mut detections, "fire", conf, min_confidence, &full_bbox);
     }
@@ -677,17 +824,17 @@ fn compute_edge_density(img: &DynamicImage, w: u32, h: u32) -> f32 {
 
     for y in 1..(sh - 1) {
         for x in 1..(sw - 1) {
-            let gx = grey.get_pixel(x + 1, y).0[0] as f32
-                   - grey.get_pixel(x - 1, y).0[0] as f32;
-            let gy = grey.get_pixel(x, y + 1).0[0] as f32
-                   - grey.get_pixel(x, y - 1).0[0] as f32;
+            let gx = grey.get_pixel(x + 1, y).0[0] as f32 - grey.get_pixel(x - 1, y).0[0] as f32;
+            let gy = grey.get_pixel(x, y + 1).0[0] as f32 - grey.get_pixel(x, y - 1).0[0] as f32;
             let mag = (gx * gx + gy * gy).sqrt();
             edge_sum += mag as f64;
             count += 1;
         }
     }
 
-    if count == 0 { return 0.0; }
+    if count == 0 {
+        return 0.0;
+    }
     // Normalise: max possible gradient magnitude is ~360 (255*sqrt(2))
     (edge_sum / count as f64 / 360.0) as f32
 }
@@ -695,10 +842,19 @@ fn compute_edge_density(img: &DynamicImage, w: u32, h: u32) -> f32 {
 /// Compute edge density for a specific region of the image.
 fn compute_region_edge_density(
     img: &DynamicImage,
-    _w: u32, _h: u32,
-    x1: u32, y1: u32, x2: u32, y2: u32,
+    _w: u32,
+    _h: u32,
+    x1: u32,
+    y1: u32,
+    x2: u32,
+    y2: u32,
 ) -> f32 {
-    let cropped = img.crop_imm(x1, y1, x2.saturating_sub(x1).max(3), y2.saturating_sub(y1).max(3));
+    let cropped = img.crop_imm(
+        x1,
+        y1,
+        x2.saturating_sub(x1).max(3),
+        y2.saturating_sub(y1).max(3),
+    );
     let (cw, ch) = cropped.dimensions();
     compute_edge_density(&cropped, cw, ch)
 }

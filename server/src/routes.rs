@@ -92,15 +92,27 @@ fn auth_routes() -> Router<AppState> {
         .route("/auth/login/totp", post(crate::auth::handlers::login_totp))
         .route("/auth/refresh", post(crate::auth::handlers::refresh))
         .route("/auth/logout", post(crate::auth::handlers::logout))
-        .route("/auth/password", put(crate::auth::handlers::change_password))
+        .route(
+            "/auth/password",
+            put(crate::auth::handlers::change_password),
+        )
         .route(
             "/auth/verify-password",
             post(crate::auth::handlers::verify_password),
         )
-        .route("/auth/2fa/status", get(crate::auth::handlers::get_2fa_status))
+        .route(
+            "/auth/2fa/status",
+            get(crate::auth::handlers::get_2fa_status),
+        )
         .route("/auth/2fa/setup", post(crate::auth::handlers::setup_2fa))
-        .route("/auth/2fa/confirm", post(crate::auth::handlers::confirm_2fa))
-        .route("/auth/2fa/disable", post(crate::auth::handlers::disable_2fa))
+        .route(
+            "/auth/2fa/confirm",
+            post(crate::auth::handlers::confirm_2fa),
+        )
+        .route(
+            "/auth/2fa/disable",
+            post(crate::auth::handlers::disable_2fa),
+        )
 }
 
 // ── Encrypted blobs ──────────────────────────────────────────────────
@@ -111,9 +123,15 @@ fn blob_routes() -> Router<AppState> {
         .route("/blobs", get(crate::blobs::handlers::list))
         .route("/blobs/{id}", get(crate::blobs::download::download))
         .route("/blobs/{id}", delete(crate::blobs::handlers::delete))
-        .route("/blobs/{id}/thumb", get(crate::blobs::download::download_thumb))
+        .route(
+            "/blobs/{id}/thumb",
+            get(crate::blobs::download::download_thumb),
+        )
         // Blob soft-delete to trash (encrypted mode)
-        .route("/blobs/{id}/trash", post(crate::trash::operations::soft_delete_blob))
+        .route(
+            "/blobs/{id}/trash",
+            post(crate::trash::operations::soft_delete_blob),
+        )
 }
 
 // ── Downloads (public, unauthenticated) ──────────────────────────────
@@ -132,7 +150,10 @@ fn admin_routes() -> Router<AppState> {
         // User management
         .route("/admin/users", post(crate::setup::admin::create_user))
         .route("/admin/users", get(crate::setup::admin::list_users))
-        .route("/admin/users/{id}", delete(crate::setup::admin::delete_user))
+        .route(
+            "/admin/users/{id}",
+            delete(crate::setup::admin::delete_user),
+        )
         .route(
             "/admin/users/{id}/role",
             put(crate::setup::admin::update_user_role),
@@ -160,7 +181,10 @@ fn admin_routes() -> Router<AppState> {
             "/admin/storage/test-smb",
             post(crate::setup::storage::test_smb),
         )
-        .route("/admin/browse", get(crate::setup::storage::browse_directory))
+        .route(
+            "/admin/browse",
+            get(crate::setup::storage::browse_directory),
+        )
         .route(
             "/admin/pick-directory",
             get(crate::setup::storage::pick_directory),
@@ -197,7 +221,10 @@ fn admin_routes() -> Router<AppState> {
 
 fn import_routes() -> Router<AppState> {
     Router::new()
-        .route("/import/metadata", post(crate::import::handlers::import_metadata))
+        .route(
+            "/import/metadata",
+            post(crate::import::handlers::import_metadata),
+        )
         .route(
             "/import/metadata/batch",
             post(crate::import::handlers::batch_import_metadata),
@@ -229,13 +256,28 @@ fn import_routes() -> Router<AppState> {
 fn photo_routes() -> Router<AppState> {
     Router::new()
         .route("/photos", get(crate::photos::handlers::list_photos))
-        .route("/photos/encrypted-sync", get(crate::gallery::sync::encrypted_sync))
-        .route("/photos/register", post(crate::photos::handlers::register_photo))
-        .route("/photos/register-encrypted", post(crate::photos::handlers::register_encrypted_photo))
+        .route(
+            "/photos/encrypted-sync",
+            get(crate::gallery::sync::encrypted_sync),
+        )
+        .route(
+            "/photos/register",
+            post(crate::photos::handlers::register_photo),
+        )
+        .route(
+            "/photos/register-encrypted",
+            post(crate::photos::handlers::register_encrypted_photo),
+        )
         .route("/photos/upload", post(crate::photos::upload::upload_photo))
         .route("/photos/{id}/file", get(crate::photos::serve::serve_photo))
-        .route("/photos/{id}/source-file", get(crate::photos::serve::serve_source_file))
-        .route("/photos/{id}/thumb", get(crate::photos::serve::serve_thumbnail))
+        .route(
+            "/photos/{id}/source-file",
+            get(crate::photos::serve::serve_source_file),
+        )
+        .route(
+            "/photos/{id}/thumb",
+            get(crate::photos::serve::serve_thumbnail),
+        )
         .route(
             "/photos/{id}/thumbnail",
             get(crate::photos::serve::serve_thumbnail),
@@ -259,16 +301,28 @@ fn photo_routes() -> Router<AppState> {
         )
         .route("/photos/{id}/crop", put(crate::editing::save::set_crop))
         .route("/photos/crop-sync", get(crate::editing::save::crop_sync))
-        .route("/photos/favorite-sync", get(crate::photos::handlers::favorite_sync))
-        .route("/photos/dimensions", patch(crate::photos::handlers::batch_update_dimensions))
+        .route(
+            "/photos/favorite-sync",
+            get(crate::photos::handlers::favorite_sync),
+        )
+        .route(
+            "/photos/dimensions",
+            patch(crate::photos::handlers::batch_update_dimensions),
+        )
         // Photo soft-delete to trash
-        .route("/photos/{id}", delete(crate::trash::operations::soft_delete_photo))
+        .route(
+            "/photos/{id}",
+            delete(crate::trash::operations::soft_delete_photo),
+        )
         // Edit copies
         .route(
             "/photos/{id}/copies",
             post(crate::editing::edit_copies::create_edit_copy),
         )
-        .route("/photos/{id}/copies", get(crate::editing::edit_copies::list_edit_copies))
+        .route(
+            "/photos/{id}/copies",
+            get(crate::editing::edit_copies::list_edit_copies),
+        )
         .route(
             "/photos/{id}/copies/{copy_id}",
             delete(crate::editing::edit_copies::delete_edit_copy),
@@ -279,13 +333,25 @@ fn photo_routes() -> Router<AppState> {
             post(crate::editing::save_copy::duplicate_photo),
         )
         // Render with baked-in edits (on-demand download)
-        .route("/photos/{id}/render", post(crate::editing::render_download::render_photo))
+        .route(
+            "/photos/{id}/render",
+            post(crate::editing::render_download::render_photo),
+        )
         // Scan & register
-        .route("/admin/photos/scan", post(crate::photos::scan::scan_and_register))
+        .route(
+            "/admin/photos/scan",
+            post(crate::photos::scan::scan_and_register),
+        )
         // Conversion progress
-        .route("/admin/conversion-status", get(crate::conversion::conversion_status))
+        .route(
+            "/admin/conversion-status",
+            get(crate::conversion::conversion_status),
+        )
         // Transcode GPU status
-        .route("/transcode/status", get(crate::transcode::handlers::transcode_status))
+        .route(
+            "/transcode/status",
+            get(crate::transcode::handlers::transcode_status),
+        )
         // Encryption key storage
         .route(
             "/admin/encryption/store-key",
@@ -355,7 +421,10 @@ fn trash_routes() -> Router<AppState> {
     Router::new()
         .route("/trash", get(crate::trash::handlers::list_trash))
         .route("/trash", delete(crate::trash::operations::empty_trash))
-        .route("/trash/{id}", delete(crate::trash::operations::permanent_delete))
+        .route(
+            "/trash/{id}",
+            delete(crate::trash::operations::permanent_delete),
+        )
         .route(
             "/trash/{id}/restore",
             post(crate::trash::operations::restore_from_trash),
@@ -419,8 +488,14 @@ fn backup_routes() -> Router<AppState> {
             "/admin/backup/discover",
             get(crate::backup::discover::discover_servers),
         )
-        .route("/admin/backup/mode", get(crate::backup::mode::get_backup_mode))
-        .route("/admin/backup/mode", post(crate::backup::mode::set_backup_mode))
+        .route(
+            "/admin/backup/mode",
+            get(crate::backup::mode::get_backup_mode),
+        )
+        .route(
+            "/admin/backup/mode",
+            post(crate::backup::mode::set_backup_mode),
+        )
         // Audio backup setting
         .route(
             "/settings/audio-backup",
@@ -436,9 +511,18 @@ fn backup_routes() -> Router<AppState> {
             post(crate::backup::autoscan::trigger_auto_scan),
         )
         // Server-to-server backup endpoints (API-key auth)
-        .route("/backup/list", get(crate::backup::serve::backup_list_photos))
-        .route("/backup/list-trash", get(crate::backup::serve::backup_list_trash))
-        .route("/backup/list-users", get(crate::backup::serve_users::backup_list_users))
+        .route(
+            "/backup/list",
+            get(crate::backup::serve::backup_list_photos),
+        )
+        .route(
+            "/backup/list-trash",
+            get(crate::backup::serve::backup_list_trash),
+        )
+        .route(
+            "/backup/list-users",
+            get(crate::backup::serve_users::backup_list_users),
+        )
         .route(
             "/backup/list-users-full",
             get(crate::backup::serve_users::backup_list_users_full),
@@ -447,16 +531,26 @@ fn backup_routes() -> Router<AppState> {
             "/backup/upsert-user",
             post(crate::backup::serve_users::backup_upsert_user),
         )
-        .route("/backup/receive", post(crate::backup::serve_receive::backup_receive))
-        .route("/backup/sync-deletions", post(crate::backup::serve::backup_sync_deletions))
-        .route("/backup/sync-user-deletions",
+        .route(
+            "/backup/receive",
+            post(crate::backup::serve_receive::backup_receive),
+        )
+        .route(
+            "/backup/sync-deletions",
+            post(crate::backup::serve::backup_sync_deletions),
+        )
+        .route(
+            "/backup/sync-user-deletions",
             post(crate::backup::serve_users::backup_sync_user_deletions),
         )
         .route(
             "/backup/sync-secure-galleries",
             post(crate::backup::serve::backup_sync_secure_galleries),
         )
-        .route("/backup/list-blobs", get(crate::backup::serve::backup_list_blobs))
+        .route(
+            "/backup/list-blobs",
+            get(crate::backup::serve::backup_list_blobs),
+        )
         .route(
             "/backup/receive-blob",
             post(crate::backup::serve::backup_receive_blob),
@@ -550,9 +644,15 @@ fn sharing_routes() -> Router<AppState> {
 fn tag_routes() -> Router<AppState> {
     Router::new()
         .route("/tags", get(crate::tags::handlers::list_tags))
-        .route("/photos/{id}/tags", get(crate::tags::handlers::get_photo_tags))
+        .route(
+            "/photos/{id}/tags",
+            get(crate::tags::handlers::get_photo_tags),
+        )
         .route("/photos/{id}/tags", post(crate::tags::handlers::add_tag))
-        .route("/photos/{id}/tags", delete(crate::tags::handlers::remove_tag))
+        .route(
+            "/photos/{id}/tags",
+            delete(crate::tags::handlers::remove_tag),
+        )
         .route("/search", get(crate::tags::handlers::search_photos))
 }
 
@@ -560,8 +660,14 @@ fn tag_routes() -> Router<AppState> {
 
 fn client_log_routes() -> Router<AppState> {
     Router::new()
-        .route("/client-logs", post(crate::client_logs::handlers::submit_logs))
-        .route("/admin/client-logs", get(crate::client_logs::handlers::list_logs))
+        .route(
+            "/client-logs",
+            post(crate::client_logs::handlers::submit_logs),
+        )
+        .route(
+            "/admin/client-logs",
+            get(crate::client_logs::handlers::list_logs),
+        )
         // Server activity flag (AI / geo backfill running) — open to any
         // authenticated user; the AuthUser extractor is enforced by the
         // handler itself if needed.  Placed in a wizard-open group so the
@@ -620,8 +726,14 @@ fn diagnostics_routes() -> Router<AppState> {
 fn export_routes() -> Router<AppState> {
     Router::new()
         .route("/export", post(crate::export::handlers::start_export))
-        .route("/export/status", get(crate::export::handlers::export_status))
-        .route("/export/files", get(crate::export::handlers::list_export_files))
+        .route(
+            "/export/status",
+            get(crate::export::handlers::export_status),
+        )
+        .route(
+            "/export/files",
+            get(crate::export::handlers::list_export_files),
+        )
         .route(
             "/export/files/{id}/download",
             get(crate::export::handlers::download_export_file),
@@ -642,18 +754,42 @@ fn ai_routes() -> Router<AppState> {
         .route("/ai/reprocess", post(crate::ai::handlers::ai_reprocess))
         // Face clusters
         .route("/ai/faces", get(crate::ai::handlers::list_face_clusters))
-        .route("/ai/faces/merge", post(crate::ai::handlers::merge_face_clusters))
-        .route("/ai/faces/split", post(crate::ai::handlers::split_face_cluster))
-        .route("/ai/faces/{cluster_id}/photos", get(crate::ai::handlers::list_cluster_photos))
-        .route("/ai/faces/{cluster_id}/name", put(crate::ai::handlers::rename_face_cluster))
+        .route(
+            "/ai/faces/merge",
+            post(crate::ai::handlers::merge_face_clusters),
+        )
+        .route(
+            "/ai/faces/split",
+            post(crate::ai::handlers::split_face_cluster),
+        )
+        .route(
+            "/ai/faces/{cluster_id}/photos",
+            get(crate::ai::handlers::list_cluster_photos),
+        )
+        .route(
+            "/ai/faces/{cluster_id}/name",
+            put(crate::ai::handlers::rename_face_cluster),
+        )
         // Object detections
         .route("/ai/objects", get(crate::ai::handlers::list_object_classes))
-        .route("/ai/objects/{class_name}/photos", get(crate::ai::handlers::list_object_photos))
+        .route(
+            "/ai/objects/{class_name}/photos",
+            get(crate::ai::handlers::list_object_photos),
+        )
         // Pet clusters
         .route("/ai/pets", get(crate::ai::handlers::list_pet_clusters))
-        .route("/ai/pets/merge", post(crate::ai::handlers::merge_pet_clusters))
-        .route("/ai/pets/{cluster_id}/photos", get(crate::ai::handlers::list_pet_cluster_photos))
-        .route("/ai/pets/{cluster_id}/name", put(crate::ai::handlers::rename_pet_cluster))
+        .route(
+            "/ai/pets/merge",
+            post(crate::ai::handlers::merge_pet_clusters),
+        )
+        .route(
+            "/ai/pets/{cluster_id}/photos",
+            get(crate::ai::handlers::list_pet_cluster_photos),
+        )
+        .route(
+            "/ai/pets/{cluster_id}/name",
+            put(crate::ai::handlers::rename_pet_cluster),
+        )
 }
 
 // ── Geolocation & timeline ──────────────────────────────────────────
@@ -662,21 +798,39 @@ fn geo_routes() -> Router<AppState> {
     Router::new()
         // Settings
         .route("/settings/geo", get(crate::geo::handlers::get_geo_settings))
-        .route("/settings/geo", post(crate::geo::handlers::update_geo_settings))
+        .route(
+            "/settings/geo",
+            post(crate::geo::handlers::update_geo_settings),
+        )
         // Locations
         .route("/geo/locations", get(crate::geo::handlers::list_locations))
-        .route("/geo/locations/{country}/{city}", get(crate::geo::handlers::list_location_photos))
+        .route(
+            "/geo/locations/{country}/{city}",
+            get(crate::geo::handlers::list_location_photos),
+        )
         .route("/geo/countries", get(crate::geo::handlers::list_countries))
         .route("/geo/map", get(crate::geo::handlers::list_map_photos))
         // Timeline
         .route("/geo/timeline", get(crate::geo::handlers::list_timeline))
-        .route("/geo/timeline/{year}", get(crate::geo::handlers::list_timeline_year))
-        .route("/geo/timeline/{year}/{month}", get(crate::geo::handlers::list_timeline_month_photos))
+        .route(
+            "/geo/timeline/{year}",
+            get(crate::geo::handlers::list_timeline_year),
+        )
+        .route(
+            "/geo/timeline/{year}/{month}",
+            get(crate::geo::handlers::list_timeline_month_photos),
+        )
         // Memories (auto-generated smart albums)
         .route("/geo/memories", get(crate::geo::handlers::list_memories))
-        .route("/geo/memories/{memory_id}/photos", get(crate::geo::handlers::list_memory_photos))
+        .route(
+            "/geo/memories/{memory_id}/photos",
+            get(crate::geo::handlers::list_memory_photos),
+        )
         .route("/geo/trips", get(crate::geo::handlers::list_trips))
-        .route("/geo/trips/{trip_id}/photos", get(crate::geo::handlers::list_trip_photos))
+        .route(
+            "/geo/trips/{trip_id}/photos",
+            get(crate::geo::handlers::list_trip_photos),
+        )
         // Scrub
         .route("/geo/scrub", post(crate::geo::handlers::scrub_geo_data))
 }

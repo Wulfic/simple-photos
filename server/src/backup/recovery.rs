@@ -95,9 +95,18 @@ pub async fn recover_from_backup(
     // Determine this server's routable address from base_url config.
     // Preserve the scheme (http:// or https://) so the backup can push
     // data back using the correct protocol.
-    let base_url_cfg = state.config.server.base_url.trim_end_matches('/').to_string();
+    let base_url_cfg = state
+        .config
+        .server
+        .base_url
+        .trim_end_matches('/')
+        .to_string();
     let primary_address = {
-        let scheme = if base_url_cfg.starts_with("https://") { "https://" } else { "http://" };
+        let scheme = if base_url_cfg.starts_with("https://") {
+            "https://"
+        } else {
+            "http://"
+        };
         let host_port = base_url_cfg
             .strip_prefix("https://")
             .or_else(|| base_url_cfg.strip_prefix("http://"))
@@ -155,7 +164,15 @@ pub async fn recover_from_backup(
         {
             Ok(c) => c,
             Err(e) => {
-                update_recovery_log(&pool, &recovery_id_clone, "error", 0, 0, Some(&e.to_string())).await;
+                update_recovery_log(
+                    &pool,
+                    &recovery_id_clone,
+                    "error",
+                    0,
+                    0,
+                    Some(&e.to_string()),
+                )
+                .await;
                 cleanup_recovery_key(&pool).await;
                 return;
             }
@@ -190,7 +207,8 @@ pub async fn recover_from_backup(
                         }
                         tracing::info!(
                             "Recovery from '{}': restored {} user account(s) directly",
-                            server_name, count
+                            server_name,
+                            count
                         );
                         count
                     }
@@ -201,10 +219,7 @@ pub async fn recover_from_backup(
                 }
             }
             Ok(resp) => {
-                tracing::warn!(
-                    "Recovery: list-users-full returned HTTP {}",
-                    resp.status()
-                );
+                tracing::warn!("Recovery: list-users-full returned HTTP {}", resp.status());
                 0
             }
             Err(e) => {
@@ -239,7 +254,8 @@ pub async fn recover_from_backup(
             Ok(resp) if resp.status().is_success() => {
                 tracing::info!(
                     "Recovery push-sync triggered on backup '{}' → primary at {}",
-                    server_name, primary_address
+                    server_name,
+                    primary_address
                 );
             }
             Ok(resp) => {
@@ -348,7 +364,16 @@ pub async fn push_sync_to_target(
         // Run the full sync engine targeting the recovering primary.
         // is_recovery=true skips the deletion phases that would otherwise
         // remove users/photos that exist on the primary but not on the backup.
-        run_sync(&pool, &storage_root, &temp_server, &target_api_key, &log_id_clone, true, accept_invalid_certs).await;
+        run_sync(
+            &pool,
+            &storage_root,
+            &temp_server,
+            &target_api_key,
+            &log_id_clone,
+            true,
+            accept_invalid_certs,
+        )
+        .await;
 
         // Notify the primary of completion via callback
         if let Some(ref url) = callback_url {
@@ -367,7 +392,8 @@ pub async fn push_sync_to_target(
                     "bytes_synced": bytes_synced,
                     "error": error,
                 });
-                let _ = c.post(url)
+                let _ = c
+                    .post(url)
                     .header("X-API-Key", &callback_api_key)
                     .json(&body)
                     .send()
@@ -401,18 +427,39 @@ pub async fn recovery_callback(
 ) -> Result<StatusCode, AppError> {
     validate_api_key(&state, &headers).await?;
 
-    let recovery_id = body.get("recovery_id").and_then(|v| v.as_str())
+    let recovery_id = body
+        .get("recovery_id")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("Missing recovery_id".into()))?;
-    let status = body.get("status").and_then(|v| v.as_str()).unwrap_or("success");
-    let photos_synced = body.get("photos_synced").and_then(|v| v.as_i64()).unwrap_or(0);
-    let bytes_synced = body.get("bytes_synced").and_then(|v| v.as_i64()).unwrap_or(0);
+    let status = body
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("success");
+    let photos_synced = body
+        .get("photos_synced")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let bytes_synced = body
+        .get("bytes_synced")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let error = body.get("error").and_then(|v| v.as_str());
 
-    update_recovery_log(&state.pool, recovery_id, status, photos_synced, bytes_synced, error).await;
+    update_recovery_log(
+        &state.pool,
+        recovery_id,
+        status,
+        photos_synced,
+        bytes_synced,
+        error,
+    )
+    .await;
 
     tracing::info!(
         "Recovery complete: status={}, photos={}, bytes={}",
-        status, photos_synced, bytes_synced
+        status,
+        photos_synced,
+        bytes_synced
     );
 
     // Clean up: remove temp API key and temp restore_admin user
@@ -465,7 +512,12 @@ async fn read_sync_log_result(
         Ok(Some((status, photos, bytes, error))) => {
             (status, photos.unwrap_or(0), bytes.unwrap_or(0), error)
         }
-        _ => ("unknown".to_string(), 0, 0, Some("Could not read sync log".to_string())),
+        _ => (
+            "unknown".to_string(),
+            0,
+            0,
+            Some("Could not read sync log".to_string()),
+        ),
     }
 }
 
@@ -484,18 +536,31 @@ async fn upsert_user_from_backup(
     pool: &sqlx::SqlitePool,
     user: &serde_json::Value,
 ) -> Result<(), String> {
-    let id = user.get("id").and_then(|v| v.as_str())
+    let id = user
+        .get("id")
+        .and_then(|v| v.as_str())
         .ok_or("missing id")?;
-    let username = user.get("username").and_then(|v| v.as_str())
+    let username = user
+        .get("username")
+        .and_then(|v| v.as_str())
         .ok_or("missing username")?;
-    let password_hash = user.get("password_hash").and_then(|v| v.as_str())
+    let password_hash = user
+        .get("password_hash")
+        .and_then(|v| v.as_str())
         .ok_or("missing password_hash")?;
     let role = user.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-    let quota = user.get("storage_quota_bytes").and_then(|v| v.as_i64())
+    let quota = user
+        .get("storage_quota_bytes")
+        .and_then(|v| v.as_i64())
         .unwrap_or(10_737_418_240);
-    let created_at = user.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+    let created_at = user
+        .get("created_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let totp_secret: Option<&str> = user.get("totp_secret").and_then(|v| v.as_str());
-    let totp_enabled: i32 = user.get("totp_enabled").and_then(|v| v.as_i64())
+    let totp_enabled: i32 = user
+        .get("totp_enabled")
+        .and_then(|v| v.as_i64())
         .unwrap_or(0) as i32;
 
     let result = sqlx::query(
@@ -527,14 +592,13 @@ async fn upsert_user_from_backup(
             // A local user with the same username but different ID exists
             // (e.g. restore_admin won't conflict, but if there's a real
             // collision we need to merge)
-            let local_id: Option<String> = sqlx::query_scalar(
-                "SELECT id FROM users WHERE username = ? AND id != ?",
-            )
-            .bind(username)
-            .bind(id)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
+            let local_id: Option<String> =
+                sqlx::query_scalar("SELECT id FROM users WHERE username = ? AND id != ?")
+                    .bind(username)
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None);
 
             if let Some(ref old_id) = local_id {
                 // Reparent content from old user to the backup's user ID
@@ -552,13 +616,19 @@ async fn upsert_user_from_backup(
                 }
 
                 let _ = sqlx::query("DELETE FROM encrypted_galleries WHERE user_id = ?")
-                    .bind(old_id).execute(pool).await;
+                    .bind(old_id)
+                    .execute(pool)
+                    .await;
                 let _ = sqlx::query("DELETE FROM users WHERE id = ?")
-                    .bind(old_id).execute(pool).await;
+                    .bind(old_id)
+                    .execute(pool)
+                    .await;
 
                 tracing::info!(
                     "Recovery: merged local user {} into backup user {} ({})",
-                    old_id, id, username
+                    old_id,
+                    id,
+                    username
                 );
             }
 
@@ -594,7 +664,9 @@ async fn upsert_user_from_backup(
     // Sync TOTP backup codes
     if let Some(codes) = user.get("totp_backup_codes").and_then(|v| v.as_array()) {
         let _ = sqlx::query("DELETE FROM totp_backup_codes WHERE user_id = ?")
-            .bind(id).execute(pool).await;
+            .bind(id)
+            .execute(pool)
+            .await;
 
         for code in codes {
             let code_id = code.get("id").and_then(|v| v.as_str()).unwrap_or("");

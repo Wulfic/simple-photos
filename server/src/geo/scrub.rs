@@ -21,7 +21,7 @@ pub async fn scrub_geolocation_for_user(
          latitude = NULL, longitude = NULL, \
          geo_city = NULL, geo_state = NULL, \
          geo_country = NULL, geo_country_code = NULL \
-         WHERE user_id = ?1 AND (latitude IS NOT NULL OR geo_city IS NOT NULL)"
+         WHERE user_id = ?1 AND (latitude IS NOT NULL OR geo_city IS NOT NULL)",
     )
     .bind(user_id)
     .execute(pool)
@@ -37,7 +37,7 @@ pub async fn scrub_geolocation_for_user(
 /// Check if geo scrubbing is enabled for a user.
 pub async fn is_scrub_enabled(pool: &SqlitePool, user_id: &str) -> bool {
     let result: Option<(String,)> = sqlx::query_as(
-        "SELECT value FROM user_settings WHERE user_id = ?1 AND key = 'geo_scrub_on_upload'"
+        "SELECT value FROM user_settings WHERE user_id = ?1 AND key = 'geo_scrub_on_upload'",
     )
     .bind(user_id)
     .fetch_optional(pool)

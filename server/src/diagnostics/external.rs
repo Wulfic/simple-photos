@@ -76,7 +76,8 @@ async fn require_basic_auth_admin(
             // to equalize timing between the success and failure paths. It is not a
             // credential.
             // nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
-            const DUMMY_BCRYPT: &str = "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK";
+            const DUMMY_BCRYPT: &str =
+                "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK";
             let _ = bcrypt::verify(password, DUMMY_BCRYPT);
             return Err(AppError::Unauthorized(
                 "Invalid username or password".into(),
@@ -135,10 +136,9 @@ pub async fn external_health(
     // Disk usage
     let storage_root = (**state.storage_root.load()).clone();
     let root_clone = storage_root.clone();
-    let (disk_total, disk_available) =
-        tokio::task::spawn_blocking(move || disk_stats(&root_clone))
-            .await
-            .unwrap_or((0, 0));
+    let (disk_total, disk_available) = tokio::task::spawn_blocking(move || disk_stats(&root_clone))
+        .await
+        .unwrap_or((0, 0));
     let disk_used_percent = if disk_total > 0 {
         ((disk_total - disk_available) as f64 / disk_total as f64) * 100.0
     } else {

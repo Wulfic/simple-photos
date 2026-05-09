@@ -456,11 +456,7 @@ fn label_category_by_name(index: usize) -> Option<&'static str> {
     // Toys & games
     if matches!(
         label,
-        "jigsaw puzzle"
-            | "pinwheel"
-            | "teddy"
-            | "comic book"
-            | "crossword puzzle"
+        "jigsaw puzzle" | "pinwheel" | "teddy" | "comic book" | "crossword puzzle"
     ) {
         return Some("toy");
     }

@@ -102,7 +102,9 @@ pub async fn list_photos(
     }
 
     if collapse {
-        sql.push_str(") WHERE rn = 1 ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?");
+        sql.push_str(
+            ") WHERE rn = 1 ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?",
+        );
     } else {
         sql.push_str(" ORDER BY COALESCE(taken_at, created_at) DESC, filename ASC LIMIT ?");
     }
@@ -275,13 +277,12 @@ pub async fn register_encrypted_photo(
     Json(req): Json<RegisterEncryptedPhotoRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     // Verify the blob actually exists and belongs to this user.
-    let blob_exists: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM blobs WHERE id = ? AND user_id = ?",
-    )
-    .bind(&req.encrypted_blob_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?;
+    let blob_exists: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM blobs WHERE id = ? AND user_id = ?")
+            .bind(&req.encrypted_blob_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.read_pool)
+            .await?;
 
     if blob_exists.is_none() {
         return Err(AppError::BadRequest(format!(
@@ -291,13 +292,12 @@ pub async fn register_encrypted_photo(
     }
 
     // Dedup: if a photo already references this blob, return it.
-    let existing: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM photos WHERE user_id = ? AND encrypted_blob_id = ? LIMIT 1",
-    )
-    .bind(&auth.user_id)
-    .bind(&req.encrypted_blob_id)
-    .fetch_optional(&state.read_pool)
-    .await?;
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM photos WHERE user_id = ? AND encrypted_blob_id = ? LIMIT 1")
+            .bind(&auth.user_id)
+            .bind(&req.encrypted_blob_id)
+            .fetch_optional(&state.read_pool)
+            .await?;
 
     if let Some((eid,)) = existing {
         tracing::info!(
@@ -477,12 +477,11 @@ pub async fn favorite_sync(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<FavSyncRecord>>, AppError> {
-    let records = sqlx::query_as::<_, FavSyncRecord>(
-        "SELECT id, is_favorite FROM photos WHERE user_id = ?",
-    )
-    .bind(&auth.user_id)
-    .fetch_all(&state.read_pool)
-    .await?;
+    let records =
+        sqlx::query_as::<_, FavSyncRecord>("SELECT id, is_favorite FROM photos WHERE user_id = ?")
+            .bind(&auth.user_id)
+            .fetch_all(&state.read_pool)
+            .await?;
 
     Ok(Json(records))
 }
@@ -516,16 +515,14 @@ pub async fn batch_update_dimensions(
             continue;
         }
         let rows = if let Some(ref pid) = item.photo_id {
-            sqlx::query(
-                "UPDATE photos SET width = ?, height = ? WHERE id = ? AND user_id = ?",
-            )
-            .bind(item.width)
-            .bind(item.height)
-            .bind(pid)
-            .bind(&auth.user_id)
-            .execute(&state.pool)
-            .await?
-            .rows_affected()
+            sqlx::query("UPDATE photos SET width = ?, height = ? WHERE id = ? AND user_id = ?")
+                .bind(item.width)
+                .bind(item.height)
+                .bind(pid)
+                .bind(&auth.user_id)
+                .execute(&state.pool)
+                .await?
+                .rows_affected()
         } else if let Some(ref bid) = item.blob_id {
             sqlx::query(
                 "UPDATE photos SET width = ?, height = ? WHERE encrypted_blob_id = ? AND user_id = ?",

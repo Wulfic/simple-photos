@@ -256,7 +256,9 @@ pub async fn set_audio_backup_setting(
                         count
                     );
                     crate::photos::server_migrate::auto_migrate_after_scan(
-                        pool, storage_root, jwt_secret,
+                        pool,
+                        storage_root,
+                        jwt_secret,
                     )
                     .await;
                 }

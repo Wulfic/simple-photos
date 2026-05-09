@@ -37,7 +37,16 @@ pub async fn sync_secure_galleries_to_backup(
     // clone photos are excluded from sync_photos, so backup has no photos
     // row for the clone, but the egi columns were populated by the primary's
     // earlier gallery sync).
-    let items: Vec<(String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
+    let items: Vec<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = match sqlx::query_as(
         "SELECT gi.id, gi.gallery_id, gi.blob_id, gi.added_at, gi.original_blob_id, \
                 COALESCE(p.encrypted_blob_id, gi.encrypted_blob_id), \
                 COALESCE(p.encrypted_thumb_blob_id, gi.encrypted_thumb_blob_id), \
@@ -50,7 +59,10 @@ pub async fn sync_secure_galleries_to_backup(
     {
         Ok(i) => i,
         Err(e) => {
-            tracing::warn!("Failed to fetch secure gallery items for backup sync: {}", e);
+            tracing::warn!(
+                "Failed to fetch secure gallery items for backup sync: {}",
+                e
+            );
             return;
         }
     };
@@ -74,18 +86,29 @@ pub async fn sync_secure_galleries_to_backup(
 
     let items_json: Vec<serde_json::Value> = items
         .iter()
-        .map(|(id, gallery_id, blob_id, added_at, original_blob_id, encrypted_blob_id, encrypted_thumb_blob_id, original_photo_hash)| {
-            serde_json::json!({
-                "id": id,
-                "gallery_id": gallery_id,
-                "blob_id": blob_id,
-                "added_at": added_at,
-                "original_blob_id": original_blob_id,
-                "encrypted_blob_id": encrypted_blob_id,
-                "encrypted_thumb_blob_id": encrypted_thumb_blob_id,
-                "original_photo_hash": original_photo_hash,
-            })
-        })
+        .map(
+            |(
+                id,
+                gallery_id,
+                blob_id,
+                added_at,
+                original_blob_id,
+                encrypted_blob_id,
+                encrypted_thumb_blob_id,
+                original_photo_hash,
+            )| {
+                serde_json::json!({
+                    "id": id,
+                    "gallery_id": gallery_id,
+                    "blob_id": blob_id,
+                    "added_at": added_at,
+                    "original_blob_id": original_blob_id,
+                    "encrypted_blob_id": encrypted_blob_id,
+                    "encrypted_thumb_blob_id": encrypted_thumb_blob_id,
+                    "original_photo_hash": original_photo_hash,
+                })
+            },
+        )
         .collect();
 
     let body = serde_json::json!({
@@ -109,10 +132,7 @@ pub async fn sync_secure_galleries_to_backup(
             );
         }
         Ok(resp) => {
-            tracing::warn!(
-                "sync-secure-galleries returned HTTP {}",
-                resp.status()
-            );
+            tracing::warn!("sync-secure-galleries returned HTTP {}", resp.status());
         }
         Err(e) => {
             tracing::warn!("sync-secure-galleries request failed: {}", e);

@@ -98,15 +98,16 @@ pub async fn render_photo(
     // Validate the stored file path is a safe relative path before joining to the
     // storage root — belts-and-suspenders since the path was validated at upload time.
     if let Err(reason) = crate::sanitize::validate_relative_path(&photo.file_path) {
-        tracing::error!("[render] invalid stored file path '{}': {}", photo.file_path, reason);
+        tracing::error!(
+            "[render] invalid stored file path '{}': {}",
+            photo.file_path,
+            reason
+        );
         return Err(AppError::NotFound);
     }
     let source_path = state.config.storage.root.join(&photo.file_path);
     if !tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
-        tracing::error!(
-            "[render] source file not found: {}",
-            source_path.display()
-        );
+        tracing::error!("[render] source file not found: {}", source_path.display());
         return Err(AppError::NotFound);
     }
 
@@ -117,7 +118,10 @@ pub async fn render_photo(
     tracing::info!(
         "[render] photo_id={}, media_type={}, dims={}×{}, \
          has_meta={}, meta_str={:?}",
-        photo_id, media_type, photo.width, photo.height,
+        photo_id,
+        media_type,
+        photo.width,
+        photo.height,
         meta.is_some(),
         meta_str.as_deref().unwrap_or("none"),
     );
@@ -125,8 +129,11 @@ pub async fn render_photo(
         tracing::info!(
             "[render] CropMeta: rotate={}°, has_crop={}, has_brightness={}, \
              has_trim={}, swaps_dims={}",
-            m.rotation_degrees(), m.has_crop(), m.has_brightness(),
-            m.has_trim(), m.rotation_swaps_dimensions(),
+            m.rotation_degrees(),
+            m.has_crop(),
+            m.has_brightness(),
+            m.has_trim(),
+            m.rotation_swaps_dimensions(),
         );
     }
 
@@ -178,11 +185,14 @@ pub async fn render_photo(
     };
     let effective_meta = meta.as_ref().unwrap_or(&default_meta);
 
-    ffmpeg::run_ffmpeg_render(&source_path, &tmp_path, media_type, effective_meta, ext).await
+    ffmpeg::run_ffmpeg_render(&source_path, &tmp_path, media_type, effective_meta, ext)
+        .await
         .inspect_err(|_e| {
             // Clean up tmp file on failure
             let tp = tmp_path.clone();
-            tokio::spawn(async move { let _ = tokio::fs::remove_file(&tp).await; });
+            tokio::spawn(async move {
+                let _ = tokio::fs::remove_file(&tp).await;
+            });
         })?;
 
     // ── Save to cache and stream back ─────────────────────────────────────────

@@ -27,12 +27,11 @@ pub async fn ai_status(
     let config = &state.config.ai;
 
     // Check user-level toggle
-    let user_enabled: Option<(String,)> = sqlx::query_as(
-        "SELECT value FROM user_settings WHERE user_id = ?1 AND key = 'ai_enabled'"
-    )
-    .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let user_enabled: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM user_settings WHERE user_id = ?1 AND key = 'ai_enabled'")
+            .bind(&auth.user_id)
+            .fetch_optional(&state.pool)
+            .await?;
 
     let enabled = match user_enabled {
         Some((val,)) => val != "false",
@@ -40,26 +39,23 @@ pub async fn ai_status(
     };
 
     // Count processed and pending photos
-    let processed: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM ai_processed_photos WHERE user_id = ?1"
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let processed: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM ai_processed_photos WHERE user_id = ?1")
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
-    let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM photos WHERE user_id = ?1 AND file_path IS NOT NULL"
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let total: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM photos WHERE user_id = ?1 AND file_path IS NOT NULL")
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
-    let face_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM face_detections WHERE user_id = ?1"
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let face_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM face_detections WHERE user_id = ?1")
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
     let cluster_count: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT cluster_id) FROM face_detections WHERE user_id = ?1 AND cluster_id IS NOT NULL"
@@ -68,26 +64,23 @@ pub async fn ai_status(
     .fetch_one(&state.pool)
     .await?;
 
-    let object_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM object_detections WHERE user_id = ?1"
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let object_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM object_detections WHERE user_id = ?1")
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
-    let pet_det_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM pet_detections WHERE user_id = ?1"
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let pet_det_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM pet_detections WHERE user_id = ?1")
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
-    let pet_cluster_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM pet_clusters WHERE user_id = ?1"
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let pet_cluster_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM pet_clusters WHERE user_id = ?1")
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
     // Re-derive model availability the same way AiEngine does so the
     // status report is honest about whether real ONNX models are loaded.
@@ -97,9 +90,8 @@ pub async fn ai_status(
         || model_dir.join("face_detection.onnx").exists();
     let object_model_loaded = model_dir.join("mobilenetv2-12.onnx").exists()
         || model_dir.join("object_detection.onnx").exists();
-    let degraded_mode = !face_model_loaded
-        && !object_model_loaded
-        && !config.allow_heuristic_fallback;
+    let degraded_mode =
+        !face_model_loaded && !object_model_loaded && !config.allow_heuristic_fallback;
 
     Ok(Json(AiStatusResponse {
         enabled,
@@ -138,7 +130,7 @@ pub async fn ai_toggle(
     sqlx::query(
         "INSERT INTO user_settings (user_id, key, value, updated_at) \
          VALUES (?1, 'ai_enabled', ?2, datetime('now')) \
-         ON CONFLICT(user_id, key) DO UPDATE SET value = ?2, updated_at = datetime('now')"
+         ON CONFLICT(user_id, key) DO UPDATE SET value = ?2, updated_at = datetime('now')",
     )
     .bind(&auth.user_id)
     .bind(value)
@@ -161,33 +153,27 @@ pub async fn ai_reprocess(
             let mut count = 0i64;
             for id in ids {
                 // Delete existing detections
-                sqlx::query(
-                    "DELETE FROM face_detections WHERE photo_id = ?1 AND user_id = ?2"
-                )
-                .bind(id)
-                .bind(&auth.user_id)
-                .execute(&state.pool)
-                .await?;
+                sqlx::query("DELETE FROM face_detections WHERE photo_id = ?1 AND user_id = ?2")
+                    .bind(id)
+                    .bind(&auth.user_id)
+                    .execute(&state.pool)
+                    .await?;
 
-                sqlx::query(
-                    "DELETE FROM object_detections WHERE photo_id = ?1 AND user_id = ?2"
-                )
-                .bind(id)
-                .bind(&auth.user_id)
-                .execute(&state.pool)
-                .await?;
+                sqlx::query("DELETE FROM object_detections WHERE photo_id = ?1 AND user_id = ?2")
+                    .bind(id)
+                    .bind(&auth.user_id)
+                    .execute(&state.pool)
+                    .await?;
 
-                sqlx::query(
-                    "DELETE FROM pet_detections WHERE photo_id = ?1 AND user_id = ?2"
-                )
-                .bind(id)
-                .bind(&auth.user_id)
-                .execute(&state.pool)
-                .await?;
+                sqlx::query("DELETE FROM pet_detections WHERE photo_id = ?1 AND user_id = ?2")
+                    .bind(id)
+                    .bind(&auth.user_id)
+                    .execute(&state.pool)
+                    .await?;
 
                 // Remove from processed list so the background processor picks it up
                 let result = sqlx::query(
-                    "DELETE FROM ai_processed_photos WHERE photo_id = ?1 AND user_id = ?2"
+                    "DELETE FROM ai_processed_photos WHERE photo_id = ?1 AND user_id = ?2",
                 )
                 .bind(id)
                 .bind(&auth.user_id)
@@ -294,7 +280,7 @@ pub async fn list_face_clusters(
                 fc.created_at, fc.updated_at \
          FROM face_clusters fc \
          WHERE fc.user_id = ?1 AND fc.photo_count >= 2 \
-         ORDER BY fc.photo_count DESC"
+         ORDER BY fc.photo_count DESC",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
@@ -310,21 +296,20 @@ pub async fn list_cluster_photos(
     Path(cluster_id): Path<i64>,
 ) -> Result<Json<Vec<FaceDetectionRecord>>, AppError> {
     // Verify cluster belongs to user
-    let _cluster: (i64,) = sqlx::query_as(
-        "SELECT id FROM face_clusters WHERE id = ?1 AND user_id = ?2"
-    )
-    .bind(cluster_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let _cluster: (i64,) =
+        sqlx::query_as("SELECT id FROM face_clusters WHERE id = ?1 AND user_id = ?2")
+            .bind(cluster_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let detections: Vec<FaceDetectionRecord> = sqlx::query_as(
         "SELECT fd.id, fd.photo_id, fd.cluster_id, fd.bbox_x, fd.bbox_y, fd.bbox_w, fd.bbox_h, \
                 fd.confidence, fd.created_at \
          FROM face_detections fd \
          WHERE fd.cluster_id = ?1 AND fd.user_id = ?2 \
-         ORDER BY fd.confidence DESC"
+         ORDER BY fd.confidence DESC",
     )
     .bind(cluster_id)
     .bind(&auth.user_id)
@@ -352,7 +337,7 @@ pub async fn rename_face_cluster(
     // Verify cluster belongs to user
     let result = sqlx::query(
         "UPDATE face_clusters SET label = ?1, updated_at = datetime('now') \
-         WHERE id = ?2 AND user_id = ?3"
+         WHERE id = ?2 AND user_id = ?3",
     )
     .bind(name)
     .bind(cluster_id)
@@ -377,19 +362,20 @@ pub async fn merge_face_clusters(
     Json(body): Json<MergeFacesRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if body.cluster_ids.len() < 2 {
-        return Err(AppError::BadRequest("Need at least 2 clusters to merge".into()));
+        return Err(AppError::BadRequest(
+            "Need at least 2 clusters to merge".into(),
+        ));
     }
 
     // Verify all clusters belong to user
     let target_id = body.cluster_ids[0];
     for cid in &body.cluster_ids {
-        let exists: Option<(i64,)> = sqlx::query_as(
-            "SELECT id FROM face_clusters WHERE id = ?1 AND user_id = ?2"
-        )
-        .bind(cid)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.pool)
-        .await?;
+        let exists: Option<(i64,)> =
+            sqlx::query_as("SELECT id FROM face_clusters WHERE id = ?1 AND user_id = ?2")
+                .bind(cid)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.pool)
+                .await?;
 
         if exists.is_none() {
             return Err(AppError::BadRequest(format!("Cluster {} not found", cid)));
@@ -399,7 +385,7 @@ pub async fn merge_face_clusters(
     // Move all face detections to the target cluster
     for cid in &body.cluster_ids[1..] {
         sqlx::query(
-            "UPDATE face_detections SET cluster_id = ?1 WHERE cluster_id = ?2 AND user_id = ?3"
+            "UPDATE face_detections SET cluster_id = ?1 WHERE cluster_id = ?2 AND user_id = ?3",
         )
         .bind(target_id)
         .bind(cid)
@@ -425,7 +411,7 @@ pub async fn merge_face_clusters(
     .await?;
 
     sqlx::query(
-        "UPDATE face_clusters SET photo_count = ?1, updated_at = datetime('now') WHERE id = ?2"
+        "UPDATE face_clusters SET photo_count = ?1, updated_at = datetime('now') WHERE id = ?2",
     )
     .bind(count.0)
     .bind(target_id)
@@ -450,13 +436,12 @@ pub async fn split_face_cluster(
 
     // Verify all detections belong to user
     for did in &body.detection_ids {
-        let exists: Option<(i64,)> = sqlx::query_as(
-            "SELECT id FROM face_detections WHERE id = ?1 AND user_id = ?2"
-        )
-        .bind(did)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.pool)
-        .await?;
+        let exists: Option<(i64,)> =
+            sqlx::query_as("SELECT id FROM face_detections WHERE id = ?1 AND user_id = ?2")
+                .bind(did)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.pool)
+                .await?;
 
         if exists.is_none() {
             return Err(AppError::BadRequest(format!("Detection {} not found", did)));
@@ -466,7 +451,7 @@ pub async fn split_face_cluster(
     // Create a new cluster
     let result = sqlx::query(
         "INSERT INTO face_clusters (user_id, photo_count, created_at, updated_at) \
-         VALUES (?1, ?2, datetime('now'), datetime('now'))"
+         VALUES (?1, ?2, datetime('now'), datetime('now'))",
     )
     .bind(&auth.user_id)
     .bind(body.detection_ids.len() as i64)
@@ -479,25 +464,22 @@ pub async fn split_face_cluster(
     // Track the old cluster IDs so we can update their counts
     let mut old_cluster_ids = std::collections::HashSet::new();
     for did in &body.detection_ids {
-        let old: Option<(Option<i64>,)> = sqlx::query_as(
-            "SELECT cluster_id FROM face_detections WHERE id = ?1"
-        )
-        .bind(did)
-        .fetch_optional(&state.pool)
-        .await?;
+        let old: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT cluster_id FROM face_detections WHERE id = ?1")
+                .bind(did)
+                .fetch_optional(&state.pool)
+                .await?;
 
         if let Some((Some(old_cid),)) = old {
             old_cluster_ids.insert(old_cid);
         }
 
-        sqlx::query(
-            "UPDATE face_detections SET cluster_id = ?1 WHERE id = ?2 AND user_id = ?3"
-        )
-        .bind(new_cluster_id)
-        .bind(did)
-        .bind(&auth.user_id)
-        .execute(&state.pool)
-        .await?;
+        sqlx::query("UPDATE face_detections SET cluster_id = ?1 WHERE id = ?2 AND user_id = ?3")
+            .bind(new_cluster_id)
+            .bind(did)
+            .bind(&auth.user_id)
+            .execute(&state.pool)
+            .await?;
     }
 
     // Update photo counts on old clusters
@@ -546,7 +528,7 @@ pub async fn list_object_classes(
          FROM object_detections \
          WHERE user_id = ?1 \
          GROUP BY class_name \
-         ORDER BY photo_count DESC"
+         ORDER BY photo_count DESC",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
@@ -565,7 +547,7 @@ pub async fn list_object_photos(
         "SELECT id, photo_id, class_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h, created_at \
          FROM object_detections \
          WHERE user_id = ?1 AND class_name = ?2 \
-         ORDER BY confidence DESC"
+         ORDER BY confidence DESC",
     )
     .bind(&auth.user_id)
     .bind(&class_name)
@@ -595,7 +577,7 @@ pub async fn list_pet_clusters(
                 pc.created_at, pc.updated_at \
          FROM pet_clusters pc \
          WHERE pc.user_id = ?1 AND pc.photo_count >= 2 \
-         ORDER BY pc.photo_count DESC, pc.species ASC"
+         ORDER BY pc.photo_count DESC, pc.species ASC",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
@@ -611,20 +593,19 @@ pub async fn list_pet_cluster_photos(
     Path(cluster_id): Path<i64>,
 ) -> Result<Json<Vec<PetDetectionRecord>>, AppError> {
     // Verify cluster belongs to user
-    let _cluster: (i64,) = sqlx::query_as(
-        "SELECT id FROM pet_clusters WHERE id = ?1 AND user_id = ?2"
-    )
-    .bind(cluster_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let _cluster: (i64,) =
+        sqlx::query_as("SELECT id FROM pet_clusters WHERE id = ?1 AND user_id = ?2")
+            .bind(cluster_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let detections: Vec<PetDetectionRecord> = sqlx::query_as(
         "SELECT id, photo_id, cluster_id, species, confidence, created_at \
          FROM pet_detections \
          WHERE cluster_id = ?1 AND user_id = ?2 \
-         ORDER BY confidence DESC"
+         ORDER BY confidence DESC",
     )
     .bind(cluster_id)
     .bind(&auth.user_id)
@@ -651,7 +632,7 @@ pub async fn rename_pet_cluster(
 
     let result = sqlx::query(
         "UPDATE pet_clusters SET label = ?1, updated_at = datetime('now') \
-         WHERE id = ?2 AND user_id = ?3"
+         WHERE id = ?2 AND user_id = ?3",
     )
     .bind(name)
     .bind(cluster_id)
@@ -676,28 +657,32 @@ pub async fn merge_pet_clusters(
     Json(body): Json<MergeFacesRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if body.cluster_ids.len() < 2 {
-        return Err(AppError::BadRequest("Need at least 2 clusters to merge".into()));
+        return Err(AppError::BadRequest(
+            "Need at least 2 clusters to merge".into(),
+        ));
     }
 
     let target_id = body.cluster_ids[0];
 
     for cid in &body.cluster_ids {
-        let exists: Option<(i64,)> = sqlx::query_as(
-            "SELECT id FROM pet_clusters WHERE id = ?1 AND user_id = ?2"
-        )
-        .bind(cid)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.pool)
-        .await?;
+        let exists: Option<(i64,)> =
+            sqlx::query_as("SELECT id FROM pet_clusters WHERE id = ?1 AND user_id = ?2")
+                .bind(cid)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.pool)
+                .await?;
 
         if exists.is_none() {
-            return Err(AppError::BadRequest(format!("Pet cluster {} not found", cid)));
+            return Err(AppError::BadRequest(format!(
+                "Pet cluster {} not found",
+                cid
+            )));
         }
     }
 
     for cid in &body.cluster_ids[1..] {
         sqlx::query(
-            "UPDATE pet_detections SET cluster_id = ?1 WHERE cluster_id = ?2 AND user_id = ?3"
+            "UPDATE pet_detections SET cluster_id = ?1 WHERE cluster_id = ?2 AND user_id = ?3",
         )
         .bind(target_id)
         .bind(cid)
@@ -721,7 +706,7 @@ pub async fn merge_pet_clusters(
     .await?;
 
     sqlx::query(
-        "UPDATE pet_clusters SET photo_count = ?1, updated_at = datetime('now') WHERE id = ?2"
+        "UPDATE pet_clusters SET photo_count = ?1, updated_at = datetime('now') WHERE id = ?2",
     )
     .bind(count.0)
     .bind(target_id)

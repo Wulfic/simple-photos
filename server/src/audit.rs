@@ -278,11 +278,7 @@ pub async fn log(
 /// Write an audit log entry for background tasks that have no HTTP headers.
 /// Works directly with a pool reference instead of AppState.
 /// Optionally broadcasts to the audit channel if a sender is provided.
-pub fn log_background(
-    pool: &SqlitePool,
-    event: AuditEvent,
-    details: Option<JsonValue>,
-) {
+pub fn log_background(pool: &SqlitePool, event: AuditEvent, details: Option<JsonValue>) {
     log_background_with_tx(pool, None, event, details);
 }
 

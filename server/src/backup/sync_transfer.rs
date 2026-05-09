@@ -142,10 +142,7 @@ fn push_common_optional_headers(
 }
 
 /// Build the full set of metadata headers for a photo transfer.
-pub fn build_photo_headers(
-    photo: &PhotoToSync,
-    tags: &[String],
-) -> Vec<(String, String)> {
+pub fn build_photo_headers(photo: &PhotoToSync, tags: &[String]) -> Vec<(String, String)> {
     let mut headers = vec![
         ("X-User-Id".to_string(), photo.user_id.clone()),
         (
@@ -200,9 +197,18 @@ pub fn build_photo_headers(
 pub fn build_trash_headers(item: &TrashToSync) -> Vec<(String, String)> {
     let mut headers = vec![
         ("X-User-Id".to_string(), item.user_id.clone()),
-        ("X-Original-Created-At".to_string(), normalize_iso_timestamp(&item.deleted_at)),
-        ("X-Deleted-At".to_string(), normalize_iso_timestamp(&item.deleted_at)),
-        ("X-Expires-At".to_string(), normalize_iso_timestamp(&item.expires_at)),
+        (
+            "X-Original-Created-At".to_string(),
+            normalize_iso_timestamp(&item.deleted_at),
+        ),
+        (
+            "X-Deleted-At".to_string(),
+            normalize_iso_timestamp(&item.deleted_at),
+        ),
+        (
+            "X-Expires-At".to_string(),
+            normalize_iso_timestamp(&item.expires_at),
+        ),
         ("X-Original-Photo-Id".to_string(), item.photo_id.clone()),
         (
             "X-Filename".to_string(),

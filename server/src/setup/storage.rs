@@ -208,11 +208,10 @@ async fn configure_local_storage(
 
     // Persist to config.toml — clears any [storage.smb] section.
     let path_clone = raw_path.clone();
-    if let Err(e) = tokio::task::spawn_blocking(move || {
-        update_config_toml_storage(&path_clone, None)
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || update_config_toml_storage(&path_clone, None))
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
     {
         tracing::warn!("Failed to persist storage path to config.toml: {}", e);
     }
@@ -291,9 +290,8 @@ async fn configure_smb_storage(
     // mount.cifs is invoked as root (via SUID or sudo) and may resolve
     // relative paths against a different CWD than the server. Pass absolute
     // paths so the credentials file and mount point are unambiguous.
-    let cwd = std::env::current_dir().map_err(|e| {
-        AppError::Internal(format!("Cannot read server CWD: {}", e))
-    })?;
+    let cwd = std::env::current_dir()
+        .map_err(|e| AppError::Internal(format!("Cannot read server CWD: {}", e)))?;
     let mount_point = if mount_point.is_absolute() {
         mount_point
     } else {
@@ -313,10 +311,7 @@ async fn configure_smb_storage(
     tokio::fs::create_dir_all(&storage_root)
         .await
         .map_err(|e| {
-            AppError::BadRequest(format!(
-                "Cannot create storage subdir on share: {}",
-                e
-            ))
+            AppError::BadRequest(format!("Cannot create storage subdir on share: {}", e))
         })?;
     let test_file = storage_root.join(".simple-photos-write-test");
     tokio::fs::write(&test_file, b"test").await.map_err(|e| {
@@ -329,11 +324,8 @@ async fn configure_smb_storage(
 
     // Encrypt the password for at-rest storage.
     let password_enc = match target.password.as_deref() {
-        Some(pw) if !pw.is_empty() => {
-            smb::encrypt_password(pw, &state.config.auth.jwt_secret).map_err(|e| {
-                AppError::Internal(format!("Failed to encrypt SMB password: {}", e))
-            })?
-        }
+        Some(pw) if !pw.is_empty() => smb::encrypt_password(pw, &state.config.auth.jwt_secret)
+            .map_err(|e| AppError::Internal(format!("Failed to encrypt SMB password: {}", e)))?,
         _ => String::new(),
     };
 
@@ -420,7 +412,9 @@ pub async fn test_smb(
     )
     .map_err(AppError::BadRequest)?;
 
-    smb::probe_smb(&target).await.map_err(AppError::BadRequest)?;
+    smb::probe_smb(&target)
+        .await
+        .map_err(AppError::BadRequest)?;
 
     Ok(Json(TestSmbResponse {
         ok: true,
@@ -654,9 +648,9 @@ pub async fn pick_directory(
 ) -> Result<Json<PickDirectoryResponse>, AppError> {
     require_admin(&state, &auth).await?;
 
-    let path = spawn_native_picker().await.map_err(|e| {
-        AppError::BadRequest(format!("native_picker_unavailable: {}", e))
-    })?;
+    let path = spawn_native_picker()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("native_picker_unavailable: {}", e)))?;
 
     audit::log(
         &state,
@@ -681,8 +675,7 @@ async fn spawn_native_picker() -> Result<String, String> {
     // show a window. Both would exit with code 1 — identical to user-cancel —
     // making them undetectable on the frontend. Bail out immediately so the
     // frontend knows to fall back to the in-browser directory browser.
-    let has_display = std::env::var("DISPLAY").is_ok()
-        || std::env::var("WAYLAND_DISPLAY").is_ok();
+    let has_display = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();
     if !has_display {
         return Err(
             "native_picker_unavailable: no graphical display found (DISPLAY / WAYLAND_DISPLAY not set)".into(),
@@ -805,7 +798,13 @@ pub async fn resolve_storage_sentinel(
     // Search common user-accessible locations (non-system roots only).
     // Non-existent roots are silently skipped by `find`.
     const SEARCH_ROOTS: &[&str] = &[
-        "/home", "/mnt", "/media", "/run/media", "/data", "/storage", "/srv",
+        "/home",
+        "/mnt",
+        "/media",
+        "/run/media",
+        "/data",
+        "/storage",
+        "/srv",
     ];
 
     let filename = query.filename.clone();
@@ -817,13 +816,14 @@ pub async fn resolve_storage_sentinel(
     // Suppress "Permission denied" noise from inaccessible subdirectories.
     cmd.stderr(std::process::Stdio::null());
 
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        cmd.output(),
-    )
-    .await
-    .map_err(|_| AppError::BadRequest("Directory search timed out — try entering the path manually.".into()))?
-    .map_err(|e| AppError::Internal(format!("find command error: {}", e)))?;
+    let output = tokio::time::timeout(std::time::Duration::from_secs(15), cmd.output())
+        .await
+        .map_err(|_| {
+            AppError::BadRequest(
+                "Directory search timed out — try entering the path manually.".into(),
+            )
+        })?
+        .map_err(|e| AppError::Internal(format!("find command error: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first = stdout.lines().next().ok_or_else(|| {

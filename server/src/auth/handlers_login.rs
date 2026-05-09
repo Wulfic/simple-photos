@@ -122,10 +122,10 @@ pub async fn login(
             // to keep the failure path's runtime equivalent to the success path. It is
             // not a credential.
             // nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
-            const DUMMY_BCRYPT: &str = "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK";
+            const DUMMY_BCRYPT: &str =
+                "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK";
             let pw = req.password.clone();
-            let _ = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, DUMMY_BCRYPT))
-                .await;
+            let _ = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, DUMMY_BCRYPT)).await;
             audit::log(
                 &state,
                 AuditEvent::LoginFailure,

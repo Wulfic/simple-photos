@@ -199,19 +199,15 @@ async fn main() -> anyhow::Result<()> {
     if hw_accel.is_gpu() {
         tracing::info!(
             "═══ Video transcode: GPU acceleration ACTIVE ({} → {}) ═══",
-            hw_accel.accel_type, hw_accel.video_encoder,
+            hw_accel.accel_type,
+            hw_accel.video_encoder,
         );
     } else {
-        tracing::warn!(
-            "═══ Video transcode: CPU-only (libx264). No GPU encoder detected. ═══"
-        );
+        tracing::warn!("═══ Video transcode: CPU-only (libx264). No GPU encoder detected. ═══");
     }
 
     // Initialize global GPU config for the conversion pipeline.
-    conversion::init_gpu_config(
-        (*hw_accel).clone(),
-        config.transcode.gpu_fallback_to_cpu,
-    );
+    conversion::init_gpu_config((*hw_accel).clone(), config.transcode.gpu_fallback_to_cpu);
 
     // Build shared application state — cloned (via Arc) into every Axum handler.
     let state = AppState {
@@ -377,7 +373,8 @@ async fn spawn_https_redirect(addr: SocketAddr, https_port: u16) {
                 "HTTP→HTTPS redirect listener failed to bind on {} ({}). \
                  HTTPS continues to serve normally; set `[tls] redirect_http = false` \
                  to silence this warning, or run with elevated privileges to bind port 80.",
-                addr, e
+                addr,
+                e
             );
             return;
         }

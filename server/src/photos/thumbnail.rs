@@ -21,7 +21,7 @@
 
 use std::path::Path;
 
-use crate::process::{run_with_timeout, status_with_timeout, THUMBNAIL_TIMEOUT, FFPROBE_TIMEOUT};
+use crate::process::{run_with_timeout, status_with_timeout, FFPROBE_TIMEOUT, THUMBNAIL_TIMEOUT};
 
 /// Generate a thumbnail for a media file.
 ///
@@ -319,16 +319,16 @@ async fn generate_gif_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) ->
 pub async fn probe_duration(path: &Path) -> Option<f64> {
     let mut cmd = tokio::process::Command::new("ffprobe");
     cmd.args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-        ])
-        .arg(path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+    ])
+    .arg(path)
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null());
     let output = run_with_timeout(&mut cmd, FFPROBE_TIMEOUT).await.ok()?;
 
     let s = String::from_utf8_lossy(&output.stdout);
@@ -373,7 +373,8 @@ pub(crate) fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> i
 
     tracing::debug!(
         "[thumbnail] EXIF orientation for {}: {:?} (1=normal, 6=90°CW, 8=90°CCW)",
-        path.display(), orientation,
+        path.display(),
+        orientation,
     );
 
     match orientation {
@@ -393,7 +394,10 @@ pub(crate) fn apply_exif_orientation(path: &Path, img: image::DynamicImage) -> i
 /// Same rotation/flip logic as [`apply_exif_orientation`] but reads the
 /// EXIF tag from a byte slice instead of a file path.  Used by the
 /// encryption migration pipeline where the file data is already in memory.
-pub(crate) fn apply_exif_orientation_from_bytes(data: &[u8], img: image::DynamicImage) -> image::DynamicImage {
+pub(crate) fn apply_exif_orientation_from_bytes(
+    data: &[u8],
+    img: image::DynamicImage,
+) -> image::DynamicImage {
     let orientation = (|| -> Option<u32> {
         let mut cursor = std::io::Cursor::new(data);
         let exif = exif::Reader::new().read_from_container(&mut cursor).ok()?;
@@ -431,10 +435,7 @@ fn read_exif_orientation(path: &Path) -> u32 {
 /// Previous thumbnail generation did **not** apply EXIF orientation, so
 /// portrait camera photos had landscape thumbnails. This task corrects
 /// existing thumbnails and records a flag so it only runs once.
-pub async fn repair_thumbnail_orientation(
-    pool: &sqlx::SqlitePool,
-    storage_root: &std::path::Path,
-) {
+pub async fn repair_thumbnail_orientation(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) {
     // Check one-time flag
     let done: Option<String> = sqlx::query_scalar(
         "SELECT value FROM server_settings WHERE key = 'thumb_orientation_repaired'",

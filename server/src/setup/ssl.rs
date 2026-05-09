@@ -283,7 +283,8 @@ pub async fn provision_letsencrypt(
             staging: provision_req.staging,
             cert_path: None,
             key_path: None,
-            message: "Inputs accepted. Submit again with dry_run=false to contact Let's Encrypt.".into(),
+            message: "Inputs accepted. Submit again with dry_run=false to contact Let's Encrypt."
+                .into(),
         }));
     }
 
@@ -328,7 +329,13 @@ pub async fn provision_letsencrypt(
     let issued_at = outcome.issued_at.clone();
     tokio::task::spawn_blocking(move || {
         update_config_toml_ssl(true, Some(&cert_path_clone), Some(&key_path_clone))?;
-        update_config_toml_letsencrypt(&domain_clone, &email_clone, staging_flag, challenge_port, &issued_at)
+        update_config_toml_letsencrypt(
+            &domain_clone,
+            &email_clone,
+            staging_flag,
+            challenge_port,
+            &issued_at,
+        )
     })
     .await
     .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
@@ -493,11 +500,10 @@ pub async fn provision_local_ca(
         extra_hosts: req.extra_hosts.clone(),
     };
     let data_root = std::path::PathBuf::from("data");
-    let outcome = tokio::task::spawn_blocking(move || {
-        local_ca::generate_local_ca(&gen_req, &data_root)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
+    let outcome =
+        tokio::task::spawn_blocking(move || local_ca::generate_local_ca(&gen_req, &data_root))
+            .await
+            .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
 
     // Persist [tls] (paths + enabled) and [tls.local_ca] (metadata).
     let cert_path_clone = outcome.cert_path.clone();
@@ -594,10 +600,7 @@ fn validate_local_ca_inputs(req: &LocalCaRequest) -> Result<(), AppError> {
                 "Label must be 128 characters or fewer.".into(),
             ));
         }
-        if trimmed
-            .chars()
-            .any(|c| c.is_control() || c == '\0')
-        {
+        if trimmed.chars().any(|c| c.is_control() || c == '\0') {
             return Err(AppError::BadRequest(
                 "Label must not contain control characters or null bytes.".into(),
             ));

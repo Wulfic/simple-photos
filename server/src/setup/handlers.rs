@@ -29,12 +29,11 @@ pub const WIZARD_COMPLETED_KEY: &str = "wizard_completed";
 /// Read the wizard-completed flag from `server_settings`. Missing or any
 /// value other than the literal string `"true"` is treated as not completed.
 pub async fn is_wizard_completed(state: &AppState) -> Result<bool, AppError> {
-    let value: Option<String> = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = ?",
-    )
-    .bind(WIZARD_COMPLETED_KEY)
-    .fetch_optional(&state.pool)
-    .await?;
+    let value: Option<String> =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = ?")
+            .bind(WIZARD_COMPLETED_KEY)
+            .fetch_optional(&state.pool)
+            .await?;
     Ok(matches!(value.as_deref(), Some("true")))
 }
 
@@ -287,4 +286,3 @@ pub async fn init(
         }),
     ))
 }
-

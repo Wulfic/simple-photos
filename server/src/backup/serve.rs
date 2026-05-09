@@ -34,7 +34,10 @@ use super::models::BackupPhotoRecord;
 ///    or when "backup mode" is enabled via the admin UI
 ///
 /// Returns an error if the key is missing, wrong, or backup serving is disabled.
-pub(super) async fn validate_api_key(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
+pub(super) async fn validate_api_key(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), AppError> {
     // Resolve the expected key: prefer static config, fall back to DB
     let configured_key: String = if let Some(k) = state
         .config
@@ -255,13 +258,11 @@ pub async fn backup_sync_deletions(
         // Remove from gallery by id OR encrypted_blob_id — for encrypted
         // items the trash stores blob_id as photo_id, which maps to
         // photos.encrypted_blob_id rather than photos.id on the backup.
-        let result = sqlx::query(
-            "DELETE FROM photos WHERE id = ? OR encrypted_blob_id = ?",
-        )
-        .bind(id)
-        .bind(id)
-        .execute(&state.pool)
-        .await;
+        let result = sqlx::query("DELETE FROM photos WHERE id = ? OR encrypted_blob_id = ?")
+            .bind(id)
+            .bind(id)
+            .execute(&state.pool)
+            .await;
         match result {
             Ok(r) if r.rows_affected() > 0 => {
                 removed += r.rows_affected() as usize;
@@ -282,12 +283,10 @@ pub async fn backup_sync_deletions(
     // encrypted_blob_id differs from the primary's (each server generates
     // its own encryption blob IDs independently).
     for fp in &file_paths {
-        let result = sqlx::query(
-            "DELETE FROM photos WHERE file_path = ?",
-        )
-        .bind(fp)
-        .execute(&state.pool)
-        .await;
+        let result = sqlx::query("DELETE FROM photos WHERE file_path = ?")
+            .bind(fp)
+            .execute(&state.pool)
+            .await;
         match result {
             Ok(r) if r.rows_affected() > 0 => {
                 removed += r.rows_affected() as usize;
@@ -420,13 +419,12 @@ pub async fn backup_sync_secure_galleries(
         // constraint on encrypted_gallery_items.blob_id → blobs(id).
         // Only the metadata matters — the actual encrypted data stays on the
         // primary and is never served from the backup.
-        let blob_exists: bool = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM blobs WHERE id = ?)",
-        )
-        .bind(blob_id)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap_or(false);
+        let blob_exists: bool =
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM blobs WHERE id = ?)")
+                .bind(blob_id)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap_or(false);
 
         if !blob_exists {
             // Resolve a valid user_id for the FK on blobs.user_id.
@@ -533,13 +531,12 @@ pub async fn backup_sync_secure_galleries(
 
     for hidden_id in &hidden_ids {
         // Collect file paths and thumb paths BEFORE deleting the photo row
-        let paths: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT file_path, thumb_path FROM photos WHERE id = ?",
-        )
-        .bind(hidden_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .unwrap_or(None);
+        let paths: Option<(Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT file_path, thumb_path FROM photos WHERE id = ?")
+                .bind(hidden_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .unwrap_or(None);
         if let Some((ref fp, ref tp)) = paths {
             if let Some(ref p) = fp {
                 files_to_delete.push(p.clone());
@@ -593,13 +590,12 @@ pub async fn backup_sync_secure_galleries(
                 .unwrap_or(true);
 
                 if !is_gallery_ref {
-                    let enc_path: Option<String> = sqlx::query_scalar(
-                        "SELECT storage_path FROM blobs WHERE id = ?",
-                    )
-                    .bind(bid)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .unwrap_or(None);
+                    let enc_path: Option<String> =
+                        sqlx::query_scalar("SELECT storage_path FROM blobs WHERE id = ?")
+                            .bind(bid)
+                            .fetch_optional(&mut *tx)
+                            .await
+                            .unwrap_or(None);
                     if let Some(ref ep) = enc_path {
                         files_to_delete.push(ep.clone());
                     }
@@ -627,13 +623,12 @@ pub async fn backup_sync_secure_galleries(
                 .unwrap_or(true);
 
                 if !is_gallery_ref {
-                    let enc_thumb_path: Option<String> = sqlx::query_scalar(
-                        "SELECT storage_path FROM blobs WHERE id = ?",
-                    )
-                    .bind(tid)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .unwrap_or(None);
+                    let enc_thumb_path: Option<String> =
+                        sqlx::query_scalar("SELECT storage_path FROM blobs WHERE id = ?")
+                            .bind(tid)
+                            .fetch_optional(&mut *tx)
+                            .await
+                            .unwrap_or(None);
                     if let Some(ref etp) = enc_thumb_path {
                         files_to_delete.push(etp.clone());
                     }
@@ -707,10 +702,7 @@ pub async fn backup_sync_secure_galleries(
                     // Already gone — not an error
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to delete purged file {}: {}",
-                        rel_path, e
-                    );
+                    tracing::warn!("Failed to delete purged file {}: {}", rel_path, e);
                 }
             }
         }
@@ -900,7 +892,10 @@ pub async fn backup_receive_blob(
     };
 
     if effective_user_id.is_empty() {
-        tracing::warn!("receive-blob: no valid user for blob {}, skipping DB insert", blob_id);
+        tracing::warn!(
+            "receive-blob: no valid user for blob {}, skipping DB insert",
+            blob_id
+        );
         return Ok(StatusCode::OK);
     }
 
@@ -946,12 +941,14 @@ pub async fn backup_receive_blob(
                 .execute(&state.pool)
                 .await
                 .ok();
-            sqlx::query("UPDATE photos SET encrypted_thumb_blob_id = ? WHERE encrypted_thumb_blob_id = ?")
-                .bind(&blob_id)
-                .bind(dupe_id)
-                .execute(&state.pool)
-                .await
-                .ok();
+            sqlx::query(
+                "UPDATE photos SET encrypted_thumb_blob_id = ? WHERE encrypted_thumb_blob_id = ?",
+            )
+            .bind(&blob_id)
+            .bind(dupe_id)
+            .execute(&state.pool)
+            .await
+            .ok();
             sqlx::query("DELETE FROM blobs WHERE id = ?")
                 .bind(dupe_id)
                 .execute(&state.pool)
@@ -959,7 +956,9 @@ pub async fn backup_receive_blob(
                 .ok();
             tracing::info!(
                 "[BLOB_DEDUP] replaced migration blob {} with synced blob {} (content_hash={})",
-                dupe_id, blob_id, ch
+                dupe_id,
+                blob_id,
+                ch
             );
         }
     }
@@ -1023,11 +1022,10 @@ pub async fn backup_sync_metadata(
     }
 
     if !ec_ids.is_empty() {
-        let existing: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM edit_copies")
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap_or_default();
+        let existing: Vec<String> = sqlx::query_scalar("SELECT id FROM edit_copies")
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap_or_default();
         for eid in &existing {
             if !ec_ids.contains(eid) {
                 sqlx::query("DELETE FROM edit_copies WHERE id = ?")
@@ -1104,11 +1102,10 @@ pub async fn backup_sync_metadata(
     }
 
     if !pm_ids.is_empty() {
-        let existing: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM photo_metadata")
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap_or_default();
+        let existing: Vec<String> = sqlx::query_scalar("SELECT id FROM photo_metadata")
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap_or_default();
         for eid in &existing {
             if !pm_ids.contains(eid) {
                 sqlx::query("DELETE FROM photo_metadata WHERE id = ?")
@@ -1224,11 +1221,10 @@ pub async fn backup_sync_metadata(
 
     // ── Prune deleted shared data ────────────────────────────────────────
     if !sp_ids.is_empty() {
-        let existing: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM shared_album_photos")
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap_or_default();
+        let existing: Vec<String> = sqlx::query_scalar("SELECT id FROM shared_album_photos")
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap_or_default();
         for eid in &existing {
             if !sp_ids.contains(eid) {
                 sqlx::query("DELETE FROM shared_album_photos WHERE id = ?")
@@ -1240,11 +1236,10 @@ pub async fn backup_sync_metadata(
     }
 
     if !sm_ids.is_empty() {
-        let existing: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM shared_album_members")
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap_or_default();
+        let existing: Vec<String> = sqlx::query_scalar("SELECT id FROM shared_album_members")
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap_or_default();
         for eid in &existing {
             if !sm_ids.contains(eid) {
                 sqlx::query("DELETE FROM shared_album_members WHERE id = ?")
@@ -1256,11 +1251,10 @@ pub async fn backup_sync_metadata(
     }
 
     if !sa_ids.is_empty() {
-        let existing: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM shared_albums")
-                .fetch_all(&mut *tx)
-                .await
-                .unwrap_or_default();
+        let existing: Vec<String> = sqlx::query_scalar("SELECT id FROM shared_albums")
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap_or_default();
         for eid in &existing {
             if !sa_ids.contains(eid) {
                 sqlx::query("DELETE FROM shared_albums WHERE id = ?")
@@ -1423,12 +1417,11 @@ pub async fn backup_sync_metadata(
     // Prune: only consider users present in the payload to avoid wiping
     // tags belonging to users not yet synced.
     if !tag_users.is_empty() {
-        let existing: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT photo_id, user_id, tag FROM photo_tags",
-        )
-        .fetch_all(&mut *tx)
-        .await
-        .unwrap_or_default();
+        let existing: Vec<(String, String, String)> =
+            sqlx::query_as("SELECT photo_id, user_id, tag FROM photo_tags")
+                .fetch_all(&mut *tx)
+                .await
+                .unwrap_or_default();
         for (pid, uid, tag) in &existing {
             if tag_users.contains(uid)
                 && !tag_keys.contains(&(pid.clone(), uid.clone(), tag.clone()))
@@ -1549,13 +1542,12 @@ pub async fn backup_sync_metadata(
         // Build comma-separated user list for IN clause.  Use parameter
         // binding via a manual loop to stay safe.
         for uid in &fd_users {
-            let existing: Vec<i64> = sqlx::query_scalar(
-                "SELECT id FROM face_detections WHERE user_id = ?",
-            )
-            .bind(uid)
-            .fetch_all(&mut *tx)
-            .await
-            .unwrap_or_default();
+            let existing: Vec<i64> =
+                sqlx::query_scalar("SELECT id FROM face_detections WHERE user_id = ?")
+                    .bind(uid)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .unwrap_or_default();
             for eid in existing {
                 if !fd_ids.contains(&eid) {
                     sqlx::query("DELETE FROM face_detections WHERE id = ?")
@@ -1568,13 +1560,12 @@ pub async fn backup_sync_metadata(
     }
     if !fc_users.is_empty() {
         for uid in &fc_users {
-            let existing: Vec<i64> = sqlx::query_scalar(
-                "SELECT id FROM face_clusters WHERE user_id = ?",
-            )
-            .bind(uid)
-            .fetch_all(&mut *tx)
-            .await
-            .unwrap_or_default();
+            let existing: Vec<i64> =
+                sqlx::query_scalar("SELECT id FROM face_clusters WHERE user_id = ?")
+                    .bind(uid)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .unwrap_or_default();
             for eid in existing {
                 if !fc_ids.contains(&eid) {
                     sqlx::query("DELETE FROM face_clusters WHERE id = ?")
@@ -1636,13 +1627,12 @@ pub async fn backup_sync_metadata(
     }
     if !od_users.is_empty() {
         for uid in &od_users {
-            let existing: Vec<i64> = sqlx::query_scalar(
-                "SELECT id FROM object_detections WHERE user_id = ?",
-            )
-            .bind(uid)
-            .fetch_all(&mut *tx)
-            .await
-            .unwrap_or_default();
+            let existing: Vec<i64> =
+                sqlx::query_scalar("SELECT id FROM object_detections WHERE user_id = ?")
+                    .bind(uid)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .unwrap_or_default();
             for eid in existing {
                 if !od_ids.contains(&eid) {
                     sqlx::query("DELETE FROM object_detections WHERE id = ?")
@@ -1686,13 +1676,12 @@ pub async fn backup_sync_metadata(
     }
     if !ap_users.is_empty() {
         for uid in &ap_users {
-            let existing: Vec<String> = sqlx::query_scalar(
-                "SELECT photo_id FROM ai_processed_photos WHERE user_id = ?",
-            )
-            .bind(uid)
-            .fetch_all(&mut *tx)
-            .await
-            .unwrap_or_default();
+            let existing: Vec<String> =
+                sqlx::query_scalar("SELECT photo_id FROM ai_processed_photos WHERE user_id = ?")
+                    .bind(uid)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .unwrap_or_default();
             for pid in existing {
                 if !ap_keys.contains(&(pid.clone(), uid.clone())) {
                     sqlx::query(
@@ -1742,22 +1731,19 @@ pub async fn backup_sync_metadata(
     }
     if !us_users.is_empty() {
         for uid in &us_users {
-            let existing: Vec<String> = sqlx::query_scalar(
-                "SELECT key FROM user_settings WHERE user_id = ?",
-            )
-            .bind(uid)
-            .fetch_all(&mut *tx)
-            .await
-            .unwrap_or_default();
+            let existing: Vec<String> =
+                sqlx::query_scalar("SELECT key FROM user_settings WHERE user_id = ?")
+                    .bind(uid)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .unwrap_or_default();
             for k in existing {
                 if !us_keys.contains(&(uid.clone(), k.clone())) {
-                    sqlx::query(
-                        "DELETE FROM user_settings WHERE user_id = ? AND key = ?",
-                    )
-                    .bind(uid)
-                    .bind(&k)
-                    .execute(&mut *tx)
-                    .await?;
+                    sqlx::query("DELETE FROM user_settings WHERE user_id = ? AND key = ?")
+                        .bind(uid)
+                        .bind(&k)
+                        .execute(&mut *tx)
+                        .await?;
                 }
             }
         }

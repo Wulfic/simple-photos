@@ -41,8 +41,7 @@ pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
     if data.len() < NONCE_LENGTH + 16 {
         return Err("Ciphertext too short".into());
     }
-    let cipher =
-        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid AES key: {}", e))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("Invalid AES key: {}", e))?;
     let nonce = Nonce::from_slice(&data[..NONCE_LENGTH]);
     let ciphertext = &data[NONCE_LENGTH..];
     cipher
@@ -136,12 +135,11 @@ pub async fn load_wrapped_key(
     pool: &sqlx::SqlitePool,
     jwt_secret: &str,
 ) -> Result<Option<[u8; 32]>, String> {
-    let active: Option<String> = sqlx::query_scalar(
-        "SELECT value FROM server_settings WHERE key = 'encryption_key_active'",
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Failed to query key active flag: {}", e))?;
+    let active: Option<String> =
+        sqlx::query_scalar("SELECT value FROM server_settings WHERE key = 'encryption_key_active'")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Failed to query key active flag: {}", e))?;
 
     if active.as_deref() != Some("true") {
         return Ok(None);

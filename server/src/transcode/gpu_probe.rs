@@ -139,9 +139,7 @@ pub fn probe_hwaccel(gpu_enabled: bool, device_override: &str) -> HwAccelCapabil
         };
     }
 
-    if (hwaccels.contains("d3d11va") || hwaccels.contains("amf"))
-        && encoders.contains("h264_amf")
-    {
+    if (hwaccels.contains("d3d11va") || hwaccels.contains("amf")) && encoders.contains("h264_amf") {
         tracing::info!("GPU transcode: detected AMD AMF (h264_amf)");
         return HwAccelCapability {
             accel_type: HwAccelType::Amf,

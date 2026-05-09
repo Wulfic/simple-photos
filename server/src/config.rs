@@ -250,8 +250,12 @@ pub struct TlsConfig {
 }
 
 impl TlsConfig {
-    fn default_redirect_http() -> bool { true }
-    fn default_http_redirect_port() -> u16 { 80 }
+    fn default_redirect_http() -> bool {
+        true
+    }
+    fn default_http_redirect_port() -> u16 {
+        80
+    }
 }
 
 impl Default for TlsConfig {
@@ -317,7 +321,9 @@ pub struct LetsEncryptConfig {
 }
 
 impl LetsEncryptConfig {
-    fn default_challenge_port() -> u16 { 80 }
+    fn default_challenge_port() -> u16 {
+        80
+    }
 }
 
 /// AI face & object recognition configuration.
@@ -380,11 +386,21 @@ pub struct AiConfig {
 }
 
 impl AiConfig {
-    fn default_gpu_preferred() -> bool { true }
-    fn default_batch_size() -> usize { 8 }
-    fn default_photos_per_minute() -> u32 { 60 }
-    fn default_face_confidence() -> f32 { 0.7 }
-    fn default_object_confidence() -> f32 { 0.5 }
+    fn default_gpu_preferred() -> bool {
+        true
+    }
+    fn default_batch_size() -> usize {
+        8
+    }
+    fn default_photos_per_minute() -> u32 {
+        60
+    }
+    fn default_face_confidence() -> f32 {
+        0.7
+    }
+    fn default_object_confidence() -> f32 {
+        0.5
+    }
     /// Cosine similarity threshold for ArcFace 512-d embeddings.
     ///
     /// InsightFace's `w600k_r50` model was trained so that same-identity
@@ -392,10 +408,18 @@ impl AiConfig {
     /// default of 0.60 was far too strict and caused the same person to
     /// fragment into many singleton clusters when their pose, lighting,
     /// or expression varied (e.g. group photos, candid shots).
-    fn default_face_similarity_threshold() -> f32 { 0.42 }
-    fn default_pet_similarity_threshold() -> f32 { 0.70 }
-    fn default_model_dir() -> String { "models".into() }
-    fn default_quality() -> String { "high".into() }
+    fn default_face_similarity_threshold() -> f32 {
+        0.42
+    }
+    fn default_pet_similarity_threshold() -> f32 {
+        0.70
+    }
+    fn default_model_dir() -> String {
+        "models".into()
+    }
+    fn default_quality() -> String {
+        "high".into()
+    }
 
     /// Parse the quality string into a DetectionQuality enum.
     pub fn detection_quality(&self) -> crate::ai::object::DetectionQuality {
@@ -456,9 +480,15 @@ impl GeoConfig {
     // `install.sh` calls) so the out-of-the-box install actually finds the
     // dataset.  Earlier default `data/geonames/cities500.txt` never matched
     // the fetch script and silently disabled reverse geocoding.
-    fn default_dataset_path() -> String { "data/cities500.txt".into() }
-    fn default_batch_size() -> usize { 100 }
-    fn default_poll_interval_secs() -> u64 { 300 }
+    fn default_dataset_path() -> String {
+        "data/cities500.txt".into()
+    }
+    fn default_batch_size() -> usize {
+        100
+    }
+    fn default_poll_interval_secs() -> u64 {
+        300
+    }
 }
 
 impl Default for GeoConfig {
@@ -491,8 +521,12 @@ pub struct TranscodeConfig {
 }
 
 impl TranscodeConfig {
-    fn default_gpu_enabled() -> bool { true }
-    fn default_gpu_fallback_to_cpu() -> bool { true }
+    fn default_gpu_enabled() -> bool {
+        true
+    }
+    fn default_gpu_fallback_to_cpu() -> bool {
+        true
+    }
 }
 
 impl Default for TranscodeConfig {

@@ -124,13 +124,12 @@ pub async fn update_metadata(
     Json(req): Json<MetadataUpdateRequest>,
 ) -> Result<Json<MetadataUpdateResponse>, AppError> {
     // Verify photo exists and belongs to user
-    let exists: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM photos WHERE id = ?1 AND user_id = ?2",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?;
+    let exists: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM photos WHERE id = ?1 AND user_id = ?2")
+            .bind(&photo_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.read_pool)
+            .await?;
 
     if exists.is_none() {
         return Err(AppError::NotFound);
@@ -364,21 +363,21 @@ pub async fn get_full_metadata(
 ) -> Result<Json<FullMetadataResponse>, AppError> {
     // First query: core fields (16 columns max for tuple FromRow)
     let core: Option<(
-        String,          // id
-        String,          // filename
-        String,          // mime_type
-        String,          // media_type
-        i64,             // width
-        i64,             // height
-        i64,             // size_bytes
-        Option<String>,  // taken_at
-        Option<f64>,     // latitude
-        Option<f64>,     // longitude
-        Option<String>,  // camera_model
-        Option<String>,  // photo_hash
-        Option<String>,  // photo_subtype
-        String,          // created_at
-        String,          // file_path
+        String,         // id
+        String,         // filename
+        String,         // mime_type
+        String,         // media_type
+        i64,            // width
+        i64,            // height
+        i64,            // size_bytes
+        Option<String>, // taken_at
+        Option<f64>,    // latitude
+        Option<f64>,    // longitude
+        Option<String>, // camera_model
+        Option<String>, // photo_hash
+        Option<String>, // photo_subtype
+        String,         // created_at
+        String,         // file_path
     )> = sqlx::query_as(
         "SELECT id, filename, mime_type, media_type, width, height, size_bytes, \
          taken_at, latitude, longitude, camera_model, photo_hash, photo_subtype, \
@@ -391,19 +390,31 @@ pub async fn get_full_metadata(
     .await?;
 
     let (
-        id, filename, mime_type, media_type, width, height, size_bytes,
-        taken_at, latitude, longitude, camera_model, photo_hash, photo_subtype,
-        created_at, file_path,
+        id,
+        filename,
+        mime_type,
+        media_type,
+        width,
+        height,
+        size_bytes,
+        taken_at,
+        latitude,
+        longitude,
+        camera_model,
+        photo_hash,
+        photo_subtype,
+        created_at,
+        file_path,
     ) = core.ok_or(AppError::NotFound)?;
 
     // Second query: geo + timeline fields
     let geo: (
-        Option<String>,  // geo_city
-        Option<String>,  // geo_state
-        Option<String>,  // geo_country
-        Option<String>,  // geo_country_code
-        Option<i64>,     // photo_year
-        Option<i64>,     // photo_month
+        Option<String>, // geo_city
+        Option<String>, // geo_state
+        Option<String>, // geo_country
+        Option<String>, // geo_country_code
+        Option<i64>,    // photo_year
+        Option<i64>,    // photo_month
     ) = sqlx::query_as(
         "SELECT geo_city, geo_state, geo_country, geo_country_code, \
          photo_year, photo_month \
@@ -415,22 +426,22 @@ pub async fn get_full_metadata(
 
     // Third query: extended EXIF columns
     let exif_ext: (
-        Option<String>,  // camera_make
-        Option<String>,  // lens_model
-        Option<i64>,     // iso_speed
-        Option<f64>,     // f_number
-        Option<String>,  // exposure_time
-        Option<f64>,     // focal_length
-        Option<String>,  // flash
-        Option<String>,  // white_balance
-        Option<String>,  // exposure_program
-        Option<String>,  // metering_mode
-        Option<i64>,     // orientation
-        Option<String>,  // software
-        Option<String>,  // artist
-        Option<String>,  // copyright
-        Option<String>,  // description
-        Option<String>,  // user_comment
+        Option<String>, // camera_make
+        Option<String>, // lens_model
+        Option<i64>,    // iso_speed
+        Option<f64>,    // f_number
+        Option<String>, // exposure_time
+        Option<f64>,    // focal_length
+        Option<String>, // flash
+        Option<String>, // white_balance
+        Option<String>, // exposure_program
+        Option<String>, // metering_mode
+        Option<i64>,    // orientation
+        Option<String>, // software
+        Option<String>, // artist
+        Option<String>, // copyright
+        Option<String>, // description
+        Option<String>, // user_comment
     ) = sqlx::query_as(
         "SELECT camera_make, lens_model, iso_speed, f_number, exposure_time, \
          focal_length, flash, white_balance, exposure_program, metering_mode, \
@@ -443,11 +454,11 @@ pub async fn get_full_metadata(
 
     // Fourth query: remaining extended EXIF columns
     let exif_ext2: (
-        Option<String>,  // color_space
-        Option<f64>,     // exposure_bias
-        Option<String>,  // scene_type
-        Option<f64>,     // digital_zoom
-        Option<String>,  // exif_overrides (JSON)
+        Option<String>, // color_space
+        Option<f64>,    // exposure_bias
+        Option<String>, // scene_type
+        Option<f64>,    // digital_zoom
+        Option<String>, // exif_overrides (JSON)
     ) = sqlx::query_as(
         "SELECT color_space, exposure_bias, scene_type, digital_zoom, exif_overrides \
          FROM photos WHERE id = ?1",
@@ -456,8 +467,10 @@ pub async fn get_full_metadata(
     .fetch_one(&state.read_pool)
     .await?;
 
-    let exif_overrides_parsed: Option<std::collections::HashMap<String, String>> =
-        exif_ext2.4.as_ref().and_then(|s| serde_json::from_str(s).ok());
+    let exif_overrides_parsed: Option<std::collections::HashMap<String, String>> = exif_ext2
+        .4
+        .as_ref()
+        .and_then(|s| serde_json::from_str(s).ok());
 
     // Try to extract EXIF tags from the file on disk
     let exif_tags = if !file_path.is_empty() {
@@ -533,12 +546,12 @@ pub async fn write_exif_to_file(
 ) -> Result<Json<WriteExifResponse>, AppError> {
     // Fetch photo record — core fields
     let row: Option<(
-        String,          // file_path
-        String,          // mime_type
-        Option<String>,  // taken_at
-        Option<f64>,     // latitude
-        Option<f64>,     // longitude
-        Option<String>,  // camera_model
+        String,         // file_path
+        String,         // mime_type
+        Option<String>, // taken_at
+        Option<f64>,    // latitude
+        Option<f64>,    // longitude
+        Option<String>, // camera_model
     )> = sqlx::query_as(
         "SELECT file_path, mime_type, taken_at, latitude, longitude, camera_model \
          FROM photos WHERE id = ?1 AND user_id = ?2",
@@ -573,10 +586,22 @@ pub async fn write_exif_to_file(
 
     // Fetch extended EXIF fields
     let ext: (
-        Option<String>, Option<String>, Option<i64>, Option<f64>,
-        Option<String>, Option<f64>, Option<String>, Option<String>,
-        Option<String>, Option<String>, Option<i64>, Option<String>,
-        Option<String>, Option<String>, Option<String>, Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<f64>,
+        Option<String>,
+        Option<f64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
     ) = sqlx::query_as(
         "SELECT camera_make, lens_model, iso_speed, f_number, exposure_time, \
          focal_length, flash, white_balance, exposure_program, metering_mode, \
@@ -587,14 +612,19 @@ pub async fn write_exif_to_file(
     .fetch_one(&state.read_pool)
     .await?;
 
-    let ext2: (Option<String>, Option<f64>, Option<String>, Option<f64>, Option<String>) =
-        sqlx::query_as(
-            "SELECT color_space, exposure_bias, scene_type, digital_zoom, exif_overrides \
+    let ext2: (
+        Option<String>,
+        Option<f64>,
+        Option<String>,
+        Option<f64>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT color_space, exposure_bias, scene_type, digital_zoom, exif_overrides \
              FROM photos WHERE id = ?1",
-        )
-        .bind(&photo_id)
-        .fetch_one(&state.read_pool)
-        .await?;
+    )
+    .bind(&photo_id)
+    .fetch_one(&state.read_pool)
+    .await?;
 
     let exif_overrides: Option<std::collections::HashMap<String, String>> =
         ext2.4.as_ref().and_then(|s| serde_json::from_str(s).ok());
@@ -629,11 +659,10 @@ pub async fn write_exif_to_file(
     };
 
     let path_clone = abs_path.clone();
-    let write_result = tokio::task::spawn_blocking(move || {
-        write_exif_fields_full(&path_clone, &write_fields)
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("EXIF write task failed: {}", e)))?;
+    let write_result =
+        tokio::task::spawn_blocking(move || write_exif_fields_full(&path_clone, &write_fields))
+            .await
+            .map_err(|e| AppError::Internal(format!("EXIF write task failed: {}", e)))?;
 
     if let Err(e) = write_result {
         return Err(AppError::Internal(format!("Failed to write EXIF: {}", e)));
@@ -688,7 +717,9 @@ fn extract_exif_tags(
 ) -> Option<std::collections::HashMap<String, String>> {
     let file = std::fs::File::open(file_path).ok()?;
     let mut buf_reader = std::io::BufReader::new(&file);
-    let exif_reader = exif::Reader::new().read_from_container(&mut buf_reader).ok()?;
+    let exif_reader = exif::Reader::new()
+        .read_from_container(&mut buf_reader)
+        .ok()?;
 
     let mut tags = std::collections::HashMap::new();
     for field in exif_reader.fields() {
@@ -770,7 +801,10 @@ fn write_exif_fields_full(
             .replace('T', " ")
             .trim_end_matches('Z')
             .to_string();
-        args.push(format!("-DateTimeOriginal={}", sanitize_exif_value(&exif_dt)?));
+        args.push(format!(
+            "-DateTimeOriginal={}",
+            sanitize_exif_value(&exif_dt)?
+        ));
     }
 
     if let (Some(lat), Some(lon)) = (fields.latitude, fields.longitude) {
@@ -826,7 +860,8 @@ fn write_exif_fields_full(
     if let Some(ref overrides) = fields.exif_overrides {
         for (tag, val) in overrides {
             // Sanitise tag name: only allow alphanumeric + underscore
-            let clean_tag: String = tag.chars()
+            let clean_tag: String = tag
+                .chars()
                 .filter(|c| c.is_alphanumeric() || *c == '_')
                 .collect();
             if !clean_tag.is_empty() && !val.is_empty() {
@@ -848,7 +883,8 @@ fn write_exif_fields_full(
         .output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "exiftool is not installed on the server — install the `exiftool` package and retry".to_string()
+                "exiftool is not installed on the server — install the `exiftool` package and retry"
+                    .to_string()
             } else {
                 format!("Failed to run exiftool: {}", e)
             }

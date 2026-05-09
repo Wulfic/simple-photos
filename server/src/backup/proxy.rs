@@ -45,7 +45,10 @@ pub async fn proxy_backup_photos(
         .build()
         .map_err(|e| AppError::BadRequest(format!("HTTP client error: {}", e)))?;
 
-    let mut req = client.get(super::models::resolve_backup_url(&address, "/api/backup/list"));
+    let mut req = client.get(super::models::resolve_backup_url(
+        &address,
+        "/api/backup/list",
+    ));
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());
     }
@@ -110,7 +113,10 @@ pub async fn proxy_backup_thumbnail(
         .build()
         .map_err(|e| AppError::BadRequest(format!("HTTP client error: {}", e)))?;
 
-    let url = super::models::resolve_backup_url(&address, &format!("/api/backup/download/{}/thumb", photo_id));
+    let url = super::models::resolve_backup_url(
+        &address,
+        &format!("/api/backup/download/{}/thumb", photo_id),
+    );
     let mut req = client.get(&url);
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());

@@ -15,7 +15,10 @@ use tokio::sync::Semaphore;
 
 use crate::crypto;
 
-use super::server_migrate_encrypt::{encrypt_one_photo, repair_encrypted_thumbnail_orientation, repair_missing_thumbnails, PlainPhotoRow};
+use super::server_migrate_encrypt::{
+    encrypt_one_photo, repair_encrypted_thumbnail_orientation, repair_missing_thumbnails,
+    PlainPhotoRow,
+};
 
 // ── Shared migration progress (lock-free) ───────────────────────────────────
 
@@ -44,8 +47,9 @@ impl MigrationProgress {
 }
 
 /// Global handle to the current migration (if any).
-static MIGRATION_PROGRESS: std::sync::OnceLock<tokio::sync::RwLock<Option<Arc<MigrationProgress>>>> =
-    std::sync::OnceLock::new();
+static MIGRATION_PROGRESS: std::sync::OnceLock<
+    tokio::sync::RwLock<Option<Arc<MigrationProgress>>>,
+> = std::sync::OnceLock::new();
 
 fn progress_store() -> &'static tokio::sync::RwLock<Option<Arc<MigrationProgress>>> {
     MIGRATION_PROGRESS.get_or_init(|| tokio::sync::RwLock::new(None))

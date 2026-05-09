@@ -115,13 +115,22 @@ impl AiEngine {
             || model_dir.join("object_detection.onnx").exists();
 
         if !has_face_det {
-            tracing::warn!("AI engine: face_detection.onnx not found in {:?}", model_dir);
+            tracing::warn!(
+                "AI engine: face_detection.onnx not found in {:?}",
+                model_dir
+            );
         }
         if !has_face_emb {
-            tracing::warn!("AI engine: face_embedding.onnx not found in {:?}", model_dir);
+            tracing::warn!(
+                "AI engine: face_embedding.onnx not found in {:?}",
+                model_dir
+            );
         }
         if !has_obj_det {
-            tracing::warn!("AI engine: object_detection.onnx not found in {:?}", model_dir);
+            tracing::warn!(
+                "AI engine: object_detection.onnx not found in {:?}",
+                model_dir
+            );
         }
 
         tracing::info!(

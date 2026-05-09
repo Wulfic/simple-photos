@@ -10,7 +10,7 @@
 //! manageable.  FFmpeg must be installed on the host system.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::OnceLock;
 
 use axum::Json;
@@ -32,7 +32,10 @@ struct GpuConversionConfig {
 
 /// Initialize GPU conversion config. Called once from main.rs at startup.
 pub fn init_gpu_config(hwaccel: HwAccelCapability, fallback_to_cpu: bool) {
-    let _ = GPU_CONFIG.set(GpuConversionConfig { hwaccel, fallback_to_cpu });
+    let _ = GPU_CONFIG.set(GpuConversionConfig {
+        hwaccel,
+        fallback_to_cpu,
+    });
 }
 
 /// Public accessor for the active hardware-acceleration capability.
@@ -262,7 +265,8 @@ pub async fn convert_file(
                 output_str,
                 gpu.map(|g| &g.hwaccel),
                 gpu.map(|g| g.fallback_to_cpu).unwrap_or(true),
-            ).await
+            )
+            .await
         }
         MediaCategory::Audio => convert_audio(input_str, output_str).await,
     };
@@ -277,7 +281,8 @@ pub async fn convert_file(
     }
 
     // Verify the output file exists and is non-empty.
-    match tokio::fs::metadata(output).await { // codeql[rust/path-injection] -- path is server temp dir + UUID; ext restricted to alphanumeric at call sites
+    match tokio::fs::metadata(output).await {
+        // codeql[rust/path-injection] -- path is server temp dir + UUID; ext restricted to alphanumeric at call sites
         Ok(m) if m.len() > 0 => Ok(()),
         Ok(_) => {
             let _ = tokio::fs::remove_file(output).await; // codeql[rust/path-injection] -- same as above
@@ -297,10 +302,8 @@ async fn convert_image(input: &str, output: &str) -> bool {
     cmd.args(["-n", "19", "ffmpeg", "-y", "-i", input, "-q:v", "2", output])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    let ffmpeg = crate::process::status_with_timeout(
-        &mut cmd,
-        std::time::Duration::from_secs(600),
-    ).await;
+    let ffmpeg =
+        crate::process::status_with_timeout(&mut cmd, std::time::Duration::from_secs(600)).await;
 
     if matches!(ffmpeg, Ok(s) if s.success()) {
         tracing::debug!(input = %input, "Image conversion: FFmpeg JPEG conversion succeeded");
@@ -311,18 +314,16 @@ async fn convert_image(input: &str, output: &str) -> bool {
     tracing::debug!(input = %input, "Image conversion: FFmpeg failed, trying ImageMagick");
     let mut cmd = tokio::process::Command::new("convert");
     cmd.args([
-            &format!("{}[0]", input), // [0] = first frame/page
-            "-quality",
-            "92",
-            "-auto-orient",
-            output,
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    let magick = crate::process::status_with_timeout(
-        &mut cmd,
-        std::time::Duration::from_secs(600),
-    ).await;
+        &format!("{}[0]", input), // [0] = first frame/page
+        "-quality",
+        "92",
+        "-auto-orient",
+        output,
+    ])
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+    let magick =
+        crate::process::status_with_timeout(&mut cmd, std::time::Duration::from_secs(600)).await;
 
     let magick_ok = matches!(magick, Ok(s) if s.success());
     if magick_ok {
@@ -382,12 +383,10 @@ pub(crate) async fn convert_video(
             let mut cmd = tokio::process::Command::new("nice");
             let mut nice_args = vec!["-n".to_string(), "19".to_string(), "ffmpeg".to_string()];
             nice_args.extend(args);
-            cmd.args(&nice_args)
-                .stdout(std::process::Stdio::null());
-            let result = crate::process::run_with_timeout(
-                &mut cmd,
-                std::time::Duration::from_secs(600),
-            ).await;
+            cmd.args(&nice_args).stdout(std::process::Stdio::null());
+            let result =
+                crate::process::run_with_timeout(&mut cmd, std::time::Duration::from_secs(600))
+                    .await;
 
             let gpu_ok = matches!(&result, Ok(out) if out.status.success());
 
@@ -447,24 +446,32 @@ pub(crate) async fn convert_video(
     let cpu_start = std::time::Instant::now();
     let mut cmd = tokio::process::Command::new("nice");
     cmd.args([
-            "-n", "19",
-            "ffmpeg", "-y",
-            "-i", input,
-            "-vf", "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1",
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "20",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-movflags", "+faststart",
-            output,
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    let status = crate::process::status_with_timeout(
-        &mut cmd,
-        std::time::Duration::from_secs(600),
-    ).await;
+        "-n",
+        "19",
+        "ffmpeg",
+        "-y",
+        "-i",
+        input,
+        "-vf",
+        "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "20",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        output,
+    ])
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+    let status =
+        crate::process::status_with_timeout(&mut cmd, std::time::Duration::from_secs(600)).await;
     let ok = matches!(status, Ok(s) if s.success());
     if ok {
         tracing::info!(
@@ -488,19 +495,22 @@ async fn convert_audio(input: &str, output: &str) -> bool {
     tracing::debug!(input = %input, output = %output, "Audio conversion: starting MP3 conversion");
     let mut cmd = tokio::process::Command::new("nice");
     cmd.args([
-            "-n", "19",
-            "ffmpeg", "-y",
-            "-i", input,
-            "-codec:a", "libmp3lame",
-            "-b:a", "192k",
-            output,
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    let status = crate::process::status_with_timeout(
-        &mut cmd,
-        std::time::Duration::from_secs(600),
-    ).await;
+        "-n",
+        "19",
+        "ffmpeg",
+        "-y",
+        "-i",
+        input,
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        "192k",
+        output,
+    ])
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+    let status =
+        crate::process::status_with_timeout(&mut cmd, std::time::Duration::from_secs(600)).await;
 
     matches!(status, Ok(s) if s.success())
 }
@@ -519,5 +529,9 @@ pub async fn conversion_status(
     _auth: AuthUser,
 ) -> Result<Json<ConversionStatusResponse>, AppError> {
     let (active, total, done) = progress_snapshot();
-    Ok(Json(ConversionStatusResponse { active, total, done }))
+    Ok(Json(ConversionStatusResponse {
+        active,
+        total,
+        done,
+    }))
 }

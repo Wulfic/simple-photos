@@ -30,19 +30,18 @@ pub async fn sync_metadata_to_backup(
     api_key: &Option<String>,
 ) {
     // ── edit_copies ──────────────────────────────────────────────────────
-    let edit_copies: Vec<(String, String, String, String, String, String)> =
-        match sqlx::query_as(
-            "SELECT id, photo_id, user_id, name, edit_metadata, created_at FROM edit_copies",
-        )
-        .fetch_all(pool)
-        .await
-        {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::warn!("Failed to fetch edit_copies for backup sync: {}", e);
-                Vec::new()
-            }
-        };
+    let edit_copies: Vec<(String, String, String, String, String, String)> = match sqlx::query_as(
+        "SELECT id, photo_id, user_id, name, edit_metadata, created_at FROM edit_copies",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("Failed to fetch edit_copies for backup sync: {}", e);
+            Vec::new()
+        }
+    };
 
     // ── photo_metadata ───────────────────────────────────────────────────
     #[derive(sqlx::FromRow)]
@@ -82,32 +81,33 @@ pub async fn sync_metadata_to_backup(
     };
 
     // ── shared_albums ────────────────────────────────────────────────────
-    let shared_albums: Vec<(String, String, String, String)> = match sqlx::query_as(
-        "SELECT id, owner_user_id, name, created_at FROM shared_albums",
-    )
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("Failed to fetch shared_albums for backup sync: {}", e);
-            Vec::new()
-        }
-    };
+    let shared_albums: Vec<(String, String, String, String)> =
+        match sqlx::query_as("SELECT id, owner_user_id, name, created_at FROM shared_albums")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("Failed to fetch shared_albums for backup sync: {}", e);
+                Vec::new()
+            }
+        };
 
     // ── shared_album_members ─────────────────────────────────────────────
-    let shared_members: Vec<(String, String, String, String)> = match sqlx::query_as(
-        "SELECT id, album_id, user_id, added_at FROM shared_album_members",
-    )
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("Failed to fetch shared_album_members for backup sync: {}", e);
-            Vec::new()
-        }
-    };
+    let shared_members: Vec<(String, String, String, String)> =
+        match sqlx::query_as("SELECT id, album_id, user_id, added_at FROM shared_album_members")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to fetch shared_album_members for backup sync: {}",
+                    e
+                );
+                Vec::new()
+            }
+        };
 
     // ── shared_album_photos ──────────────────────────────────────────────
     let shared_photos: Vec<(String, String, String, String, String)> = match sqlx::query_as(
@@ -315,18 +315,17 @@ pub async fn sync_metadata_to_backup(
     // ── photo_tags ───────────────────────────────────────────────────────
     // User-applied tags. Initial photo transfer carries tags via X-Tags
     // header but later edits (add/remove tag) need full-state sync.
-    let photo_tags: Vec<(String, String, String, String)> = match sqlx::query_as(
-        "SELECT photo_id, user_id, tag, created_at FROM photo_tags",
-    )
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("Failed to fetch photo_tags for backup sync: {}", e);
-            Vec::new()
-        }
-    };
+    let photo_tags: Vec<(String, String, String, String)> =
+        match sqlx::query_as("SELECT photo_id, user_id, tag, created_at FROM photo_tags")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("Failed to fetch photo_tags for backup sync: {}", e);
+                Vec::new()
+            }
+        };
     let photo_tags_json: Vec<serde_json::Value> = photo_tags
         .iter()
         .map(|(photo_id, user_id, tag, created_at)| {
@@ -476,18 +475,17 @@ pub async fn sync_metadata_to_backup(
         .collect();
 
     // ── ai_processed_photos ──────────────────────────────────────────────
-    let ai_processed: Vec<(String, String, String)> = match sqlx::query_as(
-        "SELECT photo_id, user_id, processed_at FROM ai_processed_photos",
-    )
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("Failed to fetch ai_processed_photos for backup sync: {}", e);
-            Vec::new()
-        }
-    };
+    let ai_processed: Vec<(String, String, String)> =
+        match sqlx::query_as("SELECT photo_id, user_id, processed_at FROM ai_processed_photos")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("Failed to fetch ai_processed_photos for backup sync: {}", e);
+                Vec::new()
+            }
+        };
     let ai_processed_json: Vec<serde_json::Value> = ai_processed
         .iter()
         .map(|(photo_id, user_id, processed_at)| {
@@ -501,18 +499,17 @@ pub async fn sync_metadata_to_backup(
 
     // ── user_settings ────────────────────────────────────────────────────
     // Per-user preferences shared by the AI and Geo modules.
-    let user_settings: Vec<(String, String, String, String)> = match sqlx::query_as(
-        "SELECT user_id, key, value, updated_at FROM user_settings",
-    )
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("Failed to fetch user_settings for backup sync: {}", e);
-            Vec::new()
-        }
-    };
+    let user_settings: Vec<(String, String, String, String)> =
+        match sqlx::query_as("SELECT user_id, key, value, updated_at FROM user_settings")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("Failed to fetch user_settings for backup sync: {}", e);
+                Vec::new()
+            }
+        };
     let user_settings_json: Vec<serde_json::Value> = user_settings
         .iter()
         .map(|(user_id, key, value, updated_at)| {
@@ -569,10 +566,7 @@ pub async fn sync_metadata_to_backup(
             );
         }
         Ok(resp) => {
-            tracing::warn!(
-                "sync-metadata returned HTTP {}",
-                resp.status()
-            );
+            tracing::warn!("sync-metadata returned HTTP {}", resp.status());
         }
         Err(e) => {
             tracing::warn!("sync-metadata request failed: {}", e);

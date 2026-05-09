@@ -134,10 +134,7 @@ pub fn validate_inputs(req: &ProvisionRequest) -> Result<(), AppError> {
                 "Domain label must be 1-63 characters".into(),
             ));
         }
-        if !label
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-        {
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return Err(AppError::BadRequest(
                 "Domain may only contain ASCII letters, digits, hyphens, and dots".into(),
             ));
@@ -164,10 +161,7 @@ pub fn validate_inputs(req: &ProvisionRequest) -> Result<(), AppError> {
         ));
     }
     // Reject control characters and whitespace anywhere in the address.
-    if email
-        .chars()
-        .any(|c| c.is_whitespace() || c.is_control())
-    {
+    if email.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(AppError::BadRequest(
             "Email must not contain whitespace or control characters".into(),
         ));
@@ -205,15 +199,13 @@ pub async fn provision_certificate(
 ) -> Result<ProvisionResult, AppError> {
     validate_inputs(req)?;
 
-    let directory = directory_url
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            if req.staging {
-                LetsEncrypt::Staging.url().to_string()
-            } else {
-                LetsEncrypt::Production.url().to_string()
-            }
-        });
+    let directory = directory_url.map(|s| s.to_string()).unwrap_or_else(|| {
+        if req.staging {
+            LetsEncrypt::Staging.url().to_string()
+        } else {
+            LetsEncrypt::Production.url().to_string()
+        }
+    });
 
     tracing::info!(
         domain = %req.domain,
@@ -287,10 +279,7 @@ pub async fn provision_certificate(
         .map_err(|e| AppError::BadRequest(format!("Invalid challenge_port: {}", e)))?;
 
     let app = Router::new()
-        .route(
-            "/.well-known/acme-challenge/{token}",
-            get(serve_challenge),
-        )
+        .route("/.well-known/acme-challenge/{token}", get(serve_challenge))
         .with_state(tokens.clone());
 
     let listener = tokio::net::TcpListener::bind(listener_addr)

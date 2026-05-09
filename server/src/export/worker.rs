@@ -33,7 +33,17 @@ pub async fn run_export(
         return;
     }
 
-    match do_export(&pool, &read_pool, &storage_root, &user_id, &job_id, size_limit, &jwt_secret).await {
+    match do_export(
+        &pool,
+        &read_pool,
+        &storage_root,
+        &user_id,
+        &job_id,
+        size_limit,
+        &jwt_secret,
+    )
+    .await
+    {
         Ok(()) => {
             let now = chrono::Utc::now().to_rfc3339();
             let _ = sqlx::query(
@@ -78,10 +88,12 @@ async fn do_export(
     let encryption_key = crate::crypto::load_wrapped_key(read_pool, jwt_secret)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to load encryption key: {e}"))?
-        .ok_or_else(|| anyhow::anyhow!(
-            "No encryption key stored on this server. \
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No encryption key stored on this server. \
              Cannot produce a decrypted export."
-        ))?;
+            )
+        })?;
 
     // Fetch all blobs for this user (id, blob_type, storage_path, size_bytes, client_hash, upload_time)
     let blobs: Vec<(String, String, String, i64, Option<String>, String)> = sqlx::query_as(
@@ -264,8 +276,7 @@ async fn do_export(
             }
 
             // Check if adding this blob would exceed the size limit
-            if current_zip_size + entry.size_bytes + 100 > size_limit_clone
-                && current_zip_size > 0
+            if current_zip_size + entry.size_bytes + 100 > size_limit_clone && current_zip_size > 0
             {
                 let file = current_zip.finish()?;
                 file.sync_all()?;
@@ -313,7 +324,10 @@ async fn do_export(
                     // Split at the last '.' to insert the counter before the extension
                     if let Some(dot_pos) = zip_entry_name.rfind('.') {
                         format!(
-                            "{}_({}){}", &zip_entry_name[..dot_pos], count, &zip_entry_name[dot_pos..]
+                            "{}_({}){}",
+                            &zip_entry_name[..dot_pos],
+                            count,
+                            &zip_entry_name[dot_pos..]
                         )
                     } else {
                         format!("{}_({})", zip_entry_name, count)

@@ -8,7 +8,7 @@
 //! - `sync`    — Encrypted-sync endpoint for client→server photo metadata
 //! - `models`  — Re-exports of model types used across gallery operations
 
+pub mod models;
 pub mod secure;
 pub mod shared;
 pub mod sync;
-pub mod models;
