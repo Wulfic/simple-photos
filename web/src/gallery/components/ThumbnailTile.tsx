@@ -176,8 +176,9 @@ export default function ThumbnailTile({
         </div>
       )}
 
-      {/* Selection indicator — always rendered so users can tap the circle to
-          enter selection mode without long-pressing. Subtle when idle. */}
+      {/* Selection indicator — hidden by default; appears on hover (desktop)
+          or once selection mode is active (e.g. via long-press on touch).
+          Selected items always show the green check. */}
       {onLongPress && (
         <button
           type="button"
@@ -197,10 +198,10 @@ export default function ThumbnailTile({
           onTouchStart={(e) => e.stopPropagation()}
           className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all z-10 ${
             isSelected
-              ? "bg-green-500 border-green-500 shadow"
+              ? "bg-green-500 border-green-500 shadow opacity-100"
               : selectionMode
-                ? "bg-white/80 border-gray-400 hover:bg-white"
-                : "bg-white/40 border-white/70 opacity-70 hover:opacity-100 hover:bg-white/80 shadow-sm"
+                ? "bg-white/80 border-gray-400 hover:bg-white opacity-100"
+                : "bg-white/40 border-white/70 shadow-sm opacity-0 group-hover:opacity-100 hover:bg-white/80"
           }`}
         >
           {isSelected && (
