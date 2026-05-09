@@ -351,7 +351,7 @@ jobs:
   #  Compute SHA256 sums and create the draft GitHub Release.
   # ───────────────────────────────────────────────────────────────────────
   release:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: [version, deb, windows, android]
     runs-on: ubuntu-latest
     steps:
@@ -378,12 +378,15 @@ jobs:
           sha256sum *.deb *.exe *.apk > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Create GitHub Release (draft)
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          # Tag pushes → draft release (promote manually after smoke-testing).
+          # workflow_dispatch → immediate pre-release (preview/dev build).
+          draft: ${{ github.event_name == 'push' }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' }}
           name: "Simple Photos ${{ needs.version.outputs.version }}"
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', needs.version.outputs.version) }}
           generate_release_notes: true
           files: |
             dist/*.deb
