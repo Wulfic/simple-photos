@@ -1,9 +1,9 @@
 # =============================================================================
-#  fetch-assets.ps1 — Simple Photos
+#  fetch-assets.ps1 -- Simple Photos
 #
 #  Two responsibilities, selected by switch:
 #    -GenerateConfig   Generate %ProgramData%\SimplePhotos\config.toml on first
-#                      install (idempotent — preserves an existing config).
+#                      install (idempotent -- preserves an existing config).
 #    (default)         Download ONNX models + GeoNames dataset into the data dir.
 #
 #  Invoked by the Inno Setup [Run] section.
@@ -31,54 +31,68 @@ function Get-RandomHex {
 function Write-Toml {
     param([string]$Path, [string]$Secret)
 
-    $storage = (Join-Path $DataDir 'storage') -replace '\\', '\\\\'
-    $db      = (Join-Path $DataDir 'db\simple-photos.db') -replace '\\', '\\\\'
-    $web     = (Join-Path $InstallDir 'web') -replace '\\', '\\\\'
+    # Use TOML *literal strings* (single-quoted) for Windows paths so we don't
+    # have to escape backslashes. A literal string is everything between two
+    # single quotes verbatim, which makes Windows paths trivial to embed.
+    $storage = Join-Path $DataDir 'storage'
+    $db      = Join-Path $DataDir 'db\simple-photos.db'
+    $web     = Join-Path $InstallDir 'web'
 
-    $cfg = @"
-[server]
-host = "0.0.0.0"
-port = 3000
-base_url = "http://localhost:3000"
-trust_proxy = false
-
-[database]
-path = "$db"
-max_connections = 16
-
-[storage]
-# Default scaffold path. The first-run setup wizard (web UI) is where the
-# operator chooses the final photo storage root.
-root = "$storage"
-default_quota_bytes = 10737418240
-max_blob_size_bytes = 5368709120
-
-[auth]
-jwt_secret = "$Secret"
-access_token_ttl_secs = 3600
-refresh_token_ttl_days = 30
-allow_registration = true
-bcrypt_cost = 12
-
-[web]
-static_root = "$web"
-
-[backup]
-
-[tls]
-enabled = false
-"@
-    Set-Content -Path $Path -Value $cfg -Encoding UTF8
+    # NOTE: We deliberately avoid here-strings (@"..."@) here. Windows
+    # PowerShell 5.1 -- which is what `powershell.exe` invokes from the Inno
+    # Setup [Run] section -- has been observed to mis-parse here-strings in
+    # this file under certain encoding/whitespace conditions, leaving the
+    # service crash-looping with "Failed to read config file". Using a plain
+    # string array joined with CRLF is bullet-proof across all PS versions.
+    $lines = @(
+        '[server]',
+        'host = "0.0.0.0"',
+        'port = 8080',
+        'base_url = "http://localhost:8080"',
+        'trust_proxy = false',
+        '',
+        '[database]',
+        ("path = '{0}'" -f $db),
+        'max_connections = 16',
+        '',
+        '[storage]',
+        '# Default scaffold path. The first-run setup wizard (web UI) is where the',
+        '# operator chooses the final photo storage root.',
+        ("root = '{0}'" -f $storage),
+        'default_quota_bytes = 10737418240',
+        'max_blob_size_bytes = 5368709120',
+        '',
+        '[auth]',
+        ('jwt_secret = "{0}"' -f $Secret),
+        'access_token_ttl_secs = 3600',
+        'refresh_token_ttl_days = 30',
+        'allow_registration = true',
+        'bcrypt_cost = 12',
+        '',
+        '[web]',
+        ("static_root = '{0}'" -f $web),
+        '',
+        '[backup]',
+        '',
+        '[tls]',
+        'enabled = false',
+        ''
+    )
+    $cfg = [string]::Join("`r`n", $lines)
+    # Use UTF8 *without* BOM. The Rust TOML parser handles BOMs but other
+    # tooling (and humans editing the file) may not.
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $cfg, $utf8NoBom)
 }
 
-# ── Branch 1: config generation (first install only) ──────────────────────
+# -- Branch 1: config generation (first install only) ----------------------
 if ($GenerateConfig) {
     if (-not (Test-Path $DataDir)) {
         New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
     }
     $cfgPath = Join-Path $DataDir 'config.toml'
     if (Test-Path $cfgPath) {
-        Write-Info "config.toml already exists at $cfgPath — preserving."
+        Write-Info "config.toml already exists at $cfgPath -- preserving."
         exit 0
     }
     $secret = Get-RandomHex 32
@@ -87,7 +101,7 @@ if ($GenerateConfig) {
     exit 0
 }
 
-# ── Branch 2: asset download ──────────────────────────────────────────────
+# -- Branch 2: asset download ----------------------------------------------
 $models = Join-Path $DataDir 'models'
 if (-not (Test-Path $models)) { New-Item -ItemType Directory -Path $models -Force | Out-Null }
 
