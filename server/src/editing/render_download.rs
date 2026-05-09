@@ -105,11 +105,32 @@ pub async fn render_photo(
         );
         return Err(AppError::NotFound);
     }
-    let source_path = state.config.storage.root.join(&photo.file_path);
-    if !tokio::fs::try_exists(&source_path).await.unwrap_or(false) {
-        tracing::error!("[render] source file not found: {}", source_path.display());
-        return Err(AppError::NotFound);
-    }
+    // Canonicalize the storage root so the containment check below is
+    // resilient to symlinks and `..` traversal in `photo.file_path`.
+    let canonical_root = tokio::fs::canonicalize(&state.config.storage.root)
+        .await
+        .map_err(|e| {
+            tracing::error!("[render] cannot canonicalize storage root: {e}");
+            AppError::Internal("storage root unavailable".into())
+        })?;
+    let candidate = canonical_root.join(&photo.file_path);
+    let source_path = match tokio::fs::canonicalize(&candidate).await {
+        Ok(p) if p.starts_with(&canonical_root) => p,
+        Ok(p) => {
+            tracing::error!(
+                "[render] resolved path '{}' escapes storage root",
+                p.display()
+            );
+            return Err(AppError::NotFound);
+        }
+        Err(_) => {
+            tracing::error!(
+                "[render] source file not found: {}",
+                candidate.display()
+            );
+            return Err(AppError::NotFound);
+        }
+    };
 
     // ── Parse edit metadata (request body takes priority over DB row) ─────────
     let meta_str = req.crop_metadata.or_else(|| photo.crop_metadata.clone());

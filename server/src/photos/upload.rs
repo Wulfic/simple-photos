@@ -77,6 +77,16 @@ pub async fn upload_photo(
             .root
             .join(".tmp")
             .join("sp_upload_conv");
+        tokio::fs::create_dir_all(&tmp_dir)
+            .await
+            .map_err(|e| AppError::Internal(format!("Create conversion temp dir: {e}")))?;
+
+        // Canonicalize the temp dir so the path-injection sanitizer below
+        // operates against a fully resolved root (no symlinks, no `..`).
+        let canonical_tmp_dir = tokio::fs::canonicalize(&tmp_dir)
+            .await
+            .map_err(|e| AppError::Internal(format!("Canonicalize tmp dir: {e}")))?;
+
         let conv_id = Uuid::new_v4();
         // Restrict the input temp-file extension to alphanumeric characters only
         // to prevent path-component injection via the user-supplied filename.
@@ -86,12 +96,21 @@ pub async fn upload_photo(
             .map(|e| e.chars().filter(|c| c.is_alphanumeric()).collect())
             .filter(|e: &String| !e.is_empty())
             .unwrap_or_else(|| "bin".to_string());
-        let tmp_input = tmp_dir.join(format!("{conv_id}_in.{input_ext}"));
-        let tmp_output = tmp_dir.join(format!("{}_out.{}", conv_id, target.extension));
+        let tmp_input = canonical_tmp_dir.join(format!("{conv_id}_in.{input_ext}"));
+        let tmp_output =
+            canonical_tmp_dir.join(format!("{}_out.{}", conv_id, target.extension));
 
-        tokio::fs::create_dir_all(&tmp_dir)
-            .await
-            .map_err(|e| AppError::Internal(format!("Create conversion temp dir: {e}")))?;
+        // Defense-in-depth path-injection barrier: even though the only
+        // user-derived component is the alphanumeric-filtered extension,
+        // verify the constructed temp paths cannot escape the canonicalized
+        // temp directory before any filesystem operation touches them.
+        if !tmp_input.starts_with(&canonical_tmp_dir)
+            || !tmp_output.starts_with(&canonical_tmp_dir)
+        {
+            return Err(AppError::BadRequest(
+                "invalid upload filename".into(),
+            ));
+        }
 
         // Write uploaded bytes to temp file for ffmpeg
         tokio::fs::write(&tmp_input, &body)
