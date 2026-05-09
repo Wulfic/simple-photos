@@ -142,6 +142,24 @@ See [API_REFERENCE.md](API_REFERENCE.md) for the full REST API documentation.
 
 [GitHub Repository](https://github.com/wulfic/simple-photos)
 
+## Documentation
+
+Full developer documentation lives in the project [Wiki](https://github.com/Wulfic/simple-photos/wiki):
+
+- [API Reference](https://github.com/Wulfic/simple-photos/wiki/API-Reference)
+- [Build & Packaging](https://github.com/Wulfic/simple-photos/wiki/Build-and-Packaging)
+- [Testing](https://github.com/Wulfic/simple-photos/wiki/Testing)
+
+## Contributing
+
+This repo uses two long-lived branches:
+
+- **`main`** — lean release branch. Only what's needed to build & ship.
+- **`dev`** — full development branch with tests, agent customisation, and
+  scratch artefacts. Open all pull requests against `dev`. A workflow auto-
+  syncs `dev` → `main` after stripping development-only paths
+  (see `.github/sync-main-exclude.txt` on `dev`).
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

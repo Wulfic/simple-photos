@@ -5,9 +5,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
@@ -81,6 +81,9 @@ jobs:
     name: Python E2E (smoke)
     runs-on: ubuntu-22.04
     needs: [rust, web]
+    # Tests live on `dev` only; main is the lean release branch and has no
+    # tests/ directory.
+    if: github.event_name == 'push' && github.ref_name == 'dev' || github.event_name == 'pull_request' && github.head_ref == 'dev'
     steps:
       - uses: actions/checkout@v4
 
