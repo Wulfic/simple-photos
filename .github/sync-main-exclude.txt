@@ -1,0 +1,22 @@
+# Paths removed from `main` when syncing from `dev`.
+# `main` is the lean "release" branch — only what's needed to build & run the server,
+# web app, Android app, and produce installers. Development docs, tests, scratch
+# files, and AI-agent customisation live on `dev` only.
+tests/
+benchmark_results/
+docker-instances/
+downloads/
+.claude/
+AGENTS.md
+CLAUDE.md
+API_REFERENCE.md
+TODO.md
+android/TODO.md
+blns.txt
+reset-primary.sh
+reset-server.sh
+server/build_out.txt
+.github/copilot-instructions.md
+.github/sync-main-exclude.txt
+.github/workflows/sync-dev-to-main.yml
+pytest.ini
