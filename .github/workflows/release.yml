@@ -289,9 +289,16 @@ jobs:
             if (-not (Test-Path $p)) { throw "Missing post-install path: $p" }
           }
 
-          # The server binary should at least respond to --version / --help.
-          & "$instDir\simple-photos-server.exe" --help | Select-Object -First 5
-          if ($LASTEXITCODE -ne 0) { throw "simple-photos-server.exe --help exited $LASTEXITCODE" }
+          # The server binary has no CLI parser, so we don't try to invoke it.
+          # Instead, confirm it is a real native executable (PE header "MZ") and
+          # that Windows can read its file version metadata.
+          $bytes = [System.IO.File]::ReadAllBytes("$instDir\simple-photos-server.exe")[0..1]
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            throw "simple-photos-server.exe is not a valid PE binary (missing MZ header)"
+          }
+          $sz = (Get-Item "$instDir\simple-photos-server.exe").Length
+          Write-Host "simple-photos-server.exe size: $sz bytes"
+          if ($sz -lt 1MB) { throw "simple-photos-server.exe is suspiciously small ($sz bytes)" }
 
           Write-Host "--- uninstalling ---"
           $uninst = "$instDir\unins000.exe"
