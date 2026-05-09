@@ -7,7 +7,7 @@
 ;    2. Copies the pre-built server.exe + web\ + migrations\ into that location.
 ;    3. Generates %ProgramData%\SimplePhotos\config.toml with a random JWT secret.
 ;    4. Registers a Windows Service (auto-start, recovery, runs as LocalSystem).
-;    5. Adds a Start Menu shortcut and a firewall rule for port 3000 (Private+Domain).
+;    5. Adds a Start Menu shortcut and a firewall rule for port 8080 (Private+Domain).
 ;    6. Schedules the post-install asset fetcher (ONNX + GeoNames) as a one-shot task.
 ;
 ;  Build with:  iscc packaging\windows\simple-photos.iss
@@ -62,7 +62,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "service";    Description: "Install Simple Photos as a Windows Service (auto-start)"; GroupDescription: "Service:"; Flags: unchecked
-Name: "firewall";   Description: "Add Windows Firewall rule for TCP port 3000 (Private + Domain networks)"; GroupDescription: "Network:"
+Name: "firewall";   Description: "Add Windows Firewall rule for TCP port 8080 (Private + Domain networks)"; GroupDescription: "Network:"
 Name: "fetchmodels";Description: "Download AI models + GeoNames dataset after install (~225 MB)"; GroupDescription: "Optional:"
 
 [Files]
@@ -97,7 +97,7 @@ Name: "{commonappdata}\SimplePhotos\models";   Permissions: users-modify
 Name: "{commonappdata}\SimplePhotos\logs";     Permissions: users-modify
 
 [Icons]
-Name: "{group}\Open Simple Photos in browser"; Filename: "http://localhost:3000"
+Name: "{group}\Open Simple Photos in browser"; Filename: "http://localhost:8080"
 Name: "{group}\Start service";                 Filename: "{sys}\sc.exe"; Parameters: "start SimplePhotos"; Tasks: service
 Name: "{group}\Stop service";                  Filename: "{sys}\sc.exe"; Parameters: "stop SimplePhotos"; Tasks: service
 Name: "{group}\Run server (foreground)";       Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
@@ -144,7 +144,7 @@ Filename: "{sys}\sc.exe"; \
 
 ; ── Firewall rule ─────────────────────────────────────────────────────────
 Filename: "powershell.exe"; \
-    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""New-NetFirewallRule -DisplayName 'SimplePhotos-Port-3000' -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow -Profile Private,Domain -ErrorAction SilentlyContinue | Out-Null"""; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""New-NetFirewallRule -DisplayName 'SimplePhotos-Port-8080' -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow -Profile Private,Domain -ErrorAction SilentlyContinue | Out-Null"""; \
     StatusMsg: "Adding firewall rule..."; \
     Flags: runhidden; \
     Tasks: firewall
@@ -156,7 +156,7 @@ Filename: "powershell.exe"; \
     Tasks: fetchmodels
 
 ; ── Open the browser when finished ───────────────────────────────────────
-Filename: "http://localhost:3000"; \
+Filename: "http://localhost:8080"; \
     Description: "Open Simple Photos in your browser"; \
     Flags: postinstall shellexec skipifsilent
 
@@ -164,7 +164,7 @@ Filename: "http://localhost:3000"; \
 Filename: "{sys}\sc.exe"; Parameters: "stop SimplePhotos"; Flags: runhidden; RunOnceId: "StopSvc"
 Filename: "{app}\bin\nssm.exe"; Parameters: "remove SimplePhotos confirm"; Flags: runhidden; RunOnceId: "RemoveSvc"
 Filename: "powershell.exe"; \
-    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-NetFirewallRule -DisplayName 'SimplePhotos-Port-3000' -ErrorAction SilentlyContinue"""; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Remove-NetFirewallRule -DisplayName 'SimplePhotos-Port-8080' -ErrorAction SilentlyContinue"""; \
     Flags: runhidden; RunOnceId: "RemoveFirewall"
 
 [UninstallDelete]

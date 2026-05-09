@@ -67,7 +67,7 @@ iscc /DSP_VERSION=1.0.0 packaging\windows\simple-photos.iss
 ```
 
 The installer asks for an install location, registers the server as a
-Windows Service via NSSM, opens TCP 3000 in the firewall, and (optionally)
+Windows Service via NSSM, opens TCP 8080 in the firewall, and (optionally)
 downloads the AI models + GeoNames in the background.
 
 ## CI/CD
