@@ -477,3 +477,47 @@ jobs:
             dist/*.exe
             dist/*.apk
             dist/SHA256SUMS.txt
+
+  # ───────────────────────────────────────────────────────────────────────
+  #  Cleanup: when a stable tag (vX.Y.Z, no -suffix) is pushed, delete any
+  #  leftover preview pre-releases and their tags so the Releases page only
+  #  shows real shipped versions plus the brand-new draft we just created.
+  # ───────────────────────────────────────────────────────────────────────
+  cleanup-prereleases:
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: github.event_name == 'push' && !contains(github.ref_name, '-')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Delete pre-releases and their tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEEP="${GITHUB_REF_NAME}"
+          echo "Keeping stable tag: $KEEP"
+
+          # List every prerelease, drop the one we just published (if it
+          # somehow ended up flagged as prerelease), and delete the rest
+          # along with their git tags.
+          mapfile -t PRES < <(gh release list --limit 200 \
+            --json tagName,isPrerelease,isDraft \
+            --jq '.[] | select(.isPrerelease == true and .isDraft == false) | .tagName')
+
+          if [ ${#PRES[@]} -eq 0 ]; then
+            echo "No pre-releases to clean up."
+            exit 0
+          fi
+
+          for tag in "${PRES[@]}"; do
+            if [[ "$tag" == "$KEEP" ]]; then
+              echo "Skipping $tag (matches current stable)."
+              continue
+            fi
+            echo "Deleting pre-release + tag: $tag"
+            gh release delete "$tag" --cleanup-tag --yes || \
+              echo "::warning::Failed to delete $tag (may already be gone)"
+          done
