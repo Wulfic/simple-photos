@@ -45,12 +45,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: resolve
+        # Route github context values through env vars to prevent expression
+        # injection / code injection in actions (CWE-94). `github.event.inputs.version`
+        # is user-controlled (workflow_dispatch) and must never be interpolated
+        # directly into a shell `run:` block.
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          GH_INPUT_VERSION: ${{ github.event.inputs.version }}
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
+          if [[ "$GH_EVENT_NAME" == "push" ]]; then
             v="${GITHUB_REF_NAME#v}"
           else
-            v="${{ github.event.inputs.version }}"
+            v="$GH_INPUT_VERSION"
+          fi
+          # Strict semver-ish allowlist: digits, dots, plus optional pre-release
+          # tag (alnum + dot + dash). Reject anything else fast and loud.
+          if [[ ! "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid version string: '$v' (expected semver)"
+            exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Resolved version: $v"
