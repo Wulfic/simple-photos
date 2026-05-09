@@ -41,8 +41,9 @@ case "$1" in
         #    upgrade).
         if [ -f "$CONF" ] && grep -q 'CHANGE_ME_AT_INSTALL_TIME' "$CONF"; then
             SECRET=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-            # Use a tab as sed delimiter to dodge slashes in any value.
-            sed -i "s\tCHANGE_ME_AT_INSTALL_TIME\t${SECRET}\t" "$CONF"
+            # SECRET is pure hex (0-9a-f) so '|' is safe as a sed delimiter
+            # and avoids escaping issues with the default '/'.
+            sed -i "s|CHANGE_ME_AT_INSTALL_TIME|${SECRET}|" "$CONF"
             chown "$USER:$GROUP" "$CONF"
             chmod 640 "$CONF"
             echo "simple-photos: generated random JWT secret in $CONF"

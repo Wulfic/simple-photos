@@ -194,20 +194,31 @@ jobs:
         shell: pwsh
         run: |
           # nssm.cc is frequently 503; use the Chocolatey package which
-          # ships an identical 2.24 binary, then copy it into our vendor dir.
+          # ships an identical 2.24 binary.
           choco install nssm --version=2.24.101.20180116 -y --no-progress
-          $nssmExe = (Get-Command nssm.exe -ErrorAction SilentlyContinue).Source
-          if (-not $nssmExe) {
-            $nssmExe = "C:\ProgramData\chocolatey\lib\NSSM\tools\nssm.exe"
+          # Choco unpacks into a deterministic path; the architecture-specific
+          # binary lives under tools\win64\nssm.exe (the bin\ shim is a stub).
+          $candidates = @(
+            'C:\ProgramData\chocolatey\lib\NSSM\tools\win64\nssm.exe',
+            'C:\ProgramData\chocolatey\lib\NSSM\tools\nssm-2.24\win64\nssm.exe',
+            'C:\ProgramData\chocolatey\lib\nssm\tools\win64\nssm.exe',
+            'C:\ProgramData\chocolatey\lib\nssm\tools\nssm-2.24\win64\nssm.exe'
+          )
+          $nssmSrc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $nssmSrc) {
+            Write-Host "Searching for nssm.exe under choco lib..."
+            $nssmSrc = (Get-ChildItem -Recurse -Path 'C:\ProgramData\chocolatey\lib' -Filter 'nssm.exe' `
+                       -ErrorAction SilentlyContinue |
+                       Where-Object { $_.FullName -match 'win64' } |
+                       Select-Object -First 1).FullName
           }
-          if (-not (Test-Path $nssmExe)) {
-            Write-Error "nssm.exe not found after choco install"
+          if (-not $nssmSrc) {
+            Write-Error "Could not locate 64-bit nssm.exe after choco install"
             exit 1
           }
+          Write-Host "Using NSSM at: $nssmSrc"
           New-Item -ItemType Directory -Path packaging\windows\vendor -Force | Out-Null
-          # Force the 64-bit binary (Chocolatey symlinks the architecture-correct one).
-          $arch64 = Join-Path (Split-Path $nssmExe) 'nssm.exe'
-          Copy-Item $arch64 packaging\windows\vendor\nssm.exe -Force
+          Copy-Item $nssmSrc packaging\windows\vendor\nssm.exe -Force
           & packaging\windows\vendor\nssm.exe version
 
       - name: Install Inno Setup 6
