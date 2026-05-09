@@ -16,8 +16,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
-  # Rust ≥1.85 required (edition2024 in transitive deps such as `ort`, `aligned`).
-  RUST_TOOLCHAIN: "1.85"
+  # Rust ≥1.88 required by transitive deps (ort, image, time).
+  RUST_TOOLCHAIN: "1.88"
   NODE_VERSION: "20"
   PYTHON_VERSION: "3.12"
 
