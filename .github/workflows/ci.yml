@@ -24,7 +24,9 @@ env:
 jobs:
   rust:
     name: Rust (build + clippy + test)
-    runs-on: ubuntu-22.04
+    # 24.04 ships glibc 2.39 which exports __isoc23_strtol/strtoll, required by
+    # the prebuilt ONNX Runtime that `ort` links against.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -79,7 +81,7 @@ jobs:
 
   python-tests:
     name: Python E2E (smoke)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: [rust, web]
     # Tests live on `dev` only; main is the lean release branch and has no
     # tests/ directory.
