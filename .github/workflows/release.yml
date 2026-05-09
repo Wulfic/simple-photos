@@ -160,7 +160,11 @@ jobs:
           sudo test -x /usr/bin/simple-photos-server
           sudo test -f /etc/simple-photos/config.toml
           sudo test -d /var/lib/simple-photos/storage
-          sudo grep -L "CHANGE_ME_AT_INSTALL_TIME" /etc/simple-photos/config.toml >/dev/null
+          # Postinst should have replaced CHANGE_ME_AT_INSTALL_TIME with a hex secret.
+          if sudo grep -q "CHANGE_ME_AT_INSTALL_TIME" /etc/simple-photos/config.toml; then
+            echo "::error::JWT placeholder was not replaced by postinst"
+            exit 1
+          fi
           sudo apt-get remove -y simple-photos
 
       - uses: actions/upload-artifact@v4
