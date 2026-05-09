@@ -465,9 +465,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Tag pushes → draft release (promote manually after smoke-testing).
+          # Tag pushes (vX.Y.Z) → published stable release.
           # workflow_dispatch → immediate pre-release (preview/dev build).
-          draft: ${{ github.event_name == 'push' }}
+          draft: false
           prerelease: ${{ github.event_name == 'workflow_dispatch' }}
           name: "Simple Photos ${{ needs.version.outputs.version }}"
           tag_name: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', needs.version.outputs.version) }}
