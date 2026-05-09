@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag for preview build (e.g. 0.6.9-dev1)'
+        description: 'Version tag for preview build (e.g. 1.0.0-dev1)'
         required: true
         default: '0.0.0-dev'
 

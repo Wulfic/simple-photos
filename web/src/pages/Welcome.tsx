@@ -690,7 +690,7 @@ export default function Welcome() {
         </div>
 
         <p className="text-center text-gray-400 text-xs mt-6">
-          Simple Photos v{status?.version ?? "0.6.9"} — End-to-end encrypted
+          Simple Photos v{status?.version ?? "1.0.0"} — End-to-end encrypted
         </p>
       </div>
     </div>
