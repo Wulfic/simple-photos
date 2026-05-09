@@ -162,7 +162,7 @@ pub async fn update_port(
     let port = req.port;
     let config_write_result = tokio::task::spawn_blocking(move || update_config_toml_port(port))
         .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))?;
 
     let config_write_ok = match config_write_result {
         Ok(()) => true,

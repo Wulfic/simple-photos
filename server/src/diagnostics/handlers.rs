@@ -360,7 +360,7 @@ pub async fn list_audit_logs(
     };
 
     // Count total matching
-    let count_sql = format!("SELECT COUNT(*) FROM audit_log a {}", where_clause);
+    let count_sql = format!("SELECT COUNT(*) FROM audit_log a {where_clause}");
     let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql);
     for b in &binds {
         count_query = count_query.bind(b);
@@ -370,9 +370,8 @@ pub async fn list_audit_logs(
     // Fetch rows with optional username join
     let sql = format!(
         "SELECT a.id, a.event_type, a.user_id, u.username, a.ip_address, a.user_agent, a.details, a.created_at, a.source_server \
-         FROM audit_log a LEFT JOIN users u ON a.user_id = u.id {} \
-         ORDER BY a.created_at DESC LIMIT ?",
-        where_clause
+         FROM audit_log a LEFT JOIN users u ON a.user_id = u.id {where_clause} \
+         ORDER BY a.created_at DESC LIMIT ?"
     );
 
     let mut query = sqlx::query_as::<

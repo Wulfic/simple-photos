@@ -225,7 +225,7 @@ pub async fn run_conversion_pass(
         let conv_id = Uuid::new_v4();
         let conv_filename = format!("{}.{}", conv_id, candidate.target.extension);
         let conv_abs = conv_dir.join(&conv_filename);
-        let conv_rel = format!(".converted/{}", conv_filename);
+        let conv_rel = format!(".converted/{conv_filename}");
 
         match conversion::convert_file(&candidate.abs_path, &conv_abs, &candidate.target).await {
             Ok(()) => {
@@ -253,7 +253,7 @@ pub async fn run_conversion_pass(
                 } else {
                     "jpg"
                 };
-                let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
+                let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
                 // Extract metadata from the ORIGINAL file first — it has the real
                 // EXIF DateTimeOriginal, GPS, and camera data.  Conversion

@@ -211,7 +211,7 @@ async fn configure_local_storage(
     if let Err(e) =
         tokio::task::spawn_blocking(move || update_config_toml_storage(&path_clone, None))
             .await
-            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {e}")))
     {
         tracing::warn!("Failed to persist storage path to config.toml: {}", e);
     }
@@ -291,7 +291,7 @@ async fn configure_smb_storage(
     // relative paths against a different CWD than the server. Pass absolute
     // paths so the credentials file and mount point are unambiguous.
     let cwd = std::env::current_dir()
-        .map_err(|e| AppError::Internal(format!("Cannot read server CWD: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Cannot read server CWD: {e}")))?;
     let mount_point = if mount_point.is_absolute() {
         mount_point
     } else {
@@ -310,14 +310,11 @@ async fn configure_smb_storage(
     // Verify the resolved storage root is writable.
     tokio::fs::create_dir_all(&storage_root)
         .await
-        .map_err(|e| {
-            AppError::BadRequest(format!("Cannot create storage subdir on share: {}", e))
-        })?;
+        .map_err(|e| AppError::BadRequest(format!("Cannot create storage subdir on share: {e}")))?;
     let test_file = storage_root.join(".simple-photos-write-test");
     tokio::fs::write(&test_file, b"test").await.map_err(|e| {
         AppError::BadRequest(format!(
-            "SMB share mounted but is not writable as the server user: {}",
-            e
+            "SMB share mounted but is not writable as the server user: {e}"
         ))
     })?;
     let _ = tokio::fs::remove_file(&test_file).await;
@@ -325,7 +322,7 @@ async fn configure_smb_storage(
     // Encrypt the password for at-rest storage.
     let password_enc = match target.password.as_deref() {
         Some(pw) if !pw.is_empty() => smb::encrypt_password(pw, &state.config.auth.jwt_secret)
-            .map_err(|e| AppError::Internal(format!("Failed to encrypt SMB password: {}", e)))?,
+            .map_err(|e| AppError::Internal(format!("Failed to encrypt SMB password: {e}")))?,
         _ => String::new(),
     };
 
@@ -349,7 +346,7 @@ async fn configure_smb_storage(
         update_config_toml_storage(&new_root_str, Some(&stored_for_persist))
     })
     .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
+    .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {e}")))
     {
         tracing::warn!("Failed to persist SMB config to config.toml: {}", e);
     }
@@ -623,7 +620,7 @@ fn is_blocked_browse_path(p: &std::path::Path) -> bool {
     let s = p.to_string_lossy();
     BLOCKED_PREFIXES
         .iter()
-        .any(|prefix| s == *prefix || s.starts_with(&format!("{}/", prefix)))
+        .any(|prefix| s == *prefix || s.starts_with(&format!("{prefix}/")))
 }
 
 // ── Native folder-picker ──────────────────────────────────────────────────
@@ -650,7 +647,7 @@ pub async fn pick_directory(
 
     let path = spawn_native_picker()
         .await
-        .map_err(|e| AppError::BadRequest(format!("native_picker_unavailable: {}", e)))?;
+        .map_err(|e| AppError::BadRequest(format!("native_picker_unavailable: {e}")))?;
 
     audit::log(
         &state,
@@ -823,7 +820,7 @@ pub async fn resolve_storage_sentinel(
                 "Directory search timed out — try entering the path manually.".into(),
             )
         })?
-        .map_err(|e| AppError::Internal(format!("find command error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("find command error: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first = stdout.lines().next().ok_or_else(|| {

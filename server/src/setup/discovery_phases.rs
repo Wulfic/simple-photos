@@ -42,7 +42,7 @@ fn parse_discovery_response(
                 .and_then(|p| p.as_u64())
                 .map(|p| p as u16)
                 .unwrap_or(port);
-            format!("{}:{}", ip, actual_port)
+            format!("{ip}:{actual_port}")
         });
     let mode = body
         .get("mode")
@@ -90,7 +90,7 @@ fn parse_server_response(
         .get("address")
         .and_then(|a| a.as_str())
         .map(|a| a.to_string())
-        .unwrap_or_else(|| format!("{}:{}", ip, port));
+        .unwrap_or_else(|| format!("{ip}:{port}"));
     Some(serde_json::json!({
         "address": address,
         "name": name,
@@ -159,7 +159,7 @@ pub(crate) fn deduplicate_servers(
             .unwrap_or("")
             .to_string();
 
-        let key = format!("{}::{}", name, version);
+        let key = format!("{name}::{version}");
 
         if let Some(existing) = dedup_map.get(&key) {
             let existing_addr = existing
@@ -202,7 +202,7 @@ async fn probe_single(
     health_default_name: &str,
 ) -> Option<serde_json::Value> {
     if is_discovery {
-        let url = format!("http://{}:{}/", host, port);
+        let url = format!("http://{host}:{port}/");
         if let Ok(resp) = client.get(&url).send().await {
             if resp.status().is_success() {
                 if let Ok(body) = resp.json::<serde_json::Value>().await {
@@ -211,8 +211,8 @@ async fn probe_single(
             }
         }
     } else {
-        let info_url = format!("http://{}:{}/api/discover/info", host, port);
-        let health_url = format!("http://{}:{}/health", host, port);
+        let info_url = format!("http://{host}:{port}/api/discover/info");
+        let health_url = format!("http://{host}:{port}/health");
 
         if let Ok(resp) = client.get(&info_url).send().await {
             if resp.status().is_success() {
@@ -354,7 +354,7 @@ fn build_local_probes(
             {
                 continue;
             }
-            let addr = format!("{}:{}", host, port);
+            let addr = format!("{host}:{port}");
             if existing_addrs.contains(&addr) {
                 continue;
             }
@@ -442,9 +442,9 @@ fn build_subnet_probes(
     let mut probes: Vec<(String, u16, bool)> = Vec::new();
     for subnet in subnets {
         for host_part in 1..=254u8 {
-            let ip = format!("{}.{}", subnet, host_part);
+            let ip = format!("{subnet}.{host_part}");
             if discovery_port != 0 {
-                let addr = format!("{}:{}", ip, discovery_port);
+                let addr = format!("{ip}:{discovery_port}");
                 if !existing_addrs.contains(&addr) {
                     probes.push((ip.clone(), discovery_port, true));
                 }
@@ -458,7 +458,7 @@ fn build_subnet_probes(
                 sub_ports.extend(vec![8081, 8082, 8083, 3000]);
             }
             for port in sub_ports {
-                let addr = format!("{}:{}", ip, port);
+                let addr = format!("{ip}:{port}");
                 if !existing_addrs.contains(&addr) {
                     probes.push((ip.clone(), port, false));
                 }

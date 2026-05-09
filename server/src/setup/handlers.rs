@@ -244,8 +244,8 @@ pub async fn init(
     let cost = state.config.auth.bcrypt_cost;
     let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&password_clone, cost))
         .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
-        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {e}")))?;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(

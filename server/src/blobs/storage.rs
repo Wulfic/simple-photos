@@ -18,17 +18,14 @@ pub fn blob_path(root: &Path, user_id: &str, blob_id: &str) -> PathBuf {
         .join(user_prefix)
         .join(user_id)
         .join(blob_prefix)
-        .join(format!("{}.bin", blob_id))
+        .join(format!("{blob_id}.bin"))
 }
 
 /// Relative storage path stored in DB (root can be moved without migration)
 pub fn relative_path(user_id: &str, blob_id: &str) -> String {
     let user_prefix = &user_id[..2.min(user_id.len())];
     let blob_prefix = &blob_id[..2.min(blob_id.len())];
-    format!(
-        "blobs/{}/{}/{}/{}.bin",
-        user_prefix, user_id, blob_prefix, blob_id
-    )
+    format!("blobs/{user_prefix}/{user_id}/{blob_prefix}/{blob_id}.bin")
 }
 
 /// Build the on-disk path for a metadata file: {root}/metadata/{user_id[0..2]}/{user_id}/{blob_id}.json
@@ -37,13 +34,13 @@ pub fn metadata_path(root: &Path, user_id: &str, blob_id: &str) -> PathBuf {
     root.join("metadata")
         .join(user_prefix)
         .join(user_id)
-        .join(format!("{}.json", blob_id))
+        .join(format!("{blob_id}.json"))
 }
 
 /// Relative metadata path stored in DB
 pub fn metadata_relative_path(user_id: &str, blob_id: &str) -> String {
     let user_prefix = &user_id[..2.min(user_id.len())];
-    format!("metadata/{}/{}/{}.json", user_prefix, user_id, blob_id)
+    format!("metadata/{user_prefix}/{user_id}/{blob_id}.json")
 }
 
 /// Write metadata JSON to the metadata subtree.
@@ -58,14 +55,14 @@ pub async fn write_metadata(
     let path = metadata_path(root, user_id, blob_id);
 
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-            AppError::Internal(format!("Failed to create metadata directory: {}", e))
-        })?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to create metadata directory: {e}")))?;
     }
 
     tokio::fs::write(&path, data)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to write metadata: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to write metadata: {e}")))?;
 
     Ok(metadata_relative_path(user_id, blob_id))
 }
@@ -77,8 +74,7 @@ pub async fn delete_metadata(root: &Path, storage_path: &str) -> Result<(), AppE
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(AppError::Internal(format!(
-            "Failed to delete metadata: {}",
-            e
+            "Failed to delete metadata: {e}"
         ))),
     }
 }
@@ -96,20 +92,20 @@ pub async fn write_blob(
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to create blob directory: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to create blob directory: {e}")))?;
     }
 
     let mut file = tokio::fs::File::create(&path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to create blob file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to create blob file: {e}")))?;
 
     file.write_all(data)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to write blob: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to write blob: {e}")))?;
 
     file.flush()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to flush blob: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to flush blob: {e}")))?;
 
     Ok(relative_path(user_id, blob_id))
 }
@@ -119,7 +115,7 @@ pub async fn read_blob(root: &Path, storage_path: &str) -> Result<Vec<u8>, AppEr
     let path = root.join(storage_path);
     tokio::fs::read(&path).await.map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => AppError::NotFound,
-        _ => AppError::Internal(format!("Failed to read blob: {}", e)),
+        _ => AppError::Internal(format!("Failed to read blob: {e}")),
     })
 }
 
@@ -129,7 +125,7 @@ pub async fn delete_blob(root: &Path, storage_path: &str) -> Result<(), AppError
     match tokio::fs::remove_file(&path).await {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(AppError::Internal(format!("Failed to delete blob: {}", e))),
+        Err(e) => Err(AppError::Internal(format!("Failed to delete blob: {e}"))),
     }
 }
 
@@ -155,12 +151,12 @@ pub async fn write_blob_streaming(
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to create blob directory: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to create blob directory: {e}")))?;
     }
 
     let mut file = tokio::fs::File::create(&path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to create blob file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to create blob file: {e}")))?;
 
     let mut hasher = Sha256::new();
     let mut total: u64 = 0;
@@ -170,7 +166,7 @@ pub async fn write_blob_streaming(
     let mut body = body;
     while let Some(frame_result) = body.frame().await {
         let frame =
-            frame_result.map_err(|e| AppError::Internal(format!("Body stream error: {}", e)))?;
+            frame_result.map_err(|e| AppError::Internal(format!("Body stream error: {e}")))?;
         if let Ok(chunk) = frame.into_data() {
             total += chunk.len() as u64;
             hasher.update(&chunk);
@@ -180,8 +176,7 @@ pub async fn write_blob_streaming(
                     tracing::warn!("Failed to clean up partial blob at {:?}: {}", path, rm_err);
                 }
                 return Err(AppError::Internal(format!(
-                    "Failed to write blob chunk: {}",
-                    e
+                    "Failed to write blob chunk: {e}"
                 )));
             }
         }
@@ -196,7 +191,7 @@ pub async fn write_blob_streaming(
                 rm_err
             );
         }
-        return Err(AppError::Internal(format!("Failed to flush blob: {}", e)));
+        return Err(AppError::Internal(format!("Failed to flush blob: {e}")));
     }
 
     let hash_hex = hex::encode(hasher.finalize());

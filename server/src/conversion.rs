@@ -250,7 +250,7 @@ pub async fn convert_file(
     if let Some(parent) = output.parent() {
         tokio::fs::create_dir_all(parent) // codeql[rust/path-injection] -- parent is within server temp dir; ext restricted to alphanumeric at call sites
             .await
-            .map_err(|e| format!("Create output directory: {}", e))?;
+            .map_err(|e| format!("Create output directory: {e}"))?;
     }
 
     let input_str = input.to_str().ok_or("Invalid input path encoding")?;
@@ -288,7 +288,7 @@ pub async fn convert_file(
             let _ = tokio::fs::remove_file(output).await; // codeql[rust/path-injection] -- same as above
             Err("Conversion produced an empty file".into())
         }
-        Err(e) => Err(format!("Output file missing after conversion: {}", e)),
+        Err(e) => Err(format!("Output file missing after conversion: {e}")),
     }
 }
 
@@ -314,7 +314,7 @@ async fn convert_image(input: &str, output: &str) -> bool {
     tracing::debug!(input = %input, "Image conversion: FFmpeg failed, trying ImageMagick");
     let mut cmd = tokio::process::Command::new("convert");
     cmd.args([
-        &format!("{}[0]", input), // [0] = first frame/page
+        &format!("{input}[0]"), // [0] = first frame/page
         "-quality",
         "92",
         "-auto-orient",

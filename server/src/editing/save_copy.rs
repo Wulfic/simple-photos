@@ -127,9 +127,9 @@ pub async fn duplicate_photo(
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("bin");
-    let copy_disk_name = format!("copy-{}.{}", new_id, ext);
+    let copy_disk_name = format!("copy-{new_id}.{ext}");
     let copy_abs = uploads_dir.join(&copy_disk_name);
-    let copy_rel = format!("uploads/{}", copy_disk_name);
+    let copy_rel = format!("uploads/{copy_disk_name}");
 
     // ── Build "Copy of <filename>" display name ──────────────────────────
     let copy_filename = if original.filename.starts_with("Copy of ") {
@@ -191,7 +191,7 @@ pub async fn duplicate_photo(
         // Filename embeds the freshly-generated `new_id` (UUID), preventing
         // predictable-name attacks.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let tmp_path = std::env::temp_dir().join(format!("sp-dup-{}.{}", new_id, ext));
+        let tmp_path = std::env::temp_dir().join(format!("sp-dup-{new_id}.{ext}"));
         tokio::fs::write(&tmp_path, &raw_bytes)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to write temp source: {e}")))?;
@@ -301,7 +301,7 @@ pub async fn duplicate_photo(
     } else {
         "jpg"
     };
-    let thumb_rel = format!(".thumbnails/{}.thumb.{}", new_id, thumb_ext);
+    let thumb_rel = format!(".thumbnails/{new_id}.thumb.{thumb_ext}");
     let thumb_abs = storage_root.join(&thumb_rel);
     let thumb_rel_opt = {
         let mime_clone = original.mime_type.clone();

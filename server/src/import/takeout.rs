@@ -110,7 +110,7 @@ pub async fn scan_takeout(
     let sidecar_set: std::collections::HashSet<String> = sidecar_files.iter().cloned().collect();
 
     for media in &media_files {
-        let supplemental = format!("{}.supplemental-metadata.json", media);
+        let supplemental = format!("{media}.supplemental-metadata.json");
         let simple_json = format!(
             "{}.json",
             media
@@ -294,7 +294,7 @@ pub async fn import_takeout(
 
             let photo_id = Uuid::new_v4().to_string();
             let now = Utc::now().to_rfc3339();
-            let thumb_rel = format!(".thumbnails/{}.thumb.jpg", photo_id);
+            let thumb_rel = format!(".thumbnails/{photo_id}.thumb.jpg");
 
             // Try to read taken_at from sidecar if available
             let mut taken_at = modified.clone();
@@ -303,7 +303,7 @@ pub async fn import_takeout(
 
             // Check for sidecar and extract taken_at / geo if present
             let supplemental_path =
-                media_path.with_file_name(format!("{}.supplemental-metadata.json", filename));
+                media_path.with_file_name(format!("{filename}.supplemental-metadata.json"));
             if let Ok(sidecar_bytes) = tokio::fs::read(&supplemental_path).await {
                 if let Ok(gp) = google_photos::parse_sidecar(&sidecar_bytes) {
                     let record =
@@ -322,10 +322,10 @@ pub async fn import_takeout(
                 tokio::fs::create_dir_all(&uploads_dir).await.ok();
                 let dest = uploads_dir.join(&filename);
                 if let Err(e) = tokio::fs::copy(media_path, &dest).await {
-                    errors.push(format!("Failed to copy {}: {}", filename, e));
+                    errors.push(format!("Failed to copy {filename}: {e}"));
                     continue;
                 }
-                let rel = format!("uploads/{}", filename);
+                let rel = format!("uploads/{filename}");
 
                 sqlx::query(
                     "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
@@ -376,7 +376,7 @@ pub async fn import_takeout(
 
         // Look for Google Photos sidecar: filename.supplemental-metadata.json
         let supplemental_path =
-            media_path.with_file_name(format!("{}.supplemental-metadata.json", filename));
+            media_path.with_file_name(format!("{filename}.supplemental-metadata.json"));
 
         if let Ok(sidecar_bytes) = tokio::fs::read(&supplemental_path).await {
             match google_photos::parse_sidecar(&sidecar_bytes) {
@@ -427,13 +427,12 @@ pub async fn import_takeout(
                     match insert_result {
                         Ok(_) => metadata_imported += 1,
                         Err(e) => {
-                            errors
-                                .push(format!("Metadata DB insert failed for {}: {}", filename, e));
+                            errors.push(format!("Metadata DB insert failed for {filename}: {e}"));
                         }
                     }
                 }
                 Err(e) => {
-                    errors.push(format!("Failed to parse sidecar for {}: {}", filename, e));
+                    errors.push(format!("Failed to parse sidecar for {filename}: {e}"));
                 }
             }
         }

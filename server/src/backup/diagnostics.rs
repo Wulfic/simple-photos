@@ -79,7 +79,7 @@ pub async fn receive_backup_report(
     let server_id = validate_backup_api_key(&state, &headers).await?;
 
     let report_json = serde_json::to_string(&report)
-        .map_err(|e| AppError::Internal(format!("Failed to serialise diagnostics: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialise diagnostics: {e}")))?;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(

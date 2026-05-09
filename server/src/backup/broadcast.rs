@@ -144,7 +144,7 @@ pub fn discover_via_broadcast(timeout: Duration) -> Vec<BroadcastInfo> {
                 };
 
                 let ip = addr.ip();
-                let address = format!("{}:{}", ip, port);
+                let address = format!("{ip}:{port}");
 
                 // Deduplicate
                 if results.iter().any(|r: &BroadcastInfo| r.address == address) {

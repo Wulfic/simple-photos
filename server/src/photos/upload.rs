@@ -86,17 +86,17 @@ pub async fn upload_photo(
             .map(|e| e.chars().filter(|c| c.is_alphanumeric()).collect())
             .filter(|e: &String| !e.is_empty())
             .unwrap_or_else(|| "bin".to_string());
-        let tmp_input = tmp_dir.join(format!("{}_in.{}", conv_id, input_ext));
+        let tmp_input = tmp_dir.join(format!("{conv_id}_in.{input_ext}"));
         let tmp_output = tmp_dir.join(format!("{}_out.{}", conv_id, target.extension));
 
         tokio::fs::create_dir_all(&tmp_dir)
             .await
-            .map_err(|e| AppError::Internal(format!("Create conversion temp dir: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Create conversion temp dir: {e}")))?;
 
         // Write uploaded bytes to temp file for ffmpeg
         tokio::fs::write(&tmp_input, &body)
             .await
-            .map_err(|e| AppError::Internal(format!("Write temp input: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Write temp input: {e}")))?;
 
         // Make this upload visible in the global ConversionBanner so the
         // user knows their HEIC/MKV/TIFF is still in flight — without
@@ -114,7 +114,7 @@ pub async fn upload_photo(
             Ok(()) => {
                 let converted_bytes = tokio::fs::read(&tmp_output)
                     .await
-                    .map_err(|e| AppError::Internal(format!("Read converted file: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Read converted file: {e}")))?;
                 let _ = tokio::fs::remove_file(&tmp_output).await;
                 conversion::progress_finish_one();
 
@@ -138,8 +138,7 @@ pub async fn upload_photo(
                 let _ = tokio::fs::remove_file(&tmp_output).await;
                 conversion::progress_finish_one();
                 return Err(AppError::Internal(format!(
-                    "Media conversion failed for '{}': {}",
-                    filename, e
+                    "Media conversion failed for '{filename}': {e}"
                 )));
             }
         }
@@ -223,7 +222,7 @@ pub async fn upload_photo(
     let uploads_dir = storage_root.join("uploads");
     tokio::fs::create_dir_all(&uploads_dir)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to create uploads directory: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to create uploads directory: {e}")))?;
 
     let mut final_filename = safe_filename.clone();
     let mut counter = 1u32;
@@ -239,7 +238,7 @@ pub async fn upload_photo(
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("jpg");
-        final_filename = format!("{}-{}.{}", stem, counter, ext);
+        final_filename = format!("{stem}-{counter}.{ext}");
         counter += 1;
     }
 
@@ -247,10 +246,10 @@ pub async fn upload_photo(
     let file_path = uploads_dir.join(&final_filename);
     tokio::fs::write(&file_path, &body)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to write photo file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to write photo file: {e}")))?;
 
     // Relative path for DB storage
-    let rel_path = format!("uploads/{}", final_filename);
+    let rel_path = format!("uploads/{final_filename}");
 
     // Register in database
     let photo_id = Uuid::new_v4().to_string();
@@ -261,7 +260,7 @@ pub async fn upload_photo(
     } else {
         "jpg"
     };
-    let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
+    let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
     // Extract metadata — use the file-based extractor which includes ffprobe
     // SAR/DAR correction for videos (imagesize::blob_size returns coded
@@ -462,7 +461,7 @@ pub async fn upload_photo(
                 let blob_id = Uuid::new_v4().to_string();
                 let blob_storage_dir = storage_root.join("blobs");
                 let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
-                let blob_rel = format!("blobs/{}.mp4", blob_id);
+                let blob_rel = format!("blobs/{blob_id}.mp4");
                 let blob_abs = storage_root.join(&blob_rel);
 
                 if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {

@@ -37,8 +37,7 @@ pub fn validate_password(password: &str) -> Result<(), AppError> {
     }
     if password.len() > MAX_PASSWORD_LENGTH {
         return Err(AppError::BadRequest(format!(
-            "Password must not exceed {} characters",
-            MAX_PASSWORD_LENGTH
+            "Password must not exceed {MAX_PASSWORD_LENGTH} characters"
         )));
     }
     let has_upper = password.chars().any(|c| c.is_ascii_uppercase());

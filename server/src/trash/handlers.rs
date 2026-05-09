@@ -90,10 +90,10 @@ pub async fn serve_trash_thumbnail(
 
     let meta = tokio::fs::metadata(&full_path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to read thumbnail: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read thumbnail: {e}")))?;
     let file = tokio::fs::File::open(&full_path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to open thumbnail: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to open thumbnail: {e}")))?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);

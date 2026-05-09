@@ -58,8 +58,8 @@ pub async fn register(
     let cost = state.config.auth.bcrypt_cost;
     let password_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&password_clone, cost))
         .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
-        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {e}")))?;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
@@ -146,8 +146,8 @@ pub async fn login(
     let hash = user.password_hash.clone();
     let valid = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, &hash))
         .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
-        .map_err(|e| AppError::Internal(format!("bcrypt error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))?
+        .map_err(|e| AppError::Internal(format!("bcrypt error: {e}")))?;
 
     if !valid {
         record_failed_login(&state, &user.id, &headers).await;
@@ -218,7 +218,7 @@ pub async fn login_totp(
     validation.set_required_spec_claims(&["exp", "sub"]);
 
     let token_data = decode::<Claims>(&req.totp_session_token, &key, &validation)
-        .map_err(|e| AppError::Unauthorized(format!("Invalid TOTP session token: {}", e)))?;
+        .map_err(|e| AppError::Unauthorized(format!("Invalid TOTP session token: {e}")))?;
 
     if !token_data.claims.totp_required {
         return Err(AppError::BadRequest("Not a TOTP session token".into()));

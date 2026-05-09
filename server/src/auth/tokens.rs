@@ -38,7 +38,7 @@ pub fn create_jwt(
         &claims,
         &EncodingKey::from_secret(secret.as_bytes()),
     )
-    .map_err(|e| AppError::Internal(format!("JWT encoding error: {}", e)))
+    .map_err(|e| AppError::Internal(format!("JWT encoding error: {e}")))
 }
 
 /// Issue a fresh access + refresh token pair for `user_id`.

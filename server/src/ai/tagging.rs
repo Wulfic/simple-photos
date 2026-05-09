@@ -22,8 +22,8 @@ pub async fn apply_face_tag(
     label: Option<&str>,
 ) -> anyhow::Result<()> {
     let tag_name = match label {
-        Some(name) if !name.is_empty() => format!("person:{}", name),
-        _ => format!("person:Unknown Face #{}", cluster_id),
+        Some(name) if !name.is_empty() => format!("person:{name}"),
+        _ => format!("person:Unknown Face #{cluster_id}"),
     };
 
     // Use INSERT OR IGNORE to avoid duplicates
@@ -55,7 +55,7 @@ pub async fn apply_object_tag(
     photo_id: &str,
     class_name: &str,
 ) -> anyhow::Result<()> {
-    let tag_name = format!("object:{}", class_name);
+    let tag_name = format!("object:{class_name}");
 
     sqlx::query(
         "INSERT OR IGNORE INTO photo_tags (photo_id, user_id, tag, created_at) VALUES (?1, ?2, ?3, datetime('now'))"
@@ -107,7 +107,7 @@ pub async fn rename_cluster_tags(
     cluster_id: i64,
     new_label: &str,
 ) -> anyhow::Result<u64> {
-    let new_tag = format!("person:{}", new_label);
+    let new_tag = format!("person:{new_label}");
 
     // Find all photos in this cluster
     let photo_ids: Vec<(String,)> = sqlx::query_as(
@@ -145,8 +145,8 @@ pub async fn rename_cluster_tags(
                 new_tag.clone()
             } else {
                 match label {
-                    Some(l) if !l.is_empty() => format!("person:{}", l),
-                    _ => format!("person:Unknown Face #{}", cid),
+                    Some(l) if !l.is_empty() => format!("person:{l}"),
+                    _ => format!("person:Unknown Face #{cid}"),
                 }
             };
             sqlx::query(
@@ -182,10 +182,10 @@ pub async fn apply_pet_tag(
 ) -> anyhow::Result<()> {
     let tag_name = match cluster_id {
         Some(_) if !label_or_species.is_empty() => {
-            format!("pet:{}", label_or_species)
+            format!("pet:{label_or_species}")
         }
-        Some(cid) => format!("pet:Unknown Pet #{}", cid),
-        None => format!("pet:{}", label_or_species),
+        Some(cid) => format!("pet:Unknown Pet #{cid}"),
+        None => format!("pet:{label_or_species}"),
     };
 
     sqlx::query(
@@ -215,7 +215,7 @@ pub async fn rename_pet_cluster_tags(
     cluster_id: i64,
     new_label: &str,
 ) -> anyhow::Result<u64> {
-    let new_tag = format!("pet:{}", new_label);
+    let new_tag = format!("pet:{new_label}");
 
     let photo_ids: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT photo_id FROM pet_detections WHERE cluster_id = ?1 AND user_id = ?2",
@@ -253,8 +253,8 @@ pub async fn rename_pet_cluster_tags(
                 new_tag.clone()
             } else {
                 match label {
-                    Some(l) if !l.is_empty() => format!("pet:{}", l),
-                    _ => format!("pet:Unknown {} #{}", species, cid),
+                    Some(l) if !l.is_empty() => format!("pet:{l}"),
+                    _ => format!("pet:Unknown {species} #{cid}"),
                 }
             };
             sqlx::query(

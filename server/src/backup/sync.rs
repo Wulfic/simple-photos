@@ -287,7 +287,7 @@ pub async fn force_sync_from_primary(
         .timeout(std::time::Duration::from_secs(30))
         .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
-        .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("HTTP client error: {e}")))?;
 
     let url = format!(
         "{}/api/backup/request-sync",
@@ -299,10 +299,7 @@ pub async fn force_sync_from_primary(
         .send()
         .await
         .map_err(|e| {
-            AppError::Internal(format!(
-                "Failed to contact primary server at {}: {}",
-                url, e
-            ))
+            AppError::Internal(format!("Failed to contact primary server at {url}: {e}"))
         })?;
 
     if !resp.status().is_success() {

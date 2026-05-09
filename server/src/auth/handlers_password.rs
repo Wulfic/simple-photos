@@ -43,8 +43,8 @@ pub async fn change_password(
     let hash = current_hash.clone();
     let valid = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, &hash))
         .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
-        .map_err(|e| AppError::Internal(format!("bcrypt error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))?
+        .map_err(|e| AppError::Internal(format!("bcrypt error: {e}")))?;
 
     if !valid {
         audit::log(
@@ -64,8 +64,8 @@ pub async fn change_password(
     let cost = state.config.auth.bcrypt_cost;
     let new_hash = tokio::task::spawn_blocking(move || bcrypt::hash(&new_pw, cost))
         .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
-        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {e}")))?;
 
     // Begin transaction — UPDATE password + revoke tokens must be atomic.
     // If the password is updated but token revocation fails, old sessions
@@ -124,8 +124,8 @@ pub async fn verify_password(
     let hash = current_hash.clone();
     let valid = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, &hash))
         .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
-        .map_err(|e| AppError::Internal(format!("bcrypt error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))?
+        .map_err(|e| AppError::Internal(format!("bcrypt error: {e}")))?;
 
     if !valid {
         return Err(AppError::Unauthorized("Password is incorrect".into()));

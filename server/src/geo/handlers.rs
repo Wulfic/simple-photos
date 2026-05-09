@@ -436,7 +436,7 @@ pub async fn list_memories(
         .map(|(city, country, _code, date_str, count, first_id, thumb)| {
             // Format a human-readable date label
             let date_label = format_memory_date(&date_str);
-            let name = format!("{} on {}", city, date_label);
+            let name = format!("{city} on {date_label}");
             let id = format!("{}_{}", city.to_lowercase().replace(' ', "-"), date_str);
 
             Memory {
@@ -810,7 +810,7 @@ pub async fn scrub_geo_data(
 
     let count = super::scrub::scrub_geolocation_for_user(&state.pool, &auth.user_id)
         .await
-        .map_err(|e| AppError::Internal(format!("Scrub failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Scrub failed: {e}")))?;
 
     Ok(Json(serde_json::json!({
         "scrubbed_photos": count,

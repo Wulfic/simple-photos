@@ -330,7 +330,7 @@ pub async fn unmount_smb(mount_point: &Path) -> Result<(), String> {
     }
     try_command("sudo", &["-n", "umount", mp.as_str()])
         .await
-        .map_err(|e| format!("umount failed: {}", e))
+        .map_err(|e| format!("umount failed: {e}"))
 }
 
 /// Lightweight reachability probe — runs `smbclient -L //host -U user%pass -t 5`
@@ -346,7 +346,7 @@ pub async fn probe_smb(target: &SmbTarget) -> Result<(), String> {
         cmd.arg("-W").arg(d);
     }
     let user_pass = match (&target.username, &target.password) {
-        (Some(u), Some(p)) => format!("{}%{}", u, p),
+        (Some(u), Some(p)) => format!("{u}%{p}"),
         (Some(u), None) => u.clone(),
         _ => "%".to_string(), // anonymous / guest
     };
@@ -360,14 +360,14 @@ pub async fn probe_smb(target: &SmbTarget) -> Result<(), String> {
         if e.kind() == std::io::ErrorKind::NotFound {
             "smbclient not installed — install the `smbclient` package and try again".to_string()
         } else {
-            format!("Failed to run smbclient: {}", e)
+            format!("Failed to run smbclient: {e}")
         }
     })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        return Err(condense_smb_error(&format!("{}\n{}", stderr, stdout)));
+        return Err(condense_smb_error(&format!("{stderr}\n{stdout}")));
     }
     Ok(())
 }
@@ -388,10 +388,10 @@ pub fn decrypt_password(ciphertext_b64: &str, jwt_secret: &str) -> Result<String
     use base64::Engine;
     let ct = base64::engine::general_purpose::STANDARD
         .decode(ciphertext_b64)
-        .map_err(|e| format!("Invalid base64 in stored SMB password: {}", e))?;
+        .map_err(|e| format!("Invalid base64 in stored SMB password: {e}"))?;
     let key = derive_key(jwt_secret);
     let pt = crate::crypto::decrypt(&key, &ct)?;
-    String::from_utf8(pt).map_err(|e| format!("Invalid UTF-8 in decrypted password: {}", e))
+    String::from_utf8(pt).map_err(|e| format!("Invalid UTF-8 in decrypted password: {e}"))
 }
 
 // ── Internals ───────────────────────────────────────────────────────────────
@@ -453,19 +453,19 @@ async fn write_credentials_file(target: &SmbTarget, path: &Path) -> Result<(), S
         target.password.as_deref().unwrap_or("")
     ));
     if let Some(d) = &target.domain {
-        body.push_str(&format!("domain={}\n", d));
+        body.push_str(&format!("domain={d}\n"));
     }
 
     tokio::fs::write(path, body)
         .await
-        .map_err(|e| format!("Cannot write SMB credentials file: {}", e))?;
+        .map_err(|e| format!("Cannot write SMB credentials file: {e}"))?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
         std::fs::set_permissions(path, perms)
-            .map_err(|e| format!("Cannot set 0600 on credentials file: {}", e))?;
+            .map_err(|e| format!("Cannot set 0600 on credentials file: {e}"))?;
     }
     Ok(())
 }
@@ -542,7 +542,7 @@ async fn run_mount_command(source: &str, mount_point: &Path, opts: &str) -> Resu
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Err("mount.cifs not found — install the `cifs-utils` package and try again".into())
         }
-        Err(e) => Err(format!("Failed to spawn mount.cifs: {}", e)),
+        Err(e) => Err(format!("Failed to spawn mount.cifs: {e}")),
     }
 }
 
@@ -569,32 +569,30 @@ async fn try_command(prog: &str, args: &[&str]) -> Result<(), String> {
 /// though we never feed tokens through a shell.
 fn validate_token(value: &str, kind: &str) -> Result<(), String> {
     if value.is_empty() {
-        return Err(format!("SMB {} is empty", kind));
+        return Err(format!("SMB {kind} is empty"));
     }
     if value.len() > 255 {
-        return Err(format!("SMB {} is too long (max 255 chars)", kind));
+        return Err(format!("SMB {kind} is too long (max 255 chars)"));
     }
     if value.starts_with('-') {
-        return Err(format!("SMB {} must not start with '-'", kind));
+        return Err(format!("SMB {kind} must not start with '-'"));
     }
     let ok = value.chars().all(|c| {
         c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '$' | '@' | '\\' | ' ')
     });
     if !ok {
         return Err(format!(
-            "SMB {} contains illegal characters — allowed: letters, digits, . - _ $ @ \\ space",
-            kind
+            "SMB {kind} contains illegal characters — allowed: letters, digits, . - _ $ @ \\ space"
         ));
     }
     if value.contains("..") {
-        return Err(format!("SMB {} must not contain '..'", kind));
+        return Err(format!("SMB {kind} must not contain '..'"));
     }
     // No mount-option separators — defence in depth. None of these are valid
     // in a hostname / share / username / domain anyway.
     if value.contains('=') || value.contains(',') {
         return Err(format!(
-            "SMB {} contains illegal mount-option separator (= or ,)",
-            kind
+            "SMB {kind} contains illegal mount-option separator (= or ,)"
         ));
     }
     Ok(())

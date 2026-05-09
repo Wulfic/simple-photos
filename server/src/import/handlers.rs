@@ -45,7 +45,7 @@ pub async fn import_metadata(
 
     // Serialize the full Google Photos JSON for archival in the metadata/ dir
     let raw_json = serde_json::to_vec_pretty(&req.metadata)
-        .map_err(|e| AppError::Internal(format!("Failed to serialize metadata: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialize metadata: {e}")))?;
 
     // NOTE: For server-side import we store the plaintext metadata JSON;
     // the client migration process will encrypt it later.
@@ -207,7 +207,7 @@ async fn import_single_metadata(
     );
 
     let raw_json = serde_json::to_vec_pretty(&entry.metadata)
-        .map_err(|e| AppError::Internal(format!("Failed to serialize metadata: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialize metadata: {e}")))?;
 
     let storage_path =
         blob_storage::write_metadata(storage_root, user_id, meta_id, &raw_json).await?;

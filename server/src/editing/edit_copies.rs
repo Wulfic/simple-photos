@@ -57,7 +57,7 @@ pub async fn create_edit_copy(
         .map(|n| sanitize::sanitize_freeform(n, 128))
         .unwrap_or_else(|| {
             let now = Utc::now().format("%Y-%m-%d %H:%M").to_string();
-            format!("Copy {}", now)
+            format!("Copy {now}")
         });
 
     sqlx::query(

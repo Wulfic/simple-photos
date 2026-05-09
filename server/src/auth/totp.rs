@@ -33,15 +33,15 @@ pub fn verify_totp_code(
         30,
         secret
             .to_bytes()
-            .map_err(|e| AppError::Internal(format!("TOTP secret error: {}", e)))?,
+            .map_err(|e| AppError::Internal(format!("TOTP secret error: {e}")))?,
         Some("SimplePhotos".to_string()),
         account.to_string(),
     )
-    .map_err(|e| AppError::Internal(format!("TOTP error: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("TOTP error: {e}")))?;
 
     if totp
         .check_current(code)
-        .map_err(|e| AppError::Internal(format!("TOTP time error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("TOTP time error: {e}")))?
     {
         Ok(())
     } else {

@@ -102,7 +102,7 @@ pub async fn collect_database_stats(pool: &SqlitePool, db_path: &Path) -> Databa
     ];
     let mut table_counts: HashMap<String, i64> = HashMap::new();
     for table in tables {
-        let sql = format!("SELECT COUNT(*) FROM {}", table);
+        let sql = format!("SELECT COUNT(*) FROM {table}");
         let count: i64 = sqlx::query_scalar(&sql).fetch_one(pool).await.unwrap_or(0);
         table_counts.insert(table.to_string(), count);
     }

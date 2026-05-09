@@ -66,8 +66,7 @@ pub async fn start_export(
     let max_size: i64 = 53_687_091_200; // 50 GB
     if body.size_limit < min_size || body.size_limit > max_size {
         return Err(AppError::BadRequest(format!(
-            "size_limit must be between {} and {} bytes",
-            min_size, max_size
+            "size_limit must be between {min_size} and {max_size} bytes"
         )));
     }
 
@@ -180,7 +179,7 @@ pub async fn export_status(
         })
         .map(
             |(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
-                download_url: format!("/api/export/files/{}/download", id),
+                download_url: format!("/api/export/files/{id}/download"),
                 id,
                 job_id,
                 filename,
@@ -226,7 +225,7 @@ pub async fn list_export_files(
         .into_iter()
         .map(
             |(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
-                download_url: format!("/api/export/files/{}/download", id),
+                download_url: format!("/api/export/files/{id}/download"),
                 id,
                 job_id,
                 filename,
@@ -272,11 +271,11 @@ pub async fn download_export_file(
 
     let meta = tokio::fs::metadata(&full_path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to stat export file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to stat export file: {e}")))?;
 
     let file = tokio::fs::File::open(&full_path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to open export file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to open export file: {e}")))?;
 
     let stream = tokio_util::io::ReaderStream::with_capacity(file, 256 * 1024);
     let body = Body::from_stream(stream);
@@ -286,10 +285,9 @@ pub async fn download_export_file(
         .header("Content-Type", "application/zip")
         .header(
             "Content-Disposition",
-            HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-                .unwrap_or_else(|_| {
-                    HeaderValue::from_static("attachment; filename=\"export.zip\"")
-                }),
+            HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")).unwrap_or_else(
+                |_| HeaderValue::from_static("attachment; filename=\"export.zip\""),
+            ),
         )
         .header("Content-Length", meta.len())
         .body(body)

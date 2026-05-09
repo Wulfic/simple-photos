@@ -69,7 +69,7 @@ pub(crate) async fn run_recovery(
     // ── Phase 2: Restore photos ─────────────────────────────────────────
 
     // Fetch remote photo list
-    let mut list_req = client.get(format!("{}/backup/list", base_url));
+    let mut list_req = client.get(format!("{base_url}/backup/list"));
     if let Some(ref key) = api_key {
         list_req = list_req.header("X-API-Key", key.as_str());
     }
@@ -84,7 +84,7 @@ pub(crate) async fn run_recovery(
                     "error",
                     0,
                     0,
-                    Some(&format!("Failed to parse backup photo list: {}", e)),
+                    Some(&format!("Failed to parse backup photo list: {e}")),
                 )
                 .await;
                 return;
@@ -109,7 +109,7 @@ pub(crate) async fn run_recovery(
                 "error",
                 0,
                 0,
-                Some(&format!("Failed to connect to backup server: {}", e)),
+                Some(&format!("Failed to connect to backup server: {e}")),
             )
             .await;
             return;
@@ -238,7 +238,7 @@ pub(crate) async fn run_recovery(
         // the backup so delta-sync and re-recovery can deduplicate correctly.
         let _now = Utc::now().to_rfc3339();
         let thumb_filename = format!("{}.thumb.jpg", photo.id);
-        let thumb_rel = format!(".thumbnails/{}", thumb_filename);
+        let thumb_rel = format!(".thumbnails/{thumb_filename}");
 
         // INSERT OR IGNORE handles id conflicts (re-recovery idempotency).
         // The WHERE NOT EXISTS guard prevents creating a duplicate when the
@@ -339,7 +339,7 @@ async fn recover_users(
     api_key: &Option<String>,
     server_name: &str,
 ) -> usize {
-    let mut req = client.get(format!("{}/backup/list-users-full", base_url));
+    let mut req = client.get(format!("{base_url}/backup/list-users-full"));
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());
     }

@@ -65,7 +65,7 @@ impl FromRequestParts<AppState> for AuthUser {
         validation.set_required_spec_claims(&["exp", "sub"]);
 
         let token_data = decode::<Claims>(&token, &key, &validation)
-            .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
+            .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
         // Reject TOTP session tokens — they represent a half-authenticated
         // state (password OK, 2FA pending) and must not access protected routes.

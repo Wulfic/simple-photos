@@ -68,17 +68,17 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
 
     // Pre-seed with our own addresses so we never list ourselves
     let mut existing_addrs = std::collections::HashSet::new();
-    existing_addrs.insert(format!("127.0.0.1:{}", our_port));
-    existing_addrs.insert(format!("localhost:{}", our_port));
+    existing_addrs.insert(format!("127.0.0.1:{our_port}"));
+    existing_addrs.insert(format!("localhost:{our_port}"));
     if let Ok(url) = reqwest::Url::parse(&state.config.server.base_url) {
         if let Some(host) = url.host_str() {
             let port = url.port().unwrap_or(our_port);
-            existing_addrs.insert(format!("{}:{}", host, port));
+            existing_addrs.insert(format!("{host}:{port}"));
         }
     }
     // Add ALL local interface IPs (Docker bridge, VPN, etc.)
     for ip in broadcast::get_all_local_ips() {
-        existing_addrs.insert(format!("{}:{}", ip, our_port));
+        existing_addrs.insert(format!("{ip}:{our_port}"));
     }
 
     // ── Phase 0: UDP broadcast discovery (1s) ────────────────────────────
@@ -166,7 +166,7 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
             {
                 continue;
             }
-            let addr = format!("{}:{}", host, port);
+            let addr = format!("{host}:{port}");
             if existing_addrs.contains(&addr) {
                 continue;
             }
@@ -238,15 +238,15 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
     let mut probes: Vec<(String, u16, bool)> = Vec::new();
     for subnet in &subnets {
         for host_id in 1..=254u8 {
-            let ip = format!("{}.{}", subnet, host_id);
+            let ip = format!("{subnet}.{host_id}");
             if discovery_port != 0 {
-                let addr = format!("{}:{}", ip, discovery_port);
+                let addr = format!("{ip}:{discovery_port}");
                 if !existing_addrs.contains(&addr) {
                     probes.push((ip, discovery_port, true));
                 }
             } else {
                 for &port in &[our_port, 3000u16, 8080, 8081, 8082, 8083] {
-                    let addr = format!("{}:{}", ip, port);
+                    let addr = format!("{ip}:{port}");
                     if !existing_addrs.contains(&addr) {
                         probes.push((ip.clone(), port, false));
                     }
@@ -264,7 +264,7 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
             if is_discovery {
                 probe_discovery_port(&c, &ip, port).await
             } else {
-                probe_health_only(&c, &format!("{}:{}", ip, port)).await
+                probe_health_only(&c, &format!("{ip}:{port}")).await
             }
         });
     }
@@ -356,7 +356,7 @@ async fn discover_servers_inner(state: &AppState) -> Vec<DiscoveredServer> {
 /// Tries `/api/discover/info` first (returns API key for localhost),
 /// then falls back to `/health`.
 async fn probe_server(client: &reqwest::Client, host: &str, port: u16) -> Option<DiscoveredServer> {
-    let info_url = format!("http://{}:{}/api/discover/info", host, port);
+    let info_url = format!("http://{host}:{port}/api/discover/info");
 
     // Primary probe: /api/discover/info (loopback-only, returns API key)
     if let Ok(resp) = client.get(&info_url).send().await {
@@ -383,7 +383,7 @@ async fn probe_server(client: &reqwest::Client, host: &str, port: u16) -> Option
                         .and_then(|m| m.as_str())
                         .map(|s| s.to_string());
                     return Some(DiscoveredServer {
-                        address: format!("{}:{}", host, port),
+                        address: format!("{host}:{port}"),
                         name,
                         version,
                         mode,
@@ -394,12 +394,12 @@ async fn probe_server(client: &reqwest::Client, host: &str, port: u16) -> Option
         }
     }
     // Fallback: /health (works for all servers, any network position)
-    probe_health_only(client, &format!("{}:{}", host, port)).await
+    probe_health_only(client, &format!("{host}:{port}")).await
 }
 
 /// Probe a single address via `/health` endpoint only.
 async fn probe_health_only(client: &reqwest::Client, addr: &str) -> Option<DiscoveredServer> {
-    let url = format!("http://{}/health", addr);
+    let url = format!("http://{addr}/health");
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => {
             if let Ok(body) = resp.json::<serde_json::Value>().await {
@@ -439,7 +439,7 @@ async fn probe_discovery_port(
     host: &str,
     discovery_port: u16,
 ) -> Option<DiscoveredServer> {
-    let url = format!("http://{}:{}/", host, discovery_port);
+    let url = format!("http://{host}:{discovery_port}/");
     match client.get(&url).send().await {
         Ok(resp) if resp.status().is_success() => {
             if let Ok(body) = resp.json::<serde_json::Value>().await {
@@ -465,7 +465,7 @@ async fn probe_discovery_port(
                         .and_then(|m| m.as_str())
                         .map(|s| s.to_string());
                     return Some(DiscoveredServer {
-                        address: format!("{}:{}", host, actual_port),
+                        address: format!("{host}:{actual_port}"),
                         name,
                         version,
                         mode,

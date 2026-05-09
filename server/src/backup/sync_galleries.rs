@@ -117,7 +117,7 @@ pub async fn sync_secure_galleries_to_backup(
     });
 
     let mut req = client
-        .post(format!("{}/backup/sync-secure-galleries", base_url))
+        .post(format!("{base_url}/backup/sync-secure-galleries"))
         .json(&body);
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());

@@ -56,7 +56,7 @@ pub async fn run_export(
             tracing::info!(job_id = %job_id, "Export job completed");
         }
         Err(e) => {
-            let error_msg = format!("{}", e);
+            let error_msg = format!("{e}");
             let now = chrono::Utc::now().to_rfc3339();
             let _ = sqlx::query(
                 "UPDATE export_jobs SET status = 'failed', completed_at = ?, error = ? WHERE id = ?",
@@ -309,8 +309,8 @@ async fn do_export(
 
             // Organise into sub-folders by type.
             let zip_entry_name = match entry.blob_type.as_str() {
-                "album_manifest" => format!("metadata/{}", filename),
-                _ => format!("photos/{}", filename),
+                "album_manifest" => format!("metadata/{filename}"),
+                _ => format!("photos/{filename}"),
             };
 
             // Deduplicate: if this name was already used in the current zip,
@@ -330,7 +330,7 @@ async fn do_export(
                             &zip_entry_name[dot_pos..]
                         )
                     } else {
-                        format!("{}_({})", zip_entry_name, count)
+                        format!("{zip_entry_name}_({count})")
                     }
                 }
             };
@@ -363,7 +363,7 @@ fn new_zip_writer(
     export_dir: &PathBuf,
     part_number: u32,
 ) -> Result<zip::ZipWriter<std::fs::File>, anyhow::Error> {
-    let filename = format!("export_part_{:03}.zip", part_number);
+    let filename = format!("export_part_{part_number:03}.zip");
     let path = export_dir.join(&filename);
     let file = std::fs::File::create(&path)?;
     Ok(zip::ZipWriter::new(file))
@@ -375,7 +375,7 @@ async fn register_zip_file(
     export_dir: &PathBuf,
     part_number: u32,
 ) -> Result<(), anyhow::Error> {
-    let filename = format!("export_part_{:03}.zip", part_number);
+    let filename = format!("export_part_{part_number:03}.zip");
     let full_path = export_dir.join(&filename);
 
     let size_bytes = tokio::fs::metadata(&full_path)
@@ -390,7 +390,7 @@ async fn register_zip_file(
 
     // Store relative path from storage root
     let job_id_for_path = job_id.to_string();
-    let relative_path = format!("exports/{}/{}", job_id_for_path, filename);
+    let relative_path = format!("exports/{job_id_for_path}/{filename}");
 
     sqlx::query(
         "INSERT INTO export_files (id, job_id, filename, file_path, size_bytes, created_at, expires_at) \

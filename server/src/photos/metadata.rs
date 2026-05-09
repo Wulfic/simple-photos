@@ -69,7 +69,7 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                     if md.starts_with(&mk) {
                         Some(md)
                     } else {
-                        Some(format!("{} {}", mk, md))
+                        Some(format!("{mk} {md}"))
                     }
                 }
                 (None, Some(md)) => Some(md.trim_matches('"').trim().to_string()),
@@ -227,7 +227,7 @@ pub(crate) fn extract_media_metadata_from_bytes(
                 if md.starts_with(&mk) {
                     Some(md)
                 } else {
-                    Some(format!("{} {}", mk, md))
+                    Some(format!("{mk} {md}"))
                 }
             }
             (None, Some(md)) => Some(md.trim_matches('"').trim().to_string()),
@@ -919,7 +919,7 @@ pub(crate) fn extract_motion_video(data: &[u8], offset: u64) -> Option<Vec<u8>> 
 /// Looks for patterns like `AttrName="12345"` or `AttrName='12345'`.
 fn extract_xmp_int_attr(text: &str, attr_name: &str) -> Option<u64> {
     // Try pattern: AttrName="value"
-    let pattern = format!("{}=\"", attr_name);
+    let pattern = format!("{attr_name}=\"");
     if let Some(pos) = text.find(&pattern) {
         let start = pos + pattern.len();
         let rest = &text[start..];
@@ -928,7 +928,7 @@ fn extract_xmp_int_attr(text: &str, attr_name: &str) -> Option<u64> {
         }
     }
     // Try pattern: AttrName='value'
-    let pattern = format!("{}='", attr_name);
+    let pattern = format!("{attr_name}='");
     if let Some(pos) = text.find(&pattern) {
         let start = pos + pattern.len();
         let rest = &text[start..];
@@ -941,7 +941,7 @@ fn extract_xmp_int_attr(text: &str, attr_name: &str) -> Option<u64> {
 
 /// Extract a string attribute value from XMP text.
 fn extract_xmp_str_attr(text: &str, attr_name: &str) -> Option<String> {
-    let pattern = format!("{}=\"", attr_name);
+    let pattern = format!("{attr_name}=\"");
     if let Some(pos) = text.find(&pattern) {
         let start = pos + pattern.len();
         let rest = &text[start..];
@@ -952,7 +952,7 @@ fn extract_xmp_str_attr(text: &str, attr_name: &str) -> Option<String> {
             }
         }
     }
-    let pattern = format!("{}='", attr_name);
+    let pattern = format!("{attr_name}='");
     if let Some(pos) = text.find(&pattern) {
         let start = pos + pattern.len();
         let rest = &text[start..];

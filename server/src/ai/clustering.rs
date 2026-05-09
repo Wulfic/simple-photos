@@ -262,15 +262,13 @@ mod tests {
 
         assert_eq!(
             cid[&101], cid[&102],
-            "near-identical 512-d embeddings (cos sim {:.3}) must share a cluster, \
-             clustering ignored the embedding vectors",
-            sim_close
+            "near-identical 512-d embeddings (cos sim {sim_close:.3}) must share a cluster, \
+             clustering ignored the embedding vectors"
         );
         assert_ne!(
             cid[&101], cid[&103],
-            "orthogonal 512-d embeddings (cos sim {:.3}) must NOT share a cluster, \
-             clustering used a proxy instead of cosine similarity",
-            sim_far
+            "orthogonal 512-d embeddings (cos sim {sim_far:.3}) must NOT share a cluster, \
+             clustering used a proxy instead of cosine similarity"
         );
     }
 

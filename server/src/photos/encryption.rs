@@ -57,7 +57,7 @@ pub async fn store_encryption_key(
     // Wrap and store the key
     crate::crypto::store_wrapped_key(&state.pool, &key_bytes, &state.config.auth.jwt_secret)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to store encryption key: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to store encryption key: {e}")))?;
 
     tracing::info!(user_id = %auth.user_id, "Encryption key stored by admin");
 

@@ -12,7 +12,7 @@ use super::models::{GooglePhotosMetadata, PhotoMetadataRecord};
 
 /// Parse a Google Photos JSON sidecar file from raw bytes.
 pub fn parse_sidecar(data: &[u8]) -> Result<GooglePhotosMetadata, String> {
-    serde_json::from_slice(data).map_err(|e| format!("Invalid Google Photos JSON: {}", e))
+    serde_json::from_slice(data).map_err(|e| format!("Invalid Google Photos JSON: {e}"))
 }
 
 /// Convert a Google Photos metadata struct into a normalised `PhotoMetadataRecord`.
