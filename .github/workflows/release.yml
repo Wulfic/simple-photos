@@ -86,12 +86,14 @@ jobs:
           retention-days: 1
 
   # ───────────────────────────────────────────────────────────────────────
-  #  .deb package — Ubuntu 22.04 (glibc 2.35) gives us the broadest compat
-  #  window down to Debian 12 / Ubuntu 22.04+.
+  #  .deb package — Ubuntu 24.04 is required because the ORT prebuilt
+  #  onnxruntime C++ library references glibc ≥2.38 symbols
+  #  (`__isoc23_strtol`); building on 22.04 fails to link. Produced .deb
+  #  therefore targets Ubuntu 24.04+ / Debian 13+.
   # ───────────────────────────────────────────────────────────────────────
   deb:
     needs: [version, web]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -188,16 +190,25 @@ jobs:
         working-directory: server
         run: cargo build --release --no-default-features --locked
 
-      - name: Fetch NSSM 2.24
+      - name: Fetch NSSM 2.24 (via Chocolatey for reliability)
         shell: pwsh
         run: |
-          $url = "https://nssm.cc/release/nssm-2.24.zip"
-          $zip = "$env:RUNNER_TEMP\nssm.zip"
-          $dst = "$env:RUNNER_TEMP\nssm"
-          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
-          Expand-Archive -Path $zip -DestinationPath $dst -Force
+          # nssm.cc is frequently 503; use the Chocolatey package which
+          # ships an identical 2.24 binary, then copy it into our vendor dir.
+          choco install nssm --version=2.24.101.20180116 -y --no-progress
+          $nssmExe = (Get-Command nssm.exe -ErrorAction SilentlyContinue).Source
+          if (-not $nssmExe) {
+            $nssmExe = "C:\ProgramData\chocolatey\lib\NSSM\tools\nssm.exe"
+          }
+          if (-not (Test-Path $nssmExe)) {
+            Write-Error "nssm.exe not found after choco install"
+            exit 1
+          }
           New-Item -ItemType Directory -Path packaging\windows\vendor -Force | Out-Null
-          Copy-Item "$dst\nssm-2.24\win64\nssm.exe" packaging\windows\vendor\nssm.exe -Force
+          # Force the 64-bit binary (Chocolatey symlinks the architecture-correct one).
+          $arch64 = Join-Path (Split-Path $nssmExe) 'nssm.exe'
+          Copy-Item $arch64 packaging\windows\vendor\nssm.exe -Force
+          & packaging\windows\vendor\nssm.exe version
 
       - name: Install Inno Setup 6
         shell: pwsh

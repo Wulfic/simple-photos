@@ -117,7 +117,7 @@ recognition, reverse geocoding, multi-user albums, and a Progressive Web App. \
 The first-run setup wizard configures the photo storage location."""
 section = "web"
 priority = "optional"
-depends = "$auto, libc6, libssl3 | libssl1.1, ca-certificates, ffmpeg, adduser"
+depends = "$auto, ca-certificates, ffmpeg, adduser"
 recommends = "nvidia-cuda-toolkit"
 suggests = "cifs-utils"
 assets = [
