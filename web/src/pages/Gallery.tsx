@@ -276,10 +276,10 @@ export default function Gallery() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <AppHeader />
 
-      <main className="p-4">
-        {/* ── Selection mode bar (sticky just under the fixed AppHeader) ── */}
+      <main className={`p-4 ${selectionMode && !isBackupView && !isBackupServer ? "pt-16" : ""}`}>
+        {/* ── Selection mode bar (fixed just under the AppHeader, always visible) ── */}
         {selectionMode && !isBackupView && !isBackupServer && (
-          <div className="sticky top-14 z-40 -mx-4 mb-4 flex items-center justify-between bg-gray-200/95 dark:bg-gray-800/95 backdrop-blur px-4 py-2 shadow-sm">
+          <div className="fixed top-14 left-0 right-0 z-40 flex items-center justify-between bg-gray-200/95 dark:bg-gray-800/95 backdrop-blur px-4 py-2 shadow-sm">
             <div className="flex items-center gap-3">
               <button onClick={clearSelection} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white transition-colors" aria-label="Cancel selection">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
