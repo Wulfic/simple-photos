@@ -253,6 +253,53 @@ jobs:
               packaging\windows\simple-photos.iss
           Get-ChildItem dist
 
+      - name: Smoke-test installer (silent install + verify + uninstall)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup  = (Get-ChildItem dist -Filter '*.exe' | Select-Object -First 1).FullName
+          $instDir = "$env:ProgramFiles\SimplePhotos"
+          $logFile = "$env:RUNNER_TEMP\sp-install.log"
+          Write-Host "Installing $setup silently to $instDir"
+          # /VERYSILENT /SUPPRESSMSGBOXES → no UI; /NORESTART → never reboot the runner;
+          # /TASKS="" → install only the default file set (no service / firewall /
+          # asset download — those need privileges + network we don't want to depend on).
+          $proc = Start-Process -FilePath $setup `
+              -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',
+                              '/TASKS=""',"/LOG=$logFile") `
+              -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "--- install log ---"
+            if (Test-Path $logFile) { Get-Content $logFile | Select-Object -Last 80 }
+            throw "Installer exited with code $($proc.ExitCode)"
+          }
+
+          Write-Host "--- installed tree ---"
+          Get-ChildItem -Recurse $instDir | Select-Object FullName | Format-Table -AutoSize
+
+          # Required files must be present.
+          $required = @(
+            "$instDir\simple-photos-server.exe",
+            "$instDir\web\index.html",
+            "$instDir\bin\nssm.exe",
+            "$instDir\migrations",
+            "$instDir\unins000.exe"
+          )
+          foreach ($p in $required) {
+            if (-not (Test-Path $p)) { throw "Missing post-install path: $p" }
+          }
+
+          # The server binary should at least respond to --version / --help.
+          & "$instDir\simple-photos-server.exe" --help | Select-Object -First 5
+          if ($LASTEXITCODE -ne 0) { throw "simple-photos-server.exe --help exited $LASTEXITCODE" }
+
+          Write-Host "--- uninstalling ---"
+          $uninst = "$instDir\unins000.exe"
+          $proc = Start-Process -FilePath $uninst `
+              -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') `
+              -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Uninstaller exited with code $($proc.ExitCode)" }
+
       - uses: actions/upload-artifact@v4
         with:
           name: simple-photos-windows
@@ -340,6 +387,36 @@ jobs:
           fi
           cp "$src" "dist/simple-photos-${{ needs.version.outputs.version }}.apk"
           ls -la dist/
+
+      - name: Smoke-test APK (structure, signature, manifest)
+        run: |
+          set -euo pipefail
+          APK="dist/simple-photos-${{ needs.version.outputs.version }}.apk"
+          BUILD_TOOLS_DIR=$(ls -d "$ANDROID_SDK_ROOT/build-tools"/* | sort -V | tail -1)
+          AAPT="$BUILD_TOOLS_DIR/aapt"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+
+          echo "--- aapt badging ---"
+          "$AAPT" dump badging "$APK" | head -20
+
+          # Confirm the package id is what we ship.
+          PKG=$("$AAPT" dump badging "$APK" | awk -F"'" '/^package:/ {print $2}')
+          if [[ "$PKG" != "com.simplephotos" ]]; then
+            echo "::error::Unexpected APK package id: $PKG (want com.simplephotos)"
+            exit 1
+          fi
+
+          # Required components must be declared in the manifest.
+          MANIFEST=$("$AAPT" dump xmltree "$APK" AndroidManifest.xml)
+          for needle in "MainActivity" "INTERNET"; do
+            if ! echo "$MANIFEST" | grep -q "$needle"; then
+              echo "::error::APK manifest missing $needle"
+              exit 1
+            fi
+          done
+
+          echo "--- apksigner verify ---"
+          "$APKSIGNER" verify --print-certs "$APK"
 
       - uses: actions/upload-artifact@v4
         with:
