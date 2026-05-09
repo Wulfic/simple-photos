@@ -81,7 +81,7 @@ pub async fn pair(
         .timeout(std::time::Duration::from_secs(15))
         .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
-        .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("HTTP client error: {e}")))?;
 
     // Authenticate against the primary (with optional 2FA)
     let remote_token = match authenticate_with_primary(
@@ -276,17 +276,17 @@ pub async fn verify_backup(
     let base_url = if base.starts_with("http://") || base.starts_with("https://") {
         base.to_string()
     } else {
-        format!("http://{}", base)
+        format!("http://{base}")
     };
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
-        .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("HTTP client error: {e}")))?;
 
     // ── Authenticate against the backup server ───────────────────────────
-    let login_url = format!("{}/api/auth/login", base_url);
+    let login_url = format!("{base_url}/api/auth/login");
     let login_body = serde_json::json!({
         "username": req.username,
         "password": req.password,
@@ -299,10 +299,7 @@ pub async fn verify_backup(
         .send()
         .await
         .map_err(|e| {
-            AppError::BadRequest(format!(
-                "Cannot reach the backup server at {}: {}",
-                base_url, e
-            ))
+            AppError::BadRequest(format!("Cannot reach the backup server at {base_url}: {e}"))
         })?;
 
     if !resp.status().is_success() {
@@ -321,10 +318,7 @@ pub async fn verify_backup(
                 body.trim()
             )
         } else {
-            format!(
-                "Backup server rejected the credentials (HTTP {}): {}",
-                status, body
-            )
+            format!("Backup server rejected the credentials (HTTP {status}): {body}")
         };
         return Err(AppError::BadRequest(msg));
     }
@@ -332,7 +326,7 @@ pub async fn verify_backup(
     let login_data: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to parse login response: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to parse login response: {e}")))?;
 
     // ── Handle 2FA challenge ─────────────────────────────────────────────
     // The backup's `/api/auth/login` returns 200 with `requires_totp:true`
@@ -374,7 +368,7 @@ pub async fn verify_backup(
             }
         };
 
-        let totp_url = format!("{}/api/auth/login/totp", base_url);
+        let totp_url = format!("{base_url}/api/auth/login/totp");
         let totp_body = serde_json::json!({
             "totp_session_token": session_token,
             "totp_code": totp_code,
@@ -387,8 +381,7 @@ pub async fn verify_backup(
             .await
             .map_err(|e| {
                 AppError::BadRequest(format!(
-                    "Cannot reach the backup server at {} for 2FA verification: {}",
-                    base_url, e
+                    "Cannot reach the backup server at {base_url} for 2FA verification: {e}"
                 ))
             })?;
 
@@ -405,7 +398,7 @@ pub async fn verify_backup(
         let totp_data: serde_json::Value = totp_resp
             .json()
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to parse 2FA response: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to parse 2FA response: {e}")))?;
         totp_data
             .get("access_token")
             .and_then(|v| v.as_str())
@@ -422,13 +415,13 @@ pub async fn verify_backup(
     };
 
     // ── Get backup mode info (including API key) from the backup server ──
-    let mode_url = format!("{}/api/admin/backup/mode", base_url);
+    let mode_url = format!("{base_url}/api/admin/backup/mode");
     let mode_resp = client
         .get(&mode_url)
-        .header("Authorization", format!("Bearer {}", access_token))
+        .header("Authorization", format!("Bearer {access_token}"))
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to get backup mode: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to get backup mode: {e}")))?;
 
     let mut api_key: Option<String> = None;
     let mut server_name = "Backup Server".to_string();
@@ -443,7 +436,7 @@ pub async fn verify_backup(
     }
 
     // ── Get server info from health endpoint ─────────────────────────────
-    let health_url = format!("{}/health", base_url);
+    let health_url = format!("{base_url}/health");
     if let Ok(health_resp) = client.get(&health_url).send().await {
         if let Ok(health_data) = health_resp.json::<serde_json::Value>().await {
             if let Some(name) = health_data.get("name").and_then(|v| v.as_str()) {
@@ -458,7 +451,7 @@ pub async fn verify_backup(
     // ── Get photo count from the backup server ───────────────────────────
     let mut photo_count: i64 = 0;
     if let Some(ref key) = api_key {
-        let list_url = format!("{}/api/backup/list", base_url);
+        let list_url = format!("{base_url}/api/backup/list");
         let list_resp = client
             .get(&list_url)
             .header("X-API-Key", key.as_str())

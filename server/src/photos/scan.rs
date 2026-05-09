@@ -181,7 +181,7 @@ pub async fn scan_and_register(
             let now = utc_now_iso();
             // GIFs get an animated GIF thumbnail; everything else gets JPEG
             let thumb_ext = if candidate.mime == "image/gif" { "gif" } else { "jpg" };
-            let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
+            let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
             // Extract dimensions, camera model, GPS, and date from file
             let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
@@ -246,7 +246,7 @@ pub async fn scan_and_register(
                         let blob_id = Uuid::new_v4().to_string();
                         let blob_storage_dir = storage_root.join("blobs");
                         let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
-                        let blob_rel = format!("blobs/{}.mp4", blob_id);
+                        let blob_rel = format!("blobs/{blob_id}.mp4");
                         let blob_abs = storage_root.join(&blob_rel);
 
                         if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {
@@ -495,7 +495,7 @@ pub async fn scan_and_register(
                                 let blob_id = Uuid::new_v4().to_string();
                                 let blob_storage_dir = storage_root.join("blobs");
                                 let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
-                                let blob_rel = format!("blobs/{}.mp4", blob_id);
+                                let blob_rel = format!("blobs/{blob_id}.mp4");
                                 let blob_abs = storage_root.join(&blob_rel);
 
                                 if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {

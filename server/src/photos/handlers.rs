@@ -149,7 +149,7 @@ pub async fn register_photo(
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     // Security: ensure file_path is a safe relative path (no traversal, no absolute)
     sanitize::validate_relative_path(&req.file_path)
-        .map_err(|reason| AppError::BadRequest(format!("Invalid file_path: {}", reason)))?;
+        .map_err(|reason| AppError::BadRequest(format!("Invalid file_path: {reason}")))?;
 
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
@@ -216,8 +216,8 @@ pub async fn register_photo(
     }
 
     // Generate thumbnail path (will be created by a separate endpoint/process)
-    let thumb_filename = format!("{}.thumb.jpg", photo_id);
-    let thumb_rel = format!(".thumbnails/{}", thumb_filename);
+    let thumb_filename = format!("{photo_id}.thumb.jpg");
+    let thumb_rel = format!(".thumbnails/{thumb_filename}");
 
     sqlx::query(
         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, size_bytes, \
@@ -581,7 +581,7 @@ pub async fn detect_bursts(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let groups = crate::photos::burst::detect_bursts_for_user(&state.pool, &auth.user_id)
         .await
-        .map_err(|e| AppError::Internal(format!("Burst detection failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Burst detection failed: {e}")))?;
 
     Ok(Json(serde_json::json!({
         "burst_groups_created": groups,

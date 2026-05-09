@@ -515,9 +515,7 @@ async fn load_encrypted_photo_bytes(
             .bind(user_id)
             .fetch_optional(pool)
             .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("encrypted blob row not found: {}", encrypted_blob_id)
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("encrypted blob row not found: {encrypted_blob_id}"))?;
 
     let enc_data = crate::blobs::storage::read_blob(storage_root.as_path(), &blob_storage_path)
         .await

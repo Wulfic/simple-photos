@@ -78,7 +78,7 @@ async fn run_migration(
         Ok(rows) => rows,
         Err(e) => {
             tracing::error!("Migration query failed: {}", e);
-            *progress.last_error.write().await = format!("DB query failed: {}", e);
+            *progress.last_error.write().await = format!("DB query failed: {e}");
             progress.running.store(false, Ordering::Release);
             return;
         }

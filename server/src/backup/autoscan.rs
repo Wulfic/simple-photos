@@ -362,7 +362,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     let now = crate::photos::utils::utc_now_iso();
                     // Use .thumb.gif for GIFs so the thumbnail preserves animation
                     let thumb_ext = if mime == "image/gif" { "gif" } else { "jpg" };
-                    let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
+                    let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
                     // Extract dimensions, camera model, GPS, and date from file
                     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =

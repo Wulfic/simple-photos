@@ -199,7 +199,7 @@ pub async fn import_file(
 
     let file = tokio::fs::File::open(&canonical)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to open file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to open file: {e}")))?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = Body::from_stream(stream);
@@ -210,7 +210,7 @@ pub async fn import_file(
         .header("Content-Length", HeaderValue::from(size))
         .header(
             "Content-Disposition",
-            HeaderValue::from_str(&format!("inline; filename=\"{}\"", name))
+            HeaderValue::from_str(&format!("inline; filename=\"{name}\""))
                 .unwrap_or_else(|_| HeaderValue::from_static("inline")),
         )
         .header("Cache-Control", HeaderValue::from_static("no-store"))

@@ -51,12 +51,12 @@ pub async fn backup_receive(
     // Percent-decode the path (the sync sender encodes non-ASCII chars)
     let file_path = percent_decode_str(raw_file_path)
         .decode_utf8()
-        .map_err(|e| AppError::BadRequest(format!("Invalid UTF-8 in X-File-Path: {}", e)))?
+        .map_err(|e| AppError::BadRequest(format!("Invalid UTF-8 in X-File-Path: {e}")))?
         .to_string();
 
     // Security: validate the file_path is a safe relative path (no traversal, no absolute)
     sanitize::validate_relative_path(&file_path)
-        .map_err(|reason| AppError::BadRequest(format!("Invalid X-File-Path: {}", reason)))?;
+        .map_err(|reason| AppError::BadRequest(format!("Invalid X-File-Path: {reason}")))?;
 
     let source = headers
         .get("X-Source")
@@ -69,8 +69,7 @@ pub async fn backup_receive(
         let actual_hash = hex::encode(Sha256::digest(&body));
         if !actual_hash.eq_ignore_ascii_case(expected_hash) {
             return Err(AppError::BadRequest(format!(
-                "Content hash mismatch: expected {}, got {}",
-                expected_hash, actual_hash
+                "Content hash mismatch: expected {expected_hash}, got {actual_hash}"
             )));
         }
     }
@@ -86,7 +85,7 @@ pub async fn backup_receive(
     if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to create directories: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to create directories: {e}")))?;
         let canonical_parent = parent
             .canonicalize()
             .unwrap_or_else(|_| parent.to_path_buf());
@@ -101,7 +100,7 @@ pub async fn backup_receive(
     let size_bytes = body.len() as i64;
     tokio::fs::write(&full_path, &body)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to write file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to write file: {e}")))?;
 
     // ── Parse metadata headers ──────────────────────────────────────────────
 
@@ -232,7 +231,7 @@ pub async fn backup_receive(
     } else {
         "jpg"
     };
-    let thumb_rel = format!(".thumbnails/{}.thumb.{}", photo_id, thumb_ext);
+    let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
     if source == "trash" {
         // ── Upsert into trash_items (full metadata) ───────────────────────────
@@ -325,8 +324,8 @@ pub async fn backup_receive(
             let mut result = existing_thumb_path;
             if result.is_none() {
                 let candidates = [
-                    format!(".thumbnails/{}.thumb.jpg", gallery_id),
-                    format!(".thumbnails/{}.thumb.gif", gallery_id),
+                    format!(".thumbnails/{gallery_id}.thumb.jpg"),
+                    format!(".thumbnails/{gallery_id}.thumb.gif"),
                 ];
                 for candidate in &candidates {
                     let abs = storage_root.join(candidate);

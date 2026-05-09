@@ -147,7 +147,7 @@ pub async fn backup_download_photo(
         .await
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(format!("Failed to open photo: {}", e)),
+            _ => AppError::Internal(format!("Failed to open photo: {e}")),
         })?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
@@ -161,7 +161,7 @@ pub async fn backup_download_photo(
                 .unwrap_or(HeaderValue::from_static("application/octet-stream")),
         )
         .body(body)
-        .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to build response: {e}")))?;
 
     // Include the file_path so the caller knows where to store it.
     // Percent-encode non-ASCII chars so the header value stays valid ASCII.
@@ -199,7 +199,7 @@ pub async fn backup_download_thumb(
         .await
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(format!("Failed to open thumbnail: {}", e)),
+            _ => AppError::Internal(format!("Failed to open thumbnail: {e}")),
         })?;
 
     let stream = tokio_util::io::ReaderStream::new(file);
@@ -209,7 +209,7 @@ pub async fn backup_download_thumb(
         .status(StatusCode::OK)
         .header("Content-Type", "image/jpeg")
         .body(body)
-        .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))
+        .map_err(|e| AppError::Internal(format!("Failed to build response: {e}")))
 }
 
 // ── Deletion Sync Endpoint ──────────────────────────────────────────────────
@@ -815,7 +815,7 @@ pub async fn backup_receive_blob(
 
     // Security: validate path to prevent traversal
     crate::sanitize::validate_relative_path(&storage_path)
-        .map_err(|e| AppError::BadRequest(format!("Invalid storage path: {}", e)))?;
+        .map_err(|e| AppError::BadRequest(format!("Invalid storage path: {e}")))?;
 
     // Verify checksum
     if let Some(expected) = headers.get("X-Content-Hash").and_then(|v| v.to_str().ok()) {
@@ -862,11 +862,11 @@ pub async fn backup_receive_blob(
     if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to create blob dir: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to create blob dir: {e}")))?;
     }
     tokio::fs::write(&full_path, &body)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to write blob: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to write blob: {e}")))?;
 
     // Upsert blob metadata — fall back to admin if user doesn't exist locally
     let effective_user_id = if user_id.is_empty() {

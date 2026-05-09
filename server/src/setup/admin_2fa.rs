@@ -99,11 +99,11 @@ pub async fn admin_setup_2fa(
         30,
         secret
             .to_bytes()
-            .map_err(|e| AppError::Internal(format!("TOTP secret error: {}", e)))?,
+            .map_err(|e| AppError::Internal(format!("TOTP secret error: {e}")))?,
         Some("SimplePhotos".to_string()),
         username.clone(),
     )
-    .map_err(|e| AppError::Internal(format!("TOTP creation error: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("TOTP creation error: {e}")))?;
 
     let otpauth_uri = totp.get_url();
     let secret_b32 = secret.to_encoded().to_string();
@@ -205,7 +205,7 @@ pub async fn admin_confirm_2fa(
 
     let secret = totp_rs::Secret::Encoded(secret_b32)
         .to_bytes()
-        .map_err(|e| AppError::Internal(format!("TOTP decode error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("TOTP decode error: {e}")))?;
 
     let totp = totp_rs::TOTP::new(
         totp_rs::Algorithm::SHA1,
@@ -216,11 +216,11 @@ pub async fn admin_confirm_2fa(
         Some("SimplePhotos".to_string()),
         String::new(),
     )
-    .map_err(|e| AppError::Internal(format!("TOTP creation error: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("TOTP creation error: {e}")))?;
 
     if !totp
         .check_current(&req.totp_code)
-        .map_err(|e| AppError::Internal(format!("TOTP error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("TOTP error: {e}")))?
     {
         return Err(AppError::BadRequest("Invalid TOTP code".into()));
     }

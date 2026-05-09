@@ -295,7 +295,7 @@ async fn main() -> anyhow::Result<()> {
         let rustls_config =
             axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to load TLS config: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to load TLS config: {e}"))?;
 
         // ── HTTP → HTTPS redirect listener ─────────────────────────────
         // When TLS is enabled, every plain-HTTP request is upgraded to
@@ -307,7 +307,7 @@ async fn main() -> anyhow::Result<()> {
         if config.tls.redirect_http {
             let redirect_port = config.tls.http_redirect_port;
             let https_port = config.server.port;
-            let redirect_addr: SocketAddr = format!("0.0.0.0:{}", redirect_port).parse()?;
+            let redirect_addr: SocketAddr = format!("0.0.0.0:{redirect_port}").parse()?;
             tokio::spawn(async move {
                 spawn_https_redirect(redirect_addr, https_port).await;
             });
@@ -353,9 +353,9 @@ async fn spawn_https_redirect(addr: SocketAddr, https_port: u16) {
         let bare_host = host.split(':').next().unwrap_or(host);
         let path_and_query = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
         let target = if https_port == 443 {
-            format!("https://{}{}", bare_host, path_and_query)
+            format!("https://{bare_host}{path_and_query}")
         } else {
-            format!("https://{}:{}{}", bare_host, https_port, path_and_query)
+            format!("https://{bare_host}:{https_port}{path_and_query}")
         };
         // 301 (permanent) is appropriate: the operator opted in to TLS,
         // so this redirect is intended to stay in place.

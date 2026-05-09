@@ -59,11 +59,11 @@ pub async fn setup_2fa(
         30,
         secret
             .to_bytes()
-            .map_err(|e| AppError::Internal(format!("TOTP secret error: {}", e)))?,
+            .map_err(|e| AppError::Internal(format!("TOTP secret error: {e}")))?,
         Some("SimplePhotos".to_string()),
         username.clone(),
     )
-    .map_err(|e| AppError::Internal(format!("TOTP creation error: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("TOTP creation error: {e}")))?;
 
     let otpauth_uri = totp.get_url();
 

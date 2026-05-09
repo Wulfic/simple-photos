@@ -56,7 +56,7 @@ pub async fn get_backup_mode(
     Ok(Json(BackupModeResponse {
         mode,
         server_ip: local_ip.clone(),
-        server_address: format!("{}:{}", local_ip, port),
+        server_address: format!("{local_ip}:{port}"),
         port,
         api_key,
         primary_server_url,
@@ -156,7 +156,7 @@ pub async fn set_backup_mode(
     Ok(Json(BackupModeResponse {
         mode,
         server_ip: local_ip.clone(),
-        server_address: format!("{}:{}", local_ip, port),
+        server_address: format!("{local_ip}:{port}"),
         port,
         api_key: api_key_val,
         primary_server_url,

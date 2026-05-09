@@ -185,8 +185,7 @@ pub async fn list_logs(
 
     let sql = format!(
         "SELECT id, user_id, session_id, level, tag, message, context, client_ts, created_at \
-         FROM client_logs {} ORDER BY created_at DESC LIMIT ?",
-        where_clause
+         FROM client_logs {where_clause} ORDER BY created_at DESC LIMIT ?"
     );
 
     // We need to build the query dynamically with binds

@@ -87,9 +87,9 @@ fn read_tls_from_disk() -> Result<crate::config::TlsConfig, AppError> {
     let config_path =
         std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
     let contents = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::Internal(format!("Failed to read config file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read config file: {e}")))?;
     let cfg: crate::config::AppConfig = toml::from_str(&contents)
-        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {e}")))?;
     Ok(cfg.tls)
 }
 
@@ -119,14 +119,12 @@ pub async fn update_ssl(
         // Verify files exist
         if !std::path::Path::new(cert).exists() {
             return Err(AppError::BadRequest(format!(
-                "Certificate file not found: {}",
-                cert
+                "Certificate file not found: {cert}"
             )));
         }
         if !std::path::Path::new(key).exists() {
             return Err(AppError::BadRequest(format!(
-                "Private key file not found: {}",
-                key
+                "Private key file not found: {key}"
             )));
         }
     }
@@ -139,7 +137,7 @@ pub async fn update_ssl(
         update_config_toml_ssl(ssl_enabled, ssl_cert.as_deref(), ssl_key.as_deref())
     })
     .await
-    .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
+    .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))??;
 
     audit::log(
         &state,
@@ -179,11 +177,11 @@ fn update_config_toml_ssl(
         std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
 
     let contents = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::Internal(format!("Failed to read config file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read config file: {e}")))?;
 
     let mut doc: toml::Table = contents
         .parse()
-        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {e}")))?;
 
     // Create or update the [tls] section
     let tls_table = doc
@@ -203,10 +201,10 @@ fn update_config_toml_ssl(
 
     // If disabling, we can remove paths or leave them — leave them for easy re-enable
     let output = toml::to_string_pretty(&doc)
-        .map_err(|e| AppError::Internal(format!("Failed to serialize config: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialize config: {e}")))?;
 
     std::fs::write(&config_path, output)
-        .map_err(|e| AppError::Internal(format!("Failed to write config file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to write config file: {e}")))?;
 
     Ok(())
 }
@@ -338,7 +336,7 @@ pub async fn provision_letsencrypt(
         )
     })
     .await
-    .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
+    .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))??;
 
     audit::log(
         &state,
@@ -376,11 +374,11 @@ fn update_config_toml_letsencrypt(
         std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
 
     let contents = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::Internal(format!("Failed to read config file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read config file: {e}")))?;
 
     let mut doc: toml::Table = contents
         .parse()
-        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {e}")))?;
 
     let tls_table = doc
         .entry("tls")
@@ -403,10 +401,10 @@ fn update_config_toml_letsencrypt(
     tls_table.insert("letsencrypt".into(), toml::Value::Table(le_table));
 
     let output = toml::to_string_pretty(&doc)
-        .map_err(|e| AppError::Internal(format!("Failed to serialize config: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialize config: {e}")))?;
 
     std::fs::write(&config_path, output)
-        .map_err(|e| AppError::Internal(format!("Failed to write config file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to write config file: {e}")))?;
 
     Ok(())
 }
@@ -503,7 +501,7 @@ pub async fn provision_local_ca(
     let outcome =
         tokio::task::spawn_blocking(move || local_ca::generate_local_ca(&gen_req, &data_root))
             .await
-            .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
+            .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))??;
 
     // Persist [tls] (paths + enabled) and [tls.local_ca] (metadata).
     let cert_path_clone = outcome.cert_path.clone();
@@ -520,7 +518,7 @@ pub async fn provision_local_ca(
         update_config_toml_local_ca(&meta)
     })
     .await
-    .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
+    .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))??;
 
     audit::log(
         &state,
@@ -569,7 +567,7 @@ pub async fn download_local_ca_bundle(
     let data_root = std::path::PathBuf::from("data");
     let (path, bytes) = tokio::task::spawn_blocking(move || local_ca::read_bundle(&data_root))
         .await
-        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))??;
+        .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))??;
 
     let filename = path
         .file_name()
@@ -581,14 +579,14 @@ pub async fn download_local_ca_bundle(
         .header(header::CONTENT_TYPE, "application/zip")
         .header(
             header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", filename),
+            format!("attachment; filename=\"{filename}\""),
         )
         .header(header::CONTENT_LENGTH, bytes.len())
         // Prevent intermediaries from stripping the cert; private CAs must
         // not be cached by shared proxies.
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(bytes))
-        .map_err(|e| AppError::Internal(format!("response build: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("response build: {e}")))?;
     Ok(response)
 }
 
@@ -615,8 +613,7 @@ fn validate_local_ca_inputs(req: &LocalCaRequest) -> Result<(), AppError> {
         let trimmed = host.trim();
         if trimmed.is_empty() || trimmed.len() > 253 {
             return Err(AppError::BadRequest(format!(
-                "Invalid extra host: {:?} (length 1-253 required).",
-                host
+                "Invalid extra host: {host:?} (length 1-253 required)."
             )));
         }
         if trimmed
@@ -624,8 +621,7 @@ fn validate_local_ca_inputs(req: &LocalCaRequest) -> Result<(), AppError> {
             .any(|c| c.is_control() || c == '\0' || c == ' ')
         {
             return Err(AppError::BadRequest(format!(
-                "Extra host {:?} contains invalid characters.",
-                host
+                "Extra host {host:?} contains invalid characters."
             )));
         }
     }
@@ -638,11 +634,11 @@ fn update_config_toml_local_ca(meta: &LocalCaMeta) -> Result<(), AppError> {
         std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
 
     let contents = std::fs::read_to_string(&config_path)
-        .map_err(|e| AppError::Internal(format!("Failed to read config file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read config file: {e}")))?;
 
     let mut doc: toml::Table = contents
         .parse()
-        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to parse config TOML: {e}")))?;
 
     let tls_table = doc
         .entry("tls")
@@ -676,10 +672,10 @@ fn update_config_toml_local_ca(meta: &LocalCaMeta) -> Result<(), AppError> {
     tls_table.insert("local_ca".into(), toml::Value::Table(t));
 
     let output = toml::to_string_pretty(&doc)
-        .map_err(|e| AppError::Internal(format!("Failed to serialize config: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialize config: {e}")))?;
 
     std::fs::write(&config_path, output)
-        .map_err(|e| AppError::Internal(format!("Failed to write config file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to write config file: {e}")))?;
 
     Ok(())
 }

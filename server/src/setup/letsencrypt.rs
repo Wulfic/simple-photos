@@ -224,7 +224,7 @@ pub async fn provision_certificate(
     };
     let (account, _credentials) = Account::create(&new_account, &directory, None)
         .await
-        .map_err(|e| AppError::Internal(format!("ACME account creation failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("ACME account creation failed: {e}")))?;
 
     // ── 2. Place new order ────────────────────────────────────────────
     let identifier = Identifier::Dns(req.domain.trim().to_string());
@@ -233,13 +233,13 @@ pub async fn provision_certificate(
             identifiers: &[identifier],
         })
         .await
-        .map_err(|e| AppError::Internal(format!("ACME new-order failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("ACME new-order failed: {e}")))?;
 
     // ── 3. Solve the http-01 challenge ────────────────────────────────
     let authorizations = order
         .authorizations()
         .await
-        .map_err(|e| AppError::Internal(format!("ACME authorizations fetch failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("ACME authorizations fetch failed: {e}")))?;
 
     // Map of challenge token → key authorization. Shared with the listener.
     let tokens: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
@@ -251,8 +251,7 @@ pub async fn provision_certificate(
             AuthorizationStatus::Valid => continue,
             other => {
                 return Err(AppError::Internal(format!(
-                    "ACME authorization in unexpected state: {:?}",
-                    other
+                    "ACME authorization in unexpected state: {other:?}"
                 )));
             }
         }
@@ -276,7 +275,7 @@ pub async fn provision_certificate(
     // ── 4. Spin up the temporary HTTP listener ────────────────────────
     let listener_addr: SocketAddr = format!("0.0.0.0:{}", req.challenge_port)
         .parse()
-        .map_err(|e| AppError::BadRequest(format!("Invalid challenge_port: {}", e)))?;
+        .map_err(|e| AppError::BadRequest(format!("Invalid challenge_port: {e}")))?;
 
     let app = Router::new()
         .route("/.well-known/acme-challenge/{token}", get(serve_challenge))
@@ -308,7 +307,7 @@ pub async fn provision_certificate(
             order
                 .set_challenge_ready(url)
                 .await
-                .map_err(|e| AppError::Internal(format!("ACME set-challenge-ready failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("ACME set-challenge-ready failed: {e}")))?;
         }
 
         // ── 5. Poll order until Ready ─────────────────────────────────
@@ -318,7 +317,7 @@ pub async fn provision_certificate(
             let state = order
                 .refresh()
                 .await
-                .map_err(|e| AppError::Internal(format!("ACME order refresh failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("ACME order refresh failed: {e}")))?;
             match state.status {
                 OrderStatus::Ready => break,
                 OrderStatus::Invalid => {
@@ -340,18 +339,18 @@ pub async fn provision_certificate(
 
         // ── 6. Generate CSR and finalize ──────────────────────────────
         let mut params = CertificateParams::new(vec![req.domain.trim().to_string()])
-            .map_err(|e| AppError::Internal(format!("rcgen params: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("rcgen params: {e}")))?;
         params.distinguished_name = DistinguishedName::new();
         let key_pair = KeyPair::generate()
-            .map_err(|e| AppError::Internal(format!("rcgen key generation: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("rcgen key generation: {e}")))?;
         let csr = params
             .serialize_request(&key_pair)
-            .map_err(|e| AppError::Internal(format!("rcgen CSR serialization: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("rcgen CSR serialization: {e}")))?;
 
         order
             .finalize(csr.der())
             .await
-            .map_err(|e| AppError::Internal(format!("ACME finalize failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("ACME finalize failed: {e}")))?;
 
         // ── 7. Poll for the issued certificate ────────────────────────
         let mut attempts = 0u32;
@@ -360,7 +359,7 @@ pub async fn provision_certificate(
             match order
                 .certificate()
                 .await
-                .map_err(|e| AppError::Internal(format!("ACME certificate fetch failed: {}", e)))?
+                .map_err(|e| AppError::Internal(format!("ACME certificate fetch failed: {e}")))?
             {
                 Some(pem) => break pem,
                 None => {
@@ -390,7 +389,7 @@ pub async fn provision_certificate(
     if let Some(parent) = cert_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|e| AppError::Internal(format!("create cert dir: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("create cert dir: {e}")))?;
     }
     write_atomic(&cert_path, cert_chain_pem.as_bytes()).await?;
     write_atomic(&key_path, key_pair.serialize_pem().as_bytes()).await?;
@@ -428,10 +427,10 @@ async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
     let tmp = path.with_extension("tmp");
     tokio::fs::write(&tmp, bytes)
         .await
-        .map_err(|e| AppError::Internal(format!("write {:?}: {}", tmp, e)))?;
+        .map_err(|e| AppError::Internal(format!("write {tmp:?}: {e}")))?;
     tokio::fs::rename(&tmp, path)
         .await
-        .map_err(|e| AppError::Internal(format!("rename {:?} -> {:?}: {}", tmp, path, e)))?;
+        .map_err(|e| AppError::Internal(format!("rename {tmp:?} -> {path:?}: {e}")))?;
     Ok(())
 }
 

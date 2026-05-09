@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 pub fn resolve_backup_url(address: &str, path: &str) -> String {
     let trimmed = address.trim().trim_end_matches('/');
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        format!("{}{}", trimmed, path)
+        format!("{trimmed}{path}")
     } else {
-        format!("http://{}{}", trimmed, path)
+        format!("http://{trimmed}{path}")
     }
 }
 

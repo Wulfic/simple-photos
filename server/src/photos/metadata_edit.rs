@@ -317,7 +317,7 @@ pub async fn update_metadata(
 
     if let Some(ref overrides) = req.exif_overrides {
         let json = serde_json::to_string(overrides)
-            .map_err(|e| AppError::BadRequest(format!("Invalid exif_overrides: {}", e)))?;
+            .map_err(|e| AppError::BadRequest(format!("Invalid exif_overrides: {e}")))?;
         sqlx::query("UPDATE photos SET exif_overrides = ?1 WHERE id = ?2")
             .bind(&json)
             .bind(&photo_id)
@@ -662,10 +662,10 @@ pub async fn write_exif_to_file(
     let write_result =
         tokio::task::spawn_blocking(move || write_exif_fields_full(&path_clone, &write_fields))
             .await
-            .map_err(|e| AppError::Internal(format!("EXIF write task failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("EXIF write task failed: {e}")))?;
 
     if let Err(e) = write_result {
-        return Err(AppError::Internal(format!("Failed to write EXIF: {}", e)));
+        return Err(AppError::Internal(format!("Failed to write EXIF: {e}")));
     }
 
     // Recalculate photo_hash
@@ -811,9 +811,9 @@ fn write_exif_fields_full(
         let lat_ref = if lat >= 0.0 { "N" } else { "S" };
         let lon_ref = if lon >= 0.0 { "E" } else { "W" };
         args.push(format!("-GPSLatitude={}", lat.abs()));
-        args.push(format!("-GPSLatitudeRef={}", lat_ref));
+        args.push(format!("-GPSLatitudeRef={lat_ref}"));
         args.push(format!("-GPSLongitude={}", lon.abs()));
-        args.push(format!("-GPSLongitudeRef={}", lon_ref));
+        args.push(format!("-GPSLongitudeRef={lon_ref}"));
     }
 
     macro_rules! push_str_tag {
@@ -866,7 +866,7 @@ fn write_exif_fields_full(
                 .collect();
             if !clean_tag.is_empty() && !val.is_empty() {
                 let safe = sanitize_exif_value(val)?;
-                args.push(format!("-{}={}", clean_tag, safe));
+                args.push(format!("-{clean_tag}={safe}"));
             }
         }
     }
@@ -886,13 +886,13 @@ fn write_exif_fields_full(
                 "exiftool is not installed on the server — install the `exiftool` package and retry"
                     .to_string()
             } else {
-                format!("Failed to run exiftool: {}", e)
+                format!("Failed to run exiftool: {e}")
             }
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("exiftool failed: {}", stderr));
+        return Err(format!("exiftool failed: {stderr}"));
     }
 
     Ok(())

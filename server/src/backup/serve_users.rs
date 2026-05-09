@@ -211,16 +211,14 @@ pub async fn backup_upsert_user(
                     insert_err
                 );
                 return Err(AppError::Internal(format!(
-                    "Failed to create backup user record for id={}: {}",
-                    id, insert_err
+                    "Failed to create backup user record for id={id}: {insert_err}"
                 )));
             }
         } else {
             // Some other DB error — report it
             tracing::error!("backup_upsert_user: unexpected error for id={}: {}", id, e);
             return Err(AppError::Internal(format!(
-                "Failed to create backup user record for id={}: {}",
-                id, e
+                "Failed to create backup user record for id={id}: {e}"
             )));
         }
     }

@@ -538,7 +538,7 @@ pub async fn sync_metadata_to_backup(
     });
 
     let mut req = client
-        .post(format!("{}/backup/sync-metadata", base_url))
+        .post(format!("{base_url}/backup/sync-metadata"))
         .json(&body);
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());

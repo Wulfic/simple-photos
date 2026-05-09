@@ -43,7 +43,7 @@ pub async fn proxy_backup_photos(
         .timeout(std::time::Duration::from_secs(30))
         .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
-        .map_err(|e| AppError::BadRequest(format!("HTTP client error: {}", e)))?;
+        .map_err(|e| AppError::BadRequest(format!("HTTP client error: {e}")))?;
 
     let mut req = client.get(super::models::resolve_backup_url(
         &address,
@@ -56,7 +56,7 @@ pub async fn proxy_backup_photos(
     match req.send().await {
         Ok(resp) if resp.status().is_success() => {
             let photos: Vec<BackupPhotoRecord> = resp.json().await.map_err(|e| {
-                AppError::BadRequest(format!("Failed to parse backup server response: {}", e))
+                AppError::BadRequest(format!("Failed to parse backup server response: {e}"))
             })?;
             Ok(Json(photos))
         }
@@ -70,15 +70,13 @@ pub async fn proxy_backup_photos(
                 body
             );
             Err(AppError::BadRequest(format!(
-                "Backup server returned HTTP {}",
-                status
+                "Backup server returned HTTP {status}"
             )))
         }
         Err(e) => {
             tracing::warn!("Failed to connect to backup server at {}: {}", address, e);
             Err(AppError::BadRequest(format!(
-                "Cannot reach backup server at {}: {}",
-                address, e
+                "Cannot reach backup server at {address}: {e}"
             )))
         }
     }
@@ -111,11 +109,11 @@ pub async fn proxy_backup_thumbnail(
         .timeout(std::time::Duration::from_secs(15))
         .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
-        .map_err(|e| AppError::BadRequest(format!("HTTP client error: {}", e)))?;
+        .map_err(|e| AppError::BadRequest(format!("HTTP client error: {e}")))?;
 
     let url = super::models::resolve_backup_url(
         &address,
-        &format!("/api/backup/download/{}/thumb", photo_id),
+        &format!("/api/backup/download/{photo_id}/thumb"),
     );
     let mut req = client.get(&url);
     if let Some(ref key) = api_key {
@@ -134,14 +132,14 @@ pub async fn proxy_backup_thumbnail(
             let bytes = resp
                 .bytes()
                 .await
-                .map_err(|e| AppError::BadRequest(format!("Failed to read thumbnail: {}", e)))?;
+                .map_err(|e| AppError::BadRequest(format!("Failed to read thumbnail: {e}")))?;
 
             Ok(axum::response::Response::builder()
                 .status(axum::http::StatusCode::OK)
                 .header("Content-Type", content_type)
                 .header("Cache-Control", "private, max-age=3600")
                 .body(axum::body::Body::from(bytes))
-                .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?)
+                .map_err(|e| AppError::Internal(format!("Failed to build response: {e}")))?)
         }
         Ok(resp) if resp.status() == axum::http::StatusCode::NOT_FOUND => Err(AppError::NotFound),
         Ok(resp) => Err(AppError::BadRequest(format!(
@@ -149,8 +147,7 @@ pub async fn proxy_backup_thumbnail(
             resp.status()
         ))),
         Err(e) => Err(AppError::BadRequest(format!(
-            "Cannot reach backup server for thumbnail: {}",
-            e
+            "Cannot reach backup server for thumbnail: {e}"
         ))),
     }
 }

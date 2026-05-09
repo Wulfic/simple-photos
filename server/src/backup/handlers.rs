@@ -63,8 +63,7 @@ pub async fn add_backup_server(
 
     if exists {
         return Err(AppError::Conflict(format!(
-            "Backup server at {} already exists",
-            address
+            "Backup server at {address} already exists"
         )));
     }
 
@@ -257,7 +256,7 @@ pub async fn check_backup_server_status(
         .timeout(std::time::Duration::from_secs(5))
         .danger_accept_invalid_certs(state.config.backup.accept_invalid_certs) // codeql[rust/disabled-certificate-check] -- opt-in via config; defaults false; needed for LAN backup servers with self-signed certs
         .build()
-        .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("HTTP client error: {e}")))?;
 
     match client.get(&url).send().await {
         Ok(resp) => {
@@ -285,7 +284,7 @@ pub async fn check_backup_server_status(
         Err(e) => Ok(Json(BackupServerStatus {
             reachable: false,
             version: None,
-            error: Some(format!("Connection failed: {}", e)),
+            error: Some(format!("Connection failed: {e}")),
         })),
     }
 }

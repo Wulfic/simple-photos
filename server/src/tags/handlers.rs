@@ -189,7 +189,7 @@ pub async fn search_photos(
                 variants.push(stem.to_string());
             }
             if let Some(stem) = token.strip_suffix("tion") {
-                variants.push(format!("{}t", stem));
+                variants.push(format!("{stem}t"));
             }
             if let Some(stem) = token.strip_suffix("ly") {
                 variants.push(stem.to_string());
@@ -201,7 +201,7 @@ pub async fn search_photos(
             .iter()
             .map(|v| {
                 bind_values.push(format!("%{}%", sanitize::escape_like(v)));
-                format!("LOWER({}) LIKE ? ESCAPE '\\'", field_expr)
+                format!("LOWER({field_expr}) LIKE ? ESCAPE '\\'")
             })
             .collect();
 
@@ -240,8 +240,7 @@ pub async fn search_photos(
     if !photo_ids.is_empty() {
         let placeholders = photo_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let tags_sql = format!(
-            "SELECT photo_id, tag FROM photo_tags WHERE photo_id IN ({}) AND user_id = ? ORDER BY tag",
-            placeholders
+            "SELECT photo_id, tag FROM photo_tags WHERE photo_id IN ({placeholders}) AND user_id = ? ORDER BY tag"
         );
         let mut tags_q = sqlx::query_as::<_, (String, String)>(&tags_sql);
         for pid in &photo_ids {

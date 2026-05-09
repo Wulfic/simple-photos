@@ -93,7 +93,7 @@ pub async fn unlock_secure_galleries(
         .await?;
 
     let valid = bcrypt::verify(&req.password, &password_hash)
-        .map_err(|e| AppError::Internal(format!("Bcrypt verify failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Bcrypt verify failed: {e}")))?;
 
     if !valid {
         return Err(AppError::Unauthorized("Invalid password".into()));
@@ -436,9 +436,8 @@ pub async fn add_gallery_item(
                 .bind(&auth.user_id)
                 .fetch_optional(&state.pool)
                 .await?;
-        let (enc_storage_path,) = enc_sp.ok_or_else(|| {
-            AppError::Internal(format!("Encrypted blob {} not found", enc_blob_id))
-        })?;
+        let (enc_storage_path,) = enc_sp
+            .ok_or_else(|| AppError::Internal(format!("Encrypted blob {enc_blob_id} not found")))?;
 
         let enc_data = crate::blobs::storage::read_blob(&storage_root, &enc_storage_path).await?;
         let plaintext = {
@@ -469,14 +468,14 @@ pub async fn add_gallery_item(
     } else {
         crate::blobs::storage::read_blob(&storage_root, &storage_path)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to read source blob: {}", e)))?
+            .map_err(|e| AppError::Internal(format!("Failed to read source blob: {e}")))?
     };
 
     let new_blob_id = Uuid::new_v4().to_string();
     let new_storage_path =
         crate::blobs::storage::write_blob(&storage_root, &auth.user_id, &new_blob_id, &blob_data)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to write cloned blob: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to write cloned blob: {e}")))?;
 
     // Insert the cloned blob record.
     // content_hash is deliberately set to NULL so the server-side encryption
@@ -507,7 +506,7 @@ pub async fn add_gallery_item(
                 .await
                 .ok(); // Non-fatal if thumbnail missing
             if let Some(td) = thumb_data {
-                let thumb_id = format!("{}_thumb", new_blob_id);
+                let thumb_id = format!("{new_blob_id}_thumb");
                 crate::blobs::storage::write_blob(&storage_root, &auth.user_id, &thumb_id, &td)
                     .await
                     .ok()

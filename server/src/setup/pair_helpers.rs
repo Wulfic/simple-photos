@@ -28,7 +28,7 @@ pub(crate) fn normalize_server_url(raw: &str) -> String {
     if base.starts_with("http://") || base.starts_with("https://") {
         base.to_string()
     } else {
-        format!("http://{}", base)
+        format!("http://{base}")
     }
 }
 
@@ -69,9 +69,9 @@ pub(crate) fn determine_backup_address(
         } else {
             format!("{}:{}", ip, config.server.port)
         };
-        format!("{}{}", scheme, raw)
+        format!("{scheme}{raw}")
     } else {
-        format!("{}{}", scheme, host_port)
+        format!("{scheme}{host_port}")
     }
 }
 
@@ -88,7 +88,7 @@ pub(crate) async fn authenticate_with_primary(
     password: &str,
     totp_code: Option<&str>,
 ) -> Result<PrimaryAuthOutcome, AppError> {
-    let login_url = format!("{}/api/auth/login", base_url);
+    let login_url = format!("{base_url}/api/auth/login");
     let login_body = serde_json::json!({
         "username": username,
         "password": password,
@@ -102,8 +102,7 @@ pub(crate) async fn authenticate_with_primary(
         .await
         .map_err(|e| {
             AppError::BadRequest(format!(
-                "Cannot reach the primary server at {}: {}",
-                base_url, e
+                "Cannot reach the primary server at {base_url}: {e}"
             ))
         })?;
 
@@ -111,13 +110,12 @@ pub(crate) async fn authenticate_with_primary(
     let resp_bytes = resp
         .bytes()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to read response: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read response: {e}")))?;
 
     if !status.is_success() {
         let body = String::from_utf8_lossy(&resp_bytes);
         return Err(AppError::BadRequest(format!(
-            "Primary server rejected the credentials (HTTP {}): {}",
-            status, body
+            "Primary server rejected the credentials (HTTP {status}): {body}"
         )));
     }
 
@@ -141,7 +139,7 @@ pub(crate) async fn authenticate_with_primary(
             _ => return Ok(PrimaryAuthOutcome::NeedsTotp),
         };
 
-        let totp_url = format!("{}/api/auth/login/totp", base_url);
+        let totp_url = format!("{base_url}/api/auth/login/totp");
         let totp_body = serde_json::json!({
             "totp_session_token": totp_session_token,
             "totp_code": code,
@@ -155,8 +153,7 @@ pub(crate) async fn authenticate_with_primary(
             .await
             .map_err(|e| {
                 AppError::BadRequest(format!(
-                    "Failed to verify 2FA code with primary server: {}",
-                    e
+                    "Failed to verify 2FA code with primary server: {e}"
                 ))
             })?;
 
@@ -166,10 +163,9 @@ pub(crate) async fn authenticate_with_primary(
             let msg = serde_json::from_str::<serde_json::Value>(&err_body)
                 .ok()
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
-                .unwrap_or_else(|| format!("HTTP {}: {}", err_status, err_body));
+                .unwrap_or_else(|| format!("HTTP {err_status}: {err_body}"));
             return Err(AppError::BadRequest(format!(
-                "2FA verification failed: {}",
-                msg
+                "2FA verification failed: {msg}"
             )));
         }
 
@@ -211,10 +207,10 @@ pub(crate) async fn verify_primary_is_not_backup(
     base_url: &str,
     token: &str,
 ) -> Result<(), AppError> {
-    let mode_url = format!("{}/api/admin/backup/mode", base_url);
+    let mode_url = format!("{base_url}/api/admin/backup/mode");
     if let Ok(mode_resp) = client
         .get(&mode_url)
-        .header("Authorization", format!("Bearer {}", token))
+        .header("Authorization", format!("Bearer {token}"))
         .send()
         .await
     {
@@ -249,7 +245,7 @@ pub(crate) async fn register_backup_on_primary(
     host_display: &str,
     api_key: &str,
 ) -> Result<Option<String>, AppError> {
-    let register_url = format!("{}/api/admin/backup/servers", base_url);
+    let register_url = format!("{base_url}/api/admin/backup/servers");
     let register_body = serde_json::json!({
         "name": format!("Backup Server ({})", host_display),
         "address": backup_address,
@@ -259,15 +255,14 @@ pub(crate) async fn register_backup_on_primary(
 
     let reg_resp = client
         .post(&register_url)
-        .header("Authorization", format!("Bearer {}", token))
+        .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")
         .json(&register_body)
         .send()
         .await
         .map_err(|e| {
             AppError::Internal(format!(
-                "Failed to connect to primary server to register backup server: {}",
-                e
+                "Failed to connect to primary server to register backup server: {e}"
             ))
         })?;
 
@@ -275,15 +270,14 @@ pub(crate) async fn register_backup_on_primary(
         let status = reg_resp.status();
         let err_body = reg_resp.text().await.unwrap_or_default();
         return Err(AppError::BadRequest(format!(
-            "Failed to register backup server on primary (HTTP {}): {}",
-            status, err_body
+            "Failed to register backup server on primary (HTTP {status}): {err_body}"
         )));
     }
 
     let reg_data: serde_json::Value = reg_resp
         .json()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to parse registration response: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to parse registration response: {e}")))?;
 
     Ok(reg_data
         .get("id")
@@ -306,10 +300,10 @@ pub(crate) async fn create_local_admin(
     default_quota_bytes: u64,
 ) -> Result<String, AppError> {
     let user_id = {
-        let users_url = format!("{}/api/admin/users", base_url);
+        let users_url = format!("{base_url}/api/admin/users");
         let users_resp = client
             .get(&users_url)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .send()
             .await
             .ok();
@@ -332,8 +326,8 @@ pub(crate) async fn create_local_admin(
     let password_hash =
         tokio::task::spawn_blocking(move || bcrypt::hash(&password_owned, bcrypt_cost))
             .await
-            .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {}", e)))?
-            .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("spawn_blocking join error: {e}")))?
+            .map_err(|e| AppError::Internal(format!("Failed to hash password: {e}")))?;
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
@@ -391,7 +385,7 @@ pub(crate) fn trigger_initial_sync(
     accept_invalid_certs: bool,
 ) {
     if let Some(server_id) = server_id {
-        let sync_url = format!("{}/api/admin/backup/servers/{}/sync", base_url, server_id);
+        let sync_url = format!("{base_url}/api/admin/backup/servers/{server_id}/sync");
         let remote_token = remote_token.to_string();
         tokio::spawn(async move {
             let sync_client = reqwest::Client::builder()
@@ -403,7 +397,7 @@ pub(crate) fn trigger_initial_sync(
             if let Some(c) = sync_client {
                 match c
                     .post(&sync_url)
-                    .header("Authorization", format!("Bearer {}", remote_token))
+                    .header("Authorization", format!("Bearer {remote_token}"))
                     .send()
                     .await
                 {
@@ -480,20 +474,18 @@ pub(crate) fn validate_backup_public_url(url: &str) -> Result<(), AppError> {
         || host_lc == "::";
     if is_loopback {
         return Err(AppError::BadRequest(format!(
-            "Backup public URL '{}' is a loopback/unspecified address — \
+            "Backup public URL '{host}' is a loopback/unspecified address — \
              the primary server will not be able to reach it. \
              Enter the backup's externally-reachable URL (a public IP, \
-             DNS hostname, or VPN address).",
-            host
+             DNS hostname, or VPN address)."
         )));
     }
 
     // 169.254.0.0/16 link-local is unreachable from a remote primary.
     if host_lc.starts_with("169.254.") {
         return Err(AppError::BadRequest(format!(
-            "Backup public URL '{}' is a link-local address — \
-             the primary server will not be able to reach it.",
-            host
+            "Backup public URL '{host}' is a link-local address — \
+             the primary server will not be able to reach it."
         )));
     }
 

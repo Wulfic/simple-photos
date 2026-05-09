@@ -176,7 +176,7 @@ async fn discovery_handler(State(state): State<DiscoveryState>) -> Json<Discover
         .and_then(|url| {
             let host = url.host_str()?.to_string();
             let port = url.port().unwrap_or(state.config.server.port);
-            Some(format!("{}:{}", host, port))
+            Some(format!("{host}:{port}"))
         });
 
     Json(DiscoveryResponse {

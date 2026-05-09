@@ -114,7 +114,7 @@ pub async fn recover_from_backup(
             .split('/')
             .next()
             .unwrap_or("localhost:8080");
-        format!("{}{}", scheme, host_port)
+        format!("{scheme}{host_port}")
     };
 
     let recovery_id = Uuid::new_v4().to_string();
@@ -146,12 +146,12 @@ pub async fn recover_from_backup(
     let backup_base = if backup_addr.starts_with("http://") || backup_addr.starts_with("https://") {
         backup_addr.to_string()
     } else {
-        format!("http://{}", backup_addr)
+        format!("http://{backup_addr}")
     };
 
     let pool = state.pool.clone();
     let recovery_id_clone = recovery_id.clone();
-    let callback_url = format!("{}/api/backup/recovery-callback", base_url_cfg);
+    let callback_url = format!("{base_url_cfg}/api/backup/recovery-callback");
     let accept_invalid_certs = state.config.backup.accept_invalid_certs;
 
     tokio::spawn(async move {
@@ -187,7 +187,7 @@ pub async fn recover_from_backup(
         // The push-sync engine will also sync users, but doing it here first
         // ensures accounts are available immediately (before photos arrive)
         // and avoids silent failures in the async push flow.
-        let users_url = format!("{}/api/backup/list-users-full", backup_base);
+        let users_url = format!("{backup_base}/api/backup/list-users-full");
         let mut users_req = client.get(&users_url);
         if let Some(ref key) = backup_api_key {
             users_req = users_req.header("X-API-Key", key);
@@ -237,7 +237,7 @@ pub async fn recover_from_backup(
         }
 
         // Ask the backup server to push all its data to this primary
-        let push_url = format!("{}/api/backup/push-to", backup_base);
+        let push_url = format!("{backup_base}/api/backup/push-to");
         let push_body = serde_json::json!({
             "target_address": primary_address,
             "target_api_key": recovery_api_key,
@@ -261,13 +261,13 @@ pub async fn recover_from_backup(
             Ok(resp) => {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                let msg = format!("Backup server returned HTTP {}: {}", status, body);
+                let msg = format!("Backup server returned HTTP {status}: {body}");
                 tracing::error!("Recovery push-sync failed: {}", msg);
                 update_recovery_log(&pool, &recovery_id_clone, "error", 0, 0, Some(&msg)).await;
                 cleanup_recovery_key(&pool).await;
             }
             Err(e) => {
-                let msg = format!("Failed to contact backup server: {}", e);
+                let msg = format!("Failed to contact backup server: {e}");
                 tracing::error!("Recovery push-sync failed: {}", msg);
                 update_recovery_log(&pool, &recovery_id_clone, "error", 0, 0, Some(&msg)).await;
                 cleanup_recovery_key(&pool).await;
@@ -278,7 +278,7 @@ pub async fn recover_from_backup(
     Ok((
         StatusCode::ACCEPTED,
         Json(RecoveryResponse {
-            message: format!("Recovery from '{}' started", server_name_response),
+            message: format!("Recovery from '{server_name_response}' started"),
             recovery_id,
         }),
     ))
@@ -316,7 +316,7 @@ pub async fn push_sync_to_target(
     let temp_server_id = format!("recovery-push-{}", Uuid::new_v4());
     let temp_server = BackupServer {
         id: temp_server_id.clone(),
-        name: format!("Recovery target ({})", target_address),
+        name: format!("Recovery target ({target_address})"),
         address: target_address,
         sync_frequency_hours: 0,
         last_sync_at: None,
@@ -655,9 +655,9 @@ async fn upsert_user_from_backup(
             .bind(totp_enabled)
             .execute(pool)
             .await
-            .map_err(|e| format!("Re-insert after merge failed: {}", e))?;
+            .map_err(|e| format!("Re-insert after merge failed: {e}"))?;
         } else {
-            return Err(format!("DB error: {}", e));
+            return Err(format!("DB error: {e}"));
         }
     }
 

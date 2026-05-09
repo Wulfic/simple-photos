@@ -41,7 +41,7 @@ pub async fn android_apk(State(state): State<AppState>) -> Result<Response, AppE
         if tokio::fs::try_exists(path).await.unwrap_or(false) {
             let data = tokio::fs::read(path)
                 .await
-                .map_err(|e| AppError::Internal(format!("Failed to read APK file: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Failed to read APK file: {e}")))?;
 
             let filename = path
                 .file_name()
@@ -55,7 +55,7 @@ pub async fn android_apk(State(state): State<AppState>) -> Result<Response, AppE
             );
             headers.insert(
                 "Content-Disposition",
-                HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
+                HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
                     .unwrap_or_else(|_| {
                         HeaderValue::from_static("attachment; filename=\"simple-photos.apk\"")
                     }),

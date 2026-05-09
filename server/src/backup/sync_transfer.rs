@@ -248,7 +248,7 @@ pub async fn fetch_remote_ids(
     path: &str,
     api_key: &Option<String>,
 ) -> HashSet<String> {
-    let mut req = client.get(format!("{}{}", base_url, path));
+    let mut req = client.get(format!("{base_url}{path}"));
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());
     }
@@ -321,7 +321,7 @@ pub async fn send_file(
 
     let file_data = tokio::fs::read(&full_path)
         .await
-        .map_err(|e| format!("read error: {}", e))?;
+        .map_err(|e| format!("read error: {e}"))?;
 
     // Compute SHA-256 checksum for integrity verification
     let hash = Sha256::digest(&file_data);
@@ -333,7 +333,7 @@ pub async fn send_file(
     let encoded_path = utf8_percent_encode(file_path, CONTROLS).to_string();
 
     let mut req = client
-        .post(format!("{}/backup/receive", base_url))
+        .post(format!("{base_url}/backup/receive"))
         .header("X-Photo-Id", item_id)
         .header("X-File-Path", encoded_path.as_str())
         .header("X-Source", source)
@@ -376,7 +376,7 @@ pub async fn send_blob_to_backup(
 
     let file_data = tokio::fs::read(&full_path)
         .await
-        .map_err(|e| format!("read error: {}", e))?;
+        .map_err(|e| format!("read error: {e}"))?;
 
     let hash = Sha256::digest(&file_data);
     let hash_hex = hex::encode(hash);
@@ -384,7 +384,7 @@ pub async fn send_blob_to_backup(
     let encoded_path = utf8_percent_encode(&blob.storage_path, CONTROLS).to_string();
 
     let mut req = client
-        .post(format!("{}/backup/receive-blob", base_url))
+        .post(format!("{base_url}/backup/receive-blob"))
         .header("X-Blob-Id", blob.id.as_str())
         .header("X-Storage-Path", encoded_path.as_str())
         .header("X-Content-Hash", hash_hex.as_str())

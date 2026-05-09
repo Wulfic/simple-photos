@@ -71,7 +71,7 @@ pub async fn download(
     let total_size = size_bytes as u64;
 
     // ── If-None-Match → 304 (blobs are immutable, ETag = blob_id) ──────
-    let etag = format!("\"{}\"", blob_id);
+    let etag = format!("\"{blob_id}\"");
     if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
         if inm == etag || inm.trim_matches('"') == blob_id {
             return Response::builder()
@@ -79,7 +79,7 @@ pub async fn download(
                 .header(
                     "ETag",
                     HeaderValue::from_str(&etag)
-                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
                 )
                 .header(
                     "Cache-Control",
@@ -104,14 +104,14 @@ pub async fn download(
                 .await
                 .map_err(|e| match e.kind() {
                     std::io::ErrorKind::NotFound => AppError::NotFound,
-                    _ => AppError::Internal(format!("Failed to open blob: {}", e)),
+                    _ => AppError::Internal(format!("Failed to open blob: {e}")),
                 })?;
 
             // Seek to the requested start position
             use tokio::io::AsyncSeekExt;
             file.seek(std::io::SeekFrom::Start(start))
                 .await
-                .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Failed to seek: {e}")))?;
 
             let stream = tokio_util::io::ReaderStream::with_capacity(file.take(length), BLOB_BUF);
             let body = Body::from_stream(stream);
@@ -128,10 +128,9 @@ pub async fn download(
                 .header("Content-Length", HeaderValue::from(length))
                 .header(
                     "Content-Range",
-                    HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end, total_size))
-                        .map_err(|e| {
-                            AppError::Internal(format!("Invalid Content-Range header: {}", e))
-                        })?,
+                    HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}")).map_err(
+                        |e| AppError::Internal(format!("Invalid Content-Range header: {e}")),
+                    )?,
                 )
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
                 .header(
@@ -141,7 +140,7 @@ pub async fn download(
                 .header(
                     "ETag",
                     HeaderValue::from_str(&etag)
-                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
                 )
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()));
@@ -151,8 +150,8 @@ pub async fn download(
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(
                     "Content-Range",
-                    HeaderValue::from_str(&format!("bytes */{}", total_size)).map_err(|e| {
-                        AppError::Internal(format!("Invalid Content-Range header: {}", e))
+                    HeaderValue::from_str(&format!("bytes */{total_size}")).map_err(|e| {
+                        AppError::Internal(format!("Invalid Content-Range header: {e}"))
                     })?,
                 )
                 .body(Body::empty())
@@ -165,7 +164,7 @@ pub async fn download(
         .await
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(format!("Failed to open blob: {}", e)),
+            _ => AppError::Internal(format!("Failed to open blob: {e}")),
         })?;
 
     let stream = tokio_util::io::ReaderStream::with_capacity(file, BLOB_BUF);
@@ -190,7 +189,7 @@ pub async fn download(
         .header(
             "ETag",
             HeaderValue::from_str(&etag)
-                .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+                .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
         )
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))
@@ -250,11 +249,11 @@ pub async fn download_thumb(
         .await
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(format!("Failed to open thumbnail blob: {}", e)),
+            _ => AppError::Internal(format!("Failed to open thumbnail blob: {e}")),
         })?;
 
     // ── If-None-Match → 304 ────────────────────────────────────────────
-    let etag = format!("\"{}\"", thumb_blob_id);
+    let etag = format!("\"{thumb_blob_id}\"");
     if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
         if inm == etag || inm.trim_matches('"') == thumb_blob_id.as_str() {
             return Response::builder()
@@ -262,7 +261,7 @@ pub async fn download_thumb(
                 .header(
                     "ETag",
                     HeaderValue::from_str(&etag)
-                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
                 )
                 .header(
                     "Cache-Control",
@@ -292,7 +291,7 @@ pub async fn download_thumb(
         .header(
             "ETag",
             HeaderValue::from_str(&etag)
-                .map_err(|e| AppError::Internal(format!("Invalid ETag header: {}", e)))?,
+                .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
         )
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))

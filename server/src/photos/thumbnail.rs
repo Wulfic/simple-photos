@@ -78,7 +78,7 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
     let output = output_path.to_path_buf();
 
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let img = image::open(&input).map_err(|e| format!("Failed to open image: {}", e))?;
+        let img = image::open(&input).map_err(|e| format!("Failed to open image: {e}"))?;
         let raw_w = img.width();
         let raw_h = img.height();
         let img = apply_exif_orientation(&input, img);
@@ -118,7 +118,7 @@ async fn generate_static_image_thumbnail(input_path: &Path, output_path: &Path) 
         );
         thumb
             .save_with_format(&output, image::ImageFormat::Jpeg)
-            .map_err(|e| format!("Failed to save thumbnail: {}", e))?;
+            .map_err(|e| format!("Failed to save thumbnail: {e}"))?;
         Ok(())
     })
     .await;
@@ -206,11 +206,11 @@ async fn generate_static_gif_thumbnail(input_path: &Path, output_path: &Path) ->
     let output = output_path.to_path_buf();
 
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let img = image::open(&input).map_err(|e| format!("Failed to open GIF: {}", e))?;
+        let img = image::open(&input).map_err(|e| format!("Failed to open GIF: {e}"))?;
         let thumb = img.resize(512, 512, image::imageops::FilterType::Triangle);
         thumb
             .save_with_format(&output, image::ImageFormat::Gif)
-            .map_err(|e| format!("Failed to save GIF thumbnail: {}", e))?;
+            .map_err(|e| format!("Failed to save GIF thumbnail: {e}"))?;
         Ok(())
     })
     .await;
@@ -248,7 +248,7 @@ async fn generate_video_thumbnail_ffmpeg(input_path: &Path, output_path: &Path) 
     // setsar=1 normalises non-square pixel aspect ratios before scaling.
     // force_original_aspect_ratio=decrease fits within 512×512 without cropping.
     let mut cmd = tokio::process::Command::new("ffmpeg");
-    cmd.args(["-y", "-ss", &format!("{:.2}", seek_to), "-i"])
+    cmd.args(["-y", "-ss", &format!("{seek_to:.2}"), "-i"])
         .arg(input_path)
         .args([
             "-frames:v",

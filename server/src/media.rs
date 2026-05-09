@@ -22,7 +22,7 @@ pub fn is_media_file(name: &str) -> bool {
     let lower = name.to_lowercase();
     MEDIA_EXTENSIONS
         .iter()
-        .any(|ext| lower.ends_with(&format!(".{}", ext)))
+        .any(|ext| lower.ends_with(&format!(".{ext}")))
 }
 
 /// Returns `true` when the filename is either a native media format

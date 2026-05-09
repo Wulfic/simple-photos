@@ -86,7 +86,7 @@ async fn require_basic_auth_admin(
     };
 
     let valid = bcrypt::verify(password, &password_hash)
-        .map_err(|e| AppError::Internal(format!("bcrypt error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("bcrypt error: {e}")))?;
 
     if !valid {
         return Err(AppError::Unauthorized(

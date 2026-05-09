@@ -149,7 +149,7 @@ pub async fn encrypt_one_photo(
             .bind(&photo.user_id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| format!("Check existing blob: {}", e))?;
+            .map_err(|e| format!("Check existing blob: {e}"))?;
 
     if let Some((existing_blob_id,)) = existing_blob {
         // Find the encrypted thumbnail that is already associated with the
@@ -173,7 +173,7 @@ pub async fn encrypt_one_photo(
         .bind(&photo.user_id)
         .fetch_optional(pool)
         .await
-        .map_err(|e| format!("Check existing thumb: {}", e))?
+        .map_err(|e| format!("Check existing thumb: {e}"))?
         .flatten();
 
         // Fallback: if no photo references the blob yet (backup-sync scenario),
@@ -191,7 +191,7 @@ pub async fn encrypt_one_photo(
             .bind(thumb_type)
             .fetch_optional(pool)
             .await
-            .map_err(|e| format!("Check existing thumb fallback: {}", e))?
+            .map_err(|e| format!("Check existing thumb fallback: {e}"))?
         };
 
         tracing::info!(
@@ -210,7 +210,7 @@ pub async fn encrypt_one_photo(
         .bind(&photo.user_id)
         .execute(pool)
         .await
-        .map_err(|e| format!("Link existing blob failed: {}", e))?;
+        .map_err(|e| format!("Link existing blob failed: {e}"))?;
 
         return Ok(());
     }
@@ -250,7 +250,7 @@ pub async fn encrypt_one_photo(
         "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &payload_data),
     });
     let photo_json =
-        serde_json::to_vec(&photo_payload).map_err(|e| format!("JSON serialize failed: {}", e))?;
+        serde_json::to_vec(&photo_payload).map_err(|e| format!("JSON serialize failed: {e}"))?;
 
     // Encrypt (CPU-bound, offload to blocking pool)
     let enc_photo = {
@@ -258,8 +258,8 @@ pub async fn encrypt_one_photo(
         let json_clone = photo_json;
         tokio::task::spawn_blocking(move || crypto::encrypt(&key_copy, &json_clone))
             .await
-            .map_err(|e| format!("Encrypt task panicked: {}", e))?
-            .map_err(|e| format!("Photo encrypt failed: {}", e))?
+            .map_err(|e| format!("Encrypt task panicked: {e}"))?
+            .map_err(|e| format!("Photo encrypt failed: {e}"))?
     };
 
     let enc_photo_hash = hex::encode(Sha256::digest(&enc_photo));
@@ -268,12 +268,12 @@ pub async fn encrypt_one_photo(
     let blob_id = Uuid::new_v4().to_string();
     let blob_storage_path = storage::write_blob(storage_root, &photo.user_id, &blob_id, &enc_photo)
         .await
-        .map_err(|e| format!("Write photo blob failed: {}", e))?;
+        .map_err(|e| format!("Write photo blob failed: {e}"))?;
 
     let now = Utc::now().to_rfc3339();
 
     // Atomic transaction: INSERT blobs + UPDATE photos
-    let mut tx = pool.begin().await.map_err(|e| format!("Begin tx: {}", e))?;
+    let mut tx = pool.begin().await.map_err(|e| format!("Begin tx: {e}"))?;
 
     if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params
     {
@@ -290,7 +290,7 @@ pub async fn encrypt_one_photo(
         .bind(tpath)
         .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Insert thumbnail blob row: {}", e))?;
+        .map_err(|e| format!("Insert thumbnail blob row: {e}"))?;
     }
 
     sqlx::query(
@@ -307,7 +307,7 @@ pub async fn encrypt_one_photo(
     .bind(&content_hash)
     .execute(&mut *tx)
     .await
-    .map_err(|e| format!("Insert photo blob row: {}", e))?;
+    .map_err(|e| format!("Insert photo blob row: {e}"))?;
 
     sqlx::query(
         "UPDATE photos SET encrypted_blob_id = ?, encrypted_thumb_blob_id = ? WHERE id = ? AND user_id = ?",
@@ -322,9 +322,9 @@ pub async fn encrypt_one_photo(
     .bind(&photo.user_id)
     .execute(&mut *tx)
     .await
-    .map_err(|e| format!("Mark encrypted failed: {}", e))?;
+    .map_err(|e| format!("Mark encrypted failed: {e}"))?;
 
-    tx.commit().await.map_err(|e| format!("Commit tx: {}", e))?;
+    tx.commit().await.map_err(|e| format!("Commit tx: {e}"))?;
 
     Ok(())
 }
@@ -638,15 +638,15 @@ async fn encrypt_and_write_thumbnail(
         "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, thumb_bytes),
     });
     let thumb_json =
-        serde_json::to_vec(&thumb_payload).map_err(|e| format!("JSON serialize failed: {}", e))?;
+        serde_json::to_vec(&thumb_payload).map_err(|e| format!("JSON serialize failed: {e}"))?;
 
     let enc_thumb = {
         let key_copy = *key;
         let json_clone = thumb_json;
         tokio::task::spawn_blocking(move || crypto::encrypt(&key_copy, &json_clone))
             .await
-            .map_err(|e| format!("Encrypt task panicked: {}", e))?
-            .map_err(|e| format!("Thumbnail encrypt failed: {}", e))?
+            .map_err(|e| format!("Encrypt task panicked: {e}"))?
+            .map_err(|e| format!("Thumbnail encrypt failed: {e}"))?
     };
 
     let enc_thumb_hash = hex::encode(Sha256::digest(&enc_thumb));
@@ -659,7 +659,7 @@ async fn encrypt_and_write_thumbnail(
 
     let blob_storage_path = storage::write_blob(storage_root, &photo.user_id, &blob_id, &enc_thumb)
         .await
-        .map_err(|e| format!("Write thumbnail blob failed: {}", e))?;
+        .map_err(|e| format!("Write thumbnail blob failed: {e}"))?;
 
     let now = Utc::now().to_rfc3339();
     Ok((
@@ -704,15 +704,15 @@ async fn encrypt_and_store_repair_thumbnail(
         "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, thumb_bytes),
     });
     let thumb_json =
-        serde_json::to_vec(&thumb_payload).map_err(|e| format!("JSON serialize failed: {}", e))?;
+        serde_json::to_vec(&thumb_payload).map_err(|e| format!("JSON serialize failed: {e}"))?;
 
     let enc_thumb = {
         let key_copy = *key;
         let json_clone = thumb_json;
         tokio::task::spawn_blocking(move || crypto::encrypt(&key_copy, &json_clone))
             .await
-            .map_err(|e| format!("Encrypt task panicked: {}", e))?
-            .map_err(|e| format!("Encrypt failed: {}", e))?
+            .map_err(|e| format!("Encrypt task panicked: {e}"))?
+            .map_err(|e| format!("Encrypt failed: {e}"))?
     };
 
     let enc_thumb_hash = hex::encode(Sha256::digest(&enc_thumb));
@@ -725,7 +725,7 @@ async fn encrypt_and_store_repair_thumbnail(
 
     let blob_storage_path = storage::write_blob(storage_root, photo_user_id, &blob_id, &enc_thumb)
         .await
-        .map_err(|e| format!("Write blob failed: {}", e))?;
+        .map_err(|e| format!("Write blob failed: {e}"))?;
 
     let now = Utc::now().to_rfc3339();
     sqlx::query(
@@ -741,7 +741,7 @@ async fn encrypt_and_store_repair_thumbnail(
     .bind(&blob_storage_path)
     .execute(pool)
     .await
-    .map_err(|e| format!("Insert blob failed: {}", e))?;
+    .map_err(|e| format!("Insert blob failed: {e}"))?;
 
     sqlx::query("UPDATE photos SET encrypted_thumb_blob_id = ? WHERE id = ? AND user_id = ?")
         .bind(&blob_id)
@@ -749,7 +749,7 @@ async fn encrypt_and_store_repair_thumbnail(
         .bind(photo_user_id)
         .execute(pool)
         .await
-        .map_err(|e| format!("Update photos failed: {}", e))?;
+        .map_err(|e| format!("Update photos failed: {e}"))?;
 
     Ok(())
 }

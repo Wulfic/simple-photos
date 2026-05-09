@@ -264,11 +264,10 @@ async fn preflight_health_check(
             health_url
         )),
         Err(e) => Err(format!(
-            "Cannot reach backup server at {} — {}\n\
+            "Cannot reach backup server at {health_url} — {e}\n\
              Hint: verify the registered address in backup_servers matches \
              the backup's externally-reachable host:port (check base_url in \
-             the backup's config.toml).",
-            health_url, e
+             the backup's config.toml)."
         )),
     }
 }
@@ -394,7 +393,7 @@ async fn sync_photos(
         let query_string: String = if audio_enabled {
             base_query.to_string()
         } else {
-            format!("{} AND media_type != 'audio'", base_query)
+            format!("{base_query} AND media_type != 'audio'")
         };
         match sqlx::query_as::<_, PhotoToSync>(&query_string)
             .fetch_all(ctx.pool)

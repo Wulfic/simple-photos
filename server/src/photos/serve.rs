@@ -72,13 +72,13 @@ pub(crate) async fn serve_file_with_range(
                 .await
                 .map_err(|e| match e.kind() {
                     std::io::ErrorKind::NotFound => AppError::NotFound,
-                    _ => AppError::Internal(format!("Failed to open file: {}", e)),
+                    _ => AppError::Internal(format!("Failed to open file: {e}")),
                 })?;
 
             use tokio::io::{AsyncReadExt, AsyncSeekExt};
             file.seek(std::io::SeekFrom::Start(start))
                 .await
-                .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Failed to seek: {e}")))?;
 
             let stream =
                 tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
@@ -90,8 +90,8 @@ pub(crate) async fn serve_file_with_range(
                 .header("Content-Length", HeaderValue::from(length))
                 .header(
                     "Content-Range",
-                    HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end, total_size))
-                        .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
+                    HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}"))
+                        .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
                 )
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
                 .header(
@@ -109,8 +109,8 @@ pub(crate) async fn serve_file_with_range(
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(
                     "Content-Range",
-                    HeaderValue::from_str(&format!("bytes */{}", total_size))
-                        .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
+                    HeaderValue::from_str(&format!("bytes */{total_size}"))
+                        .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
                 )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()));
@@ -121,7 +121,7 @@ pub(crate) async fn serve_file_with_range(
         .await
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => AppError::NotFound,
-            _ => AppError::Internal(format!("Failed to open file: {}", e)),
+            _ => AppError::Internal(format!("Failed to open file: {e}")),
         })?;
 
     let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
@@ -263,13 +263,13 @@ pub async fn serve_photo(
             );
             match e.kind() {
                 std::io::ErrorKind::NotFound => AppError::NotFound,
-                _ => AppError::Internal(format!("Failed to open photo: {}", e)),
+                _ => AppError::Internal(format!("Failed to open photo: {e}")),
             }
         })
     };
 
     // ── ETag / conditional response ─────────────────────────────────────
-    let etag = format!("\"{}-{}\"", photo_id, total_size);
+    let etag = format!("\"{photo_id}-{total_size}\"");
     if let Some(not_modified) = check_etag(&headers, &etag) {
         return Ok(not_modified);
     }
@@ -284,7 +284,7 @@ pub async fn serve_photo(
             use tokio::io::{AsyncReadExt, AsyncSeekExt};
             file.seek(std::io::SeekFrom::Start(start))
                 .await
-                .map_err(|e| AppError::Internal(format!("Failed to seek: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Failed to seek: {e}")))?;
 
             let stream =
                 tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
@@ -296,8 +296,8 @@ pub async fn serve_photo(
                 .header("Content-Length", HeaderValue::from(length))
                 .header(
                     "Content-Range",
-                    HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end, total_size))
-                        .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
+                    HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}"))
+                        .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
                 )
                 .header("Accept-Ranges", HeaderValue::from_static("bytes"))
                 .header(
@@ -315,8 +315,8 @@ pub async fn serve_photo(
                 .status(StatusCode::RANGE_NOT_SATISFIABLE)
                 .header(
                     "Content-Range",
-                    HeaderValue::from_str(&format!("bytes */{}", total_size))
-                        .map_err(|e| AppError::Internal(format!("Invalid header: {}", e)))?,
+                    HeaderValue::from_str(&format!("bytes */{total_size}"))
+                        .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
                 )
                 .body(Body::empty())
                 .map_err(|e| AppError::Internal(e.to_string()));
@@ -442,7 +442,7 @@ pub async fn serve_thumbnail(
 
     let meta = tokio::fs::metadata(&full_path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to read thumbnail: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read thumbnail: {e}")))?;
 
     // ETag for thumbnails — ID + file size on disk
     let etag = format!("\"{}-thumb-{}\"", photo_id, meta.len());
@@ -452,7 +452,7 @@ pub async fn serve_thumbnail(
 
     let file = tokio::fs::File::open(&full_path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to open thumbnail: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to open thumbnail: {e}")))?;
 
     let stream = tokio_util::io::ReaderStream::with_capacity(file, STREAM_BUF_SIZE);
     let body = Body::from_stream(stream);
@@ -511,7 +511,7 @@ pub async fn serve_web(
     let full_path = storage_root.join(&file_path);
     let content_type = mime_type.as_str();
 
-    let etag = format!("\"{}-orig-{}\"", photo_id, size_bytes);
+    let etag = format!("\"{photo_id}-orig-{size_bytes}\"");
     serve_file_with_range(
         &full_path,
         size_bytes as u64,
@@ -565,7 +565,7 @@ pub async fn serve_source_file(
 
     let meta = tokio::fs::metadata(&full_path)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to read source file: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to read source file: {e}")))?;
 
     let total_size = meta.len();
 
@@ -584,14 +584,14 @@ pub async fn serve_source_file(
         _ => "application/octet-stream",
     };
 
-    let etag = format!("\"{}-source-{}\"", photo_id, total_size);
+    let etag = format!("\"{photo_id}-source-{total_size}\"");
 
     // Force download via Content-Disposition
     let filename = full_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("original");
-    let disposition = format!("attachment; filename=\"{}\"", filename);
+    let disposition = format!("attachment; filename=\"{filename}\"");
 
     let mut resp =
         serve_file_with_range(&full_path, total_size, content_type, &headers, Some(&etag)).await?;
@@ -643,17 +643,17 @@ pub async fn serve_motion_video(
         let blob_path = crate::blobs::storage::blob_path(&storage_root, &auth.user_id, blob_id);
         if tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
             let meta = tokio::fs::metadata(&blob_path).await.map_err(|e| {
-                AppError::Internal(format!("Failed to read motion video blob: {}", e))
+                AppError::Internal(format!("Failed to read motion video blob: {e}"))
             })?;
             let data = tokio::fs::read(&blob_path).await.map_err(|e| {
-                AppError::Internal(format!("Failed to read motion video blob: {}", e))
+                AppError::Internal(format!("Failed to read motion video blob: {e}"))
             })?;
             return Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "video/mp4")
                 .header("Content-Length", meta.len())
                 .body(Body::from(data))
-                .map_err(|e| AppError::Internal(format!("Response build: {}", e)));
+                .map_err(|e| AppError::Internal(format!("Response build: {e}")));
         }
     }
 
@@ -662,7 +662,7 @@ pub async fn serve_motion_video(
     let full_path = storage_root.join(&file_path);
 
     let data = tokio::fs::read(&full_path).await.map_err(|e| {
-        AppError::Internal(format!("Failed to read photo file for motion video: {}", e))
+        AppError::Internal(format!("Failed to read photo file for motion video: {e}"))
     })?;
 
     let subtype_info = super::metadata::extract_xmp_subtype(&data);
@@ -680,5 +680,5 @@ pub async fn serve_motion_video(
         .header("Content-Type", "video/mp4")
         .header("Content-Length", len)
         .body(Body::from(video_bytes))
-        .map_err(|e| AppError::Internal(format!("Response build: {}", e)))
+        .map_err(|e| AppError::Internal(format!("Response build: {e}")))
 }

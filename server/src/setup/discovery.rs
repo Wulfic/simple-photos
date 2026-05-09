@@ -53,19 +53,19 @@ pub async fn discover(
     let mut existing_addrs = std::collections::HashSet::new();
 
     // Pre-seed existing_addrs with our own addresses so we never list ourselves
-    existing_addrs.insert(format!("127.0.0.1:{}", our_port));
-    existing_addrs.insert(format!("localhost:{}", our_port));
+    existing_addrs.insert(format!("127.0.0.1:{our_port}"));
+    existing_addrs.insert(format!("localhost:{our_port}"));
     if let Ok(url) = reqwest::Url::parse(&state.config.server.base_url) {
         if let Some(host) = url.host_str() {
             let port = url.port().unwrap_or(our_port);
-            existing_addrs.insert(format!("{}:{}", host, port));
+            existing_addrs.insert(format!("{host}:{port}"));
         }
     }
     if let Some(local_ip) = crate::backup::broadcast::get_local_ip() {
-        existing_addrs.insert(format!("{}:{}", local_ip, our_port));
+        existing_addrs.insert(format!("{local_ip}:{our_port}"));
     }
     for ip in crate::backup::broadcast::get_all_local_ips() {
-        existing_addrs.insert(format!("{}:{}", ip, our_port));
+        existing_addrs.insert(format!("{ip}:{our_port}"));
     }
 
     // HTTP client with tight timeouts for network probes

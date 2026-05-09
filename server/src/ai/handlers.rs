@@ -378,7 +378,7 @@ pub async fn merge_face_clusters(
                 .await?;
 
         if exists.is_none() {
-            return Err(AppError::BadRequest(format!("Cluster {} not found", cid)));
+            return Err(AppError::BadRequest(format!("Cluster {cid} not found")));
         }
     }
 
@@ -444,7 +444,7 @@ pub async fn split_face_cluster(
                 .await?;
 
         if exists.is_none() {
-            return Err(AppError::BadRequest(format!("Detection {} not found", did)));
+            return Err(AppError::BadRequest(format!("Detection {did} not found")));
         }
     }
 
@@ -673,10 +673,7 @@ pub async fn merge_pet_clusters(
                 .await?;
 
         if exists.is_none() {
-            return Err(AppError::BadRequest(format!(
-                "Pet cluster {} not found",
-                cid
-            )));
+            return Err(AppError::BadRequest(format!("Pet cluster {cid} not found")));
         }
     }
 

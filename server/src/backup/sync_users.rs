@@ -76,7 +76,7 @@ pub async fn sync_users_to_backup(
             "totp_backup_codes": codes_json,
         });
         let mut req = client
-            .post(format!("{}/backup/upsert-user", base_url))
+            .post(format!("{base_url}/backup/upsert-user"))
             .json(&body);
         if let Some(ref key) = api_key {
             req = req.header("X-API-Key", key.as_str());
@@ -109,7 +109,7 @@ pub async fn sync_user_deletions_to_backup(
     server_name: &str,
 ) {
     // Fetch remote user IDs
-    let mut req = client.get(format!("{}/backup/list-users", base_url));
+    let mut req = client.get(format!("{base_url}/backup/list-users"));
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());
     }
@@ -177,7 +177,7 @@ pub async fn sync_user_deletions_to_backup(
     }
 
     let payload = serde_json::json!({ "deleted_ids": to_delete });
-    let url = format!("{}/backup/sync-user-deletions", base_url);
+    let url = format!("{base_url}/backup/sync-user-deletions");
     let mut req = client.post(&url).json(&payload);
     if let Some(ref key) = api_key {
         req = req.header("X-API-Key", key.as_str());

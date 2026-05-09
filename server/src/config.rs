@@ -555,7 +555,7 @@ impl AppConfig {
         let path = std::env::var("SIMPLE_PHOTOS_CONFIG").unwrap_or_else(|_| "config.toml".into());
 
         let contents = std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("Failed to read config file '{}': {}", path, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to read config file '{path}': {e}"))?;
 
         let mut config: AppConfig = toml::from_str(&contents)?;
 

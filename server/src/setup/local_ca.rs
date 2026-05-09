@@ -110,7 +110,7 @@ pub fn generate_local_ca(
 ) -> Result<GenerateOutcome, AppError> {
     let dir = data_root.join("local_ca");
     std::fs::create_dir_all(&dir)
-        .map_err(|e| AppError::Internal(format!("Failed to create local_ca directory: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to create local_ca directory: {e}")))?;
 
     let hostname = detect_hostname();
     let label = req
@@ -118,11 +118,11 @@ pub fn generate_local_ca(
         .as_ref()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("Simple Photos Local CA ({})", hostname));
+        .unwrap_or_else(|| format!("Simple Photos Local CA ({hostname})"));
 
     // ── 1. Root CA ────────────────────────────────────────────────
     let mut ca_params = CertificateParams::new(Vec::<String>::new())
-        .map_err(|e| AppError::Internal(format!("rcgen ca params: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("rcgen ca params: {e}")))?;
     let mut ca_dn = DistinguishedName::new();
     ca_dn.push(DnType::CommonName, label.clone());
     ca_dn.push(DnType::OrganizationName, "Simple Photos");
@@ -137,10 +137,10 @@ pub fn generate_local_ca(
     ca_params.not_after = now_offset(CA_VALIDITY_DAYS);
 
     let ca_key =
-        KeyPair::generate().map_err(|e| AppError::Internal(format!("rcgen ca key: {}", e)))?;
+        KeyPair::generate().map_err(|e| AppError::Internal(format!("rcgen ca key: {e}")))?;
     let ca_cert = ca_params
         .self_signed(&ca_key)
-        .map_err(|e| AppError::Internal(format!("rcgen ca self_signed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("rcgen ca self_signed: {e}")))?;
     let ca_pem = ca_cert.pem();
     let ca_der = ca_cert.der().to_vec();
     let fingerprint = sha256_hex(&ca_der);
@@ -148,7 +148,7 @@ pub fn generate_local_ca(
     // ── 2. Leaf certificate ────────────────────────────────────────
     let hosts = collect_hosts(&hostname, &req.extra_hosts);
     let mut leaf_params = CertificateParams::new(Vec::<String>::new())
-        .map_err(|e| AppError::Internal(format!("rcgen leaf params: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("rcgen leaf params: {e}")))?;
     let mut leaf_dn = DistinguishedName::new();
     leaf_dn.push(DnType::CommonName, hostname.clone());
     leaf_dn.push(DnType::OrganizationName, "Simple Photos");
@@ -177,10 +177,10 @@ pub fn generate_local_ca(
     leaf_params.not_after = now_offset(LEAF_VALIDITY_DAYS);
 
     let leaf_key =
-        KeyPair::generate().map_err(|e| AppError::Internal(format!("rcgen leaf key: {}", e)))?;
+        KeyPair::generate().map_err(|e| AppError::Internal(format!("rcgen leaf key: {e}")))?;
     let leaf_cert = leaf_params
         .signed_by(&leaf_key, &ca_cert, &ca_key)
-        .map_err(|e| AppError::Internal(format!("rcgen leaf signed_by: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("rcgen leaf signed_by: {e}")))?;
     let leaf_pem = leaf_cert.pem();
 
     // ── 3. Persist atomically (write+rename) ───────────────────────
@@ -212,7 +212,7 @@ pub fn generate_local_ca(
         fingerprint_sha256: fingerprint.clone(),
     };
     let meta_json = serde_json::to_vec_pretty(&meta)
-        .map_err(|e| AppError::Internal(format!("meta json: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("meta json: {e}")))?;
     write_secret(&meta_path, &meta_json)?;
 
     // ── 4. Build the client install bundle ─────────────────────────
@@ -339,7 +339,7 @@ fn collect_hosts(hostname: &str, extras: &[String]) -> Vec<String> {
     // Also add the `<hostname>.local` mDNS name — common on Windows /
     // macOS networks even without Avahi.
     if !hostname.contains('.') {
-        push(&format!("{}.local", hostname));
+        push(&format!("{hostname}.local"));
     }
 
     // Local interface IPs (best-effort; ignored if the syscall is not
@@ -414,7 +414,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
         if i > 0 {
             out.push(':');
         }
-        out.push_str(&format!("{:02X}", b));
+        out.push_str(&format!("{b:02X}"));
     }
     out
 }
@@ -469,9 +469,9 @@ fn write_bundle(
 
     let mut add = |name: &str, body: &[u8], options: SimpleFileOptions| -> Result<(), AppError> {
         zw.start_file(name, options)
-            .map_err(|e| AppError::Internal(format!("zip start {}: {}", name, e)))?;
+            .map_err(|e| AppError::Internal(format!("zip start {name}: {e}")))?;
         zw.write_all(body)
-            .map_err(|e| AppError::Internal(format!("zip write {}: {}", name, e)))?;
+            .map_err(|e| AppError::Internal(format!("zip write {name}: {e}")))?;
         Ok(())
     };
 
@@ -494,8 +494,8 @@ fn write_bundle(
     add("README.md", readme(fingerprint, hosts).as_bytes(), opts)?;
 
     zw.finish()
-        .map_err(|e| AppError::Internal(format!("zip finish: {}", e)))?;
-    std::fs::rename(&tmp, path).map_err(|e| AppError::Internal(format!("rename bundle: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("zip finish: {e}")))?;
+    std::fs::rename(&tmp, path).map_err(|e| AppError::Internal(format!("rename bundle: {e}")))?;
     Ok(())
 }
 
@@ -503,7 +503,7 @@ fn linux_script(fingerprint: &str) -> String {
     format!(
         r#"#!/usr/bin/env bash
 # Install the Simple Photos local CA on Linux.
-# Fingerprint (SHA-256): {fp}
+# Fingerprint (SHA-256): {fingerprint}
 #
 # Usage:  sudo ./install-linux.sh
 set -euo pipefail
@@ -522,7 +522,7 @@ fi
 
 # Verify fingerprint before installing — refuses to install a tampered cert.
 ACTUAL=$(openssl x509 -in "$SRC" -noout -fingerprint -sha256 | cut -d= -f2)
-EXPECTED="{fp}"
+EXPECTED="{fingerprint}"
 if [ "$ACTUAL" != "$EXPECTED" ]; then
   echo "Fingerprint mismatch:" >&2
   echo "  expected: $EXPECTED" >&2
@@ -545,13 +545,12 @@ else
 fi
 
 echo
-echo "✓ Simple Photos local CA installed (fingerprint: {fp})."
+echo "✓ Simple Photos local CA installed (fingerprint: {fingerprint})."
 echo "Browsers using the system store (Chromium, Edge, curl, wget) will trust"
 echo "the certificate immediately. Firefox uses its own store — open"
 echo "  about:preferences#privacy → View Certificates → Authorities → Import"
 echo "and tick \"Trust this CA to identify websites\"."
 "#,
-        fp = fingerprint,
     )
 }
 
@@ -607,7 +606,7 @@ fn android_instructions(fingerprint: &str) -> String {
         r#"Install the Simple Photos local CA on Android
 =============================================
 
-Fingerprint (SHA-256): {fp}
+Fingerprint (SHA-256): {fingerprint}
 
 Android cannot install a CA from a script — the OS forces a manual
 review.  The procedure below works on every Android version from 7
@@ -650,14 +649,13 @@ To remove the certificate later:
    Settings → Security → Encryption & credentials → User credentials
    → tap → Remove
 "#,
-        fp = fingerprint,
     )
 }
 
 fn readme(fingerprint: &str, hosts: &[String]) -> String {
     let host_list = hosts
         .iter()
-        .map(|h| format!("  - {}", h))
+        .map(|h| format!("  - {h}"))
         .collect::<Vec<_>>()
         .join("\n");
     format!(
@@ -683,7 +681,7 @@ add the extra name in the **Extra hosts** field.
 
 ## Fingerprint
 
-SHA-256: `{fp}`
+SHA-256: `{fingerprint}`
 
 Verify this fingerprint matches the one shown in the server's settings
 page **before** installing.  A mismatch means the bundle has been
@@ -723,7 +721,5 @@ the CA at any time.  The Simple Photos Android app falls back to
 plain HTTP if the certificate is removed and HTTPS is still enforced —
 re-install it to restore service.
 "#,
-        host_list = host_list,
-        fp = fingerprint,
     )
 }
