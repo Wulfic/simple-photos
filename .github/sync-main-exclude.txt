@@ -19,4 +19,5 @@ server/build_out.txt
 .github/copilot-instructions.md
 .github/sync-main-exclude.txt
 .github/workflows/sync-dev-to-main.yml
+.vscode
 pytest.ini
