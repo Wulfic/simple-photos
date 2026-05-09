@@ -353,7 +353,7 @@ pub async fn upload_photo(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<i64>().ok())
         .filter(|ms| *ms > 0)
-        .and_then(|ms| chrono::DateTime::<Utc>::from_timestamp_millis(ms))
+        .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
         .map(|dt| dt.to_rfc3339());
 
     let final_taken_at = exif_taken

@@ -595,7 +595,7 @@ pub async fn browse_directory(
         }
     }
 
-    directories.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    directories.sort_by_key(|a| a.name.to_lowercase());
 
     // Check if writable
     let test_file = canonical.join(".simple-photos-write-test");
