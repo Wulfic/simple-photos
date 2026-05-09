@@ -116,6 +116,9 @@ coverage/
 *.dll
 *.class
 *.jar
+# Gradle wrapper jar must be committed so CI can run ./gradlew without
+# bootstrapping Gradle separately.
+!android/gradle/wrapper/gradle-wrapper.jar
 __pycache__/
 *.pyc
 downloads/simple-photos.apk

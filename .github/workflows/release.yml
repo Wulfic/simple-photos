@@ -29,7 +29,9 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
   # Pin toolchains for reproducible release builds.
-  RUST_TOOLCHAIN: "1.83"
+  # NOTE: Rust ≥1.85 is required because transitive deps (ort, aligned ≥0.4.3)
+  # use the `edition2024` Cargo feature, which only stabilised in 1.85.
+  RUST_TOOLCHAIN: "1.85"
   NODE_VERSION: "20"
 
 jobs:
