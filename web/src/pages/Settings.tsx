@@ -646,7 +646,7 @@ export default function Settings() {
           <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mb-3" />
           <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Simple Photos</h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-            v0.6.9 — Self-hosted, end-to-end encrypted photo & video library
+            v1.0.0 — Self-hosted, end-to-end encrypted photo & video library
           </p>
           <hr className="w-full border-gray-100 dark:border-gray-700 mb-4" />
           <p className="text-xs text-gray-400 mb-2">Developed by</p>

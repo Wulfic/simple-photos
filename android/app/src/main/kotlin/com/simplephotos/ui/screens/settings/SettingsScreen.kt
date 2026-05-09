@@ -475,7 +475,7 @@ fun SettingsScreen(
             // ── About ────────────────────────────────────────────────────
             SettingsCard(title = "About", icon = Icons.Default.Info) {
                 Text("Simple Photos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Version 0.6.9", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Version 1.0.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "A self-hosted photo storage solution with optional end-to-end encryption.",

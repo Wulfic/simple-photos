@@ -25,9 +25,9 @@
 #define AppURL         "https://github.com/Wulfic/simple-photos"
 #define AppExeName     "simple-photos-server.exe"
 #define AppId          "{{B7A3F8C2-9D1E-4F2B-8E5A-1C2D3E4F5A6B}"
-; SP_VERSION is supplied by CI via /DSP_VERSION=x.y.z. Falls back to 0.6.9.
+; SP_VERSION is supplied by CI via /DSP_VERSION=x.y.z. Falls back to 1.0.0.
 #ifndef SP_VERSION
-  #define SP_VERSION "0.6.9"
+  #define SP_VERSION "1.0.0"
 #endif
 
 [Setup]
