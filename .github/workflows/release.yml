@@ -147,8 +147,15 @@ jobs:
 
       - name: Smoke-test .deb install
         run: |
+          set -x
           sudo apt-get install -y ./dist/simple-photos_${{ needs.version.outputs.version }}_amd64.deb
-          systemctl status simple-photos --no-pager || true
+          # systemd-units enable=true, start=false: service is loaded but inactive.
+          # `systemctl status` returns 3 for inactive units; absorb that with `:`.
+          systemctl status simple-photos --no-pager || :
+          # Diagnostic listings before the assertions, so any miss is obvious.
+          ls -la /usr/bin/simple-photos-server || true
+          ls -la /etc/simple-photos/ || true
+          ls -la /var/lib/simple-photos/ || true
           test -x /usr/bin/simple-photos-server
           test -f /etc/simple-photos/config.toml
           test -d /var/lib/simple-photos/storage
@@ -193,27 +200,17 @@ jobs:
       - name: Fetch NSSM 2.24 (via Chocolatey for reliability)
         shell: pwsh
         run: |
-          # nssm.cc is frequently 503; use the Chocolatey package which
-          # ships an identical 2.24 binary.
-          choco install nssm --version=2.24.101.20180116 -y --no-progress
-          # Choco unpacks into a deterministic path; the architecture-specific
-          # binary lives under tools\win64\nssm.exe (the bin\ shim is a stub).
-          $candidates = @(
-            'C:\ProgramData\chocolatey\lib\NSSM\tools\win64\nssm.exe',
-            'C:\ProgramData\chocolatey\lib\NSSM\tools\nssm-2.24\win64\nssm.exe',
-            'C:\ProgramData\chocolatey\lib\nssm\tools\win64\nssm.exe',
-            'C:\ProgramData\chocolatey\lib\nssm\tools\nssm-2.24\win64\nssm.exe'
-          )
-          $nssmSrc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $nssmSrc) {
-            Write-Host "Searching for nssm.exe under choco lib..."
-            $nssmSrc = (Get-ChildItem -Recurse -Path 'C:\ProgramData\chocolatey\lib' -Filter 'nssm.exe' `
-                       -ErrorAction SilentlyContinue |
-                       Where-Object { $_.FullName -match 'win64' } |
+          # nssm.cc is frequently 503; pull the binary from Chocolatey instead.
+          # --force ensures the package is re-extracted even if the agent has
+          # cached metadata from a previous run (otherwise tools\ may be empty).
+          choco install nssm --version=2.24.101.20180116 -y --force --no-progress
+          $nssmSrc = (Get-ChildItem -Recurse -Path 'C:\ProgramData\chocolatey\lib' `
+                       -Filter 'nssm.exe' -ErrorAction SilentlyContinue |
                        Select-Object -First 1).FullName
-          }
           if (-not $nssmSrc) {
-            Write-Error "Could not locate 64-bit nssm.exe after choco install"
+            Write-Error "nssm.exe not found under C:\ProgramData\chocolatey\lib after choco install"
+            Get-ChildItem -Recurse -Path 'C:\ProgramData\chocolatey\lib\NSSM' -ErrorAction SilentlyContinue |
+              Select-Object FullName
             exit 1
           }
           Write-Host "Using NSSM at: $nssmSrc"

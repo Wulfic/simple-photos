@@ -2,9 +2,6 @@
 
 A self-hosted photo & video library with end-to-end encryption, multi-server backup & restore, and web + Android access.
 
-### PROJECT STATUS: BETA
-This project is in early development and not yet recommended for production use. I expect to have a proper release by early summer 2026. Once this reaches a first release, I don't anticipate any new major features for a long time, and will primarily be focused on bug fixes, performance improvements, and polish. That being said I dont have access to apple hardware for testing, so if anyone wants to help with the apple side of things (Live Photo support, HEIC conversion, iOS app development, etc) that would be a huge help!
-
 ### Authors Note
 Simple Photos was born out of a desire for a secure, private, and user-friendly photo management solution that I could host myself. But found that other solutions lacked one critical thing, backup servers! Forcing users to choose between only having one backup target, or use multiple solutions; So I decided to build something from the ground up that met all my needs — and hopefully yours too!
 
@@ -74,15 +71,7 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 
 ### Pre-built installers (recommended)
 
-Download the latest installer from the [Releases page](https://github.com/Wulfic/simple-photos/releases):
-
-| Platform | Artefact | Notes |
-|----------|----------|-------|
-| Debian / Ubuntu (amd64) | `simple-photos_<version>_amd64.deb` | `sudo apt install ./simple-photos_*.deb`, then run `sudo systemctl start simple-photos` and open `http://<host>:3000`. The first-run wizard chooses the photo storage location. |
-| Windows 10/11 (x64)     | `simple-photos-<version>-windows-x64-setup.exe` | The installer prompts for an install location, registers a Windows Service, and opens TCP 3000 in the firewall. |
-| Android 8.0+            | `simple-photos-<version>.apk` | Sideload via `adb install` or transfer to the device. Production builds require enabling the keystore secrets in CI (see [packaging/README.md](packaging/README.md)); otherwise the APK is debug-signed. |
-
-Verify with `sha256sum -c SHA256SUMS.txt`. AI models + GeoNames data (~225 MB) are fetched post-install — see [packaging/README.md](packaging/README.md).
+Download the latest installer from the [Releases page](https://github.com/Wulfic/simple-photos/releases)
 
 ### Build from source
 
