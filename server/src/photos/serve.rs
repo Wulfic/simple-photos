@@ -65,8 +65,7 @@ pub(crate) async fn serve_file_with_range(
     let etag_hv = etag.and_then(|t| HeaderValue::from_str(t).ok());
 
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
-        if let Some((start, end)) =
-            crate::http_utils::parse_range_header(range_header, total_size)
+        if let Some((start, end)) = crate::http_utils::parse_range_header(range_header, total_size)
         {
             let length = end - start + 1;
             let mut file = tokio::fs::File::open(path)
@@ -188,28 +187,29 @@ pub async fn serve_photo(
         let storage_root = (**state.storage_root.load()).clone();
         let key = crate::crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
             .await
-            .map_err(|e| AppError::Internal(format!("Key load: {e}")))?            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
-        let (blob_storage_path,): (String,) = sqlx::query_as(
-            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
-        )
-        .bind(&enc_blob_id)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.read_pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
+            .map_err(|e| AppError::Internal(format!("Key load: {e}")))?
+            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+        let (blob_storage_path,): (String,) =
+            sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
+                .bind(&enc_blob_id)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.read_pool)
+                .await?
+                .ok_or(AppError::NotFound)?;
         let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
-        let plaintext = tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
-            .await
-            .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?            .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
+        let plaintext =
+            tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
+                .await
+                .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+                .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
         let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
             .map_err(|e| AppError::Internal(format!("Blob envelope JSON: {e}")))?;
         let data_b64 = envelope["data"]
             .as_str()
             .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
-        let raw_bytes =
-            base64::engine::general_purpose::STANDARD
-                .decode(data_b64)
-                .map_err(|e| AppError::Internal(format!("Base64 decode: {e}")))?;
+        let raw_bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_b64)
+            .map_err(|e| AppError::Internal(format!("Base64 decode: {e}")))?;
         let etag = format!("\"{}-enc-{}\"", photo_id, raw_bytes.len());
         if let Some(not_modified) = check_etag(&headers, &etag) {
             return Ok(not_modified);
@@ -222,8 +222,14 @@ pub async fn serve_photo(
             .header("Content-Type", ct)
             .header("Content-Length", HeaderValue::from(len))
             .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-            .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
-            .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
+            .header(
+                "Cache-Control",
+                HeaderValue::from_static("private, max-age=86400"),
+            )
+            .header(
+                "ETag",
+                HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+            )
             .body(Body::from(raw_bytes))
             .map_err(|e| AppError::Internal(e.to_string()));
     }
@@ -270,8 +276,7 @@ pub async fn serve_photo(
 
     // ── HTTP Range support ─────────────────────────────────────────────
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
-        if let Some((start, end)) =
-            crate::http_utils::parse_range_header(range_header, total_size)
+        if let Some((start, end)) = crate::http_utils::parse_range_header(range_header, total_size)
         {
             let length = end - start + 1;
             let mut file = open_file().await?;
@@ -372,28 +377,29 @@ pub async fn serve_thumbnail(
         let storage_root = (**state.storage_root.load()).clone();
         let key = crate::crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
             .await
-            .map_err(|e| AppError::Internal(format!("Key load: {e}")))?            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
-        let (blob_storage_path,): (String,) = sqlx::query_as(
-            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
-        )
-        .bind(&enc_thumb_blob_id)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.read_pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
+            .map_err(|e| AppError::Internal(format!("Key load: {e}")))?
+            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+        let (blob_storage_path,): (String,) =
+            sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
+                .bind(&enc_thumb_blob_id)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.read_pool)
+                .await?
+                .ok_or(AppError::NotFound)?;
         let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
-        let plaintext = tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
-            .await
-            .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?            .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
+        let plaintext =
+            tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
+                .await
+                .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+                .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
         let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
             .map_err(|e| AppError::Internal(format!("Thumb envelope JSON: {e}")))?;
         let data_b64 = envelope["data"]
             .as_str()
             .ok_or_else(|| AppError::Internal("Missing 'data' in thumb envelope".into()))?;
-        let raw_bytes =
-            base64::engine::general_purpose::STANDARD
-                .decode(data_b64)
-                .map_err(|e| AppError::Internal(format!("Base64 decode thumb: {e}")))?;
+        let raw_bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_b64)
+            .map_err(|e| AppError::Internal(format!("Base64 decode thumb: {e}")))?;
         let etag = format!("\"{}-enc-thumb-{}\"", photo_id, raw_bytes.len());
         if let Some(not_modified) = check_etag(&headers, &etag) {
             return Ok(not_modified);
@@ -408,8 +414,14 @@ pub async fn serve_thumbnail(
             .status(StatusCode::OK)
             .header("Content-Type", HeaderValue::from_static(content_type))
             .header("Content-Length", HeaderValue::from(len))
-            .header("Cache-Control", HeaderValue::from_static("private, max-age=86400"))
-            .header("ETag", HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")))
+            .header(
+                "Cache-Control",
+                HeaderValue::from_static("private, max-age=86400"),
+            )
+            .header(
+                "ETag",
+                HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+            )
             .body(Body::from(raw_bytes))
             .map_err(|e| AppError::Internal(e.to_string()));
     }
@@ -523,14 +535,13 @@ pub async fn serve_source_file(
         return Err(AppError::StorageUnavailable);
     }
 
-    let source_path: Option<String> = sqlx::query_scalar(
-        "SELECT source_path FROM photos WHERE id = ? AND user_id = ?",
-    )
-    .bind(&photo_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let source_path: Option<String> =
+        sqlx::query_scalar("SELECT source_path FROM photos WHERE id = ? AND user_id = ?")
+            .bind(&photo_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.read_pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
     let source_path = source_path.ok_or_else(|| {
         tracing::debug!(
@@ -582,14 +593,8 @@ pub async fn serve_source_file(
         .unwrap_or("original");
     let disposition = format!("attachment; filename=\"{}\"", filename);
 
-    let mut resp = serve_file_with_range(
-        &full_path,
-        total_size,
-        content_type,
-        &headers,
-        Some(&etag),
-    )
-    .await?;
+    let mut resp =
+        serve_file_with_range(&full_path, total_size, content_type, &headers, Some(&etag)).await?;
 
     resp.headers_mut().insert(
         "Content-Disposition",

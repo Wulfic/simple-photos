@@ -77,7 +77,10 @@ pub async fn store_encryption_key(
             0
         };
         if count > 0 {
-            tracing::info!("[STORE_KEY] Discovered {} new files, starting encryption", count);
+            tracing::info!(
+                "[STORE_KEY] Discovered {} new files, starting encryption",
+                count
+            );
         }
         // Phase 2: encrypt any unencrypted photos in the background
         let pool_clone = state.pool.clone();

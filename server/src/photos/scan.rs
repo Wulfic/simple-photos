@@ -26,7 +26,7 @@ use crate::media::{is_media_file, mime_from_extension};
 use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
-use super::metadata::{extract_media_metadata_async, extract_xmp_subtype, extract_motion_video};
+use super::metadata::{extract_media_metadata_async, extract_motion_video, extract_xmp_subtype};
 use super::thumbnail::generate_thumbnail_file;
 use super::utils::{compute_photo_hash_streaming, normalize_iso_timestamp, utc_now_iso};
 
@@ -315,10 +315,7 @@ pub async fn scan_and_register(
     }
 
     let new_count = new_count.load(Ordering::Relaxed);
-    tracing::info!(
-        "Scan complete: registered {} new files",
-        new_count,
-    );
+    tracing::info!("Scan complete: registered {} new files", new_count,);
 
     // ── Retroactively fill missing metadata for existing photos ──────────
     // Also re-check video dimensions: uploads prior to the ffprobe SAR fix
@@ -610,8 +607,11 @@ pub async fn scan_and_register(
         tokio::spawn(async move {
             // Phase 1: Encrypt native files
             crate::photos::server_migrate::auto_migrate_after_scan(
-                pool_clone.clone(), root_clone.clone(), jwt_secret.clone(),
-            ).await;
+                pool_clone.clone(),
+                root_clone.clone(),
+                jwt_secret.clone(),
+            )
+            .await;
             // Phase 2: Convert non-native files, register, then encrypt those
             crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
         });
@@ -624,8 +624,11 @@ pub async fn scan_and_register(
         let jwt_secret = state.config.auth.jwt_secret.clone();
         tokio::spawn(async move {
             crate::photos::server_migrate::auto_migrate_after_scan(
-                pool_clone.clone(), root_clone.clone(), jwt_secret.clone(),
-            ).await;
+                pool_clone.clone(),
+                root_clone.clone(),
+                jwt_secret.clone(),
+            )
+            .await;
             crate::ingest::run_conversion_pass(pool_clone, root_clone, jwt_secret).await;
         });
     }
@@ -634,11 +637,9 @@ pub async fn scan_and_register(
     if new_count > 0 {
         let pool_clone = state.pool.clone();
         tokio::spawn(async move {
-            let users: Vec<(String,)> = match sqlx::query_as(
-                "SELECT DISTINCT user_id FROM photos"
-            )
-            .fetch_all(&pool_clone)
-            .await
+            let users: Vec<(String,)> = match sqlx::query_as("SELECT DISTINCT user_id FROM photos")
+                .fetch_all(&pool_clone)
+                .await
             {
                 Ok(u) => u,
                 Err(e) => {

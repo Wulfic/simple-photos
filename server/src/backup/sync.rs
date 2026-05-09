@@ -61,8 +61,6 @@ pub fn try_acquire_sync(server_id: &str) -> Option<SyncGuard> {
     }
 }
 
-
-
 // ── HTTP Handlers ────────────────────────────────────────────────────────────
 
 /// POST /api/admin/backup/servers/:id/sync
@@ -123,7 +121,16 @@ pub async fn trigger_sync(
         // `guard` is moved into this future — the concurrency lock is held
         // for the entire duration of run_sync and released on drop.
         let _guard = guard;
-        run_sync(&pool, &storage_root, &server, &api_key, &log_id_clone, false, accept_invalid_certs).await;
+        run_sync(
+            &pool,
+            &storage_root,
+            &server,
+            &api_key,
+            &log_id_clone,
+            false,
+            accept_invalid_certs,
+        )
+        .await;
     });
 
     audit::log(
@@ -200,7 +207,16 @@ pub async fn handle_request_sync(
 
     tokio::spawn(async move {
         let _guard = guard;
-        run_sync(&pool, &storage_root, &server, &api_key, &log_id_clone, false, accept_invalid_certs).await;
+        run_sync(
+            &pool,
+            &storage_root,
+            &server,
+            &api_key,
+            &log_id_clone,
+            false,
+            accept_invalid_certs,
+        )
+        .await;
     });
 
     tracing::info!(
@@ -327,7 +343,11 @@ pub async fn force_sync_from_primary(
 
 /// Background task: periodically sync to all enabled backup servers
 /// based on their configured frequency.
-pub async fn background_sync_task(pool: sqlx::SqlitePool, storage_root: std::path::PathBuf, accept_invalid_certs: bool) {
+pub async fn background_sync_task(
+    pool: sqlx::SqlitePool,
+    storage_root: std::path::PathBuf,
+    accept_invalid_certs: bool,
+) {
     // Check every 5 minutes so newly-paired servers get synced quickly.
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
 
@@ -409,7 +429,16 @@ pub async fn background_sync_task(pool: sqlx::SqlitePool, storage_root: std::pat
                     .ok()
                     .flatten();
 
-            run_sync(&pool, &storage_root, server, &api_key, &log_id, false, accept_invalid_certs).await;
+            run_sync(
+                &pool,
+                &storage_root,
+                server,
+                &api_key,
+                &log_id,
+                false,
+                accept_invalid_certs,
+            )
+            .await;
 
             audit::log_background(
                 &pool,

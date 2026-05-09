@@ -42,8 +42,8 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose,
-    IsCa, KeyPair, KeyUsagePurpose, SanType,
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyPair, KeyUsagePurpose, SanType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -109,9 +109,8 @@ pub fn generate_local_ca(
     data_root: &Path,
 ) -> Result<GenerateOutcome, AppError> {
     let dir = data_root.join("local_ca");
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        AppError::Internal(format!("Failed to create local_ca directory: {}", e))
-    })?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AppError::Internal(format!("Failed to create local_ca directory: {}", e)))?;
 
     let hostname = detect_hostname();
     let label = req
@@ -137,8 +136,8 @@ pub fn generate_local_ca(
     ca_params.not_before = now_offset(0);
     ca_params.not_after = now_offset(CA_VALIDITY_DAYS);
 
-    let ca_key = KeyPair::generate()
-        .map_err(|e| AppError::Internal(format!("rcgen ca key: {}", e)))?;
+    let ca_key =
+        KeyPair::generate().map_err(|e| AppError::Internal(format!("rcgen ca key: {}", e)))?;
     let ca_cert = ca_params
         .self_signed(&ca_key)
         .map_err(|e| AppError::Internal(format!("rcgen ca self_signed: {}", e)))?;
@@ -168,19 +167,17 @@ pub fn generate_local_ca(
         .map(|h| -> Result<SanType, AppError> {
             match h.parse::<IpAddr>() {
                 Ok(ip) => Ok(SanType::IpAddress(ip)),
-                Err(_) => Ok(SanType::DnsName(
-                    h.as_str()
-                        .try_into()
-                        .map_err(|e| AppError::Internal(format!("invalid SAN dns name {h:?}: {e}")))?,
-                )),
+                Err(_) => Ok(SanType::DnsName(h.as_str().try_into().map_err(|e| {
+                    AppError::Internal(format!("invalid SAN dns name {h:?}: {e}"))
+                })?)),
             }
         })
         .collect::<Result<Vec<_>, AppError>>()?;
     leaf_params.not_before = now_offset(0);
     leaf_params.not_after = now_offset(LEAF_VALIDITY_DAYS);
 
-    let leaf_key = KeyPair::generate()
-        .map_err(|e| AppError::Internal(format!("rcgen leaf key: {}", e)))?;
+    let leaf_key =
+        KeyPair::generate().map_err(|e| AppError::Internal(format!("rcgen leaf key: {}", e)))?;
     let leaf_cert = leaf_params
         .signed_by(&leaf_key, &ca_cert, &ca_key)
         .map_err(|e| AppError::Internal(format!("rcgen leaf signed_by: {}", e)))?;
@@ -246,7 +243,9 @@ pub fn load_meta(data_root: &Path) -> Option<LocalCaMeta> {
 
 /// Read the install bundle as raw bytes for the download endpoint.
 pub fn read_bundle(data_root: &Path) -> Result<(PathBuf, Vec<u8>), AppError> {
-    let path = data_root.join("local_ca").join("simple-photos-ca-bundle.zip");
+    let path = data_root
+        .join("local_ca")
+        .join("simple-photos-ca-bundle.zip");
     let bytes = std::fs::read(&path).map_err(|e| {
         AppError::BadRequest(format!(
             "Local CA bundle not found at {} ({}). Generate a local CA first.",
@@ -299,8 +298,7 @@ fn sanitize_host(raw: &str) -> Option<String> {
         return None;
     }
     // No control characters / spaces / wildcards / null bytes.
-    if h
-        .chars()
+    if h.chars()
         .any(|c| c.is_control() || c == ' ' || c == '*' || c == '\0')
     {
         return None;
@@ -317,10 +315,7 @@ fn sanitize_host(raw: &str) -> Option<String> {
         if label.starts_with('-') || label.ends_with('-') {
             return None;
         }
-        if !label
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-        {
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return None;
         }
     }
@@ -434,11 +429,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn now_offset(days: i64) -> time::OffsetDateTime {
     use chrono::Datelike;
     let target = chrono::Utc::now() + chrono::Duration::days(days);
-    rcgen::date_time_ymd(
-        target.year(),
-        target.month() as u8,
-        target.day() as u8,
-    )
+    rcgen::date_time_ymd(target.year(), target.month() as u8, target.day() as u8)
 }
 
 fn now_iso8601(days: i64) -> String {
@@ -476,10 +467,7 @@ fn write_bundle(
         .compression_method(CompressionMethod::Deflated)
         .unix_permissions(0o755);
 
-    let mut add = |name: &str,
-                   body: &[u8],
-                   options: SimpleFileOptions|
-     -> Result<(), AppError> {
+    let mut add = |name: &str, body: &[u8], options: SimpleFileOptions| -> Result<(), AppError> {
         zw.start_file(name, options)
             .map_err(|e| AppError::Internal(format!("zip start {}: {}", name, e)))?;
         zw.write_all(body)
@@ -488,7 +476,11 @@ fn write_bundle(
     };
 
     add("ca.pem", ca_pem.as_bytes(), opts)?;
-    add("install-linux.sh", linux_script(fingerprint).as_bytes(), exec_opts)?;
+    add(
+        "install-linux.sh",
+        linux_script(fingerprint).as_bytes(),
+        exec_opts,
+    )?;
     add(
         "install-windows.ps1",
         windows_script(fingerprint).as_bytes(),
@@ -503,8 +495,7 @@ fn write_bundle(
 
     zw.finish()
         .map_err(|e| AppError::Internal(format!("zip finish: {}", e)))?;
-    std::fs::rename(&tmp, path)
-        .map_err(|e| AppError::Internal(format!("rename bundle: {}", e)))?;
+    std::fs::rename(&tmp, path).map_err(|e| AppError::Internal(format!("rename bundle: {}", e)))?;
     Ok(())
 }
 

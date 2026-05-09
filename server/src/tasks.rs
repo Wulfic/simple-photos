@@ -31,14 +31,22 @@ pub fn spawn_all(
 ) {
     spawn_housekeeping(pool.clone());
     spawn_trash_purge(pool.clone(), config.storage.root.clone());
-    spawn_backup_sync(pool.clone(), config.storage.root.clone(), config.backup.accept_invalid_certs);
+    spawn_backup_sync(
+        pool.clone(),
+        config.storage.root.clone(),
+        config.backup.accept_invalid_certs,
+    );
     spawn_diagnostics_push(
         pool.clone(),
         config.storage.root.clone(),
         PathBuf::from(&config.database.path),
         config.backup.accept_invalid_certs,
     );
-    spawn_log_forward(pool.clone(), audit_tx.clone(), config.backup.accept_invalid_certs);
+    spawn_log_forward(
+        pool.clone(),
+        audit_tx.clone(),
+        config.backup.accept_invalid_certs,
+    );
     spawn_broadcast(pool.clone(), config.server.port);
     spawn_discovery_listener(pool.clone(), Arc::new(config.clone()));
     spawn_auto_scan(
@@ -65,7 +73,11 @@ pub fn spawn_all(
         config.auth.jwt_secret.clone(),
         ai_active.clone(),
     );
-    crate::geo::processor::spawn_geo_processor(pool.clone(), config.geo.clone(), geo_active.clone());
+    crate::geo::processor::spawn_geo_processor(
+        pool.clone(),
+        config.geo.clone(),
+        geo_active.clone(),
+    );
 }
 
 // ── Individual task spawners ─────────────────────────────────────────
@@ -169,17 +181,36 @@ fn spawn_backup_sync(pool: SqlitePool, storage_root: PathBuf, accept_invalid_cer
 }
 
 /// Push diagnostics snapshot from backup to primary every 15 min.
-fn spawn_diagnostics_push(pool: SqlitePool, storage_root: PathBuf, db_path: PathBuf, accept_invalid_certs: bool) {
+fn spawn_diagnostics_push(
+    pool: SqlitePool,
+    storage_root: PathBuf,
+    db_path: PathBuf,
+    accept_invalid_certs: bool,
+) {
     tokio::spawn(async move {
-        crate::backup::diagnostics::background_diagnostics_push_task(pool, storage_root, db_path, accept_invalid_certs)
-            .await;
+        crate::backup::diagnostics::background_diagnostics_push_task(
+            pool,
+            storage_root,
+            db_path,
+            accept_invalid_certs,
+        )
+        .await;
     });
 }
 
 /// Forward audit logs from backup to primary in real time.
-fn spawn_log_forward(pool: SqlitePool, audit_tx: tokio::sync::broadcast::Sender<AuditBroadcast>, accept_invalid_certs: bool) {
+fn spawn_log_forward(
+    pool: SqlitePool,
+    audit_tx: tokio::sync::broadcast::Sender<AuditBroadcast>,
+    accept_invalid_certs: bool,
+) {
     tokio::spawn(async move {
-        crate::backup::diagnostics::background_log_forward_task(pool, audit_tx, accept_invalid_certs).await;
+        crate::backup::diagnostics::background_log_forward_task(
+            pool,
+            audit_tx,
+            accept_invalid_certs,
+        )
+        .await;
     });
 }
 
@@ -281,14 +312,13 @@ fn spawn_export_cleanup(pool: SqlitePool, storage_root_swap: Arc<arc_swap::ArcSw
 
             // Clean up empty export directories and completed/failed jobs with no remaining files
             for job_id in &job_ids {
-                let remaining: Option<(i64,)> = sqlx::query_as(
-                    "SELECT COUNT(*) FROM export_files WHERE job_id = ?",
-                )
-                .bind(job_id)
-                .fetch_optional(&pool)
-                .await
-                .ok()
-                .flatten();
+                let remaining: Option<(i64,)> =
+                    sqlx::query_as("SELECT COUNT(*) FROM export_files WHERE job_id = ?")
+                        .bind(job_id)
+                        .fetch_optional(&pool)
+                        .await
+                        .ok()
+                        .flatten();
 
                 if remaining.map(|(c,)| c).unwrap_or(0) == 0 {
                     // Remove export directory
@@ -305,11 +335,16 @@ fn spawn_export_cleanup(pool: SqlitePool, storage_root_swap: Arc<arc_swap::ArcSw
             }
 
             if deleted_count > 0 {
-                tracing::info!("Export cleanup: removed {} expired export files", deleted_count);
+                tracing::info!(
+                    "Export cleanup: removed {} expired export files",
+                    deleted_count
+                );
                 audit::log_background(
                     &pool,
                     audit::AuditEvent::HousekeepingComplete,
-                    Some(serde_json::json!({"task": "export_cleanup", "files_removed": deleted_count})),
+                    Some(
+                        serde_json::json!({"task": "export_cleanup", "files_removed": deleted_count}),
+                    ),
                 );
             }
         }

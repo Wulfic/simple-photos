@@ -12,7 +12,10 @@ use std::time::Instant;
 
 use sqlx::SqlitePool;
 
-use super::handlers::{dir_usage, disk_stats, read_cpu_seconds, read_load_average, read_open_fds, read_rss_bytes, read_thread_count, server_start};
+use super::handlers::{
+    dir_usage, disk_stats, read_cpu_seconds, read_load_average, read_open_fds, read_rss_bytes,
+    read_thread_count, server_start,
+};
 use super::models::*;
 use crate::config::AppConfig;
 
@@ -21,12 +24,17 @@ pub async fn collect_server_info(config: &AppConfig, storage_root: &Path) -> Ser
     let (start_instant, started_at) = server_start();
     let uptime = start_instant.elapsed().as_secs();
 
-    let (rss_bytes, cpu_secs, threads, fds, load_avg) =
-        tokio::task::spawn_blocking(|| {
-            (read_rss_bytes(), read_cpu_seconds(), read_thread_count(), read_open_fds(), read_load_average())
-        })
-        .await
-        .unwrap_or((0, 0.0, 0, 0, [0.0; 3]));
+    let (rss_bytes, cpu_secs, threads, fds, load_avg) = tokio::task::spawn_blocking(|| {
+        (
+            read_rss_bytes(),
+            read_cpu_seconds(),
+            read_thread_count(),
+            read_open_fds(),
+            read_load_average(),
+        )
+    })
+    .await
+    .unwrap_or((0, 0.0, 0, 0, [0.0; 3]));
 
     ServerInfo {
         version: crate::VERSION.to_string(),
@@ -114,10 +122,9 @@ pub async fn collect_database_stats(pool: &SqlitePool, db_path: &Path) -> Databa
 pub async fn collect_storage_stats(storage_root: &Path) -> StorageStats {
     let (dir_bytes, file_count) = dir_usage(storage_root).await;
     let root = storage_root.to_path_buf();
-    let (disk_total, disk_available) =
-        tokio::task::spawn_blocking(move || disk_stats(&root))
-            .await
-            .unwrap_or((0, 0));
+    let (disk_total, disk_available) = tokio::task::spawn_blocking(move || disk_stats(&root))
+        .await
+        .unwrap_or((0, 0));
     let disk_used_percent = if disk_total > 0 {
         ((disk_total - disk_available) as f64 / disk_total as f64) * 100.0
     } else {
@@ -335,13 +342,13 @@ pub async fn collect_backup_summary(pool: &SqlitePool) -> BackupSummary {
 
     // Fetch per-server details including their pushed diagnostics
     let server_rows: Vec<(
-        String,  // id
-        String,  // name
-        String,  // address
-        bool,    // enabled
-        i64,     // sync_frequency_hours
+        String,         // id
+        String,         // name
+        String,         // address
+        bool,           // enabled
+        i64,            // sync_frequency_hours
         Option<String>, // last_sync_at
-        String,  // last_sync_status
+        String,         // last_sync_status
         Option<String>, // last_sync_error
         Option<String>, // last_diagnostics (JSON)
         Option<String>, // last_diagnostics_at
@@ -349,7 +356,7 @@ pub async fn collect_backup_summary(pool: &SqlitePool) -> BackupSummary {
         "SELECT id, name, address, enabled, sync_frequency_hours, \
          last_sync_at, last_sync_status, last_sync_error, \
          last_diagnostics, last_diagnostics_at \
-         FROM backup_servers ORDER BY name"
+         FROM backup_servers ORDER BY name",
     )
     .fetch_all(pool)
     .await
@@ -358,35 +365,43 @@ pub async fn collect_backup_summary(pool: &SqlitePool) -> BackupSummary {
     let mut servers = Vec::new();
     for row in server_rows {
         // Fetch recent sync logs for this server
-        let sync_logs: Vec<(String, String, Option<String>, String, i64, i64, Option<String>)> =
-            sqlx::query_as(
-                "SELECT id, started_at, completed_at, status, photos_synced, \
+        let sync_logs: Vec<(
+            String,
+            String,
+            Option<String>,
+            String,
+            i64,
+            i64,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, started_at, completed_at, status, photos_synced, \
                  bytes_synced, error FROM backup_sync_log \
-                 WHERE server_id = ? ORDER BY started_at DESC LIMIT 10"
-            )
-            .bind(&row.0)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+                 WHERE server_id = ? ORDER BY started_at DESC LIMIT 10",
+        )
+        .bind(&row.0)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
 
         let recent_sync_logs: Vec<SyncLogBrief> = sync_logs
             .into_iter()
-            .map(|(id, started_at, completed_at, status, photos_synced, bytes_synced, error)| {
-                SyncLogBrief {
-                    id,
-                    started_at,
-                    completed_at,
-                    status,
-                    photos_synced,
-                    bytes_synced,
-                    error,
-                }
-            })
+            .map(
+                |(id, started_at, completed_at, status, photos_synced, bytes_synced, error)| {
+                    SyncLogBrief {
+                        id,
+                        started_at,
+                        completed_at,
+                        status,
+                        photos_synced,
+                        bytes_synced,
+                        error,
+                    }
+                },
+            )
             .collect();
 
-        let last_diagnostics: Option<serde_json::Value> = row.8
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
+        let last_diagnostics: Option<serde_json::Value> =
+            row.8.as_deref().and_then(|s| serde_json::from_str(s).ok());
 
         servers.push(BackupServerDetail {
             id: row.0,
@@ -450,11 +465,10 @@ pub async fn collect_performance(pool: &SqlitePool, write_pool: &SqlitePool) -> 
             });
 
     // SQLite compile options
-    let compile_options: Vec<String> =
-        sqlx::query_scalar::<_, String>("PRAGMA compile_options")
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+    let compile_options: Vec<String> = sqlx::query_scalar::<_, String>("PRAGMA compile_options")
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
 
     // Connection pool stats
     let read_pool_size = pool.size();

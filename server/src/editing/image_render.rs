@@ -24,11 +24,7 @@ use super::models::CropMeta;
 /// **Important:** EXIF orientation is applied first so the pixel layout
 /// matches the displayed orientation.  The user's edits (crop, rotation,
 /// brightness) are then layered on top.
-pub async fn render_image(
-    source: &Path,
-    dest: &Path,
-    meta: &CropMeta,
-) -> Result<(), AppError> {
+pub async fn render_image(source: &Path, dest: &Path, meta: &CropMeta) -> Result<(), AppError> {
     let src = source.to_path_buf();
     let dst = dest.to_path_buf();
     let x = meta.x.unwrap_or(0.0);
@@ -43,7 +39,10 @@ pub async fn render_image(
          crop=({:.4},{:.4},{:.4},{:.4}), rotate={}°, brightness={:.1}",
         src.display(),
         dst.display(),
-        x, y, w, h,
+        x,
+        y,
+        w,
+        h,
         rot,
         brightness,
     );
@@ -68,7 +67,11 @@ pub async fn render_image(
 
         tracing::info!(
             "[editing/image_render] Source: raw={}×{}, after_exif={}×{} (changed={})",
-            raw_w, raw_h, exif_w, exif_h, exif_changed,
+            raw_w,
+            raw_h,
+            exif_w,
+            exif_h,
+            exif_changed,
         );
 
         let iw = img.width() as f64;
@@ -93,7 +96,11 @@ pub async fn render_image(
             };
             tracing::info!(
                 "[editing/image_render] Rotation {}° (pre-crop): {}×{} → {}×{}",
-                rot, pre_rot_w, pre_rot_h, img.width(), img.height(),
+                rot,
+                pre_rot_w,
+                pre_rot_h,
+                img.width(),
+                img.height(),
             );
         }
 
@@ -113,14 +120,24 @@ pub async fn render_image(
             tracing::info!(
                 "[editing/image_render] Crop (post-rotation): frac=({:.4},{:.4},{:.4},{:.4}) → \
                  px=({},{},{},{}) on {}×{} canvas",
-                x, y, w, h, cx, cy, cw, ch, img.width(), img.height(),
+                x,
+                y,
+                w,
+                h,
+                cx,
+                cy,
+                cw,
+                ch,
+                img.width(),
+                img.height(),
             );
 
             img = img.crop_imm(cx, cy, cw, ch);
 
             tracing::info!(
                 "[editing/image_render] After crop: {}×{}",
-                img.width(), img.height(),
+                img.width(),
+                img.height(),
             );
         }
 
@@ -137,11 +154,13 @@ pub async fn render_image(
         if brightness.abs() > 0.5 {
             tracing::info!(
                 "[editing/image_render] Brightness: {:.1} → brighten({})",
-                brightness, (brightness * 2.55) as i32,
+                brightness,
+                (brightness * 2.55) as i32,
             );
-            img = image::DynamicImage::ImageRgba8(
-                image::imageops::brighten(&img, (brightness * 2.55) as i32),
-            );
+            img = image::DynamicImage::ImageRgba8(image::imageops::brighten(
+                &img,
+                (brightness * 2.55) as i32,
+            ));
         }
 
         // Determine output format from extension
@@ -156,7 +175,10 @@ pub async fn render_image(
 
         tracing::info!(
             "[editing/image_render] Saving: {}×{} as {:?} → {}",
-            img.width(), img.height(), format, dst.display(),
+            img.width(),
+            img.height(),
+            format,
+            dst.display(),
         );
 
         img.save_with_format(&dst, format)

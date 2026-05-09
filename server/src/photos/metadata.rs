@@ -162,7 +162,9 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                             tracing::info!(
                                 "[metadata] Swapped dims for EXIF orientation {}: \
                                  now {}×{} for {}",
-                                orient, width, height,
+                                orient,
+                                width,
+                                height,
                                 file_path.display(),
                             );
                         }
@@ -174,7 +176,11 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
 
     tracing::debug!(
         "[metadata] Final metadata for {}: {}×{}, camera={:?}, taken_at={:?}",
-        file_path.display(), width, height, camera_model, taken_at,
+        file_path.display(),
+        width,
+        height,
+        camera_model,
+        taken_at,
     );
 
     (width, height, camera_model, latitude, longitude, taken_at)
@@ -313,13 +319,12 @@ pub(crate) fn extract_media_metadata_from_bytes(
 /// Async wrapper around [`extract_media_metadata`] that offloads the blocking
 /// file I/O and EXIF parsing to a `spawn_blocking` thread.
 pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) -> MediaMetadata {
-    let (mut w, mut h, cam, lat, lon, taken) =
-        tokio::task::spawn_blocking({
-            let p = file_path.clone();
-            move || extract_media_metadata(&p)
-        })
-        .await
-        .unwrap_or((0, 0, None, None, None, None));
+    let (mut w, mut h, cam, lat, lon, taken) = tokio::task::spawn_blocking({
+        let p = file_path.clone();
+        move || extract_media_metadata(&p)
+    })
+    .await
+    .unwrap_or((0, 0, None, None, None, None));
 
     // For video files, `imagesize` returns coded pixel dimensions which
     // ignore SAR/DAR.  Use ffprobe to get display dimensions so the gallery
@@ -339,7 +344,11 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
         if let Some((pw, ph)) = probe_video_display_dimensions(&file_path).await {
             tracing::info!(
                 "[metadata] Video ffprobe override for {}: imagesize={}×{} → ffprobe={}×{}",
-                file_path.display(), w, h, pw, ph,
+                file_path.display(),
+                w,
+                h,
+                pw,
+                ph,
             );
             w = pw;
             h = ph;
@@ -348,7 +357,10 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
 
     tracing::info!(
         "[metadata] extract_media_metadata_async result for {}: {}×{}, is_video={}",
-        file_path.display(), w, h, is_video,
+        file_path.display(),
+        w,
+        h,
+        is_video,
     );
 
     (w, h, cam, lat, lon, taken)
@@ -359,25 +371,27 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
 async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, i64)> {
     let mut cmd = tokio::process::Command::new("ffprobe");
     cmd.args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width,height,sample_aspect_ratio:stream_side_data=rotation:format_tags=rotate",
-            "-of", "csv=p=0:s=,",
-        ])
-        .arg(path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
-    let output = crate::process::run_with_timeout(
-        &mut cmd,
-        crate::process::FFPROBE_TIMEOUT,
-    )
-    .await
-    .ok()?;
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,sample_aspect_ratio:stream_side_data=rotation:format_tags=rotate",
+        "-of",
+        "csv=p=0:s=,",
+    ])
+    .arg(path)
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null());
+    let output = crate::process::run_with_timeout(&mut cmd, crate::process::FFPROBE_TIMEOUT)
+        .await
+        .ok()?;
 
     let s = String::from_utf8_lossy(&output.stdout);
     tracing::debug!(
         "[metadata] ffprobe raw output for {}: {:?}",
-        path.display(), s.trim(),
+        path.display(),
+        s.trim(),
     );
     // Output may have multiple lines (stream info, side_data, format tags).
     // Collect all parts across lines.
@@ -396,7 +410,11 @@ async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, 
         if let Some((num, den)) = sar_str.split_once(':') {
             let n: f64 = num.parse().unwrap_or(1.0);
             let d: f64 = den.parse().unwrap_or(1.0);
-            if d > 0.0 { n / d } else { 1.0 }
+            if d > 0.0 {
+                n / d
+            } else {
+                1.0
+            }
         } else {
             1.0
         }
@@ -418,7 +436,10 @@ async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, 
     if has_90_270_rotation {
         tracing::info!(
             "[metadata] Video has 90/270° rotation, swapping {}×{} → {}×{}",
-            display_w, display_h, display_h, display_w,
+            display_w,
+            display_h,
+            display_h,
+            display_w,
         );
         std::mem::swap(&mut display_w, &mut display_h);
     }
@@ -481,7 +502,10 @@ pub async fn repair_orientation_dimensions(
         }
     };
 
-    tracing::info!("[DIM-REPAIR] Checking {} photos for orientation fix", rows.len());
+    tracing::info!(
+        "[DIM-REPAIR] Checking {} photos for orientation fix",
+        rows.len()
+    );
 
     let mut fixed = 0u64;
     for (photo_id, file_path, db_w, db_h) in &rows {
@@ -491,31 +515,36 @@ pub async fn repair_orientation_dimensions(
         }
 
         let path_clone = abs_path.clone();
-        let (new_w, new_h, _, _, _, _) =
-            extract_media_metadata_async(path_clone).await;
+        let (new_w, new_h, _, _, _, _) = extract_media_metadata_async(path_clone).await;
 
         if new_w > 0 && new_h > 0 && (new_w != *db_w || new_h != *db_h) {
-            if let Err(e) = sqlx::query(
-                "UPDATE photos SET width = ?, height = ? WHERE id = ?",
-            )
-            .bind(new_w)
-            .bind(new_h)
-            .bind(photo_id)
-            .execute(pool)
-            .await
+            if let Err(e) = sqlx::query("UPDATE photos SET width = ?, height = ? WHERE id = ?")
+                .bind(new_w)
+                .bind(new_h)
+                .bind(photo_id)
+                .execute(pool)
+                .await
             {
                 tracing::warn!("[DIM-REPAIR] Failed to update {}: {}", photo_id, e);
             } else {
                 fixed += 1;
                 tracing::debug!(
                     "[DIM-REPAIR] Fixed {}: {}x{} -> {}x{}",
-                    file_path, db_w, db_h, new_w, new_h
+                    file_path,
+                    db_w,
+                    db_h,
+                    new_w,
+                    new_h
                 );
             }
         }
     }
 
-    tracing::info!("[DIM-REPAIR] Complete: fixed {} of {} photos", fixed, rows.len());
+    tracing::info!(
+        "[DIM-REPAIR] Complete: fixed {} of {} photos",
+        fixed,
+        rows.len()
+    );
 
     // Mark as done so this doesn't re-run
     let _ = sqlx::query(
@@ -646,11 +675,7 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
 ///   positives on ordinary 2:1 wallpapers.
 ///
 /// Width/height of `0` (unknown) are treated as a no-op.
-pub(crate) fn apply_aspect_subtype_fallback(
-    info: &mut SubtypeInfo,
-    width: i64,
-    height: i64,
-) {
+pub(crate) fn apply_aspect_subtype_fallback(info: &mut SubtypeInfo, width: i64, height: i64) {
     if info.photo_subtype.is_some() {
         return;
     }
@@ -682,10 +707,7 @@ pub(crate) fn apply_aspect_subtype_fallback(
     // long edge.  A real 360° photo sphere is typically ≥ 4K wide
     // (Pixel: 7680×3840, RICOH Theta: 5376×2688).  A random 2:1 wallpaper
     // or landscape crop should NOT be flagged as 360°.
-    let subtype = if is_horizontal_pano
-        && (1.97..=2.03).contains(&aspect)
-        && width >= 4000
-    {
+    let subtype = if is_horizontal_pano && (1.97..=2.03).contains(&aspect) && width >= 4000 {
         "equirectangular"
     } else {
         "panorama"
@@ -886,10 +908,7 @@ pub(crate) fn extract_motion_video(data: &[u8], offset: u64) -> Option<Vec<u8>> 
         );
         Some(video_bytes)
     } else {
-        tracing::warn!(
-            "[xmp] Motion video too small: {} bytes",
-            video_bytes.len()
-        );
+        tracing::warn!("[xmp] Motion video too small: {} bytes", video_bytes.len());
         None
     }
 }
@@ -1031,14 +1050,16 @@ mod xmp_tests {
 
     #[test]
     fn panorama_equirectangular_single_quotes() {
-        let xmp = r#"<x:xmpmeta><rdf:Description GPano:ProjectionType='equirectangular' /></x:xmpmeta>"#;
+        let xmp =
+            r#"<x:xmpmeta><rdf:Description GPano:ProjectionType='equirectangular' /></x:xmpmeta>"#;
         let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
         assert_eq!(info.photo_subtype.as_deref(), Some("equirectangular"));
     }
 
     #[test]
     fn panorama_cylindrical_lowercase_prefix() {
-        let xmp = r#"<x:xmpmeta><rdf:Description gpano:ProjectionType="cylindrical" /></x:xmpmeta>"#;
+        let xmp =
+            r#"<x:xmpmeta><rdf:Description gpano:ProjectionType="cylindrical" /></x:xmpmeta>"#;
         let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
         assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
     }

@@ -43,7 +43,11 @@ pub(crate) fn determine_backup_address(
     headers: &HeaderMap,
 ) -> String {
     let base = config.server.base_url.trim_end_matches('/');
-    let scheme = if base.starts_with("https://") { "https://" } else { "http://" };
+    let scheme = if base.starts_with("https://") {
+        "https://"
+    } else {
+        "http://"
+    };
     let host_port = base
         .strip_prefix("https://")
         .or_else(|| base.strip_prefix("http://"))
@@ -129,9 +133,7 @@ pub(crate) async fn authenticate_with_primary(
             .get("totp_session_token")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                AppError::Internal(
-                    "Primary returned requires_totp without a session token".into(),
-                )
+                AppError::Internal("Primary returned requires_totp without a session token".into())
             })?;
 
         let code = match totp_code {
@@ -382,7 +384,12 @@ pub(crate) async fn configure_backup_mode(
 }
 
 /// Fire-and-forget: ask the primary to push all existing photos to this backup.
-pub(crate) fn trigger_initial_sync(base_url: &str, remote_token: &str, server_id: Option<String>, accept_invalid_certs: bool) {
+pub(crate) fn trigger_initial_sync(
+    base_url: &str,
+    remote_token: &str,
+    server_id: Option<String>,
+    accept_invalid_certs: bool,
+) {
     if let Some(server_id) = server_id {
         let sync_url = format!("{}/api/admin/backup/servers/{}/sync", base_url, server_id);
         let remote_token = remote_token.to_string();
@@ -439,9 +446,7 @@ pub(crate) fn trigger_initial_sync(base_url: &str, remote_token: &str, server_id
 pub(crate) fn validate_backup_public_url(url: &str) -> Result<(), AppError> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
-        return Err(AppError::BadRequest(
-            "Backup public URL is empty.".into(),
-        ));
+        return Err(AppError::BadRequest("Backup public URL is empty.".into()));
     }
 
     // Strip scheme to inspect the host:port portion.

@@ -10,6 +10,6 @@
 //! - [`handlers_password`] — change_password, verify_password
 
 // Re-export everything so callers see `auth::handlers::login` etc.
-pub use super::handlers_login::*;
 pub use super::handlers_2fa::*;
+pub use super::handlers_login::*;
 pub use super::handlers_password::*;

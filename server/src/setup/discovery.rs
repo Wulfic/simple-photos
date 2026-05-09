@@ -78,14 +78,23 @@ pub async fn discover(
     phase1_udp_broadcast(&mut discovered, &mut existing_addrs).await;
 
     phase2_local_probing(
-        &client, discovery_port, our_port,
-        &mut discovered, &mut existing_addrs,
-    ).await;
+        &client,
+        discovery_port,
+        our_port,
+        &mut discovered,
+        &mut existing_addrs,
+    )
+    .await;
 
     phase3_subnet_scan(
-        &client, &state.config.server.base_url, discovery_port, our_port,
-        &mut discovered, &mut existing_addrs,
-    ).await;
+        &client,
+        &state.config.server.base_url,
+        discovery_port,
+        our_port,
+        &mut discovered,
+        &mut existing_addrs,
+    )
+    .await;
 
     let discovered_len = discovered.len();
     let keep_backups = params.mode.as_deref() == Some("backup");
@@ -94,7 +103,11 @@ pub async fn discover(
         "Discovery: found {} servers ({} after dedup{})",
         discovered_len,
         final_servers.len(),
-        if keep_backups { ", backups included" } else { ", primary-only filter" }
+        if keep_backups {
+            ", backups included"
+        } else {
+            ", primary-only filter"
+        }
     );
 
     Ok(Json(serde_json::json!({ "servers": final_servers })))

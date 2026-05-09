@@ -488,7 +488,11 @@ pub(crate) async fn phase3_subnet_scan(
         "Setup discovery Phase 3: scanning {} subnets ({:?}) on port {}, {} total probes",
         subnets.len(),
         subnets,
-        if discovery_port != 0 { discovery_port } else { our_port },
+        if discovery_port != 0 {
+            discovery_port
+        } else {
+            our_port
+        },
         probes.len()
     );
 

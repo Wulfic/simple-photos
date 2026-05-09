@@ -25,9 +25,9 @@
 //! available (requires `--features cuda` build), CPU otherwise.
 
 use image::DynamicImage;
+use ort::session::Session;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
-use ort::session::Session;
 use tracing;
 
 use crate::ai::models::BoundingBox;
@@ -56,10 +56,7 @@ pub fn init_pet_embedding_model(model_dir: &str) {
         }
         match crate::ai::session::build_session(&p) {
             Ok(sess) => {
-                tracing::info!(
-                    "Pet embedding model (Phase 2) loaded from {:?}",
-                    p
-                );
+                tracing::info!("Pet embedding model (Phase 2) loaded from {:?}", p);
                 Some(Arc::new(Mutex::new(sess)))
             }
             Err(e) => {
@@ -77,25 +74,27 @@ pub fn init_pet_embedding_model(model_dir: &str) {
 
 /// Object-detection class names we consider "pets" (triggers re-ID).
 const PET_SPECIES: &[(&str, &str)] = &[
-    ("dog",      "dog"),
-    ("cat",      "cat"),
-    ("big cat",  "cat"),   // lions, tigers in zoo photos — treat as cat family
-    ("bird",     "bird"),
-    ("horse",    "horse"),
-    ("rabbit",   "rabbit"),
-    ("hamster",  "hamster"),
-    ("fish",     "fish"),
+    ("dog", "dog"),
+    ("cat", "cat"),
+    ("big cat", "cat"), // lions, tigers in zoo photos — treat as cat family
+    ("bird", "bird"),
+    ("horse", "horse"),
+    ("rabbit", "rabbit"),
+    ("hamster", "hamster"),
+    ("fish", "fish"),
 ];
 
 /// Map an object-detection `class_name` to a pet species string.
 ///
 /// Returns `None` for non-pet classes (landscapes, vehicles, food, …).
 pub fn map_to_species(class_name: &str) -> Option<&'static str> {
-    PET_SPECIES
-        .iter()
-        .find_map(|(key, species)| {
-            if *key == class_name { Some(*species) } else { None }
-        })
+    PET_SPECIES.iter().find_map(|(key, species)| {
+        if *key == class_name {
+            Some(*species)
+        } else {
+            None
+        }
+    })
 }
 
 // ── Embedding extraction ─────────────────────────────────────────────
@@ -151,10 +150,7 @@ fn l2_normalize(mut v: Vec<f32>) -> Vec<f32> {
 ///    MobileNetV2 logit vector from the already-loaded classification model.
 ///
 /// Returns `None` when no model is available (degraded mode).
-pub fn extract_pet_embedding(
-    img: &DynamicImage,
-    bbox: Option<&BoundingBox>,
-) -> Option<Vec<f32>> {
+pub fn extract_pet_embedding(img: &DynamicImage, bbox: Option<&BoundingBox>) -> Option<Vec<f32>> {
     // Crop to the animal first when a bbox is provided.  15% padding gives
     // the network a little context (fur boundary, ears) without letting the
     // background dominate the activations.
@@ -181,7 +177,7 @@ fn try_phase2_embedding(img: &DynamicImage) -> Option<Vec<f32>> {
     const W: usize = 320;
     const H: usize = 320;
     const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
-    const STD:  [f32; 3] = [0.229, 0.224, 0.225];
+    const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
     let resized = img.resize_exact(W as u32, H as u32, FilterType::Triangle);
     let rgb = resized.to_rgb8();
@@ -191,8 +187,7 @@ fn try_phase2_embedding(img: &DynamicImage) -> Option<Vec<f32>> {
         for x in 0..W {
             let pixel = rgb.get_pixel(x as u32, y as u32);
             for c in 0..3 {
-                input[[0, c, y, x]] =
-                    (pixel[c] as f32 / 255.0 - MEAN[c]) / STD[c];
+                input[[0, c, y, x]] = (pixel[c] as f32 / 255.0 - MEAN[c]) / STD[c];
             }
         }
     }
@@ -202,5 +197,3 @@ fn try_phase2_embedding(img: &DynamicImage) -> Option<Vec<f32>> {
     let (_shape, data) = outputs[0].try_extract_tensor::<f32>().ok()?;
     Some(data.to_vec())
 }
-
-

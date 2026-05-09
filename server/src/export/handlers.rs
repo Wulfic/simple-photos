@@ -117,7 +117,16 @@ pub async fn start_export(
     let jwt_secret = state.config.auth.jwt_secret.clone();
 
     tokio::spawn(async move {
-        super::worker::run_export(pool, read_pool, storage_root, user_id, jid, size_limit, jwt_secret).await;
+        super::worker::run_export(
+            pool,
+            read_pool,
+            storage_root,
+            user_id,
+            jid,
+            size_limit,
+            jwt_secret,
+        )
+        .await;
     });
 
     Ok(Json(ExportJobResponse {
@@ -135,16 +144,17 @@ pub async fn export_status(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<ExportStatusResponse>, AppError> {
-    let row: Option<(String, String, i64, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT id, status, size_limit, created_at, completed_at, error \
+    let row: Option<(String, String, i64, String, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT id, status, size_limit, created_at, completed_at, error \
          FROM export_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?;
+        )
+        .bind(&auth.user_id)
+        .fetch_optional(&state.read_pool)
+        .await?;
 
-    let (job_id, status, size_limit, created_at, completed_at, error) = row
-        .ok_or_else(|| AppError::NotFound)?;
+    let (job_id, status, size_limit, created_at, completed_at, error) =
+        row.ok_or_else(|| AppError::NotFound)?;
 
     // Only return files once the job is fully completed to prevent
     // downloading partially-written zip archives.
@@ -168,15 +178,17 @@ pub async fn export_status(
                 .map(|e| e > now)
                 .unwrap_or(false)
         })
-        .map(|(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
-            download_url: format!("/api/export/files/{}/download", id),
-            id,
-            job_id,
-            filename,
-            size_bytes,
-            created_at,
-            expires_at,
-        })
+        .map(
+            |(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
+                download_url: format!("/api/export/files/{}/download", id),
+                id,
+                job_id,
+                filename,
+                size_bytes,
+                created_at,
+                expires_at,
+            },
+        )
         .collect();
 
     Ok(Json(ExportStatusResponse {
@@ -212,15 +224,17 @@ pub async fn list_export_files(
 
     let files: Vec<ExportFileResponse> = rows
         .into_iter()
-        .map(|(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
-            download_url: format!("/api/export/files/{}/download", id),
-            id,
-            job_id,
-            filename,
-            size_bytes,
-            created_at,
-            expires_at,
-        })
+        .map(
+            |(id, job_id, filename, size_bytes, created_at, expires_at)| ExportFileResponse {
+                download_url: format!("/api/export/files/{}/download", id),
+                id,
+                job_id,
+                filename,
+                size_bytes,
+                created_at,
+                expires_at,
+            },
+        )
         .collect();
 
     Ok(Json(ExportFilesListResponse { files }))
@@ -273,7 +287,9 @@ pub async fn download_export_file(
         .header(
             "Content-Disposition",
             HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-                .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"export.zip\"")),
+                .unwrap_or_else(|_| {
+                    HeaderValue::from_static("attachment; filename=\"export.zip\"")
+                }),
         )
         .header("Content-Length", meta.len())
         .body(body)
@@ -288,25 +304,23 @@ pub async fn delete_export(
     Path(job_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     // Verify ownership
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM export_jobs WHERE id = ? AND user_id = ?",
-    )
-    .bind(&job_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM export_jobs WHERE id = ? AND user_id = ?")
+            .bind(&job_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.read_pool)
+            .await?;
 
     if row.is_none() {
         return Err(AppError::NotFound);
     }
 
     // Delete files from disk
-    let file_paths: Vec<(String,)> = sqlx::query_as(
-        "SELECT file_path FROM export_files WHERE job_id = ?",
-    )
-    .bind(&job_id)
-    .fetch_all(&state.read_pool)
-    .await?;
+    let file_paths: Vec<(String,)> =
+        sqlx::query_as("SELECT file_path FROM export_files WHERE job_id = ?")
+            .bind(&job_id)
+            .fetch_all(&state.read_pool)
+            .await?;
 
     let storage_root = state.storage_root.load();
     for (path,) in &file_paths {

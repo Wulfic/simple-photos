@@ -35,10 +35,7 @@ pub async fn run_with_timeout(
     match tokio::time::timeout(timeout, child).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(e)) => Err(format!("process spawn/io failed: {e}")),
-        Err(_) => Err(format!(
-            "process timed out after {}s",
-            timeout.as_secs()
-        )),
+        Err(_) => Err(format!("process timed out after {}s", timeout.as_secs())),
     }
 }
 
@@ -57,9 +54,6 @@ pub async fn status_with_timeout(
     match tokio::time::timeout(timeout, child).await {
         Ok(Ok(status)) => Ok(status),
         Ok(Err(e)) => Err(format!("process spawn/io failed: {e}")),
-        Err(_) => Err(format!(
-            "process timed out after {}s",
-            timeout.as_secs()
-        )),
+        Err(_) => Err(format!("process timed out after {}s", timeout.as_secs())),
     }
 }

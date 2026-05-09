@@ -241,7 +241,11 @@ pub fn apply_credentials(
 /// We base the name on host + share (sanitised) rather than including the
 /// subpath so multiple subpaths on the same share share a single mount.
 pub fn default_mount_point(target: &SmbTarget, base: &Path) -> PathBuf {
-    let safe = format!("{}__{}", sanitize_for_path(&target.host), sanitize_for_path(&target.share));
+    let safe = format!(
+        "{}__{}",
+        sanitize_for_path(&target.host),
+        sanitize_for_path(&target.share)
+    );
     base.join("mounts").join(safe)
 }
 
@@ -253,19 +257,21 @@ pub async fn mount_smb(
     creds_dir: &Path,
 ) -> Result<PathBuf, String> {
     if cfg!(not(target_os = "linux")) {
-        return Err(
-            "Automatic SMB mounting is only supported on Linux. \
+        return Err("Automatic SMB mounting is only supported on Linux. \
              Mount the share manually and point storage at the mount point."
-                .into(),
-        );
+            .into());
     }
 
     tokio::fs::create_dir_all(mount_point)
         .await
         .map_err(|e| format!("Cannot create mount point {}: {}", mount_point.display(), e))?;
-    tokio::fs::create_dir_all(creds_dir)
-        .await
-        .map_err(|e| format!("Cannot create credentials dir {}: {}", creds_dir.display(), e))?;
+    tokio::fs::create_dir_all(creds_dir).await.map_err(|e| {
+        format!(
+            "Cannot create credentials dir {}: {}",
+            creds_dir.display(),
+            e
+        )
+    })?;
 
     if is_mounted(mount_point).await {
         return Ok(mount_point.join(&target.subpath));
@@ -534,9 +540,7 @@ async fn run_mount_command(source: &str, mount_point: &Path, opts: &str) -> Resu
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err(
-                "mount.cifs not found — install the `cifs-utils` package and try again".into(),
-            )
+            Err("mount.cifs not found — install the `cifs-utils` package and try again".into())
         }
         Err(e) => Err(format!("Failed to spawn mount.cifs: {}", e)),
     }
@@ -615,7 +619,13 @@ fn validate_subpath(value: &str) -> Result<(), String> {
 
 fn sanitize_for_path(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

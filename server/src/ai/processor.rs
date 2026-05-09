@@ -15,11 +15,11 @@ use sqlx::SqlitePool;
 use tokio::time;
 use tracing;
 
+use crate::ai::animal;
 use crate::ai::clustering;
 use crate::ai::engine::AiEngine;
 use crate::ai::face;
 use crate::ai::object;
-use crate::ai::animal;
 use crate::ai::tagging;
 use crate::config::AiConfig;
 
@@ -68,7 +68,11 @@ pub fn spawn_ai_processor(
             photos_per_minute,
             config.batch_size,
             engine.provider(),
-            if config.enabled { "enabled" } else { "disabled" }
+            if config.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
         );
 
         loop {
@@ -140,7 +144,18 @@ async fn process_batch(
 
     for (photo_id, user_id, filename) in &unprocessed {
         let photo_start = Instant::now();
-        match process_single_photo(pool, engine, config, storage_root, jwt_secret, photo_id, user_id, filename).await {
+        match process_single_photo(
+            pool,
+            engine,
+            config,
+            storage_root,
+            jwt_secret,
+            photo_id,
+            user_id,
+            filename,
+        )
+        .await
+        {
             Ok((nf, no)) => {
                 total_faces += nf;
                 total_objects += no;
@@ -175,28 +190,34 @@ async fn process_batch(
     );
 
     // After processing a batch, re-run clustering for any users that had new detections
-    let users_with_new: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT user_id FROM face_detections WHERE cluster_id IS NULL"
-    )
-    .fetch_all(pool)
-    .await?;
+    let users_with_new: Vec<(String,)> =
+        sqlx::query_as("SELECT DISTINCT user_id FROM face_detections WHERE cluster_id IS NULL")
+            .fetch_all(pool)
+            .await?;
 
     for (user_id,) in &users_with_new {
         if let Err(e) = run_clustering(pool, user_id, config.face_similarity_threshold).await {
-            tracing::warn!("AI processor: clustering failed for user {}: {}", user_id, e);
+            tracing::warn!(
+                "AI processor: clustering failed for user {}: {}",
+                user_id,
+                e
+            );
         }
     }
 
     // Run pet clustering for users with new unclustered pet detections.
-    let users_with_new_pets: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT user_id FROM pet_detections WHERE cluster_id IS NULL"
-    )
-    .fetch_all(pool)
-    .await?;
+    let users_with_new_pets: Vec<(String,)> =
+        sqlx::query_as("SELECT DISTINCT user_id FROM pet_detections WHERE cluster_id IS NULL")
+            .fetch_all(pool)
+            .await?;
 
     for (user_id,) in &users_with_new_pets {
         if let Err(e) = run_pet_clustering(pool, user_id, config.pet_similarity_threshold).await {
-            tracing::warn!("AI processor: pet clustering failed for user {}: {}", user_id, e);
+            tracing::warn!(
+                "AI processor: pet clustering failed for user {}: {}",
+                user_id,
+                e
+            );
         }
     }
 
@@ -217,7 +238,7 @@ async fn process_single_photo(
 ) -> anyhow::Result<(usize, usize)> {
     // Load the photo file (plain or encrypted)
     let row: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT file_path, encrypted_blob_id FROM photos WHERE id = ?1 AND user_id = ?2"
+        "SELECT file_path, encrypted_blob_id FROM photos WHERE id = ?1 AND user_id = ?2",
     )
     .bind(photo_id)
     .bind(user_id)
@@ -245,7 +266,8 @@ async fn process_single_photo(
             }
         }
     } else if let Some(enc_blob_id) = encrypted_blob_id.as_ref() {
-        match load_encrypted_photo_bytes(pool, storage_root, jwt_secret, enc_blob_id, user_id).await {
+        match load_encrypted_photo_bytes(pool, storage_root, jwt_secret, enc_blob_id, user_id).await
+        {
             Ok(bytes) => bytes,
             Err(e) => {
                 tracing::debug!(
@@ -334,15 +356,12 @@ async fn process_single_photo(
         } else {
             face::extract_face_embedding(&img, &det.bbox)
         };
-        let embedding_bytes: Vec<u8> = embedding
-            .iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
 
         sqlx::query(
             "INSERT INTO face_detections \
              (photo_id, user_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, embedding) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(photo_id)
         .bind(user_id)
@@ -386,7 +405,7 @@ async fn process_single_photo(
         sqlx::query(
             "INSERT INTO object_detections \
              (photo_id, user_id, class_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(photo_id)
         .bind(user_id)
@@ -416,14 +435,12 @@ async fn process_single_photo(
             let pet_start = Instant::now();
             match animal::extract_pet_embedding(&img, Some(&det.bbox)) {
                 Some(embedding) => {
-                    let emb_bytes: Vec<u8> = embedding
-                        .iter()
-                        .flat_map(|f| f.to_le_bytes())
-                        .collect();
+                    let emb_bytes: Vec<u8> =
+                        embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
                     sqlx::query(
                         "INSERT INTO pet_detections \
                          (photo_id, user_id, species, confidence, embedding) \
-                         VALUES (?1, ?2, ?3, ?4, ?5)"
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
                     )
                     .bind(photo_id)
                     .bind(user_id)
@@ -463,7 +480,7 @@ async fn process_single_photo(
 async fn mark_processed(pool: &SqlitePool, photo_id: &str, user_id: &str) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT OR REPLACE INTO ai_processed_photos (photo_id, user_id, processed_at) \
-         VALUES (?1, ?2, datetime('now'))"
+         VALUES (?1, ?2, datetime('now'))",
     )
     .bind(photo_id)
     .bind(user_id)
@@ -492,14 +509,15 @@ async fn load_encrypted_photo_bytes(
         .map_err(|e| anyhow::anyhow!("load wrapped key: {e}"))?
         .ok_or_else(|| anyhow::anyhow!("no encryption key configured"))?;
 
-    let (blob_storage_path,): (String,) = sqlx::query_as(
-        "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
-    )
-    .bind(encrypted_blob_id)
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("encrypted blob row not found: {}", encrypted_blob_id))?;
+    let (blob_storage_path,): (String,) =
+        sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
+            .bind(encrypted_blob_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("encrypted blob row not found: {}", encrypted_blob_id)
+            })?;
 
     let enc_data = crate::blobs::storage::read_blob(storage_root.as_path(), &blob_storage_path)
         .await
@@ -533,7 +551,7 @@ async fn run_clustering(
 ) -> anyhow::Result<()> {
     // Load all face detections with embeddings for this user
     let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-        "SELECT id, embedding FROM face_detections WHERE user_id = ?1 AND embedding IS NOT NULL"
+        "SELECT id, embedding FROM face_detections WHERE user_id = ?1 AND embedding IS NOT NULL",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -571,12 +589,11 @@ async fn run_clustering(
     let cluster_start = Instant::now();
     // Map cluster assignments to database cluster IDs.
     // First, get existing clusters for this user.
-    let existing_clusters: Vec<(i64,)> = sqlx::query_as(
-        "SELECT id FROM face_clusters WHERE user_id = ?1 ORDER BY id"
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
+    let existing_clusters: Vec<(i64,)> =
+        sqlx::query_as("SELECT id FROM face_clusters WHERE user_id = ?1 ORDER BY id")
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?;
 
     // Find unique cluster IDs from the clustering output
     let mut unique_clusters: Vec<i64> = assignments.iter().map(|(_, c)| *c).collect();
@@ -600,12 +617,11 @@ async fn run_clustering(
             if c != cluster_idx {
                 continue;
             }
-            let existing: Option<(Option<i64>,)> = sqlx::query_as(
-                "SELECT cluster_id FROM face_detections WHERE id = ?1"
-            )
-            .bind(face_id)
-            .fetch_optional(pool)
-            .await?;
+            let existing: Option<(Option<i64>,)> =
+                sqlx::query_as("SELECT cluster_id FROM face_detections WHERE id = ?1")
+                    .bind(face_id)
+                    .fetch_optional(pool)
+                    .await?;
 
             if let Some((Some(cid),)) = existing {
                 matched_db_cluster = Some(cid);
@@ -630,7 +646,7 @@ async fn run_clustering(
                 // Create new cluster
                 let result = sqlx::query(
                     "INSERT INTO face_clusters (user_id, photo_count, created_at, updated_at) \
-                     VALUES (?1, ?2, datetime('now'), datetime('now'))"
+                     VALUES (?1, ?2, datetime('now'), datetime('now'))",
                 )
                 .bind(user_id)
                 .bind(count as i64)
@@ -647,13 +663,11 @@ async fn run_clustering(
     // Update face detections with cluster assignments
     for (face_id, cluster_idx) in &assignments {
         if let Some(db_cluster_id) = cluster_id_map.get(cluster_idx) {
-            sqlx::query(
-                "UPDATE face_detections SET cluster_id = ?1 WHERE id = ?2"
-            )
-            .bind(db_cluster_id)
-            .bind(face_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE face_detections SET cluster_id = ?1 WHERE id = ?2")
+                .bind(db_cluster_id)
+                .bind(face_id)
+                .execute(pool)
+                .await?;
         }
     }
 
@@ -663,14 +677,18 @@ async fn run_clustering(
             "SELECT fd.photo_id, fd.cluster_id, COALESCE(fc.label, '') \
              FROM face_detections fd \
              LEFT JOIN face_clusters fc ON fc.id = fd.cluster_id \
-             WHERE fd.id = ?1"
+             WHERE fd.id = ?1",
         )
         .bind(face_id)
         .fetch_optional(pool)
         .await?;
 
         if let Some((photo_id, cluster_id, label)) = face_info {
-            let label_opt = if label.is_empty() { None } else { Some(label.as_str()) };
+            let label_opt = if label.is_empty() {
+                None
+            } else {
+                Some(label.as_str())
+            };
             tagging::apply_face_tag(pool, user_id, &photo_id, cluster_id, label_opt).await?;
         }
     }
@@ -702,7 +720,7 @@ async fn run_pet_clustering(
     // Load all pet detections with embeddings for this user, grouped by species
     let rows: Vec<(i64, String, Vec<u8>)> = sqlx::query_as(
         "SELECT id, species, embedding FROM pet_detections \
-         WHERE user_id = ?1 AND embedding IS NOT NULL"
+         WHERE user_id = ?1 AND embedding IS NOT NULL",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -749,7 +767,7 @@ async fn run_pet_clustering(
 
         // Fetch existing pet clusters for this user+species
         let existing: Vec<(i64,)> = sqlx::query_as(
-            "SELECT id FROM pet_clusters WHERE user_id = ?1 AND species = ?2 ORDER BY id"
+            "SELECT id FROM pet_clusters WHERE user_id = ?1 AND species = ?2 ORDER BY id",
         )
         .bind(user_id)
         .bind(species)
@@ -768,12 +786,11 @@ async fn run_pet_clustering(
                 if c != cluster_idx {
                     continue;
                 }
-                let row: Option<(Option<i64>,)> = sqlx::query_as(
-                    "SELECT cluster_id FROM pet_detections WHERE id = ?1"
-                )
-                .bind(det_id)
-                .fetch_optional(pool)
-                .await?;
+                let row: Option<(Option<i64>,)> =
+                    sqlx::query_as("SELECT cluster_id FROM pet_detections WHERE id = ?1")
+                        .bind(det_id)
+                        .fetch_optional(pool)
+                        .await?;
                 if let Some((Some(cid),)) = row {
                     matched_db_cluster = Some(cid);
                     break;
@@ -784,7 +801,7 @@ async fn run_pet_clustering(
                 // Update photo count on existing cluster
                 sqlx::query(
                     "UPDATE pet_clusters SET photo_count = ?1, updated_at = datetime('now') \
-                     WHERE id = ?2"
+                     WHERE id = ?2",
                 )
                 .bind(count)
                 .bind(cid)
@@ -811,20 +828,18 @@ async fn run_pet_clustering(
         // Assign detections to clusters and apply tags
         for (det_id, cluster_idx) in &assignments {
             if let Some(db_cluster_id) = cluster_id_map.get(cluster_idx) {
-                sqlx::query(
-                    "UPDATE pet_detections SET cluster_id = ?1 WHERE id = ?2"
-                )
-                .bind(db_cluster_id)
-                .bind(det_id)
-                .execute(pool)
-                .await?;
+                sqlx::query("UPDATE pet_detections SET cluster_id = ?1 WHERE id = ?2")
+                    .bind(db_cluster_id)
+                    .bind(det_id)
+                    .execute(pool)
+                    .await?;
 
                 // Re-apply cluster-aware pet tag
                 let info: Option<(String, Option<String>)> = sqlx::query_as(
                     "SELECT pd.photo_id, pc.label \
                      FROM pet_detections pd \
                      LEFT JOIN pet_clusters pc ON pc.id = pd.cluster_id \
-                     WHERE pd.id = ?1"
+                     WHERE pd.id = ?1",
                 )
                 .bind(det_id)
                 .fetch_optional(pool)
@@ -837,7 +852,8 @@ async fn run_pet_clustering(
                         &photo_id,
                         Some(*db_cluster_id),
                         label.as_deref().unwrap_or(species),
-                    ).await?;
+                    )
+                    .await?;
                 }
 
                 // Set representative thumbnail (highest-confidence photo)
@@ -845,7 +861,7 @@ async fn run_pet_clustering(
                     "UPDATE pet_clusters SET representative = \
                      COALESCE(representative, (SELECT photo_id FROM pet_detections \
                       WHERE cluster_id = ?1 ORDER BY confidence DESC LIMIT 1)) \
-                     WHERE id = ?1"
+                     WHERE id = ?1",
                 )
                 .bind(db_cluster_id)
                 .execute(pool)

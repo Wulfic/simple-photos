@@ -182,19 +182,17 @@ pub async fn remove_gallery_item(
     .fetch_optional(&state.pool)
     .await?;
 
-    let (clone_blob_id, enc_blob_id, enc_thumb_blob_id) =
-        item.ok_or(AppError::NotFound)?;
+    let (clone_blob_id, enc_blob_id, enc_thumb_blob_id) = item.ok_or(AppError::NotFound)?;
 
     let storage_root = (**state.storage_root.load()).clone();
 
     // Delete the cloned blob file + row (if owned by this user).
-    let clone_blob: Option<(String,)> = sqlx::query_as(
-        "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
-    )
-    .bind(&clone_blob_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let clone_blob: Option<(String,)> =
+        sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
+            .bind(&clone_blob_id)
+            .bind(&auth.user_id)
+            .fetch_optional(&state.pool)
+            .await?;
     if let Some((sp,)) = clone_blob {
         let _ = crate::blobs::storage::delete_blob(&storage_root, &sp).await;
         let _ = sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
@@ -206,14 +204,15 @@ pub async fn remove_gallery_item(
 
     // Delete server-side clone photos row (and its thumbnail file) if any.
     // The clone uses the same id as the cloned blob.
-    let clone_photo: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT file_path, thumb_path, encrypted_blob_id, encrypted_thumb_blob_id \
+    let clone_photo: Option<(String, Option<String>, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT file_path, thumb_path, encrypted_blob_id, encrypted_thumb_blob_id \
          FROM photos WHERE id = ? AND user_id = ?",
-    )
-    .bind(&clone_blob_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+        )
+        .bind(&clone_blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.pool)
+        .await?;
     if let Some((fp, tp, photo_enc_blob, photo_enc_thumb)) = clone_photo {
         if !fp.is_empty() {
             let _ = crate::blobs::storage::delete_blob(&storage_root, &fp).await;
@@ -422,30 +421,26 @@ pub async fn add_gallery_item(
             .and_then(|p| p.encrypted_blob_id.as_deref())
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                AppError::BadRequest(
-                    "Photo has no file on disk and no encrypted blob".into(),
-                )
+                AppError::BadRequest("Photo has no file on disk and no encrypted blob".into())
             })?;
 
         let enc_key = crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to load encryption key: {e}")))?;
-        let enc_key = enc_key
-            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+        let enc_key =
+            enc_key.ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
 
-        let enc_sp: Option<(String,)> = sqlx::query_as(
-            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
-        )
-        .bind(enc_blob_id)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.pool)
-        .await?;
+        let enc_sp: Option<(String,)> =
+            sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
+                .bind(enc_blob_id)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.pool)
+                .await?;
         let (enc_storage_path,) = enc_sp.ok_or_else(|| {
             AppError::Internal(format!("Encrypted blob {} not found", enc_blob_id))
         })?;
 
-        let enc_data =
-            crate::blobs::storage::read_blob(&storage_root, &enc_storage_path).await?;
+        let enc_data = crate::blobs::storage::read_blob(&storage_root, &enc_storage_path).await?;
         let plaintext = {
             let k = enc_key;
             tokio::task::spawn_blocking(move || crypto::decrypt(&k, &enc_data))
@@ -460,11 +455,9 @@ pub async fn add_gallery_item(
         let data_b64 = envelope["data"]
             .as_str()
             .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
-        let raw_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            data_b64,
-        )
-        .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
+        let raw_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
+                .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
 
         tracing::info!(
             encrypted_blob_id = %enc_blob_id,
@@ -806,17 +799,19 @@ pub async fn list_gallery_items(
 
     let items_json: Vec<serde_json::Value> = items
         .iter()
-        .map(|(id, blob_id, added_at, encrypted_thumb_blob_id, width, height, media_type)| {
-            serde_json::json!({
-                "id": id,
-                "blob_id": blob_id,
-                "added_at": added_at,
-                "encrypted_thumb_blob_id": encrypted_thumb_blob_id,
-                "width": width,
-                "height": height,
-                "media_type": media_type,
-            })
-        })
+        .map(
+            |(id, blob_id, added_at, encrypted_thumb_blob_id, width, height, media_type)| {
+                serde_json::json!({
+                    "id": id,
+                    "blob_id": blob_id,
+                    "added_at": added_at,
+                    "encrypted_thumb_blob_id": encrypted_thumb_blob_id,
+                    "width": width,
+                    "height": height,
+                    "media_type": media_type,
+                })
+            },
+        )
         .collect();
 
     Ok(Json(serde_json::json!({ "items": items_json })))

@@ -7,13 +7,13 @@
 // ── Secure gallery models (from photos) ──────────────────────────────────
 #[allow(unused_imports)]
 pub use crate::photos::models::{
-    SecureGalleryRecord, SecureGalleryListResponse,
-    CreateSecureGalleryRequest, UnlockSecureGalleryRequest, SecureGalleryUnlockResponse,
+    CreateSecureGalleryRequest, SecureGalleryListResponse, SecureGalleryRecord,
+    SecureGalleryUnlockResponse, UnlockSecureGalleryRequest,
 };
 
 // ── Shared album models (from sharing) ───────────────────────────────────
 #[allow(unused_imports)]
 pub use crate::sharing::models::{
-    SharedAlbumInfo, SharedAlbumMember, SharedAlbumPhoto,
-    CreateSharedAlbumRequest, AddMemberRequest, AddPhotoRequest,
+    AddMemberRequest, AddPhotoRequest, CreateSharedAlbumRequest, SharedAlbumInfo,
+    SharedAlbumMember, SharedAlbumPhoto,
 };

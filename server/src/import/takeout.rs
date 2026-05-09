@@ -260,14 +260,12 @@ pub async fn import_takeout(
 
         let existing: Option<String> = if let Some(ref ph) = photo_hash {
             // Content-hash dedup: catches renamed duplicates of the same file
-            sqlx::query_scalar(
-                "SELECT id FROM photos WHERE user_id = ? AND photo_hash = ? LIMIT 1",
-            )
-            .bind(&auth.user_id)
-            .bind(ph)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None)
+            sqlx::query_scalar("SELECT id FROM photos WHERE user_id = ? AND photo_hash = ? LIMIT 1")
+                .bind(&auth.user_id)
+                .bind(ph)
+                .fetch_optional(&state.pool)
+                .await
+                .unwrap_or(None)
         } else {
             // Fallback: filename+size if hash couldn't be computed
             sqlx::query_scalar(

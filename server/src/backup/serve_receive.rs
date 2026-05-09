@@ -187,8 +187,7 @@ pub async fn backup_receive(
     let created_at = hdr_str(&headers, "X-Original-Created-At")
         .map(|t| normalize_iso_timestamp(&t))
         .unwrap_or_else(|| now.clone());
-    let taken_at = hdr_str(&headers, "X-Taken-At")
-        .map(|t| normalize_iso_timestamp(&t));
+    let taken_at = hdr_str(&headers, "X-Taken-At").map(|t| normalize_iso_timestamp(&t));
     let deleted_at = hdr_str(&headers, "X-Deleted-At")
         .map(|t| normalize_iso_timestamp(&t))
         .unwrap_or_else(|| now.clone());
@@ -300,8 +299,8 @@ pub async fn backup_receive(
         // X-Original-Photo-Id contains the original photo UUID (photos.id on
         // the backup).  X-Photo-Id is the *trash row* UUID, which is a
         // different value — deleting by it would be a no-op.
-        let gallery_id = hdr_str(&headers, "X-Original-Photo-Id")
-            .unwrap_or_else(|| photo_id.clone());
+        let gallery_id =
+            hdr_str(&headers, "X-Original-Photo-Id").unwrap_or_else(|| photo_id.clone());
 
         // Before deleting the gallery row, look up its thumb_path so we can
         // copy the existing thumbnail to the trash thumbnail path later.
@@ -344,14 +343,13 @@ pub async fn backup_receive(
         // the normal case; encrypted_blob_id covers encrypted items (photo_id
         // = blob_id); file_path covers a race where autoscan ran between
         // Phase-0a and this receive call and re-imported with a different UUID.
-        if let Err(e) = sqlx::query(
-            "DELETE FROM photos WHERE id = ? OR encrypted_blob_id = ? OR file_path = ?",
-        )
-        .bind(&gallery_id)
-        .bind(&gallery_id)
-        .bind(&file_path)
-        .execute(&state.pool)
-        .await
+        if let Err(e) =
+            sqlx::query("DELETE FROM photos WHERE id = ? OR encrypted_blob_id = ? OR file_path = ?")
+                .bind(&gallery_id)
+                .bind(&gallery_id)
+                .bind(&file_path)
+                .execute(&state.pool)
+                .await
         {
             tracing::warn!(
                 photo_id = %photo_id,

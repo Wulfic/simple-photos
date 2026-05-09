@@ -36,10 +36,20 @@ pub async fn soft_delete_photo(
     let mut tx = state.pool.begin().await?;
 
     // Fetch the photo row in two queries to stay within SQLx tuple size limits
-    let photo_core = sqlx::query_as::<_, (
-        String, String, String, String, i64, i64, i64,
-        Option<f64>, Option<String>,
-    )>(
+    let photo_core = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            String,
+            i64,
+            i64,
+            i64,
+            Option<f64>,
+            Option<String>,
+        ),
+    >(
         "SELECT filename, file_path, mime_type, media_type, size_bytes, width, height, \
          duration_secs, taken_at \
          FROM photos WHERE id = ? AND user_id = ?",
@@ -50,10 +60,18 @@ pub async fn soft_delete_photo(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let photo_extra = sqlx::query_as::<_, (
-        Option<f64>, Option<f64>, Option<String>, i64,
-        Option<String>, Option<String>, Option<String>,
-    )>(
+    let photo_extra = sqlx::query_as::<
+        _,
+        (
+            Option<f64>,
+            Option<f64>,
+            Option<String>,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         "SELECT latitude, longitude, thumb_path, is_favorite, \
          crop_metadata, camera_model, photo_hash \
          FROM photos WHERE id = ? AND user_id = ?",
@@ -83,21 +101,21 @@ pub async fn soft_delete_photo(
     .bind(&trash_id)
     .bind(&auth.user_id)
     .bind(&photo_id)
-    .bind(&photo_core.0)  // filename
-    .bind(&photo_core.1)  // file_path
-    .bind(&photo_core.2)  // mime_type
-    .bind(&photo_core.3)  // media_type
-    .bind(photo_core.4)   // size_bytes
-    .bind(photo_core.5)   // width
-    .bind(photo_core.6)   // height
-    .bind(photo_core.7)   // duration_secs
-    .bind(&photo_core.8)  // taken_at
-    .bind(photo_extra.0)  // latitude
-    .bind(photo_extra.1)  // longitude
+    .bind(&photo_core.0) // filename
+    .bind(&photo_core.1) // file_path
+    .bind(&photo_core.2) // mime_type
+    .bind(&photo_core.3) // media_type
+    .bind(photo_core.4) // size_bytes
+    .bind(photo_core.5) // width
+    .bind(photo_core.6) // height
+    .bind(photo_core.7) // duration_secs
+    .bind(&photo_core.8) // taken_at
+    .bind(photo_extra.0) // latitude
+    .bind(photo_extra.1) // longitude
     .bind(&photo_extra.2) // thumb_path
     .bind(now.to_rfc3339())
     .bind(expires_at.to_rfc3339())
-    .bind(photo_extra.3)  // is_favorite
+    .bind(photo_extra.3) // is_favorite
     .bind(&photo_extra.4) // crop_metadata
     .bind(&photo_extra.5) // camera_model
     .bind(&photo_extra.6) // photo_hash
@@ -351,12 +369,11 @@ pub async fn restore_from_trash(
                 .await?
                 .ok_or(AppError::NotFound)?;
 
-                let actual_owner: String = sqlx::query_scalar(
-                    "SELECT user_id FROM trash_items WHERE id = ?",
-                )
-                .bind(&trash_id)
-                .fetch_one(&mut *tx)
-                .await?;
+                let actual_owner: String =
+                    sqlx::query_scalar("SELECT user_id FROM trash_items WHERE id = ?")
+                        .bind(&trash_id)
+                        .fetch_one(&mut *tx)
+                        .await?;
 
                 (r, actual_owner)
             } else {
@@ -440,10 +457,21 @@ pub async fn restore_from_trash(
     } else {
         // ── Unencrypted photo restore path ───────────────────────────
         // Fetch photo columns from trash in two queries to stay within tuple limits
-        let photo_core = sqlx::query_as::<_, (
-            String, String, String, String, String, i64, i64, i64,
-            Option<f64>, Option<String>,
-        )>(
+        let photo_core = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                String,
+                i64,
+                i64,
+                i64,
+                Option<f64>,
+                Option<String>,
+            ),
+        >(
             "SELECT photo_id, filename, file_path, mime_type, media_type, size_bytes, \
              width, height, duration_secs, taken_at \
              FROM trash_items WHERE id = ?",
@@ -452,10 +480,18 @@ pub async fn restore_from_trash(
         .fetch_one(&mut *tx)
         .await?;
 
-        let photo_extra = sqlx::query_as::<_, (
-            Option<f64>, Option<f64>, Option<String>, i64,
-            Option<String>, Option<String>, Option<String>,
-        )>(
+        let photo_extra = sqlx::query_as::<
+            _,
+            (
+                Option<f64>,
+                Option<f64>,
+                Option<String>,
+                i64,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
             "SELECT latitude, longitude, thumb_path, is_favorite, \
              crop_metadata, camera_model, photo_hash \
              FROM trash_items WHERE id = ?",
@@ -479,25 +515,25 @@ pub async fn restore_from_trash(
              thumb_path, created_at, is_favorite, crop_metadata, camera_model, photo_hash) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&photo_core.0)    // photo_id → id
+        .bind(&photo_core.0) // photo_id → id
         .bind(&owner_id)
-        .bind(&photo_core.1)    // filename
-        .bind(&photo_core.2)    // file_path
-        .bind(&photo_core.3)    // mime_type
-        .bind(&photo_core.4)    // media_type
-        .bind(photo_core.5)     // size_bytes
-        .bind(photo_core.6)     // width
-        .bind(photo_core.7)     // height
-        .bind(photo_core.8)     // duration_secs
-        .bind(&photo_core.9)    // taken_at
-        .bind(photo_extra.0)    // latitude
-        .bind(photo_extra.1)    // longitude
-        .bind(&photo_extra.2)   // thumb_path
+        .bind(&photo_core.1) // filename
+        .bind(&photo_core.2) // file_path
+        .bind(&photo_core.3) // mime_type
+        .bind(&photo_core.4) // media_type
+        .bind(photo_core.5) // size_bytes
+        .bind(photo_core.6) // width
+        .bind(photo_core.7) // height
+        .bind(photo_core.8) // duration_secs
+        .bind(&photo_core.9) // taken_at
+        .bind(photo_extra.0) // latitude
+        .bind(photo_extra.1) // longitude
+        .bind(&photo_extra.2) // thumb_path
         .bind(original_created_at) // created_at — preserve original date
-        .bind(photo_extra.3)    // is_favorite
-        .bind(&photo_extra.4)   // crop_metadata
-        .bind(&photo_extra.5)   // camera_model
-        .bind(&photo_extra.6)   // photo_hash
+        .bind(photo_extra.3) // is_favorite
+        .bind(&photo_extra.4) // crop_metadata
+        .bind(&photo_extra.5) // camera_model
+        .bind(&photo_extra.6) // photo_hash
         .execute(&mut *tx)
         .await?;
 

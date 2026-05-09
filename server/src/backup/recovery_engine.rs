@@ -5,9 +5,9 @@
 
 use chrono::Utc;
 
+use super::models::*;
 use crate::photos::utils::normalize_iso_timestamp;
 use crate::sanitize;
-use super::models::*;
 
 /// Execute the actual recovery from a backup server.
 ///
@@ -397,10 +397,7 @@ async fn recover_users(
             Some(v) => v,
             None => continue,
         };
-        let role = user
-            .get("role")
-            .and_then(|v| v.as_str())
-            .unwrap_or("user");
+        let role = user.get("role").and_then(|v| v.as_str()).unwrap_or("user");
         let quota = user
             .get("storage_quota_bytes")
             .and_then(|v| v.as_i64())

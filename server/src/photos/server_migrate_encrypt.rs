@@ -76,10 +76,7 @@ pub async fn generate_thumbnail_for_migration(
                 let img = apply_exif_orientation_from_bytes(&data_owned, img);
                 let thumb = img.resize(512, 512, image::imageops::FilterType::Triangle);
                 let mut buf = std::io::Cursor::new(Vec::new());
-                if thumb
-                    .write_to(&mut buf, image::ImageFormat::Jpeg)
-                    .is_ok()
-                {
+                if thumb.write_to(&mut buf, image::ImageFormat::Jpeg).is_ok() {
                     return Some(buf.into_inner());
                 }
             }
@@ -146,14 +143,13 @@ pub async fn encrypt_one_photo(
     // Check if a blob with this content already exists (e.g. synced from primary).
     // If so, reuse it instead of re-encrypting and creating a duplicate blob.
     let content_hash = hex::encode(&Sha256::digest(&file_data)[..6]);
-    let existing_blob: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM blobs WHERE content_hash = ? AND user_id = ? LIMIT 1",
-    )
-    .bind(&content_hash)
-    .bind(&photo.user_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Check existing blob: {}", e))?;
+    let existing_blob: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM blobs WHERE content_hash = ? AND user_id = ? LIMIT 1")
+            .bind(&content_hash)
+            .bind(&photo.user_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Check existing blob: {}", e))?;
 
     if let Some((existing_blob_id,)) = existing_blob {
         // Find the encrypted thumbnail that is already associated with the
@@ -223,19 +219,12 @@ pub async fn encrypt_one_photo(
     let web_preview_fut = build_web_preview(&photo, &full_path, &file_data, storage_root);
     let thumbnail_fut = build_thumbnail(&photo, &full_path, &file_data, storage_root);
 
-    let ((payload_data, payload_mime), thumb_data) =
-        tokio::join!(web_preview_fut, thumbnail_fut);
+    let ((payload_data, payload_mime), thumb_data) = tokio::join!(web_preview_fut, thumbnail_fut);
 
     // Upload thumbnail blob (if generated)
     let mut thumb_blob_id = String::new();
     let thumb_insert_params = if let Some(ref thumb_bytes) = thumb_data {
-        let params = encrypt_and_write_thumbnail(
-            thumb_bytes,
-            key,
-            &photo,
-            storage_root,
-        )
-        .await?;
+        let params = encrypt_and_write_thumbnail(thumb_bytes, key, &photo, storage_root).await?;
         thumb_blob_id = params.0.clone();
         Some(params)
     } else {
@@ -260,8 +249,8 @@ pub async fn encrypt_one_photo(
         "thumbnail_blob_id": thumb_blob_id,
         "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &payload_data),
     });
-    let photo_json = serde_json::to_vec(&photo_payload)
-        .map_err(|e| format!("JSON serialize failed: {}", e))?;
+    let photo_json =
+        serde_json::to_vec(&photo_payload).map_err(|e| format!("JSON serialize failed: {}", e))?;
 
     // Encrypt (CPU-bound, offload to blocking pool)
     let enc_photo = {
@@ -277,18 +266,14 @@ pub async fn encrypt_one_photo(
 
     // Write encrypted blob to disk
     let blob_id = Uuid::new_v4().to_string();
-    let blob_storage_path =
-        storage::write_blob(storage_root, &photo.user_id, &blob_id, &enc_photo)
-            .await
-            .map_err(|e| format!("Write photo blob failed: {}", e))?;
+    let blob_storage_path = storage::write_blob(storage_root, &photo.user_id, &blob_id, &enc_photo)
+        .await
+        .map_err(|e| format!("Write photo blob failed: {}", e))?;
 
     let now = Utc::now().to_rfc3339();
 
     // Atomic transaction: INSERT blobs + UPDATE photos
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| format!("Begin tx: {}", e))?;
+    let mut tx = pool.begin().await.map_err(|e| format!("Begin tx: {}", e))?;
 
     if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params
     {
@@ -339,9 +324,7 @@ pub async fn encrypt_one_photo(
     .await
     .map_err(|e| format!("Mark encrypted failed: {}", e))?;
 
-    tx.commit()
-        .await
-        .map_err(|e| format!("Commit tx: {}", e))?;
+    tx.commit().await.map_err(|e| format!("Commit tx: {}", e))?;
 
     Ok(())
 }
@@ -387,11 +370,7 @@ pub async fn repair_missing_thumbnails(
         let file_data = match tokio::fs::read(&full_path).await {
             Ok(data) => data,
             Err(e) => {
-                tracing::error!(
-                    "[SERVER_MIG] repair: read failed for {}: {}",
-                    filename,
-                    e
-                );
+                tracing::error!("[SERVER_MIG] repair: read failed for {}: {}", filename, e);
                 continue;
             }
         };
@@ -418,11 +397,7 @@ pub async fn repair_missing_thumbnails(
                     );
                 }
                 Err(e) => {
-                    tracing::error!(
-                        "[SERVER_MIG] repair: failed for {}: {}",
-                        filename,
-                        e
-                    );
+                    tracing::error!("[SERVER_MIG] repair: failed for {}: {}", filename, e);
                 }
             }
         }
@@ -572,10 +547,8 @@ async fn build_web_preview(
     storage_root: &std::path::Path,
 ) -> (Vec<u8>, String) {
     if let Some(preview_ext) = needs_web_preview(&photo.filename) {
-        let cached_preview_path = storage_root.join(format!(
-            ".web_previews/{}.web.{}",
-            photo.id, preview_ext
-        ));
+        let cached_preview_path =
+            storage_root.join(format!(".web_previews/{}.web.{}", photo.id, preview_ext));
 
         let preview_data = if tokio::fs::try_exists(&cached_preview_path)
             .await
@@ -620,7 +593,11 @@ async fn build_thumbnail(
     // Hardcoding `.jpg` here used to force every GIF through
     // `generate_thumbnail_for_migration` (image::open → static frame),
     // losing animation in the encrypted thumbnail blob.
-    let thumb_ext = if photo.mime_type == "image/gif" { "gif" } else { "jpg" };
+    let thumb_ext = if photo.mime_type == "image/gif" {
+        "gif"
+    } else {
+        "jpg"
+    };
     let cached_thumb_path =
         storage_root.join(format!(".thumbnails/{}.thumb.{}", photo.id, thumb_ext));
 
@@ -641,8 +618,7 @@ async fn build_thumbnail(
             }
             return cached;
         }
-        return generate_thumbnail_for_migration(full_path, file_data, &photo.mime_type)
-            .await;
+        return generate_thumbnail_for_migration(full_path, file_data, &photo.mime_type).await;
     }
     generate_thumbnail_for_migration(full_path, file_data, &photo.mime_type).await
 }
@@ -661,8 +637,8 @@ async fn encrypt_and_write_thumbnail(
         "height": 256,
         "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, thumb_bytes),
     });
-    let thumb_json = serde_json::to_vec(&thumb_payload)
-        .map_err(|e| format!("JSON serialize failed: {}", e))?;
+    let thumb_json =
+        serde_json::to_vec(&thumb_payload).map_err(|e| format!("JSON serialize failed: {}", e))?;
 
     let enc_thumb = {
         let key_copy = *key;
@@ -681,10 +657,9 @@ async fn encrypt_and_write_thumbnail(
         "thumbnail"
     };
 
-    let blob_storage_path =
-        storage::write_blob(storage_root, &photo.user_id, &blob_id, &enc_thumb)
-            .await
-            .map_err(|e| format!("Write thumbnail blob failed: {}", e))?;
+    let blob_storage_path = storage::write_blob(storage_root, &photo.user_id, &blob_id, &enc_thumb)
+        .await
+        .map_err(|e| format!("Write thumbnail blob failed: {}", e))?;
 
     let now = Utc::now().to_rfc3339();
     Ok((
@@ -728,8 +703,8 @@ async fn encrypt_and_store_repair_thumbnail(
         "height": 256,
         "data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, thumb_bytes),
     });
-    let thumb_json = serde_json::to_vec(&thumb_payload)
-        .map_err(|e| format!("JSON serialize failed: {}", e))?;
+    let thumb_json =
+        serde_json::to_vec(&thumb_payload).map_err(|e| format!("JSON serialize failed: {}", e))?;
 
     let enc_thumb = {
         let key_copy = *key;
@@ -748,10 +723,9 @@ async fn encrypt_and_store_repair_thumbnail(
         "thumbnail"
     };
 
-    let blob_storage_path =
-        storage::write_blob(storage_root, photo_user_id, &blob_id, &enc_thumb)
-            .await
-            .map_err(|e| format!("Write blob failed: {}", e))?;
+    let blob_storage_path = storage::write_blob(storage_root, photo_user_id, &blob_id, &enc_thumb)
+        .await
+        .map_err(|e| format!("Write blob failed: {}", e))?;
 
     let now = Utc::now().to_rfc3339();
     sqlx::query(
@@ -769,15 +743,13 @@ async fn encrypt_and_store_repair_thumbnail(
     .await
     .map_err(|e| format!("Insert blob failed: {}", e))?;
 
-    sqlx::query(
-        "UPDATE photos SET encrypted_thumb_blob_id = ? WHERE id = ? AND user_id = ?",
-    )
-    .bind(&blob_id)
-    .bind(photo_id)
-    .bind(photo_user_id)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Update photos failed: {}", e))?;
+    sqlx::query("UPDATE photos SET encrypted_thumb_blob_id = ? WHERE id = ? AND user_id = ?")
+        .bind(&blob_id)
+        .bind(photo_id)
+        .bind(photo_user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Update photos failed: {}", e))?;
 
     Ok(())
 }

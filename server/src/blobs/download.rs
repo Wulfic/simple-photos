@@ -96,7 +96,8 @@ pub async fn download(
 
     // ── Parse Range header ─────────────────────────────────────────────────
     if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
-        if let Some((start, end)) = crate::http_utils::parse_range_header(range_header, total_size) {
+        if let Some((start, end)) = crate::http_utils::parse_range_header(range_header, total_size)
+        {
             let length = end - start + 1;
 
             let mut file = tokio::fs::File::open(&path)

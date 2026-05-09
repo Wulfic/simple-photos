@@ -47,7 +47,9 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
     let ffmpeg_ok = match preview_ext {
         "jpg" => {
             let status = tokio::process::Command::new("nice")
-                .args(["-n", "19", "ffmpeg", "-y", "-i", input_str, "-q:v", "2", output_str])
+                .args([
+                    "-n", "19", "ffmpeg", "-y", "-i", input_str, "-q:v", "2", output_str,
+                ])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())

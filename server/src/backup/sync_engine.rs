@@ -9,13 +9,13 @@ use std::collections::{HashMap, HashSet};
 use chrono::Utc;
 
 use super::models::{resolve_backup_url, BackupServer};
+use super::sync_blobs::sync_blobs;
+use super::sync_galleries::sync_secure_galleries_to_backup;
+use super::sync_metadata::sync_metadata_to_backup;
 use super::sync_transfer::{
     build_photo_headers, build_trash_headers, fetch_remote_ids, send_file, update_sync_log,
     PhotoToSync, TrashToSync,
 };
-use super::sync_blobs::sync_blobs;
-use super::sync_galleries::sync_secure_galleries_to_backup;
-use super::sync_metadata::sync_metadata_to_backup;
 use super::sync_users::{sync_user_deletions_to_backup, sync_users_to_backup};
 
 // ── Sync context ─────────────────────────────────────────────────────────────
@@ -159,7 +159,14 @@ pub async fn run_sync(
     // would be incorrectly treated as "deleted" and wiped, invalidating
     // all live JWTs.
     if !is_recovery {
-        sync_user_deletions_to_backup(ctx.pool, ctx.client, &ctx.base_url, ctx.api_key, &ctx.server.name).await;
+        sync_user_deletions_to_backup(
+            ctx.pool,
+            ctx.client,
+            &ctx.base_url,
+            ctx.api_key,
+            &ctx.server.name,
+        )
+        .await;
     }
 
     // ── Phase 1 & 2: transfer photos and trash ───────────────────────────
@@ -285,7 +292,10 @@ async fn purge_deleted_photos_from_backup(
     {
         Ok(ids) => ids,
         Err(e) => {
-            tracing::warn!("Failed to fetch primary trash photo_ids for deletion sync: {}", e);
+            tracing::warn!(
+                "Failed to fetch primary trash photo_ids for deletion sync: {}",
+                e
+            );
             return;
         }
     };
@@ -487,9 +497,7 @@ async fn sync_trash(
 // ── Small helpers ────────────────────────────────────────────────────────────
 
 /// Pre-fetch all photo tags in one query (avoids N+1 in the transfer loop).
-async fn fetch_all_photo_tags(
-    pool: &sqlx::SqlitePool,
-) -> HashMap<String, Vec<String>> {
+async fn fetch_all_photo_tags(pool: &sqlx::SqlitePool) -> HashMap<String, Vec<String>> {
     match sqlx::query_as::<_, (String, String)>(
         "SELECT photo_id, tag FROM photo_tags ORDER BY photo_id",
     )

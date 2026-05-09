@@ -13,12 +13,12 @@
 mod legacy;
 
 use crate::ai::models::{BoundingBox, FaceDetection};
-use image::{DynamicImage, GenericImageView, RgbImage, imageops::FilterType};
+use image::{imageops::FilterType, DynamicImage, GenericImageView, RgbImage};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tracing;
 use ort::session::Session;
+use tracing;
 
 /// Convert ort errors (which aren't Send+Sync) to anyhow errors.
 pub(super) fn ort_err<R>(r: Result<R, impl std::fmt::Display>) -> anyhow::Result<R> {
@@ -89,7 +89,10 @@ pub fn init_face_model(model_dir: &str) {
     let dir_exists = dir.is_dir();
 
     if !dir_exists {
-        tracing::info!("Model directory {:?} does not exist — heuristic-only mode", dir);
+        tracing::info!(
+            "Model directory {:?} does not exist — heuristic-only mode",
+            dir
+        );
     }
 
     // SCRFD detection model (primary)
@@ -126,7 +129,10 @@ pub fn init_face_model(model_dir: &str) {
             }
             tracing::info!("ArcFace model not found at {:?}, downloading…", p);
             if let Err(e) = download_model(REC_MODEL_URL, &p, 10_000_000) {
-                tracing::warn!("ArcFace download failed: {}. Using histogram embeddings.", e);
+                tracing::warn!(
+                    "ArcFace download failed: {}. Using histogram embeddings.",
+                    e
+                );
                 return None;
             }
         }
@@ -136,7 +142,10 @@ pub fn init_face_model(model_dir: &str) {
                 Some(Arc::new(Mutex::new(session)))
             }
             Err(e) => {
-                tracing::warn!("Failed to load ArcFace model: {}. Using histogram embeddings.", e);
+                tracing::warn!(
+                    "Failed to load ArcFace model: {}. Using histogram embeddings.",
+                    e
+                );
                 None
             }
         }
@@ -165,7 +174,10 @@ pub(super) fn download_model(url: &str, dest: &Path, min_size: usize) -> Result<
     }
     let bytes = resp.bytes().map_err(|e| format!("read: {e}"))?;
     if bytes.len() < min_size {
-        return Err(format!("File too small ({} bytes), expected ≥{min_size}", bytes.len()));
+        return Err(format!(
+            "File too small ({} bytes), expected ≥{min_size}",
+            bytes.len()
+        ));
     }
     std::fs::write(dest, &bytes).map_err(|e| format!("write: {e}"))?;
     tracing::info!("Model downloaded ({} bytes) → {:?}", bytes.len(), dest);
@@ -252,8 +264,7 @@ fn detect_faces_scrfd(
 
     // Build input tensor [1, 3, 640, 640] — letterbox-padded, normalised.
     let pad_val = -DET_INPUT_MEAN / DET_INPUT_STD; // (0 - 127.5) / 128.0 ≈ -0.996
-    let mut input =
-        ndarray::Array4::<f32>::from_elem([1, 3, DET_HEIGHT, DET_WIDTH], pad_val);
+    let mut input = ndarray::Array4::<f32>::from_elem([1, 3, DET_HEIGHT, DET_WIDTH], pad_val);
     for y in 0..new_h as usize {
         for x in 0..new_w as usize {
             let p = rgb.get_pixel(x as u32, y as u32);
@@ -446,7 +457,11 @@ fn detect_faces_scrfd(
     }
 
     // Sort by score descending for NMS
-    all_dets.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    all_dets.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // NMS
     let keep = nms_raw(&all_dets, NMS_THRESH);
@@ -698,8 +713,13 @@ fn crop_face_simple(img: &DynamicImage, landmarks: &[[f32; 2]; 5], size: u32) ->
     let y = (cy - half).max(0.0) as u32;
     let w = (half * 2.0).min((iw - x) as f32) as u32;
     let h = (half * 2.0).min((ih - y) as f32) as u32;
-    img.crop_imm(x.min(iw.saturating_sub(1)), y.min(ih.saturating_sub(1)), w.max(1), h.max(1))
-        .resize_exact(size, size, FilterType::Triangle)
+    img.crop_imm(
+        x.min(iw.saturating_sub(1)),
+        y.min(ih.saturating_sub(1)),
+        w.max(1),
+        h.max(1),
+    )
+    .resize_exact(size, size, FilterType::Triangle)
 }
 
 /// Solve 4×4 linear system via Gaussian elimination with partial pivoting.
@@ -748,10 +768,7 @@ fn solve_4x4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> [f64; 4] {
 /// simple centre crop (no landmarks). For best results, use SCRFD detection
 /// which provides landmarks internally. When no model is available, falls
 /// back to a 128-dim histogram/gradient feature vector.
-pub fn extract_face_embedding(
-    img: &DynamicImage,
-    bbox: &BoundingBox,
-) -> Vec<f32> {
+pub fn extract_face_embedding(img: &DynamicImage, bbox: &BoundingBox) -> Vec<f32> {
     if let Some(rec_arc) = REC_MODEL.get().and_then(|m| m.as_ref()) {
         let mut rec = rec_arc.lock().unwrap_or_else(|p| p.into_inner());
         // Synthesise approximate landmarks from bbox centre for non-SCRFD path
@@ -765,9 +782,9 @@ pub fn extract_face_embedding(
         let landmarks = [
             [cx - fw * 0.17, cy - fh * 0.12], // left eye
             [cx + fw * 0.17, cy - fh * 0.12], // right eye
-            [cx, cy + fh * 0.05],              // nose
-            [cx - fw * 0.14, cy + fh * 0.22],  // left mouth
-            [cx + fw * 0.14, cy + fh * 0.22],  // right mouth
+            [cx, cy + fh * 0.05],             // nose
+            [cx - fw * 0.14, cy + fh * 0.22], // left mouth
+            [cx + fw * 0.14, cy + fh * 0.22], // right mouth
         ];
 
         match extract_arcface_embedding(img, &landmarks, &mut rec) {
@@ -792,4 +809,3 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
     dot / (norm_a * norm_b)
 }
-

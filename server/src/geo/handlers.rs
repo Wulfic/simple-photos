@@ -89,19 +89,17 @@ pub async fn get_geo_settings(
         .map(|v| v == "true")
         .unwrap_or(false);
 
-    let with_loc: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM photos WHERE user_id = ?1 AND latitude IS NOT NULL"
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let with_loc: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM photos WHERE user_id = ?1 AND latitude IS NOT NULL")
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
-    let without_loc: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM photos WHERE user_id = ?1 AND latitude IS NULL"
-    )
-    .bind(&auth.user_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let without_loc: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM photos WHERE user_id = ?1 AND latitude IS NULL")
+            .bind(&auth.user_id)
+            .fetch_one(&state.pool)
+            .await?;
 
     let countries: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT geo_country) FROM photos WHERE user_id = ?1 AND geo_country IS NOT NULL"
@@ -112,7 +110,7 @@ pub async fn get_geo_settings(
 
     let cities: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT geo_city || ',' || geo_country_code) FROM photos \
-         WHERE user_id = ?1 AND geo_city IS NOT NULL"
+         WHERE user_id = ?1 AND geo_city IS NOT NULL",
     )
     .bind(&auth.user_id)
     .fetch_one(&state.pool)
@@ -135,10 +133,22 @@ pub async fn update_geo_settings(
     Json(body): Json<GeoSettingsRequest>,
 ) -> Result<StatusCode, AppError> {
     if let Some(enabled) = body.enabled {
-        upsert_user_setting(&state.pool, &auth.user_id, "geo_enabled", if enabled { "true" } else { "false" }).await?;
+        upsert_user_setting(
+            &state.pool,
+            &auth.user_id,
+            "geo_enabled",
+            if enabled { "true" } else { "false" },
+        )
+        .await?;
     }
     if let Some(scrub) = body.scrub_on_upload {
-        upsert_user_setting(&state.pool, &auth.user_id, "geo_scrub_on_upload", if scrub { "true" } else { "false" }).await?;
+        upsert_user_setting(
+            &state.pool,
+            &auth.user_id,
+            "geo_scrub_on_upload",
+            if scrub { "true" } else { "false" },
+        )
+        .await?;
     }
     Ok(StatusCode::OK)
 }
@@ -154,15 +164,22 @@ pub async fn list_locations(
         "SELECT geo_city, geo_state, geo_country, geo_country_code, COUNT(*) as cnt \
          FROM photos WHERE user_id = ?1 AND geo_city IS NOT NULL \
          GROUP BY geo_city, geo_state, geo_country, geo_country_code \
-         ORDER BY cnt DESC"
+         ORDER BY cnt DESC",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
     .await?;
 
-    let entries = rows.into_iter().map(|(city, state, country, code, count)| LocationEntry {
-        city, state, country, country_code: code, photo_count: count,
-    }).collect();
+    let entries = rows
+        .into_iter()
+        .map(|(city, state, country, code, count)| LocationEntry {
+            city,
+            state,
+            country,
+            country_code: code,
+            photo_count: count,
+        })
+        .collect();
 
     Ok(Json(entries))
 }
@@ -173,10 +190,17 @@ pub async fn list_location_photos(
     auth: AuthUser,
     Path((country, city)): Path<(String, String)>,
 ) -> Result<Json<Vec<PhotoSummary>>, AppError> {
-    let rows: Vec<(String, String, Option<String>, Option<String>, Option<f64>, Option<f64>)> = sqlx::query_as(
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<f64>,
+        Option<f64>,
+    )> = sqlx::query_as(
         "SELECT id, filename, thumb_path, taken_at, latitude, longitude \
          FROM photos WHERE user_id = ?1 AND geo_country_code = ?2 AND geo_city = ?3 \
-         ORDER BY taken_at DESC"
+         ORDER BY taken_at DESC",
     )
     .bind(&auth.user_id)
     .bind(&country)
@@ -184,9 +208,17 @@ pub async fn list_location_photos(
     .fetch_all(&state.pool)
     .await?;
 
-    let photos = rows.into_iter().map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
-        id, filename, thumb_path: thumb, taken_at: taken, latitude: lat, longitude: lon,
-    }).collect();
+    let photos = rows
+        .into_iter()
+        .map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
+            id,
+            filename,
+            thumb_path: thumb,
+            taken_at: taken,
+            latitude: lat,
+            longitude: lon,
+        })
+        .collect();
 
     Ok(Json(photos))
 }
@@ -200,15 +232,20 @@ pub async fn list_countries(
         "SELECT geo_country, geo_country_code, COUNT(*) as cnt \
          FROM photos WHERE user_id = ?1 AND geo_country IS NOT NULL \
          GROUP BY geo_country, geo_country_code \
-         ORDER BY cnt DESC"
+         ORDER BY cnt DESC",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
     .await?;
 
-    let entries = rows.into_iter().map(|(country, code, count)| CountryEntry {
-        country, country_code: code, photo_count: count,
-    }).collect();
+    let entries = rows
+        .into_iter()
+        .map(|(country, code, count)| CountryEntry {
+            country,
+            country_code: code,
+            photo_count: count,
+        })
+        .collect();
 
     Ok(Json(entries))
 }
@@ -218,18 +255,33 @@ pub async fn list_map_photos(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<PhotoSummary>>, AppError> {
-    let rows: Vec<(String, String, Option<String>, Option<String>, Option<f64>, Option<f64>)> = sqlx::query_as(
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<f64>,
+        Option<f64>,
+    )> = sqlx::query_as(
         "SELECT id, filename, thumb_path, taken_at, latitude, longitude \
          FROM photos WHERE user_id = ?1 AND latitude IS NOT NULL AND longitude IS NOT NULL \
-         ORDER BY taken_at DESC"
+         ORDER BY taken_at DESC",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
     .await?;
 
-    let photos = rows.into_iter().map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
-        id, filename, thumb_path: thumb, taken_at: taken, latitude: lat, longitude: lon,
-    }).collect();
+    let photos = rows
+        .into_iter()
+        .map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
+            id,
+            filename,
+            thumb_path: thumb,
+            taken_at: taken,
+            latitude: lat,
+            longitude: lon,
+        })
+        .collect();
 
     Ok(Json(photos))
 }
@@ -244,15 +296,19 @@ pub async fn list_timeline(
     let rows: Vec<(i64, i64)> = sqlx::query_as(
         "SELECT photo_year, COUNT(*) FROM photos \
          WHERE user_id = ?1 AND photo_year IS NOT NULL \
-         GROUP BY photo_year ORDER BY photo_year DESC"
+         GROUP BY photo_year ORDER BY photo_year DESC",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
     .await?;
 
-    let entries = rows.into_iter().map(|(year, count)| TimelineYearEntry {
-        year, photo_count: count,
-    }).collect();
+    let entries = rows
+        .into_iter()
+        .map(|(year, count)| TimelineYearEntry {
+            year,
+            photo_count: count,
+        })
+        .collect();
 
     Ok(Json(entries))
 }
@@ -266,16 +322,21 @@ pub async fn list_timeline_year(
     let rows: Vec<(i64, i64, i64)> = sqlx::query_as(
         "SELECT photo_year, photo_month, COUNT(*) FROM photos \
          WHERE user_id = ?1 AND photo_year = ?2 AND photo_month IS NOT NULL \
-         GROUP BY photo_year, photo_month ORDER BY photo_month"
+         GROUP BY photo_year, photo_month ORDER BY photo_month",
     )
     .bind(&auth.user_id)
     .bind(year)
     .fetch_all(&state.pool)
     .await?;
 
-    let entries = rows.into_iter().map(|(y, m, count)| TimelineMonthEntry {
-        year: y, month: m, photo_count: count,
-    }).collect();
+    let entries = rows
+        .into_iter()
+        .map(|(y, m, count)| TimelineMonthEntry {
+            year: y,
+            month: m,
+            photo_count: count,
+        })
+        .collect();
 
     Ok(Json(entries))
 }
@@ -286,10 +347,17 @@ pub async fn list_timeline_month_photos(
     auth: AuthUser,
     Path((year, month)): Path<(i64, i64)>,
 ) -> Result<Json<Vec<PhotoSummary>>, AppError> {
-    let rows: Vec<(String, String, Option<String>, Option<String>, Option<f64>, Option<f64>)> = sqlx::query_as(
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<f64>,
+        Option<f64>,
+    )> = sqlx::query_as(
         "SELECT id, filename, thumb_path, taken_at, latitude, longitude \
          FROM photos WHERE user_id = ?1 AND photo_year = ?2 AND photo_month = ?3 \
-         ORDER BY taken_at DESC"
+         ORDER BY taken_at DESC",
     )
     .bind(&auth.user_id)
     .bind(year)
@@ -297,9 +365,17 @@ pub async fn list_timeline_month_photos(
     .fetch_all(&state.pool)
     .await?;
 
-    let photos = rows.into_iter().map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
-        id, filename, thumb_path: thumb, taken_at: taken, latitude: lat, longitude: lon,
-    }).collect();
+    let photos = rows
+        .into_iter()
+        .map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
+            id,
+            filename,
+            thumb_path: thumb,
+            taken_at: taken,
+            latitude: lat,
+            longitude: lon,
+        })
+        .collect();
 
     Ok(Json(photos))
 }
@@ -329,7 +405,15 @@ pub async fn list_memories(
     auth: AuthUser,
 ) -> Result<Json<Vec<Memory>>, AppError> {
     // Group photos by city + date, returning the count, first photo ID, and thumb path
-    let rows: Vec<(String, String, String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
         "SELECT geo_city, geo_country, geo_country_code, DATE(taken_at) as photo_date, \
                 COUNT(*) as cnt, \
                 MIN(id) as first_id, \
@@ -341,29 +425,32 @@ pub async fn list_memories(
          GROUP BY geo_city, geo_country, DATE(taken_at) \
          HAVING cnt >= 3 \
          ORDER BY photo_date DESC \
-         LIMIT 100"
+         LIMIT 100",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
     .await?;
 
-    let memories = rows.into_iter().map(|(city, country, _code, date_str, count, first_id, thumb)| {
-        // Format a human-readable date label
-        let date_label = format_memory_date(&date_str);
-        let name = format!("{} on {}", city, date_label);
-        let id = format!("{}_{}", city.to_lowercase().replace(' ', "-"), date_str);
+    let memories = rows
+        .into_iter()
+        .map(|(city, country, _code, date_str, count, first_id, thumb)| {
+            // Format a human-readable date label
+            let date_label = format_memory_date(&date_str);
+            let name = format!("{} on {}", city, date_label);
+            let id = format!("{}_{}", city.to_lowercase().replace(' ', "-"), date_str);
 
-        Memory {
-            id,
-            name,
-            city,
-            country,
-            date_label,
-            photo_count: count,
-            first_photo_id: first_id,
-            first_thumb_path: thumb,
-        }
-    }).collect();
+            Memory {
+                id,
+                name,
+                city,
+                country,
+                date_label,
+                photo_count: count,
+                first_photo_id: first_id,
+                first_thumb_path: thumb,
+            }
+        })
+        .collect();
 
     Ok(Json(memories))
 }
@@ -388,21 +475,26 @@ pub async fn list_memory_photos(
         "SELECT DISTINCT geo_city FROM photos \
          WHERE user_id = ?1 AND geo_city IS NOT NULL AND \
                LOWER(REPLACE(geo_city, ' ', '-')) = ?2 \
-         LIMIT 1"
+         LIMIT 1",
     )
     .bind(&auth.user_id)
     .bind(city_slug)
     .fetch_optional(&state.pool)
     .await?;
 
-    let city = city_row
-        .map(|(c,)| c)
-        .ok_or_else(|| AppError::NotFound)?;
+    let city = city_row.map(|(c,)| c).ok_or_else(|| AppError::NotFound)?;
 
-    let rows: Vec<(String, String, Option<String>, Option<String>, Option<f64>, Option<f64>)> = sqlx::query_as(
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<f64>,
+        Option<f64>,
+    )> = sqlx::query_as(
         "SELECT id, filename, thumb_path, taken_at, latitude, longitude \
          FROM photos WHERE user_id = ?1 AND geo_city = ?2 AND DATE(taken_at) = ?3 \
-         ORDER BY taken_at ASC"
+         ORDER BY taken_at ASC",
     )
     .bind(&auth.user_id)
     .bind(&city)
@@ -414,9 +506,17 @@ pub async fn list_memory_photos(
         return Err(AppError::NotFound);
     }
 
-    let photos = rows.into_iter().map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
-        id, filename, thumb_path: thumb, taken_at: taken, latitude: lat, longitude: lon,
-    }).collect();
+    let photos = rows
+        .into_iter()
+        .map(|(id, filename, thumb, taken, lat, lon)| PhotoSummary {
+            id,
+            filename,
+            thumb_path: thumb,
+            taken_at: taken,
+            latitude: lat,
+            longitude: lon,
+        })
+        .collect();
 
     Ok(Json(photos))
 }
@@ -428,9 +528,18 @@ fn format_memory_date(date_str: &str) -> String {
         return date_str.to_string();
     }
     let month = match parts[1] {
-        "01" => "Jan", "02" => "Feb", "03" => "Mar", "04" => "Apr",
-        "05" => "May", "06" => "Jun", "07" => "Jul", "08" => "Aug",
-        "09" => "Sep", "10" => "Oct", "11" => "Nov", "12" => "Dec",
+        "01" => "Jan",
+        "02" => "Feb",
+        "03" => "Mar",
+        "04" => "Apr",
+        "05" => "May",
+        "06" => "Jun",
+        "07" => "Jul",
+        "08" => "Aug",
+        "09" => "Sep",
+        "10" => "Oct",
+        "11" => "Nov",
+        "12" => "Dec",
         _ => parts[1],
     };
     let day = parts[2].trim_start_matches('0');
@@ -520,12 +629,15 @@ pub async fn list_trips(
             Some(d) => d,
             None => continue,
         };
-        let last_matches = clusters.last().map(|c| {
-            c.country_code == row.country_code
-                && c.city == row.city
-                && (date - c.end).num_days() <= MAX_GAP_DAYS
-                && (date - c.end).num_days() >= 0
-        }).unwrap_or(false);
+        let last_matches = clusters
+            .last()
+            .map(|c| {
+                c.country_code == row.country_code
+                    && c.city == row.city
+                    && (date - c.end).num_days() <= MAX_GAP_DAYS
+                    && (date - c.end).num_days() >= 0
+            })
+            .unwrap_or(false);
 
         if last_matches {
             let last = clusters.last_mut().unwrap();
@@ -637,27 +749,31 @@ pub async fn list_trip_photos(
     .fetch_optional(&state.pool)
     .await?;
 
-    let city = city_row
-        .map(|(c,)| c)
-        .ok_or(AppError::NotFound)?;
+    let city = city_row.map(|(c,)| c).ok_or(AppError::NotFound)?;
 
-    let rows: Vec<(String, String, Option<String>, Option<String>, Option<f64>, Option<f64>)> =
-        sqlx::query_as(
-            "SELECT id, filename, thumb_path, taken_at, latitude, longitude \
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<f64>,
+        Option<f64>,
+    )> = sqlx::query_as(
+        "SELECT id, filename, thumb_path, taken_at, latitude, longitude \
              FROM photos \
              WHERE user_id = ?1 \
                AND geo_city = ?2 \
                AND geo_country_code = ?3 \
                AND DATE(taken_at) BETWEEN ?4 AND ?5 \
              ORDER BY taken_at ASC",
-        )
-        .bind(&auth.user_id)
-        .bind(&city)
-        .bind(&country_code)
-        .bind(start_date)
-        .bind(end_date)
-        .fetch_all(&state.pool)
-        .await?;
+    )
+    .bind(&auth.user_id)
+    .bind(&city)
+    .bind(&country_code)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(&state.pool)
+    .await?;
 
     if rows.is_empty() {
         return Err(AppError::NotFound);
@@ -687,10 +803,13 @@ pub async fn scrub_geo_data(
     Json(body): Json<ScrubConfirmRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if !body.confirm {
-        return Err(AppError::BadRequest("Must confirm scrub with {\"confirm\": true}".into()));
+        return Err(AppError::BadRequest(
+            "Must confirm scrub with {\"confirm\": true}".into(),
+        ));
     }
 
-    let count = super::scrub::scrub_geolocation_for_user(&state.pool, &auth.user_id).await
+    let count = super::scrub::scrub_geolocation_for_user(&state.pool, &auth.user_id)
+        .await
         .map_err(|e| AppError::Internal(format!("Scrub failed: {}", e)))?;
 
     Ok(Json(serde_json::json!({
@@ -701,14 +820,13 @@ pub async fn scrub_geo_data(
 // ── Helpers ──────────────────────────────────────────────────────────
 
 async fn get_user_setting(pool: &SqlitePool, user_id: &str, key: &str) -> Option<String> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT value FROM user_settings WHERE user_id = ?1 AND key = ?2"
-    )
-    .bind(user_id)
-    .bind(key)
-    .fetch_optional(pool)
-    .await
-    .ok()?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT value FROM user_settings WHERE user_id = ?1 AND key = ?2")
+            .bind(user_id)
+            .bind(key)
+            .fetch_optional(pool)
+            .await
+            .ok()?;
     row.map(|(v,)| v)
 }
 
@@ -721,7 +839,7 @@ async fn upsert_user_setting(
     sqlx::query(
         "INSERT INTO user_settings (user_id, key, value, updated_at) \
          VALUES (?1, ?2, ?3, datetime('now')) \
-         ON CONFLICT(user_id, key) DO UPDATE SET value = ?3, updated_at = datetime('now')"
+         ON CONFLICT(user_id, key) DO UPDATE SET value = ?3, updated_at = datetime('now')",
     )
     .bind(user_id)
     .bind(key)

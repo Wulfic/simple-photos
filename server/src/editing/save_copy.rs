@@ -100,12 +100,17 @@ pub async fn duplicate_photo(
             "[editing/save_copy] Parsed CropMeta: crop=({:.4},{:.4},{:.4},{:.4}), \
              rotate={}°, brightness={:.1}, trim=({:.2},{:.2}), \
              has_crop={}, has_rotation={}, swaps_dims={}",
-            m.x.unwrap_or(0.0), m.y.unwrap_or(0.0),
-            m.width.unwrap_or(1.0), m.height.unwrap_or(1.0),
+            m.x.unwrap_or(0.0),
+            m.y.unwrap_or(0.0),
+            m.width.unwrap_or(1.0),
+            m.height.unwrap_or(1.0),
             m.rotation_degrees(),
             m.brightness.unwrap_or(0.0),
-            m.trim_start.unwrap_or(0.0), m.trim_end.unwrap_or(0.0),
-            m.has_crop(), m.has_rotation(), m.rotation_swaps_dimensions(),
+            m.trim_start.unwrap_or(0.0),
+            m.trim_end.unwrap_or(0.0),
+            m.has_crop(),
+            m.has_rotation(),
+            m.rotation_swaps_dimensions(),
         );
     }
 
@@ -114,9 +119,9 @@ pub async fn duplicate_photo(
     // ── Prepare output path ──────────────────────────────────────────────
     let storage_root = (**state.storage_root.load()).clone();
     let uploads_dir = storage_root.join("uploads");
-    tokio::fs::create_dir_all(&uploads_dir).await.map_err(|e| {
-        AppError::Internal(format!("Failed to create uploads directory: {e}"))
-    })?;
+    tokio::fs::create_dir_all(&uploads_dir)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to create uploads directory: {e}")))?;
 
     let ext = StdPath::new(&original.filename)
         .extension()
@@ -140,7 +145,9 @@ pub async fn duplicate_photo(
     let temp_source_path: Option<std::path::PathBuf>;
     let source_abs = if original.file_path.is_empty() {
         if original.encrypted_blob_id.is_empty() {
-            return Err(AppError::Internal("Photo has no file_path and no encrypted_blob_id".into()));
+            return Err(AppError::Internal(
+                "Photo has no file_path and no encrypted_blob_id".into(),
+            ));
         }
         let blob_id = &original.encrypted_blob_id;
         tracing::info!(
@@ -153,13 +160,12 @@ pub async fn duplicate_photo(
             .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
 
         // Look up the blob's storage_path
-        let blob_row: Option<(String,)> = sqlx::query_as(
-            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
-        )
-        .bind(blob_id)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.read_pool)
-        .await?;
+        let blob_row: Option<(String,)> =
+            sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
+                .bind(blob_id)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.read_pool)
+                .await?;
         let (blob_storage_path,) = blob_row.ok_or(AppError::NotFound)?;
 
         let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
@@ -177,20 +183,18 @@ pub async fn duplicate_photo(
         let data_b64 = envelope["data"]
             .as_str()
             .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
-        let raw_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            data_b64,
-        )
-        .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
+        let raw_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
+                .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
 
         // Write to a temp file with proper extension for ffmpeg/image crate.
         // Filename embeds the freshly-generated `new_id` (UUID), preventing
         // predictable-name attacks.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
         let tmp_path = std::env::temp_dir().join(format!("sp-dup-{}.{}", new_id, ext));
-        tokio::fs::write(&tmp_path, &raw_bytes).await.map_err(|e| {
-            AppError::Internal(format!("Failed to write temp source: {e}"))
-        })?;
+        tokio::fs::write(&tmp_path, &raw_bytes)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to write temp source: {e}")))?;
         tracing::info!(
             "[editing/save_copy] Decrypted blob to temp file: {} ({} bytes)",
             tmp_path.display(),
@@ -213,7 +217,8 @@ pub async fn duplicate_photo(
     if has_edits && (media_type == "video" || media_type == "audio") {
         tracing::info!(
             "[editing/save_copy] Rendering video/audio via ffmpeg: {} → {}",
-            source_abs.display(), copy_abs.display(),
+            source_abs.display(),
+            copy_abs.display(),
         );
         super::ffmpeg::run_ffmpeg_render(
             &source_abs,
@@ -227,23 +232,20 @@ pub async fn duplicate_photo(
     } else if has_edits && media_type == "photo" {
         tracing::info!(
             "[editing/save_copy] Rendering photo via image crate: {} → {}",
-            source_abs.display(), copy_abs.display(),
+            source_abs.display(),
+            copy_abs.display(),
         );
-        super::image_render::render_image(
-            &source_abs,
-            &copy_abs,
-            meta.as_ref().unwrap(),
-        )
-        .await?;
+        super::image_render::render_image(&source_abs, &copy_abs, meta.as_ref().unwrap()).await?;
         tracing::info!("[editing/save_copy] Image render completed");
     } else {
         tracing::info!(
             "[editing/save_copy] No edits — plain file copy: {} → {}",
-            source_abs.display(), copy_abs.display(),
+            source_abs.display(),
+            copy_abs.display(),
         );
-        tokio::fs::copy(&source_abs, &copy_abs).await.map_err(|e| {
-            AppError::Internal(format!("Failed to copy file: {e}"))
-        })?;
+        tokio::fs::copy(&source_abs, &copy_abs)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to copy file: {e}")))?;
     }
 
     // Clean up decrypted temp source file (blob-only photos)
@@ -252,19 +254,21 @@ pub async fn duplicate_photo(
     }
 
     // ── Probe rendered file for dimensions and size ──────────────────────
-    let file_meta = tokio::fs::metadata(&copy_abs).await.map_err(|e| {
-        AppError::Internal(format!("Failed to stat rendered copy: {e}"))
-    })?;
+    let file_meta = tokio::fs::metadata(&copy_abs)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to stat rendered copy: {e}")))?;
     let size_bytes = file_meta.len() as i64;
 
-    let (new_w, new_h, _, _, _, _) =
-        extract_media_metadata_async(copy_abs.clone()).await;
+    let (new_w, new_h, _, _, _, _) = extract_media_metadata_async(copy_abs.clone()).await;
 
     tracing::info!(
         "[editing/save_copy] Rendered file metadata: {}×{}, size={} bytes, \
          original was {}×{}",
-        new_w, new_h, size_bytes,
-        original.width, original.height,
+        new_w,
+        new_h,
+        size_bytes,
+        original.width,
+        original.height,
     );
 
     // Sanity check: if rotation swaps dimensions, verify they actually changed
@@ -274,8 +278,12 @@ pub async fn duplicate_photo(
             tracing::info!(
                 "[editing/save_copy] Rotation {}° swaps dims: original={}×{} → \
                  rendered={}×{} (dims_changed={})",
-                m.rotation_degrees(), original.width, original.height,
-                new_w, new_h, expected_swap,
+                m.rotation_degrees(),
+                original.width,
+                original.height,
+                new_w,
+                new_h,
+                expected_swap,
             );
         }
     }
@@ -301,7 +309,8 @@ pub async fn duplicate_photo(
         let thumb_abs_c = thumb_abs.clone();
         tracing::info!(
             "[editing/save_copy] Generating thumbnail from rendered file: {} → {}",
-            copy_abs_c.display(), thumb_abs_c.display(),
+            copy_abs_c.display(),
+            thumb_abs_c.display(),
         );
         let ok = generate_thumbnail_file(&copy_abs_c, &thumb_abs_c, &mime_clone, None).await;
         if ok {
@@ -309,7 +318,10 @@ pub async fn duplicate_photo(
             if let Ok(tsize) = imagesize::size(&thumb_abs_c) {
                 tracing::info!(
                     "[editing/save_copy] Thumbnail generated: {}×{} (source rendered={}×{})",
-                    tsize.width, tsize.height, new_w, new_h,
+                    tsize.width,
+                    tsize.height,
+                    new_w,
+                    new_h,
                 );
             }
             Some(thumb_rel.clone())
@@ -331,29 +343,30 @@ pub async fn duplicate_photo(
         .ok()
         .flatten();
 
-    let (_final_file_path, _final_thumb_path, enc_blob_id, enc_thumb_blob_id) =
-        if let Some(key) = enc_key {
-            encrypt_and_store_copy(
-                &state,
-                &auth,
-                &original,
-                key,
-                &new_id,
-                &copy_filename,
-                &copy_abs,
-                &thumb_abs,
-                thumb_rel_opt.as_deref(),
-                &storage_root,
-                &created_at,
-                new_w,
-                new_h,
-                new_duration,
-                size_bytes,
-            )
-            .await?
-        } else {
-            // No encryption key — fall back to unencrypted storage
-            sqlx::query(
+    let (_final_file_path, _final_thumb_path, enc_blob_id, enc_thumb_blob_id) = if let Some(key) =
+        enc_key
+    {
+        encrypt_and_store_copy(
+            &state,
+            &auth,
+            &original,
+            key,
+            &new_id,
+            &copy_filename,
+            &copy_abs,
+            &thumb_abs,
+            thumb_rel_opt.as_deref(),
+            &storage_root,
+            &created_at,
+            new_w,
+            new_h,
+            new_duration,
+            size_bytes,
+        )
+        .await?
+    } else {
+        // No encryption key — fall back to unencrypted storage
+        sqlx::query(
                 "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                  size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
                  thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, \
@@ -379,13 +392,13 @@ pub async fn duplicate_photo(
             .execute(&state.pool)
             .await?;
 
-            (
-                copy_rel.clone(),
-                thumb_rel_opt.clone(),
-                Option::<String>::None,
-                Option::<String>::None,
-            )
-        };
+        (
+            copy_rel.clone(),
+            thumb_rel_opt.clone(),
+            Option::<String>::None,
+            Option::<String>::None,
+        )
+    };
 
     tracing::info!(
         "Rendered duplicate {} → {} ({}×{}, encrypted={}) for user {}",
@@ -440,9 +453,9 @@ async fn encrypt_and_store_copy(
     size_bytes: i64,
 ) -> Result<(String, Option<String>, Option<String>, Option<String>), AppError> {
     // Read the rendered file data
-    let file_data = tokio::fs::read(copy_abs).await.map_err(|e| {
-        AppError::Internal(format!("Failed to read rendered copy: {e}"))
-    })?;
+    let file_data = tokio::fs::read(copy_abs)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read rendered copy: {e}")))?;
 
     // Read thumbnail data (if generated)
     let thumb_data = if thumb_rel_opt.is_some() {
@@ -460,7 +473,9 @@ async fn encrypt_and_store_copy(
             .unwrap_or((512, 512));
         tracing::info!(
             "[editing/save_copy] Encrypting thumbnail: {}×{}, {} bytes",
-            thumb_w, thumb_h, tb.len(),
+            thumb_w,
+            thumb_h,
+            tb.len(),
         );
         let thumb_payload = serde_json::json!({
             "v": 1,
@@ -471,9 +486,8 @@ async fn encrypt_and_store_copy(
                 &base64::engine::general_purpose::STANDARD, tb,
             ),
         });
-        let thumb_json = serde_json::to_vec(&thumb_payload).map_err(|e| {
-            AppError::Internal(format!("Thumb JSON failed: {e}"))
-        })?;
+        let thumb_json = serde_json::to_vec(&thumb_payload)
+            .map_err(|e| AppError::Internal(format!("Thumb JSON failed: {e}")))?;
 
         let enc_thumb = {
             let kc = key;
@@ -537,9 +551,8 @@ async fn encrypt_and_store_copy(
             &base64::engine::general_purpose::STANDARD, &file_data,
         ),
     });
-    let photo_json = serde_json::to_vec(&photo_payload).map_err(|e| {
-        AppError::Internal(format!("Photo JSON failed: {e}"))
-    })?;
+    let photo_json = serde_json::to_vec(&photo_payload)
+        .map_err(|e| AppError::Internal(format!("Photo JSON failed: {e}")))?;
 
     // Encrypt the photo payload
     let enc_photo = {
@@ -553,17 +566,18 @@ async fn encrypt_and_store_copy(
 
     let enc_photo_hash = hex::encode(Sha256::digest(&enc_photo));
     let blob_id = Uuid::new_v4().to_string();
-    let blob_storage_path =
-        storage::write_blob(storage_root, &auth.user_id, &blob_id, &enc_photo)
-            .await
-            .map_err(|e| AppError::Internal(format!("Write photo blob: {e}")))?;
+    let blob_storage_path = storage::write_blob(storage_root, &auth.user_id, &blob_id, &enc_photo)
+        .await
+        .map_err(|e| AppError::Internal(format!("Write photo blob: {e}")))?;
 
     let now = Utc::now().to_rfc3339();
 
     // Atomic transaction: INSERT blob rows + INSERT photos row
-    let mut tx = state.pool.begin().await.map_err(|e| {
-        AppError::Internal(format!("Begin tx: {e}"))
-    })?;
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| AppError::Internal(format!("Begin tx: {e}")))?;
 
     if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params
     {
@@ -633,9 +647,9 @@ async fn encrypt_and_store_copy(
     .await
     .map_err(|e| AppError::Internal(format!("Insert photo row: {e}")))?;
 
-    tx.commit().await.map_err(|e| {
-        AppError::Internal(format!("Commit tx: {e}"))
-    })?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Commit tx: {e}")))?;
 
     // Delete the unencrypted temp files — they must not persist on disk
     let _ = tokio::fs::remove_file(copy_abs).await;

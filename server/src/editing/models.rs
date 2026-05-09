@@ -121,7 +121,9 @@ mod tests {
 
     #[test]
     fn full_frame_no_edits() {
-        let m = CropMeta::from_json(r#"{"x":0,"y":0,"width":1,"height":1,"rotate":0,"brightness":0}"#).unwrap();
+        let m =
+            CropMeta::from_json(r#"{"x":0,"y":0,"width":1,"height":1,"rotate":0,"brightness":0}"#)
+                .unwrap();
         assert!(!m.has_crop());
         assert!(!m.has_rotation());
         assert!(!m.has_brightness());

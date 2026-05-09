@@ -54,14 +54,9 @@ pub fn normalize_iso_timestamp(ts: &str) -> String {
     }
 
     // EXIF DateTimeOriginal format: "2024:01:15 14:30:00"
-    if ts.len() >= 19 && ts.as_bytes().get(4) == Some(&b':') && ts.as_bytes().get(7) == Some(&b':') {
-        let converted = format!(
-            "{}-{}-{}T{}",
-            &ts[0..4],
-            &ts[5..7],
-            &ts[8..10],
-            &ts[11..19]
-        );
+    if ts.len() >= 19 && ts.as_bytes().get(4) == Some(&b':') && ts.as_bytes().get(7) == Some(&b':')
+    {
+        let converted = format!("{}-{}-{}T{}", &ts[0..4], &ts[5..7], &ts[8..10], &ts[11..19]);
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&converted, "%Y-%m-%dT%H:%M:%S") {
             return naive.and_utc().to_rfc3339_opts(SecondsFormat::Millis, true);
         }
@@ -94,7 +89,11 @@ pub fn normalize_iso_timestamp(ts: &str) -> String {
     if ts.len() >= 9 && ts.len() <= 13 && ts.chars().all(|c| c.is_ascii_digit()) {
         if let Ok(secs) = ts.parse::<i64>() {
             // If > 10 billion, treat as milliseconds
-            let secs = if secs > 10_000_000_000 { secs / 1000 } else { secs };
+            let secs = if secs > 10_000_000_000 {
+                secs / 1000
+            } else {
+                secs
+            };
             if let Some(dt) = chrono::DateTime::from_timestamp(secs, 0) {
                 return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
             }

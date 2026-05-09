@@ -13,9 +13,14 @@ use crate::media::{is_supported_extension, mime_from_extension};
 use crate::sanitize;
 use crate::state::AppState;
 
-use super::metadata::{extract_media_metadata_async, extract_media_metadata_from_bytes_async, extract_xmp_subtype, apply_aspect_subtype_fallback, extract_motion_video};
+use super::metadata::{
+    apply_aspect_subtype_fallback, extract_media_metadata_async,
+    extract_media_metadata_from_bytes_async, extract_motion_video, extract_xmp_subtype,
+};
 use super::thumbnail::generate_thumbnail_file;
-use super::utils::{audio_backup_enabled, compute_photo_hash, normalize_iso_timestamp, utc_now_iso};
+use super::utils::{
+    audio_backup_enabled, compute_photo_hash, normalize_iso_timestamp, utc_now_iso,
+};
 use chrono::Utc;
 
 /// POST /api/photos/upload
@@ -64,12 +69,19 @@ pub async fn upload_photo(
         None
     };
 
-    let (body, filename, mime_type) = if let Some(target) = conversion::conversion_target(&filename) {
-        let tmp_dir = state.config.storage.root.join(".tmp").join("sp_upload_conv");
+    let (body, filename, mime_type) = if let Some(target) = conversion::conversion_target(&filename)
+    {
+        let tmp_dir = state
+            .config
+            .storage
+            .root
+            .join(".tmp")
+            .join("sp_upload_conv");
         let conv_id = Uuid::new_v4();
         // Restrict the input temp-file extension to alphanumeric characters only
         // to prevent path-component injection via the user-supplied filename.
-        let input_ext: String = filename.rsplit('.')
+        let input_ext: String = filename
+            .rsplit('.')
             .next()
             .map(|e| e.chars().filter(|c| c.is_alphanumeric()).collect())
             .filter(|e: &String| !e.is_empty())
@@ -126,7 +138,8 @@ pub async fn upload_photo(
                 let _ = tokio::fs::remove_file(&tmp_output).await;
                 conversion::progress_finish_one();
                 return Err(AppError::Internal(format!(
-                    "Media conversion failed for '{}': {}", filename, e
+                    "Media conversion failed for '{}': {}",
+                    filename, e
                 )));
             }
         }
@@ -361,11 +374,12 @@ pub async fn upload_photo(
     // ── Geo scrubbing ───────────────────────────────────────────────────
     // If the user has geo-scrubbing enabled, null out GPS coordinates before
     // storing in the database.
-    let (insert_lat, insert_lon) = if crate::geo::scrub::is_scrub_enabled(&state.pool, &auth.user_id).await {
-        (None, None)
-    } else {
-        (resolved_lat, resolved_lon)
-    };
+    let (insert_lat, insert_lon) =
+        if crate::geo::scrub::is_scrub_enabled(&state.pool, &auth.user_id).await {
+            (None, None)
+        } else {
+            (resolved_lat, resolved_lon)
+        };
 
     // Use INSERT OR IGNORE so a concurrent upload race (two near-simultaneous
     // uploads of identical content from different clients) doesn't surface as
@@ -436,7 +450,8 @@ pub async fn upload_photo(
 
     // ── Inline geo & timeline backfill ──────────────────────────────────
     // Set photo_year/photo_month from taken_at timestamp
-    let _ = crate::geo::processor::set_photo_year_month(&state.pool, &photo_id, &final_taken_at).await;
+    let _ =
+        crate::geo::processor::set_photo_year_month(&state.pool, &photo_id, &final_taken_at).await;
 
     // ── Extract and store motion video blob ─────────────────────────────
     // If the photo is a motion photo with an embedded MP4 trailer, extract it
@@ -467,13 +482,12 @@ pub async fn upload_photo(
                     .await;
 
                     if insert_ok.is_ok() {
-                        let _ = sqlx::query(
-                            "UPDATE photos SET motion_video_blob_id = ? WHERE id = ?",
-                        )
-                        .bind(&blob_id)
-                        .bind(&photo_id)
-                        .execute(&state.pool)
-                        .await;
+                        let _ =
+                            sqlx::query("UPDATE photos SET motion_video_blob_id = ? WHERE id = ?")
+                                .bind(&blob_id)
+                                .bind(&photo_id)
+                                .execute(&state.pool)
+                                .await;
 
                         tracing::info!(
                             photo_id = %photo_id,

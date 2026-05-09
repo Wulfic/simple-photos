@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
-use crate::config::GeoConfig;
 use super::geocoder::ReverseGeocoder;
+use crate::config::GeoConfig;
 
 /// Spawn the background geo-processor task.
 ///
@@ -76,8 +76,7 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<Atom
 
                 if let Some(gc) = &geocoder {
                     if gc.is_loaded() {
-                        if let Err(e) =
-                            backfill_geo_locations(&pool, gc, batch_size, &config).await
+                        if let Err(e) = backfill_geo_locations(&pool, gc, batch_size, &config).await
                         {
                             tracing::warn!(error = %e, "Geo backfill cycle failed");
                         }
@@ -194,11 +193,9 @@ async fn backfill_geo_locations(
         // Resolve all coordinates
         let coords: Vec<(f64, f64)> = rows.iter().map(|(_, lat, lon)| (*lat, *lon)).collect();
         let gc = Arc::clone(geocoder);
-        let locations = tokio::task::spawn_blocking(move || {
-            gc.lookup_batch(&coords)
-        })
-        .await
-        .unwrap_or_default();
+        let locations = tokio::task::spawn_blocking(move || gc.lookup_batch(&coords))
+            .await
+            .unwrap_or_default();
 
         // Update each photo with its resolved location, OR mark it as
         // "attempted but unresolved" using an empty-string sentinel.
@@ -229,7 +226,7 @@ async fn backfill_geo_locations(
                     sqlx::query(
                         "UPDATE photos SET geo_city = ?1, geo_state = ?2, \
                          geo_country = ?3, geo_country_code = ?4 \
-                         WHERE id = ?5"
+                         WHERE id = ?5",
                     )
                     .bind(&loc.city)
                     .bind(&loc.state)
@@ -243,7 +240,7 @@ async fn backfill_geo_locations(
                 _ => {
                     sqlx::query(
                         "UPDATE photos SET geo_city = '' \
-                         WHERE id = ?1 AND geo_city IS NULL"
+                         WHERE id = ?1 AND geo_city IS NULL",
                     )
                     .bind(photo_id)
                     .execute(&mut *tx)
@@ -266,7 +263,9 @@ async fn backfill_geo_locations(
         }
 
         tracing::info!(
-            photos = count, resolved, unresolved,
+            photos = count,
+            resolved,
+            unresolved,
             "Backfilled geo locations"
         );
 
@@ -281,10 +280,7 @@ async fn backfill_geo_locations(
 
 /// Backfill photo_year and photo_month from taken_at for photos that
 /// have a timestamp but no year cached yet.
-async fn backfill_year_month(
-    pool: &SqlitePool,
-    batch_size: i64,
-) -> Result<(), sqlx::Error> {
+async fn backfill_year_month(pool: &SqlitePool, batch_size: i64) -> Result<(), sqlx::Error> {
     // Use SQLite date functions to extract year/month from the ISO timestamp
     let result = sqlx::query(
         "UPDATE photos SET \
@@ -324,7 +320,7 @@ pub async fn resolve_photo_geo(
         sqlx::query(
             "UPDATE photos SET geo_city = ?1, geo_state = ?2, \
              geo_country = ?3, geo_country_code = ?4 \
-             WHERE id = ?5"
+             WHERE id = ?5",
         )
         .bind(&loc.city)
         .bind(&loc.state)
@@ -347,7 +343,7 @@ pub async fn set_photo_year_month(
         "UPDATE photos SET \
          photo_year = CAST(strftime('%Y', ?1) AS INTEGER), \
          photo_month = CAST(strftime('%m', ?1) AS INTEGER) \
-         WHERE id = ?2"
+         WHERE id = ?2",
     )
     .bind(taken_at)
     .bind(photo_id)
