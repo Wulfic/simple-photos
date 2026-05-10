@@ -105,7 +105,7 @@ tensorrt = ["ort/tensorrt"]
 #
 # The postinst script creates the `simple-photos` system user, scaffolds the
 # data dirs, and enables the service. Storage root is finalised by the
-# first-run setup wizard (web UI on :3000) — the .deb only seeds defaults.
+# first-run setup wizard (web UI on :8080) — the .deb only seeds defaults.
 [package.metadata.deb]
 name = "simple-photos"
 maintainer = "Wulfic <noreply@github.com>"
@@ -130,7 +130,7 @@ assets = [
 ]
 conf-files = ["/etc/simple-photos/config.toml"]
 maintainer-scripts = "../packaging/debian/"
-systemd-units = { unit-name = "simple-photos", unit-scripts = "../packaging/debian/", enable = true, start = false, restart-after-upgrade = true }
+systemd-units = { unit-name = "simple-photos", unit-scripts = "../packaging/debian/", enable = true, start = true, restart-after-upgrade = true }
 
 # Build profile tuned for shipping binaries: thin LTO, stripped, single
 # codegen unit. Slower link, materially smaller artefact.

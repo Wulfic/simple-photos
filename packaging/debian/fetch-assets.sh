@@ -48,3 +48,29 @@ dl "$ADMIN1" "https://download.geonames.org/export/dump/admin1CodesASCII.txt" ||
 
 echo "[done] AI models and geo data installed under $DATA_DIR"
 echo "[next] sudo systemctl restart simple-photos"
+
+# ── NVIDIA / CUDA runtime check ───────────────────────────────────────────────
+echo ""
+if command -v nvidia-smi >/dev/null 2>&1; then
+    echo "[gpu]  NVIDIA GPU detected: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+    if ldconfig -p 2>/dev/null | grep -q 'libcudart'; then
+        echo "[gpu]  CUDA runtime present — GPU inference will be used automatically."
+    else
+        echo "[gpu]  CUDA runtime NOT found. Install it for GPU-accelerated AI inference:"
+        echo "         sudo apt-get install nvidia-cuda-toolkit"
+        echo "       Or use the NVIDIA-published packages (recommended, more up to date):"
+        echo "         https://developer.nvidia.com/cuda-downloads"
+    fi
+else
+    echo "[gpu]  No NVIDIA GPU detected — running CPU inference (slower)."
+    echo "       If you add a GPU later, install nvidia-cuda-toolkit and re-run this script."
+fi
+
+# ── FFmpeg check ──────────────────────────────────────────────────────────────
+echo ""
+if command -v ffmpeg >/dev/null 2>&1; then
+    echo "[ffmpeg] $(ffmpeg -version 2>&1 | head -1)"
+else
+    echo "[ffmpeg] ffmpeg not found — video transcoding will be unavailable."
+    echo "         Install with: sudo apt-get install ffmpeg"
+fi

@@ -24,7 +24,18 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/simple-photos
 PrivateTmp=true
-PrivateDevices=true
+# PrivateDevices=true is intentionally NOT set: it creates a private /dev
+# namespace that hides NVIDIA device nodes even if DeviceAllow is present,
+# breaking CUDA/GPU inference.  Instead we use a closed device policy and
+# explicitly allow only the devices the server may need.
+DevicePolicy=closed
+DeviceAllow=char-drm rwm
+DeviceAllow=/dev/dri rwm
+# NVIDIA GPU (CUDA inference).  Harmless when no GPU is present.
+DeviceAllow=/dev/nvidia0 rwm
+DeviceAllow=/dev/nvidiactl rwm
+DeviceAllow=/dev/nvidia-uvm rwm
+DeviceAllow=/dev/nvidia-uvm-tools rwm
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
