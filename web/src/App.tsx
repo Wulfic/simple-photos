@@ -23,6 +23,7 @@ import ConversionBanner from "./components/ConversionBanner";
 import SavingBanner from "./components/SavingBanner";
 import AiBanner from "./components/AiBanner";
 import GeoBanner from "./components/GeoBanner";
+import ServerOfflineBanner from "./components/ServerOfflineBanner";
 
 /**
  * Layout route for authenticated pages.
@@ -69,10 +70,12 @@ function ProtectedLayout() {
   if (serverUnreachable) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+        {/* Runtime offline banner stays visible even on this error page */}
+        <ServerOfflineBanner />
         <div className="text-center max-w-md">
           <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Cannot reach server</h1>
           <p className="text-gray-600 dark:text-gray-400 mb-4">
-            Unable to connect to the Simple Photos server. Please check that the server is running and try again.
+            Unable to connect to the Simple Photos server. Check that the server is running, then retry.
           </p>
           <button
             onClick={() => window.location.reload()}
@@ -197,6 +200,9 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      {/* Global server-health banner — shows on every page when the server
+          is unreachable at runtime and auto-hides once it reconnects. */}
+      <ServerOfflineBanner />
       <Routes>
         {/* Public routes — no auth required */}
         {/* Cast receiver — must be public so Chromecast can load it */}
