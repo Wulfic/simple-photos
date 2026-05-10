@@ -26,6 +26,7 @@ import CastDialog, { CastIcon } from "../components/CastDialog";
 import { getErrorMessage } from "../utils/formatters";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { usePwaInstall } from "../hooks/usePwaInstall";
+import PwaInstallInstructionsDialog from "../components/PwaInstallInstructionsDialog";
 
 export default function Settings() {
   const { username } = useAuthStore();
@@ -64,6 +65,10 @@ export default function Settings() {
 
   // ── Cast dialog state ─────────────────────────────────────────────────
   const [castDialogOpen, setCastDialogOpen] = useState(false);
+
+  // ── PWA install-instructions dialog (shown when the browser hasn't
+  //    fired beforeinstallprompt — e.g. Brave, Firefox, Safari). ────────
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
 
   // ── Storage stats state ─────────────────────────────────────────────────
   type StorageStats = {
@@ -448,24 +453,29 @@ export default function Settings() {
                     setSuccess("Simple Photos is already installed on this device.");
                     return;
                   }
+                  // When the browser hasn't fired `beforeinstallprompt`
+                  // (Brave with shields, Firefox, Safari, or Chromium before
+                  // it has decided the site is "installable"), we cannot
+                  // trigger a native install programmatically. Instead, open
+                  // a dialog with browser-specific manual install steps so
+                  // the button is always actionable.
                   if (!canInstall) {
-                    setError(
-                      "This browser hasn't offered an install prompt yet. " +
-                      "On iOS Safari: tap Share → Add to Home Screen. " +
-                      "On desktop Chrome/Edge: look for the install icon in the address bar."
-                    );
+                    setInstallHelpOpen(true);
                     return;
                   }
                   const outcome = await promptInstall();
                   if (outcome === "accepted") setSuccess("App installed.");
                   else if (outcome === "dismissed") setError("Install dismissed.");
+                  else if (outcome === "unavailable") setInstallHelpOpen(true);
                 }}
                 className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-sm"
                 disabled={isInstalled}
                 title={
                   isInstalled
                     ? "Already installed on this device"
-                    : "Install Simple Photos as a web app on this device"
+                    : canInstall
+                      ? "Install Simple Photos as a web app on this device"
+                      : "Show install instructions for this browser"
                 }
               >
                 ⬇️ {isInstalled ? "App Installed" : "Install App (Web)"}
@@ -633,6 +643,13 @@ export default function Settings() {
           <CastDialog open={castDialogOpen} onClose={() => setCastDialogOpen(false)} />
         </section>
       )}
+
+      {/* PWA install-instructions fallback dialog — rendered globally so it
+          works even if the Apps section is collapsed/hidden on small screens. */}
+      <PwaInstallInstructionsDialog
+        open={installHelpOpen}
+        onClose={() => setInstallHelpOpen(false)}
+      />
 
       {/* ── Restart Server (admin only) ─────────────────────────────────── */}
       {isAdmin && (
