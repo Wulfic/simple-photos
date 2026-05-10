@@ -98,6 +98,8 @@ private fun ListScaffold(
 
 // ── People ───────────────────────────────────────────────────────────────────
 
+// ── People ───────────────────────────────────────────────────────────────────
+
 @HiltViewModel
 class PeopleViewModel @Inject constructor(private val repo: AiRepository) : ViewModel() {
     var loading by mutableStateOf(true); private set
@@ -124,7 +126,7 @@ fun PeopleScreen(onBack: () -> Unit, vm: PeopleViewModel = hiltViewModel()) {
         loading = vm.loading,
         error = vm.error,
         rows = vm.clusters.map {
-            Row(it.name ?: "Unnamed person", "${it.photoCount} photos")
+            Row(it.label ?: "Unnamed person", "${it.photoCount} photos")
         },
         emptyHint = "No face clusters yet. Enable AI in Settings to begin scanning.",
     )
@@ -155,104 +157,9 @@ fun PetsScreen(onBack: () -> Unit, vm: PetsViewModel = hiltViewModel()) {
         loading = vm.loading,
         error = vm.error,
         rows = vm.clusters.map {
-            Row(it.name ?: it.species ?: "Unnamed pet", "${it.photoCount} photos")
+            Row(it.label ?: it.species, "${it.photoCount} photos")
         },
         emptyHint = "No pet clusters yet.",
-    )
-}
-
-// ── Things ───────────────────────────────────────────────────────────────────
-
-@HiltViewModel
-class ThingsViewModel @Inject constructor(private val repo: AiRepository) : ViewModel() {
-    var loading by mutableStateOf(true); private set
-    var error by mutableStateOf<String?>(null); private set
-    var classes by mutableStateOf<List<ObjectClass>>(emptyList()); private set
-
-    init {
-        viewModelScope.launch {
-            try { classes = repo.listObjectClasses() }
-            catch (e: Exception) { error = e.message }
-            loading = false
-        }
-    }
-}
-
-@Composable
-fun ThingsScreen(onBack: () -> Unit, vm: ThingsViewModel = hiltViewModel()) {
-    ListScaffold(
-        title = "Things",
-        onBack = onBack,
-        loading = vm.loading,
-        error = vm.error,
-        rows = vm.classes.map { Row(it.className, "${it.photoCount} photos") },
-        emptyHint = "No object classes detected yet.",
-    )
-}
-
-// ── Map ──────────────────────────────────────────────────────────────────────
-
-@HiltViewModel
-class MapViewModel @Inject constructor(private val repo: GeoRepository) : ViewModel() {
-    var loading by mutableStateOf(true); private set
-    var error by mutableStateOf<String?>(null); private set
-    var photos by mutableStateOf<List<GeoMapPhoto>>(emptyList()); private set
-
-    init {
-        viewModelScope.launch {
-            try { photos = repo.listMapPhotos() }
-            catch (e: Exception) { error = e.message }
-            loading = false
-        }
-    }
-}
-
-@Composable
-fun MapScreen(onBack: () -> Unit, vm: MapViewModel = hiltViewModel()) {
-    // Map widget itself requires Google Maps SDK (out of scope for this
-    // realignment). Show counts and lat/long so users can confirm geo
-    // ingestion is working.
-    ListScaffold(
-        title = "Map",
-        onBack = onBack,
-        loading = vm.loading,
-        error = vm.error,
-        rows = vm.photos.take(50).map {
-            Row("Photo ${it.photoId.take(8)}…", "%.4f, %.4f".format(it.latitude, it.longitude))
-        },
-        emptyHint = "No geo-tagged photos yet. Enable Geo features in Settings.",
-    )
-}
-
-// ── Timeline ─────────────────────────────────────────────────────────────────
-
-@HiltViewModel
-class TimelineViewModel @Inject constructor(private val repo: GeoRepository) : ViewModel() {
-    var loading by mutableStateOf(true); private set
-    var error by mutableStateOf<String?>(null); private set
-    var entries by mutableStateOf<List<GeoTimelineEntry>>(emptyList()); private set
-
-    init {
-        viewModelScope.launch {
-            try { entries = repo.listTimeline() }
-            catch (e: Exception) { error = e.message }
-            loading = false
-        }
-    }
-}
-
-@Composable
-fun TimelineScreen(onBack: () -> Unit, vm: TimelineViewModel = hiltViewModel()) {
-    ListScaffold(
-        title = "Timeline",
-        onBack = onBack,
-        loading = vm.loading,
-        error = vm.error,
-        rows = vm.entries.map {
-            val label = if (it.month != null) "${it.year}-%02d".format(it.month) else "${it.year}"
-            Row(label, "${it.photoCount} photos")
-        },
-        emptyHint = "No timeline data yet.",
     )
 }
 
@@ -281,7 +188,7 @@ fun MemoriesScreen(onBack: () -> Unit, vm: MemoriesViewModel = hiltViewModel()) 
         loading = vm.loading,
         error = vm.error,
         rows = vm.memories.map {
-            Row(it.title, "${it.photoCount} photos · ${it.subtitle ?: it.anchorDate ?: ""}")
+            Row(it.name, "${it.photoCount} photos · ${it.dateLabel}")
         },
         emptyHint = "No memories curated yet.",
     )
@@ -312,41 +219,9 @@ fun TripsScreen(onBack: () -> Unit, vm: TripsViewModel = hiltViewModel()) {
         loading = vm.loading,
         error = vm.error,
         rows = vm.trips.map {
-            val dates = listOfNotNull(it.startedAt, it.endedAt).joinToString(" → ")
             val place = listOfNotNull(it.city, it.country).joinToString(", ")
-            Row(it.title, "${it.photoCount} photos · ${listOf(place, dates).filter { s -> s.isNotEmpty() }.joinToString(" · ")}")
+            Row(it.name, "${it.photoCount} photos · $place · ${it.dateLabel}")
         },
         emptyHint = "No trips detected yet.",
-    )
-}
-
-// ── Locations (Places) ───────────────────────────────────────────────────────
-
-@HiltViewModel
-class LocationsViewModel @Inject constructor(private val repo: GeoRepository) : ViewModel() {
-    var loading by mutableStateOf(true); private set
-    var error by mutableStateOf<String?>(null); private set
-    var locations by mutableStateOf<List<GeoLocation>>(emptyList()); private set
-
-    init {
-        viewModelScope.launch {
-            try { locations = repo.listLocations() }
-            catch (e: Exception) { error = e.message }
-            loading = false
-        }
-    }
-}
-
-@Composable
-fun LocationsScreen(onBack: () -> Unit, vm: LocationsViewModel = hiltViewModel()) {
-    ListScaffold(
-        title = "Places",
-        onBack = onBack,
-        loading = vm.loading,
-        error = vm.error,
-        rows = vm.locations.map {
-            Row("${it.city}, ${it.country}", "${it.photoCount} photos")
-        },
-        emptyHint = "No places detected yet.",
     )
 }

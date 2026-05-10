@@ -8,6 +8,8 @@ package com.simplephotos.ui.screens.album
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -53,13 +55,8 @@ fun AlbumListScreen(
     onSharedAlbumClick: () -> Unit = {},
     onPeople: () -> Unit = {},
     onPets: () -> Unit = {},
-    onThings: () -> Unit = {},
-    onMap: () -> Unit = {},
-    onTimeline: () -> Unit = {},
     onMemories: () -> Unit = {},
     onTrips: () -> Unit = {},
-    onLocations: () -> Unit = {},
-    onExport: () -> Unit = {},
     isAdmin: Boolean = false,
     viewModel: AlbumViewModel = hiltViewModel()
 ) {
@@ -198,43 +195,122 @@ fun AlbumListScreen(
                 }
             }
 
-            // ── Discover (smart) album sections — server-driven views ──
-            Spacer(Modifier.height(16.dp))
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = 16.dp),
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-            )
-            Text(
-                "Discover",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-            )
-            val discoverEntries = listOf<Triple<String, Int, () -> Unit>>(
-                Triple("People", com.simplephotos.R.drawable.ic_shared, onPeople),
-                Triple("Pets", com.simplephotos.R.drawable.ic_image, onPets),
-                Triple("Things", com.simplephotos.R.drawable.ic_tag, onThings),
-                Triple("Memories", com.simplephotos.R.drawable.ic_star, onMemories),
-                Triple("Trips", com.simplephotos.R.drawable.ic_folder, onTrips),
-                Triple("Locations", com.simplephotos.R.drawable.ic_home, onLocations),
-                Triple("Map", com.simplephotos.R.drawable.ic_home, onMap),
-                Triple("Timeline", com.simplephotos.R.drawable.ic_image, onTimeline),
-                Triple("Export", com.simplephotos.R.drawable.ic_download, onExport),
-            )
-            discoverEntries.chunked(2).forEach { rowItems ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    rowItems.forEach { (label, iconRes, onClick) ->
-                        Box(modifier = Modifier.weight(1f)) {
-                            DiscoverCard(label = label, iconRes = iconRes, onClick = onClick)
+            // ── Discover (smart) album sections ─ horizontal rows per category ──
+            val anyDiscover = viewModel.peopleClusters.isNotEmpty() ||
+                viewModel.petClusters.isNotEmpty() ||
+                viewModel.memories.isNotEmpty() ||
+                viewModel.trips.isNotEmpty()
+            if (anyDiscover) {
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
+                Text(
+                    "Discover",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+            }
+
+            if (viewModel.peopleClusters.isNotEmpty()) {
+                DiscoverSection(
+                    title = "People",
+                    overflowCap = 6,
+                    items = viewModel.peopleClusters,
+                    keyOf = { it.id.toString() },
+                    primary = { it.label ?: "Unnamed" },
+                    secondary = { "${it.photoCount} photos" },
+                    thumbUrl = { c ->
+                        c.representative?.let { id -> "${viewModel.serverBaseUrl}/api/photos/$id/thumb" }
+                    },
+                    onItemClick = { onPeople() },
+                    onOverflowClick = onPeople,
+                )
+            }
+            if (viewModel.petClusters.isNotEmpty()) {
+                DiscoverSection(
+                    title = "Pets",
+                    overflowCap = 6,
+                    items = viewModel.petClusters,
+                    keyOf = { it.id.toString() },
+                    primary = { it.label ?: it.species },
+                    secondary = { "${it.photoCount} photos" },
+                    thumbUrl = { c ->
+                        c.representative?.let { id -> "${viewModel.serverBaseUrl}/api/photos/$id/thumb" }
+                    },
+                    onItemClick = { onPets() },
+                    onOverflowClick = onPets,
+                )
+            }
+            if (viewModel.memories.isNotEmpty()) {
+                DiscoverSection(
+                    title = "Memories",
+                    overflowCap = 4,
+                    items = viewModel.memories,
+                    keyOf = { it.id },
+                    primary = { it.name },
+                    secondary = { it.dateLabel },
+                    thumbUrl = { m ->
+                        m.firstPhotoId?.let { id -> "${viewModel.serverBaseUrl}/api/photos/$id/thumb" }
+                    },
+                    onItemClick = { onMemories() },
+                    onOverflowClick = onMemories,
+                )
+            }
+            if (viewModel.trips.isNotEmpty()) {
+                DiscoverSection(
+                    title = "Trips",
+                    overflowCap = 4,
+                    items = viewModel.trips,
+                    keyOf = { it.id },
+                    primary = { it.city },
+                    secondary = { it.dateLabel },
+                    thumbUrl = { t ->
+                        t.firstPhotoId?.let { id -> "${viewModel.serverBaseUrl}/api/photos/$id/thumb" }
+                    },
+                    onItemClick = { onTrips() },
+                    onOverflowClick = onTrips,
+                )
+            }
+
+            // Always show the 4-card icon shortcut row (matches the web's
+            // "open the dedicated screen" affordance even when no clusters
+            // exist yet).
+            if (!anyDiscover) {
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                )
+                Text(
+                    "Discover",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+                val discoverEntries = listOf<Triple<String, Int, () -> Unit>>(
+                    Triple("People", com.simplephotos.R.drawable.ic_shared, onPeople),
+                    Triple("Pets", com.simplephotos.R.drawable.ic_image, onPets),
+                    Triple("Memories", com.simplephotos.R.drawable.ic_star, onMemories),
+                    Triple("Trips", com.simplephotos.R.drawable.ic_folder, onTrips),
+                )
+                discoverEntries.chunked(2).forEach { rowItems ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        rowItems.forEach { (label, iconRes, onClick) ->
+                            Box(modifier = Modifier.weight(1f)) {
+                                DiscoverCard(label = label, iconRes = iconRes, onClick = onClick)
+                            }
                         }
-                    }
-                    if (rowItems.size == 1) {
-                        Spacer(Modifier.weight(1f))
+                        if (rowItems.size == 1) {
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -659,6 +735,171 @@ private fun DiscoverCard(
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Horizontal section showing the first N items as cards, followed by a
+ * "See K more" overflow card when the list exceeds [overflowCap]. Mirrors
+ * the layout used by web/src/pages/Albums.tsx for People / Pets / Memories
+ * / Trips sections.
+ */
+@Composable
+private fun <T> DiscoverSection(
+    title: String,
+    overflowCap: Int,
+    items: List<T>,
+    keyOf: (T) -> String,
+    primary: (T) -> String,
+    secondary: (T) -> String,
+    thumbUrl: (T) -> String?,
+    onItemClick: (T) -> Unit,
+    onOverflowClick: () -> Unit,
+) {
+    val total = items.size
+    // Web pattern: if total > overflowCap, show first (overflowCap - 1) cards
+    // plus an overflow card. Otherwise show all.
+    val visible = if (total > overflowCap) items.take(overflowCap - 1) else items
+    val overflowCount = if (total > overflowCap) total - visible.size else 0
+
+    Spacer(Modifier.height(8.dp))
+    Text(
+        title,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+    )
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(visible, key = { keyOf(it) }) { item ->
+            DiscoverThumbCard(
+                primary = primary(item),
+                secondary = secondary(item),
+                thumbUrl = thumbUrl(item),
+                onClick = { onItemClick(item) },
+            )
+        }
+        if (overflowCount > 0) {
+            item(key = "$title-overflow") {
+                DiscoverOverflowCard(
+                    label = "See $overflowCount more",
+                    onClick = onOverflowClick,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverThumbCard(
+    primary: String,
+    secondary: String,
+    thumbUrl: String?,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .width(120.dp)
+            .clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                Color(0xFF8B5CF6).copy(alpha = 0.15f),
+                                Color(0xFF3B82F6).copy(alpha = 0.15f)
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (!thumbUrl.isNullOrEmpty()) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(thumbUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = primary,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(36.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                Text(
+                    primary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+                Text(
+                    secondary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverOverflowCard(
+    label: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .width(120.dp)
+            .clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                Color(0xFF8B5CF6).copy(alpha = 0.25f),
+                                Color(0xFF3B82F6).copy(alpha = 0.25f)
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2
                 )
             }
         }

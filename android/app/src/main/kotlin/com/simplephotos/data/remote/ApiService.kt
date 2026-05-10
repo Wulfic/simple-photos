@@ -362,7 +362,7 @@ interface ApiService {
     suspend fun reprocessAi(@Body request: AiReprocessRequest): AiReprocessResponse
 
     @GET("api/ai/faces")
-    suspend fun listFaceClusters(): FaceClusterListResponse
+    suspend fun listFaceClusters(): List<FaceCluster>
 
     @POST("api/ai/faces/merge")
     suspend fun mergeFaceClusters(@Body request: FaceClusterMergeRequest): MessageResponse
@@ -386,7 +386,7 @@ interface ApiService {
     suspend fun listObjectClassPhotos(@Path("class_name") className: String): ObjectClassPhotosResponse
 
     @GET("api/ai/pets")
-    suspend fun listPetClusters(): PetClusterListResponse
+    suspend fun listPetClusters(): List<PetCluster>
 
     @POST("api/ai/pets/merge")
     suspend fun mergePetClusters(@Body request: PetClusterMergeRequest): MessageResponse
@@ -438,13 +438,13 @@ interface ApiService {
     ): GeoTimelinePhotosResponse
 
     @GET("api/geo/memories")
-    suspend fun listGeoMemories(): GeoMemoryListResponse
+    suspend fun listGeoMemories(): List<GeoMemory>
 
     @GET("api/geo/memories/{memory_id}/photos")
     suspend fun listGeoMemoryPhotos(@Path("memory_id") memoryId: String): GeoMemoryPhotosResponse
 
     @GET("api/geo/trips")
-    suspend fun listGeoTrips(): GeoTripListResponse
+    suspend fun listGeoTrips(): List<GeoTrip>
 
     @GET("api/geo/trips/{trip_id}/photos")
     suspend fun listGeoTripPhotos(@Path("trip_id") tripId: String): GeoTripPhotosResponse

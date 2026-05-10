@@ -25,10 +25,12 @@ import GeolocationSection from "../components/settings/GeolocationSection";
 import CastDialog, { CastIcon } from "../components/CastDialog";
 import { getErrorMessage } from "../utils/formatters";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
+import { usePwaInstall } from "../hooks/usePwaInstall";
 
 export default function Settings() {
   const { username } = useAuthStore();
   const isAdmin = useIsAdmin();
+  const { canInstall, isInstalled, promptInstall } = usePwaInstall();
   const { thumbnailSize, toggle: toggleThumbnailSize } = useThumbnailSizeStore();
   const navigate = useNavigate();
 
@@ -435,34 +437,65 @@ export default function Settings() {
         <h2 className="text-lg font-semibold mb-3">Apps</h2>
         <div className="space-y-4">
           <div>
-            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Android App</h3>
+            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Install Simple Photos</h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-              Download the Simple Photos Android app to automatically back up photos from your phone.
+              Use this site like a native app. Choose <strong>Install App</strong> for a quick web-app install on any device, or <strong>Android App</strong> for automatic phone-photo backup.
             </p>
-            <button
-              onClick={async () => {
-                try {
-                  const res = await fetch("/api/downloads/android", { method: "HEAD" });
-                  if (res.ok) {
-                    // Programmatic download via temporary anchor — avoids SPA
-                    // navigation issues that window.location.href can cause.
-                    const a = document.createElement("a");
-                    a.href = "/api/downloads/android";
-                    a.download = "simple-photos.apk";
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                  } else {
-                    setError("Android APK is not available yet. Build it with: cd android && ./gradlew assembleRelease — or place a pre-built APK at downloads/simple-photos.apk");
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={async () => {
+                  if (isInstalled) {
+                    setSuccess("Simple Photos is already installed on this device.");
+                    return;
                   }
-                } catch {
-                  setError("Could not check APK availability.");
+                  if (!canInstall) {
+                    setError(
+                      "This browser hasn't offered an install prompt yet. " +
+                      "On iOS Safari: tap Share → Add to Home Screen. " +
+                      "On desktop Chrome/Edge: look for the install icon in the address bar."
+                    );
+                    return;
+                  }
+                  const outcome = await promptInstall();
+                  if (outcome === "accepted") setSuccess("App installed.");
+                  else if (outcome === "dismissed") setError("Install dismissed.");
+                }}
+                className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-sm"
+                disabled={isInstalled}
+                title={
+                  isInstalled
+                    ? "Already installed on this device"
+                    : "Install Simple Photos as a web app on this device"
                 }
-              }}
-              className="inline-flex items-center gap-1.5 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 text-sm"
-            >
-              📱 Download Android App (.apk)
-            </button>
+              >
+                ⬇️ {isInstalled ? "App Installed" : "Install App (Web)"}
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await fetch("/api/downloads/android", { method: "HEAD" });
+                    if (res.ok) {
+                      // Programmatic download via temporary anchor — avoids SPA
+                      // navigation issues that window.location.href can cause.
+                      const a = document.createElement("a");
+                      a.href = "/api/downloads/android";
+                      a.download = "simple-photos.apk";
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                    } else {
+                      setError("Android APK is not available yet. Build it with: cd android && ./gradlew assembleRelease — or place a pre-built APK at downloads/simple-photos.apk");
+                    }
+                  } catch {
+                    setError("Could not check APK availability.");
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 text-sm"
+                title="Download the native Android APK for automatic phone-photo backup"
+              >
+                📱 Android App (.apk)
+              </button>
+            </div>
 
             {/* Collapsible install instructions */}
             <button
@@ -470,7 +503,7 @@ export default function Settings() {
               className="mt-3 flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors"
             >
               <span className={`inline-block transition-transform ${showInstallInstructions ? "rotate-90" : ""}`}>▶</span>
-              Install Instructions
+              Android Install Instructions
             </button>
             {showInstallInstructions && (
               <div className="mt-3 bg-gray-50 dark:bg-gray-900 rounded-lg p-4">

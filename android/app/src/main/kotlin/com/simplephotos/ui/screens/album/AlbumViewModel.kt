@@ -9,9 +9,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
+import com.simplephotos.data.remote.dto.FaceCluster
+import com.simplephotos.data.remote.dto.GeoMemory
+import com.simplephotos.data.remote.dto.GeoTrip
+import com.simplephotos.data.remote.dto.PetCluster
 import com.simplephotos.data.remote.dto.SharedAlbumInfo
+import com.simplephotos.data.repository.AiRepository
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.AuthRepository
+import com.simplephotos.data.repository.GeoRepository
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.SharingRepository
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
@@ -32,6 +38,8 @@ class AlbumViewModel @Inject constructor(
     private val authRepository: AuthRepository,
     private val photoRepository: PhotoRepository,
     private val sharingRepository: SharingRepository,
+    private val aiRepository: AiRepository,
+    private val geoRepository: GeoRepository,
     val dataStore: DataStore<Preferences>
 ) : ViewModel() {
     val albums = albumRepository.getAllAlbums()
@@ -67,6 +75,16 @@ class AlbumViewModel @Inject constructor(
     var smartAlbumCoverPhotos by mutableStateOf<Map<String, PhotoEntity>>(emptyMap())
         private set
 
+    // ── Discover sections (people / pets / memories / trips) ────────────
+    var peopleClusters by mutableStateOf<List<FaceCluster>>(emptyList())
+        private set
+    var petClusters by mutableStateOf<List<PetCluster>>(emptyList())
+        private set
+    var memories by mutableStateOf<List<GeoMemory>>(emptyList())
+        private set
+    var trips by mutableStateOf<List<GeoTrip>>(emptyList())
+        private set
+
     // ── Shared albums ────────────────────────────────────────────────────
     var sharedAlbums by mutableStateOf<List<SharedAlbumInfo>>(emptyList())
         private set
@@ -93,6 +111,17 @@ class AlbumViewModel @Inject constructor(
             loadSmartAlbumCounts()
             // Load shared albums (displayed at the bottom of the albums page)
             loadSharedAlbums()
+            // Load Discover sections (people / pets / memories / trips)
+            loadDiscoverSections()
+        }
+    }
+
+    private fun loadDiscoverSections() {
+        viewModelScope.launch {
+            try { peopleClusters = withContext(Dispatchers.IO) { aiRepository.listFaceClusters() } } catch (_: Exception) {}
+            try { petClusters = withContext(Dispatchers.IO) { aiRepository.listPetClusters() } } catch (_: Exception) {}
+            try { memories = withContext(Dispatchers.IO) { geoRepository.listMemories() } } catch (_: Exception) {}
+            try { trips = withContext(Dispatchers.IO) { geoRepository.listTrips() } } catch (_: Exception) {}
         }
     }
 
