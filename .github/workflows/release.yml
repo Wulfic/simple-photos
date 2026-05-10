@@ -211,9 +211,14 @@ jobs:
           name: web-dist
           path: web/dist
 
-      - name: Build server (release, CPU)
+      # Windows ships with the `cuda` feature compiled in. The ORT CUDA EP
+      # `dlopen`s `cudart64_*.dll` / `cublas64_*.dll` lazily at runtime, so
+      # the same binary runs unmodified on machines without a GPU (it falls
+      # back to CPU). Users with an NVIDIA card + CUDA Toolkit installed
+      # automatically get acceleration without rebuilding.
+      - name: Build server (release, CUDA-enabled)
         working-directory: server
-        run: cargo build --release --no-default-features --locked
+        run: cargo build --release --locked
 
       - name: Fetch NSSM 2.24 (via Chocolatey for reliability)
         shell: pwsh
