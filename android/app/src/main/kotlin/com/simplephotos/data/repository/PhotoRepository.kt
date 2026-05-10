@@ -618,7 +618,11 @@ class PhotoRepository @Inject constructor(
                     isFavorite = photo.isFavorite,
                     cropMetadata = photo.cropMetadata,
                     photoHash = photo.photoHash,
-                    serverPhotoId = photo.id
+                    serverPhotoId = photo.id,
+                    photoSubtype = photo.photoSubtype,
+                    burstId = photo.burstId,
+                    motionVideoBlobId = photo.motionVideoBlobId,
+                    sourcePath = photo.sourcePath
                 )
                 db.photoDao().insert(entity)
                 imported++

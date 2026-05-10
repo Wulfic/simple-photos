@@ -571,13 +571,25 @@ internal fun GalleryDetailView(
                         }
                     }
                 } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(100.dp),
-                        contentPadding = PaddingValues(2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        items(items, key = { it.id }) { item ->
+                    com.simplephotos.ui.components.JustifiedGrid(
+                        items = items,
+                        getAspectRatio = { it ->
+                            val w = it.width ?: 0
+                            val h = it.height ?: 0
+                            if (w > 0 && h > 0) w.toFloat() / h.toFloat() else 1f
+                        },
+                        getKey = { it.id },
+                        targetRowHeight = 130.dp,
+                        gap = 2.dp,
+                    ) { item, widthDp, heightDp ->
+                        Box(
+                            modifier = Modifier
+                                .size(widthDp, heightDp)
+                                .clickable {
+                                    val idx = items.indexOfFirst { it.blobId == item.blobId }
+                                    viewerIndex = idx.coerceAtLeast(0)
+                                }
+                        ) {
                             SecureItemTile(
                                 item = item,
                                 onClick = {

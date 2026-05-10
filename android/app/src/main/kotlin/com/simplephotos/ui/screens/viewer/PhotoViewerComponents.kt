@@ -540,6 +540,35 @@ internal fun PhotoPageContent(
                 }
             }
         }
+
+        // ── Special photo overlays (panorama / 360° / motion) ─────────────────
+        // Only on the active page; only after media has loaded successfully.
+        if (isActivePage && !decryptLoading && decryptError == null) {
+            val sub = photo.photoSubtype
+            val isPano = sub == "panorama" || sub == "equirectangular"
+            val isMotionPhoto = photo.motionVideoBlobId != null && photo.mediaType != "video"
+
+            if (isPano) {
+                val panoData: Any? = when {
+                    hasLocalPath -> Uri.parse(photo.localPath)
+                    decryptedData != null -> decryptedData
+                    else -> null
+                }
+                PanoramaOverlay(
+                    imageData = panoData,
+                    intrinsicWidth = if (intrinsicWidth > 0f) intrinsicWidth else photo.width.toFloat(),
+                    intrinsicHeight = if (intrinsicHeight > 0f) intrinsicHeight else photo.height.toFloat(),
+                    is360 = sub == "equirectangular",
+                    contentDescription = photo.filename,
+                )
+            } else if (isMotionPhoto) {
+                MotionPhotoOverlay(
+                    photo = photo,
+                    serverBaseUrl = serverBaseUrl,
+                    okHttpClient = okHttpClient,
+                )
+            }
+        }
     }
 }
 
