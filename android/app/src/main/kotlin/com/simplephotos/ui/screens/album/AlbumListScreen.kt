@@ -51,6 +51,15 @@ fun AlbumListScreen(
     onAlbumClick: (String) -> Unit = {},
     /** Navigate into the dedicated Shared Albums screen (e.g. to view detail) */
     onSharedAlbumClick: () -> Unit = {},
+    onPeople: () -> Unit = {},
+    onPets: () -> Unit = {},
+    onThings: () -> Unit = {},
+    onMap: () -> Unit = {},
+    onTimeline: () -> Unit = {},
+    onMemories: () -> Unit = {},
+    onTrips: () -> Unit = {},
+    onLocations: () -> Unit = {},
+    onExport: () -> Unit = {},
     isAdmin: Boolean = false,
     viewModel: AlbumViewModel = hiltViewModel()
 ) {
@@ -186,6 +195,47 @@ fun AlbumListScreen(
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+
+            // ── Discover (smart) album sections — server-driven views ──
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+            )
+            Text(
+                "Discover",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+            val discoverEntries = listOf<Triple<String, Int, () -> Unit>>(
+                Triple("People", com.simplephotos.R.drawable.ic_shared, onPeople),
+                Triple("Pets", com.simplephotos.R.drawable.ic_image, onPets),
+                Triple("Things", com.simplephotos.R.drawable.ic_tag, onThings),
+                Triple("Memories", com.simplephotos.R.drawable.ic_star, onMemories),
+                Triple("Trips", com.simplephotos.R.drawable.ic_folder, onTrips),
+                Triple("Locations", com.simplephotos.R.drawable.ic_home, onLocations),
+                Triple("Map", com.simplephotos.R.drawable.ic_home, onMap),
+                Triple("Timeline", com.simplephotos.R.drawable.ic_image, onTimeline),
+                Triple("Export", com.simplephotos.R.drawable.ic_download, onExport),
+            )
+            discoverEntries.chunked(2).forEach { rowItems ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    rowItems.forEach { (label, iconRes, onClick) ->
+                        Box(modifier = Modifier.weight(1f)) {
+                            DiscoverCard(label = label, iconRes = iconRes, onClick = onClick)
+                        }
+                    }
+                    if (rowItems.size == 1) {
+                        Spacer(Modifier.weight(1f))
+                    }
                 }
             }
 
@@ -552,6 +602,63 @@ private fun SharedAlbumCard(
                     if (album.isOwner) "You" else album.ownerUsername,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Renders a "Discover" smart-section card (People, Pets, Things, Map, etc.)
+ * Tapping the card navigates into the corresponding library sub-screen.
+ */
+@Composable
+private fun DiscoverCard(
+    label: String,
+    iconRes: Int,
+    onClick: () -> Unit = {}
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Column {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f),
+                color = Color.Transparent,
+                shape = MaterialTheme.shapes.small
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.linearGradient(
+                                listOf(
+                                    Color(0xFF8B5CF6).copy(alpha = 0.15f),
+                                    Color(0xFF3B82F6).copy(alpha = 0.15f)
+                                )
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = androidx.compose.ui.res.painterResource(iconRes),
+                        contentDescription = label,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Column(modifier = Modifier.padding(8.dp)) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
                 )
             }
         }

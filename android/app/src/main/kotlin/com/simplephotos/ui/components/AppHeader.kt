@@ -54,7 +54,6 @@ data class HeaderNavigation(
     val onSecureGalleryClick: () -> Unit = {},
     val onSharedAlbumsClick: () -> Unit = {},
     val onDiagnosticsClick: () -> Unit = {},
-    val onLibraryClick: () -> Unit = {},
     val onLogout: () -> Unit = {},
     val onToggleTheme: () -> Unit = {},
     val isAdmin: Boolean = false,
@@ -203,7 +202,6 @@ fun AppHeader(
                     onSharedAlbumsClick = navigation.onSharedAlbumsClick,
                     onSettingsClick = navigation.onSettingsClick,
                     onDiagnosticsClick = navigation.onDiagnosticsClick,
-                    onLibraryClick = navigation.onLibraryClick,
                     isAdmin = navigation.isAdmin,
                     onLogout = navigation.onLogout,
                     onToggleTheme = navigation.onToggleTheme
@@ -287,7 +285,6 @@ private fun UserMenu(
     onSharedAlbumsClick: () -> Unit = {},
     onSettingsClick: () -> Unit,
     onDiagnosticsClick: () -> Unit = {},
-    onLibraryClick: () -> Unit = {},
     isAdmin: Boolean = false,
     onLogout: () -> Unit,
     onToggleTheme: () -> Unit = {},
@@ -371,16 +368,6 @@ private fun UserMenu(
                 },
                 leadingIcon = {
                     Icon(painter = painterResource(R.drawable.ic_locks), contentDescription = null, modifier = Modifier.size(18.dp))
-                }
-            )
-            DropdownMenuItem(
-                text = { Text("Library") },
-                onClick = {
-                    expanded = false
-                    onLibraryClick()
-                },
-                leadingIcon = {
-                    Icon(painter = painterResource(R.drawable.ic_folder), contentDescription = null, modifier = Modifier.size(18.dp))
                 }
             )
             // Shared Albums are now shown inline at the bottom of the Albums

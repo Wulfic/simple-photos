@@ -92,7 +92,6 @@ fun GalleryScreen(
     onSecureGalleryClick: () -> Unit = {},
     onSharedAlbumsClick: () -> Unit = {},
     onDiagnosticsClick: () -> Unit = {},
-    onLibraryClick: () -> Unit = {},
     onLogout: () -> Unit,
     isAdmin: Boolean = false,
     viewModel: GalleryViewModel = hiltViewModel()
@@ -109,8 +108,17 @@ fun GalleryScreen(
         else photos.filter { it.serverBlobId == null || it.serverBlobId !in viewModel.secureBlobIds }
     }
 
+    // Collapse burst stacks: keep only the first frame of each burstId (matches web)
+    val collapsedPhotos = remember(visiblePhotos) {
+        val seenBursts = HashSet<String>()
+        visiblePhotos.filter { p ->
+            val bid = p.burstId
+            if (bid.isNullOrEmpty()) true else seenBursts.add(bid)
+        }
+    }
+
     // Build day-grouped grid items
-    val gridItems = remember(visiblePhotos) { buildGridItems(groupPhotosByDay(visiblePhotos)) }
+    val gridItems = remember(collapsedPhotos) { buildGridItems(groupPhotosByDay(collapsedPhotos)) }
 
     val pickMediaLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -189,7 +197,6 @@ fun GalleryScreen(
                         onSecureGalleryClick = onSecureGalleryClick,
                         onSharedAlbumsClick = onSharedAlbumsClick,
                         onDiagnosticsClick = onDiagnosticsClick,
-                        onLibraryClick = onLibraryClick,
                         onLogout = { viewModel.logout(onLogout) },
                         onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
                         isAdmin = isAdmin
@@ -666,13 +673,43 @@ private fun MediaTile(
             }
         }
 
-        // Selection circle (top-right)
+        // Photo subtype badges (top-left): panorama / 360 / burst / motion
+        run {
+            val sub = photo.photoSubtype
+            val burstBadge = photo.burstId != null
+            val motionBadge = photo.motionVideoBlobId != null || sub == "motion"
+            val panoBadge = sub == "panorama" || sub == "equirectangular"
+            val label = when {
+                panoBadge && sub == "equirectangular" -> "360\u00B0"
+                panoBadge -> "PANO"
+                motionBadge -> "LIVE"
+                burstBadge -> "BURST"
+                else -> null
+            }
+            if (label != null) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+                    shape = MaterialTheme.shapes.extraSmall,
+                    color = Color.Black.copy(alpha = 0.6f)
+                ) {
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        // Selection circle (top-right) — sized to match web (~20% smaller than original)
         if (isSelectionMode) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(24.dp)
+                    .padding(5.dp)
+                    .size(19.dp)
                     .clip(CircleShape)
                     .background(if (isSelected) Color(0xFF22C55E) else Color.White.copy(alpha = 0.8f))
                     .border(
@@ -683,7 +720,7 @@ private fun MediaTile(
                 contentAlignment = Alignment.Center
             ) {
                 if (isSelected) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
                 }
             }
         }
