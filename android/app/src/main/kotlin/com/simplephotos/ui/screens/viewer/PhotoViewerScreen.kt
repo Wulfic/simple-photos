@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -409,12 +410,17 @@ fun PhotoViewerScreen(
                 // Only at the top level so it doesn't conflict with zoom panning
                 if (editMode) return@pointerInput
                 awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalY = 0f
                     var totalX = 0f
                     var consumed = false
+                    var verticalLocked = false
                     while (true) {
-                        val event = awaitPointerEvent()
+                        // Read on Initial pass so we see drags BEFORE the
+                        // HorizontalPager child consumes them. Once we've
+                        // confirmed a vertical-dominant swipe we consume the
+                        // changes so the pager doesn't also flip pages.
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull() ?: break
                         if (!change.pressed) {
                             // Finger lifted — evaluate the swipe
@@ -422,10 +428,8 @@ fun PhotoViewerScreen(
                                 kotlin.math.abs(totalY) > kotlin.math.abs(totalX) * 1.5f
                             ) {
                                 if (totalY < 0) {
-                                    // Swipe up → show info panel
                                     showInfoPanel = true
                                 } else {
-                                    // Swipe down → close viewer
                                     if (showInfoPanel) {
                                         showInfoPanel = false
                                     } else {
@@ -435,10 +439,24 @@ fun PhotoViewerScreen(
                             }
                             break
                         }
-                        // Only track single-finger vertical movement
                         if (event.changes.count { it.pressed } == 1) {
-                            totalY += change.positionChange().y
-                            totalX += change.positionChange().x
+                            val dy = change.positionChange().y
+                            val dx = change.positionChange().x
+                            totalY += dy
+                            totalX += dx
+                            // Lock to vertical once clearly dominant + past
+                            // a small initial threshold so casual horizontal
+                            // pager swipes still work.
+                            if (!verticalLocked &&
+                                kotlin.math.abs(totalY) > 24f &&
+                                kotlin.math.abs(totalY) > kotlin.math.abs(totalX) * 1.5f
+                            ) {
+                                verticalLocked = true
+                            }
+                            if (verticalLocked) {
+                                // Consume so HorizontalPager ignores this drag.
+                                change.consume()
+                            }
                         } else {
                             consumed = true // multi-touch — don't interpret as swipe
                         }

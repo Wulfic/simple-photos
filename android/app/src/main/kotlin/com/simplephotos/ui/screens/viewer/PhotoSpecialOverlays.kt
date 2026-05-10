@@ -16,7 +16,6 @@ import android.net.Uri
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,6 +30,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -100,8 +101,23 @@ fun PanoramaOverlay(
             .background(Color.Black)
             .clipToBounds()
             .pointerInput(Unit) {
-                detectHorizontalDragGestures { _, dragAmount ->
-                    panX = (panX - dragAmount).coerceIn(0f, maxPan)
+                // Consume horizontal drag in the INITIAL pass so the parent
+                // HorizontalPager (in PhotoViewerScreen) does not see it and
+                // try to flip pages — which would prevent panning the pano.
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        var dx = 0f
+                        event.changes.forEach { change ->
+                            if (change.pressed) {
+                                dx += change.positionChange().x
+                                change.consume()
+                            }
+                        }
+                        if (dx != 0f) {
+                            panX = (panX - dx).coerceIn(0f, maxPan)
+                        }
+                    }
                 }
             }
             .onSizeChanged { containerSize = Size(it.width.toFloat(), it.height.toFloat()) }

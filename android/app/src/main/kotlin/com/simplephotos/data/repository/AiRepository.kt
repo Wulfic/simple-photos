@@ -21,7 +21,7 @@ class AiRepository @Inject constructor(private val api: ApiService) {
 
     // Face clusters
     suspend fun listFaceClusters(): List<FaceCluster> =
-        api.listFaceClusters().clusters
+        api.listFaceClusters()
 
     suspend fun mergeFaceClusters(source: String, target: String) {
         api.mergeFaceClusters(FaceClusterMergeRequest(source, target))
@@ -47,7 +47,7 @@ class AiRepository @Inject constructor(private val api: ApiService) {
 
     // Pet clusters
     suspend fun listPetClusters(): List<PetCluster> =
-        api.listPetClusters().clusters
+        api.listPetClusters()
 
     suspend fun mergePetClusters(source: String, target: String) {
         api.mergePetClusters(PetClusterMergeRequest(source, target))

@@ -89,15 +89,13 @@ data class GeoTimelinePhotosResponse(
 
 data class GeoMemory(
     val id: String,
-    val title: String,
-    @SerializedName("subtitle") val subtitle: String? = null,
+    val name: String,
+    val city: String,
+    val country: String,
+    @SerializedName("date_label") val dateLabel: String,
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("preview_photo_id") val previewPhotoId: String? = null,
-    @SerializedName("anchor_date") val anchorDate: String? = null,
-)
-
-data class GeoMemoryListResponse(
-    val memories: List<GeoMemory>,
+    @SerializedName("first_photo_id") val firstPhotoId: String? = null,
+    @SerializedName("first_thumb_path") val firstThumbPath: String? = null,
 )
 
 data class GeoMemoryPhotosResponse(
@@ -108,17 +106,18 @@ data class GeoMemoryPhotosResponse(
 
 data class GeoTrip(
     val id: String,
-    val title: String,
+    val name: String,
+    val city: String,
+    val state: String? = null,
+    val country: String,
+    @SerializedName("country_code") val countryCode: String,
+    @SerializedName("start_date") val startDate: String,
+    @SerializedName("end_date") val endDate: String,
+    @SerializedName("date_label") val dateLabel: String,
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("started_at") val startedAt: String? = null,
-    @SerializedName("ended_at") val endedAt: String? = null,
-    @SerializedName("preview_photo_id") val previewPhotoId: String? = null,
-    @SerializedName("country") val country: String? = null,
-    @SerializedName("city") val city: String? = null,
-)
-
-data class GeoTripListResponse(
-    val trips: List<GeoTrip>,
+    @SerializedName("day_count") val dayCount: Int,
+    @SerializedName("first_photo_id") val firstPhotoId: String? = null,
+    @SerializedName("first_thumb_path") val firstThumbPath: String? = null,
 )
 
 data class GeoTripPhotosResponse(

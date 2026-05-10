@@ -74,7 +74,14 @@ class SimplePhotosApplication : Application(), Configuration.Provider, ImageLoad
                     .build()
             }
             .components {
-                add(GifDecoder.Factory())
+                // ImageDecoderDecoder enables AVIF + HEIF decoding via the
+                // platform ImageDecoder (API 28+), and also handles animated
+                // WebP/GIF when present. Required for 360° AVIF photos.
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    add(coil.decode.ImageDecoderDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
                 add(SvgDecoder.Factory())
             }
             .build()

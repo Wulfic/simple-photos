@@ -117,6 +117,14 @@ fun GalleryScreen(
         }
     }
 
+    // Burst frame counts per burstId (used by the badge stack indicator).
+    val burstCounts = remember(visiblePhotos) {
+        visiblePhotos.asSequence()
+            .mapNotNull { it.burstId?.takeIf { id -> id.isNotEmpty() } }
+            .groupingBy { it }
+            .eachCount()
+    }
+
     // Build day-grouped grid items
     val gridItems = remember(collapsedPhotos) { buildGridItems(groupPhotosByDay(collapsedPhotos)) }
 
@@ -336,6 +344,7 @@ fun GalleryScreen(
                             serverBaseUrl = viewModel.serverBaseUrl,
                             isSelectionMode = viewModel.isSelectionMode,
                             isSelected = item.localId in viewModel.selectedIds,
+                            burstCount = item.burstId?.let { burstCounts[it] } ?: 0,
                             onTap = {
                                 if (viewModel.isSelectionMode) viewModel.toggleSelect(item.localId)
                                 else onPhotoClick(item.localId)
@@ -528,6 +537,7 @@ private fun MediaTile(
     isSelected: Boolean,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
+    burstCount: Int = 0,
     widthDp: Dp = 100.dp,
     heightDp: Dp = 100.dp
 ) {
@@ -676,14 +686,14 @@ private fun MediaTile(
         // Photo subtype badges (top-left): panorama / 360 / burst / motion
         run {
             val sub = photo.photoSubtype
-            val burstBadge = photo.burstId != null
+            val burstBadge = photo.burstId != null || sub == "burst"
             val motionBadge = photo.motionVideoBlobId != null || sub == "motion"
             val panoBadge = sub == "panorama" || sub == "equirectangular"
             val label = when {
-                panoBadge && sub == "equirectangular" -> "360\u00B0"
+                panoBadge && sub == "equirectangular" -> "360°"
                 panoBadge -> "PANO"
                 motionBadge -> "LIVE"
-                burstBadge -> "BURST"
+                burstBadge -> if (burstCount > 1) "BURST $burstCount" else "BURST"
                 else -> null
             }
             if (label != null) {
