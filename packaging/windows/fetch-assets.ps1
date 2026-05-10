@@ -1,10 +1,13 @@
 # =============================================================================
 #  fetch-assets.ps1 -- Simple Photos
 #
-#  Two responsibilities, selected by switch:
+#  Three responsibilities, selected by switch:
 #    -GenerateConfig   Generate %ProgramData%\SimplePhotos\config.toml on first
-#                      install (idempotent -- preserves an existing config).
-#    (default)         Download ONNX models + GeoNames dataset into the data dir.
+#                      install (idempotent -- preserves existing values, only
+#                      appends missing sections so upgrades pick up new
+#                      [ai] / [geo] / [scan] / [transcode] defaults).
+#    (default)         Download ONNX models + GeoNames dataset + ffmpeg.exe
+#                      into the data dir and {app}\bin.
 #
 #  Invoked by the Inno Setup [Run] section.
 # =============================================================================
@@ -28,22 +31,19 @@ function Get-RandomHex {
     -join ($buf | ForEach-Object { '{0:x2}' -f $_ })
 }
 
-function Write-Toml {
-    param([string]$Path, [string]$Secret)
+# Build the full config.toml body. All Windows paths are emitted as TOML
+# *literal strings* (single-quoted) so we never have to escape backslashes.
+function Build-FullToml {
+    param([string]$Secret)
 
-    # Use TOML *literal strings* (single-quoted) for Windows paths so we don't
-    # have to escape backslashes. A literal string is everything between two
-    # single quotes verbatim, which makes Windows paths trivial to embed.
     $storage = Join-Path $DataDir 'storage'
     $db      = Join-Path $DataDir 'db\simple-photos.db'
     $web     = Join-Path $InstallDir 'web'
+    $models  = Join-Path $DataDir 'models'
+    $geoFile = Join-Path $DataDir 'cities500.txt'
 
-    # NOTE: We deliberately avoid here-strings (@"..."@) here. Windows
-    # PowerShell 5.1 -- which is what `powershell.exe` invokes from the Inno
-    # Setup [Run] section -- has been observed to mis-parse here-strings in
-    # this file under certain encoding/whitespace conditions, leaving the
-    # service crash-looping with "Failed to read config file". Using a plain
-    # string array joined with CRLF is bullet-proof across all PS versions.
+    # Plain string array joined with CRLF -- avoids PS 5.1 here-string
+    # encoding pitfalls observed with the Inno Setup [Run] launcher.
     $lines = @(
         '[server]',
         'host = "0.0.0.0"',
@@ -76,27 +76,87 @@ function Write-Toml {
         '',
         '[tls]',
         'enabled = false',
+        '',
+        '[scan]',
+        '# Background storage scan cadence (seconds). 0 disables.',
+        'auto_scan_interval_secs = 300',
+        '',
+        '[ai]',
+        '# AI tagging / face & object recognition. Heuristic fallback ON so',
+        '# tag-based smart features still work when ONNX models are missing.',
+        'enabled = true',
+        'gpu_preferred = true',
+        'allow_heuristic_fallback = true',
+        ("model_dir = '{0}'" -f $models),
+        '',
+        '[geo]',
+        '# Reverse geocoding via the offline GeoNames cities500 dataset. The',
+        '# fetch-assets step downloads the file alongside this config.',
+        'enabled = true',
+        ("dataset_path = '{0}'" -f $geoFile),
+        '',
+        '[transcode]',
+        '# Bundled ffmpeg.exe lives in {app}\bin (added to the service PATH).',
+        '# CPU fallback is always allowed so missing GPU drivers do not stall',
+        '# the conversion pipeline.',
+        'gpu_enabled = true',
+        'gpu_fallback_to_cpu = true',
         ''
     )
-    $cfg = [string]::Join("`r`n", $lines)
-    # Use UTF8 *without* BOM. The Rust TOML parser handles BOMs but other
-    # tooling (and humans editing the file) may not.
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($Path, $cfg, $utf8NoBom)
+    [string]::Join("`r`n", $lines)
 }
 
-# -- Branch 1: config generation (first install only) ----------------------
+function Write-Utf8NoBom {
+    param([string]$Path, [string]$Content)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
+}
+
+# Append any missing [section] blocks to an existing config. We deliberately
+# do *not* edit values inside sections the operator already has -- that
+# preserves manual customisations across upgrades.
+function Update-ExistingToml {
+    param([string]$Path, [string]$Secret)
+
+    $existing = Get-Content -Raw -LiteralPath $Path
+    $full     = Build-FullToml -Secret $Secret
+
+    $needed   = @('[scan]', '[ai]', '[geo]', '[transcode]')
+    $appended = @()
+    foreach ($hdr in $needed) {
+        if ($existing -notmatch [regex]::Escape($hdr)) {
+            # Extract just this section out of $full (header through next
+            # blank line before the following section header, or EOF).
+            $pattern = "(?ms)^" + [regex]::Escape($hdr) + ".*?(?=^\[|\z)"
+            $m = [regex]::Match($full, $pattern)
+            if ($m.Success) {
+                $appended += $m.Value.TrimEnd()
+            }
+        }
+    }
+    if ($appended.Count -eq 0) {
+        Write-Info "config.toml already has [scan] [ai] [geo] [transcode] -- nothing to do."
+        return
+    }
+    if ($existing -notmatch "(\r?\n)\z") { $existing += "`r`n" }
+    $patched = $existing + "`r`n" + ([string]::Join("`r`n`r`n", $appended)) + "`r`n"
+    Write-Utf8NoBom -Path $Path -Content $patched
+    Write-Info ("Patched config.toml -- appended {0} missing section(s)." -f $appended.Count)
+}
+
+# -- Branch 1: config generation / migration (always idempotent) ----------
 if ($GenerateConfig) {
     if (-not (Test-Path $DataDir)) {
         New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
     }
     $cfgPath = Join-Path $DataDir 'config.toml'
     if (Test-Path $cfgPath) {
-        Write-Info "config.toml already exists at $cfgPath -- preserving."
+        Write-Info "config.toml exists at $cfgPath -- patching missing sections."
+        Update-ExistingToml -Path $cfgPath -Secret (Get-RandomHex 32)
         exit 0
     }
     $secret = Get-RandomHex 32
-    Write-Toml -Path $cfgPath -Secret $secret
+    Write-Utf8NoBom -Path $cfgPath -Content (Build-FullToml -Secret $secret)
     Write-Info "Generated $cfgPath with a random JWT secret."
     exit 0
 }
@@ -104,6 +164,9 @@ if ($GenerateConfig) {
 # -- Branch 2: asset download ----------------------------------------------
 $models = Join-Path $DataDir 'models'
 if (-not (Test-Path $models)) { New-Item -ItemType Directory -Path $models -Force | Out-Null }
+
+$binDir = Join-Path $InstallDir 'bin'
+if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
 
 function Get-File {
     param([string]$Url, [string]$OutPath)
@@ -152,5 +215,38 @@ if (-not (Test-Path $geo) -or (Get-Item $geo).Length -eq 0) {
 
 Get-File "https://download.geonames.org/export/dump/admin1CodesASCII.txt" `
          (Join-Path $DataDir 'admin1CodesASCII.txt')
+
+# -- ffmpeg.exe (video thumbnails + transcoding) ---------------------------
+# BtbN nightly GPL build -- includes ffmpeg.exe + ffprobe.exe statically.
+$ffmpegExe  = Join-Path $binDir 'ffmpeg.exe'
+$ffprobeExe = Join-Path $binDir 'ffprobe.exe'
+if (-not ((Test-Path $ffmpegExe) -and (Test-Path $ffprobeExe))) {
+    $tmp = Join-Path $env:TEMP "ffmpeg-$([guid]::NewGuid()).zip"
+    try {
+        Write-Info "get  ffmpeg (windows-x64 master-latest-gpl)"
+        $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+        $extract = Join-Path $env:TEMP "ffmpeg-$([guid]::NewGuid())"
+        Expand-Archive -Path $tmp -DestinationPath $extract -Force
+        $found = Get-ChildItem -Path $extract -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
+        if ($found) {
+            Copy-Item -Path $found.FullName -Destination $ffmpegExe -Force
+            $probeSrc = Join-Path $found.Directory.FullName 'ffprobe.exe'
+            if (Test-Path $probeSrc) {
+                Copy-Item -Path $probeSrc -Destination $ffprobeExe -Force
+            }
+            Write-Info "installed ffmpeg.exe -> $ffmpegExe"
+        } else {
+            Write-Warn2 "ffmpeg.exe not found inside the downloaded archive."
+        }
+        Remove-Item -Recurse -Force $extract
+    } catch {
+        Write-Warn2 "ffmpeg download failed: $($_.Exception.Message)"
+    } finally {
+        Remove-Item $tmp -ErrorAction SilentlyContinue
+    }
+} else {
+    Write-Info "skip ffmpeg.exe (already present)"
+}
 
 Write-Info "done."
