@@ -417,7 +417,7 @@ export default function SecureGallery() {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         <AppHeader />
-        <main className="max-w-6xl mx-auto p-4">
+        <main className="p-4">
           {/* Add photos action bar */}
           {showAddPhotos && (
             <div className="flex justify-end gap-2 mb-4">

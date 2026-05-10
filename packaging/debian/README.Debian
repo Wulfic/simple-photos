@@ -14,7 +14,7 @@ Files
 
 First-run
 ---------
-After install, start the service and open http://<host>:3000 in a browser.
+After install, start the service and open http://<host>:8080 in a browser.
 The first-run setup wizard creates the admin user and lets you select the
 final photo storage location (any path readable by the `simple-photos`
 system user, including SMB/NFS mounts).
