@@ -112,14 +112,22 @@ fun PanoramaOverlay(
                 // Consume horizontal drag in the INITIAL pass so the parent
                 // HorizontalPager (in PhotoViewerScreen) does not see it and
                 // try to flip pages — which would prevent panning the pano.
+                //
+                // CRITICAL: only consume a change when it carries an actual
+                // horizontal positionChange. The DOWN and UP events have
+                // positionChange().x == 0 — consuming those swallows taps and
+                // makes the "Full View" toggle pill un-clickable.
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         var dx = 0f
                         event.changes.forEach { change ->
                             if (change.pressed) {
-                                dx += change.positionChange().x
-                                change.consume()
+                                val px = change.positionChange().x
+                                if (px != 0f) {
+                                    dx += px
+                                    change.consume()
+                                }
                             }
                         }
                         if (dx != 0f) {
@@ -130,6 +138,13 @@ fun PanoramaOverlay(
             }
             .onSizeChanged { containerSize = Size(it.width.toFloat(), it.height.toFloat()) }
     ) {
+        // Give the image an explicit width equal to its rendered (height-scaled)
+        // width via requiredWidth so it can extend beyond the parent's maxWidth.
+        // Without this, AsyncImage is clamped to the container width and the
+        // graphicsLayer translationX just slides an already-clipped rect —
+        // panning reveals nothing. clipToBounds on the parent handles the
+        // visible-region clipping.
+        val renderedWidthDp = with(density) { renderedWidthPx.toDp() }
         AsyncImage(
             // 360 / wide panoramas commonly exceed Coil's default 4096-px
             // bitmap budget; force ORIGINAL size + disable hardware bitmaps
@@ -145,6 +160,7 @@ fun PanoramaOverlay(
             contentScale = ContentScale.FillHeight,
             modifier = Modifier
                 .fillMaxHeight()
+                .requiredWidth(renderedWidthDp)
                 .graphicsLayer { translationX = -panX }
         )
 

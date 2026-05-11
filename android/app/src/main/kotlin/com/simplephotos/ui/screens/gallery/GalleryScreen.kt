@@ -303,9 +303,11 @@ fun GalleryScreen(
                         map
                     }
 
-                    // Flat photo list for the grid
-                    val photoItems = remember(visiblePhotos) {
-                        visiblePhotos
+                    // Flat photo list for the grid — MUST use the burst-collapsed
+                    // list (one tile per burstId) so burst stacks render as a single
+                    // tile with a "BURST N" badge instead of N separate tiles.
+                    val photoItems = remember(collapsedPhotos) {
+                        collapsedPhotos
                             .sortedWith(compareByDescending<PhotoEntity> { it.takenAt }.thenBy { it.filename })
                     }
 
