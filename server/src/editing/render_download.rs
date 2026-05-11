@@ -124,10 +124,7 @@ pub async fn render_photo(
             return Err(AppError::NotFound);
         }
         Err(_) => {
-            tracing::error!(
-                "[render] source file not found: {}",
-                candidate.display()
-            );
+            tracing::error!("[render] source file not found: {}", candidate.display());
             return Err(AppError::NotFound);
         }
     };
