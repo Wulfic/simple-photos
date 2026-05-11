@@ -62,6 +62,8 @@ import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.ConversionBanner
 import com.simplephotos.ui.components.EncryptionBanner
+import com.simplephotos.ui.components.GeoBanner
+import com.simplephotos.ui.components.AiBanner
 import com.simplephotos.ui.components.HeaderNavigation
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
@@ -368,6 +370,8 @@ fun GalleryScreen(
             ) {
                 ConversionBanner(api = viewModel.apiService)
                 EncryptionBanner(api = viewModel.apiService)
+                GeoBanner(api = viewModel.apiService)
+                AiBanner(api = viewModel.apiService)
             }
         }
     }

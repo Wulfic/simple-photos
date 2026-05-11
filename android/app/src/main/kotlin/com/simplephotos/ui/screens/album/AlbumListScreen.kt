@@ -57,6 +57,10 @@ fun AlbumListScreen(
     onPets: () -> Unit = {},
     onMemories: () -> Unit = {},
     onTrips: () -> Unit = {},
+    onPersonClick: (Long) -> Unit = {},
+    onPetClick: (Long) -> Unit = {},
+    onMemoryClick: (String) -> Unit = {},
+    onTripClick: (String) -> Unit = {},
     isAdmin: Boolean = false,
     viewModel: AlbumViewModel = hiltViewModel()
 ) {
@@ -130,13 +134,18 @@ fun AlbumListScreen(
                 )
             }
 
-            // Build combined list: smart albums pinned at top, then user albums
+            // Build combined list: smart albums pinned at top, then user albums.
+            // Audio only appears when there is at least one audio item, matching
+            // the web behaviour (web/src/pages/Albums.tsx renders the Audio card
+            // only when encryptedPhotoCounts.audio > 0).
             val smartAlbumEntries = buildList {
                 add(Triple("smart-favorites", "Favorites", viewModel.favoritesCount))
                 add(Triple("smart-photos", "Photos", viewModel.photosCount))
                 add(Triple("smart-gifs", "GIFs", viewModel.gifsCount))
                 add(Triple("smart-videos", "Videos", viewModel.videosCount))
-                add(Triple("smart-audio", "Audio", viewModel.audioCount))
+                if (viewModel.audioCount > 0) {
+                    add(Triple("smart-audio", "Audio", viewModel.audioCount))
+                }
             }
 
             // Render all cards (smart + user) in 2-column rows
@@ -225,7 +234,8 @@ fun AlbumListScreen(
                     thumbUrl = { c ->
                         c.representative?.let { id -> "${viewModel.serverBaseUrl}/api/photos/$id/thumb" }
                     },
-                    onItemClick = { onPeople() },
+                    onHeaderClick = onPeople,
+                    onItemClick = { cluster -> onPersonClick(cluster.id) },
                     onOverflowClick = onPeople,
                 )
             }
@@ -240,7 +250,8 @@ fun AlbumListScreen(
                     thumbUrl = { c ->
                         c.representative?.let { id -> "${viewModel.serverBaseUrl}/api/photos/$id/thumb" }
                     },
-                    onItemClick = { onPets() },
+                    onHeaderClick = onPets,
+                    onItemClick = { cluster -> onPetClick(cluster.id) },
                     onOverflowClick = onPets,
                 )
             }
@@ -255,7 +266,8 @@ fun AlbumListScreen(
                     thumbUrl = { m ->
                         m.firstPhotoId?.let { id -> "${viewModel.serverBaseUrl}/api/photos/$id/thumb" }
                     },
-                    onItemClick = { onMemories() },
+                    onHeaderClick = onMemories,
+                    onItemClick = { memory -> onMemoryClick(memory.id) },
                     onOverflowClick = onMemories,
                 )
             }
@@ -270,7 +282,8 @@ fun AlbumListScreen(
                     thumbUrl = { t ->
                         t.firstPhotoId?.let { id -> "${viewModel.serverBaseUrl}/api/photos/$id/thumb" }
                     },
-                    onItemClick = { onTrips() },
+                    onHeaderClick = onTrips,
+                    onItemClick = { trip -> onTripClick(trip.id) },
                     onOverflowClick = onTrips,
                 )
             }
@@ -756,6 +769,7 @@ private fun <T> DiscoverSection(
     primary: (T) -> String,
     secondary: (T) -> String,
     thumbUrl: (T) -> String?,
+    onHeaderClick: () -> Unit,
     onItemClick: (T) -> Unit,
     onOverflowClick: () -> Unit,
 ) {
@@ -766,11 +780,15 @@ private fun <T> DiscoverSection(
     val overflowCount = if (total > overflowCap) total - visible.size else 0
 
     Spacer(Modifier.height(8.dp))
+    // The section title itself acts as a link to the full subpage —
+    // matches the web Albums.tsx behaviour (the <h2> word is the link).
     Text(
         title,
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        modifier = Modifier
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onHeaderClick)
     )
     LazyRow(
         modifier = Modifier.fillMaxWidth(),
@@ -895,11 +913,19 @@ private fun DiscoverOverflowCard(
                 )
             }
             Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                // Two text rows so the card has identical height to DiscoverThumbCard
+                // (which renders both a primary and secondary label).
                 Text(
                     label,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 2
+                    maxLines = 1
+                )
+                Text(
+                    "See all",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
                 )
             }
         }
