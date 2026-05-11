@@ -218,8 +218,19 @@ fun PhotoViewerScreen(
 
 
 
-    // Controls overlay visibility — tap photo to toggle
-    var showOverlay by remember { mutableStateOf(true) }
+    // Controls overlay visibility — starts hidden so the photo is the focus.
+    // Single tap toggles; when shown, auto-hide after 3 s of inactivity.
+    var showOverlay by remember { mutableStateOf(false) }
+    LaunchedEffect(showOverlay) {
+        if (showOverlay) {
+            kotlinx.coroutines.delay(3_000)
+            showOverlay = false
+        }
+    }
+
+    // Panorama / 360 live-pan state — hoisted from PanoramaOverlay so we can
+    // disable HorizontalPager paging while the user is panning the image.
+    var panoLiveActive by remember { mutableStateOf(false) }
 
     // ── Info panel state ─────────────────────────────────────────────
     var showInfoPanel by remember { mutableStateOf(false) }
@@ -473,7 +484,7 @@ fun PhotoViewerScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize().padding(cropPadding),
             beyondBoundsPageCount = 0,
-            userScrollEnabled = !editMode,
+            userScrollEnabled = !editMode && !panoLiveActive,
             key = { viewModel.allPhotos.getOrNull(it)?.localId ?: it }
         ) { page ->
             val photo = viewModel.allPhotos.getOrNull(page)
@@ -509,6 +520,9 @@ fun PhotoViewerScreen(
                     activeVideoUri = activeVideoUri,
                     intrinsicWidth = if (pagerState.currentPage == page) mediaIntrinsicWidth else -1f,
                     intrinsicHeight = if (pagerState.currentPage == page) mediaIntrinsicHeight else -1f,
+                    onPanoLiveModeChange = { live ->
+                        if (pagerState.currentPage == page) panoLiveActive = live
+                    },
                     onVideoUriReady = { uri, filename ->
                         // Load the new media item into the shared player.
                         // Only swap if the URI actually changed (avoids re-prepare

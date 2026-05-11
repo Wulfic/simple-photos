@@ -79,7 +79,8 @@ internal fun PhotoPageContent(
     playerError: String? = null,
     onMediaSizeLoaded: ((Float, Float) -> Unit)? = null,
     intrinsicWidth: Float = -1f,
-    intrinsicHeight: Float = -1f
+    intrinsicHeight: Float = -1f,
+    onPanoLiveModeChange: ((Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
 
@@ -560,6 +561,7 @@ internal fun PhotoPageContent(
                     intrinsicHeight = if (intrinsicHeight > 0f) intrinsicHeight else photo.height.toFloat(),
                     is360 = sub == "equirectangular",
                     contentDescription = photo.filename,
+                    onLiveModeChange = { live -> onPanoLiveModeChange?.invoke(live) },
                 )
             } else if (isMotionPhoto) {
                 MotionPhotoOverlay(

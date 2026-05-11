@@ -67,9 +67,17 @@ fun PanoramaOverlay(
     intrinsicHeight: Float,
     is360: Boolean,
     contentDescription: String,
+    onLiveModeChange: (Boolean) -> Unit = {},
 ) {
     if (imageData == null) return
     var liveMode by remember { mutableStateOf(false) }
+
+    // Notify caller (PhotoViewerScreen) so it can disable HorizontalPager
+    // paging while the user is panning the panorama / 360 image.
+    LaunchedEffect(liveMode) { onLiveModeChange(liveMode) }
+    DisposableEffect(Unit) {
+        onDispose { onLiveModeChange(false) }
+    }
 
     if (!liveMode) {
         // Mode toggle pill is rendered at the bottom; underlying image is
@@ -123,7 +131,16 @@ fun PanoramaOverlay(
             .onSizeChanged { containerSize = Size(it.width.toFloat(), it.height.toFloat()) }
     ) {
         AsyncImage(
-            model = ImageRequest.Builder(context).data(imageData).crossfade(true).build(),
+            // 360 / wide panoramas commonly exceed Coil's default 4096-px
+            // bitmap budget; force ORIGINAL size + disable hardware bitmaps
+            // so the decoder doesn't silently drop the image to an empty
+            // placeholder.
+            model = ImageRequest.Builder(context)
+                .data(imageData)
+                .size(coil.size.Size.ORIGINAL)
+                .allowHardware(false)
+                .crossfade(true)
+                .build(),
             contentDescription = contentDescription,
             contentScale = ContentScale.FillHeight,
             modifier = Modifier

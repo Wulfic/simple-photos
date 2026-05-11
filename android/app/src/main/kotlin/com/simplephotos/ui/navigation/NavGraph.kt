@@ -31,6 +31,10 @@ import com.simplephotos.ui.screens.library.PeopleScreen
 import com.simplephotos.ui.screens.library.PetsScreen
 import com.simplephotos.ui.screens.library.MemoriesScreen
 import com.simplephotos.ui.screens.library.TripsScreen
+import com.simplephotos.ui.screens.library.PersonDetailScreen
+import com.simplephotos.ui.screens.library.PetDetailScreen
+import com.simplephotos.ui.screens.library.MemoryDetailScreen
+import com.simplephotos.ui.screens.library.TripDetailScreen
 
 /**
  * Top-level navigation host. Routes are defined in [Screen].
@@ -97,6 +101,10 @@ fun NavGraph() {
                 onPets = { navController.navigate(Screen.Pets.route) },
                 onMemories = { navController.navigate(Screen.Memories.route) },
                 onTrips = { navController.navigate(Screen.Trips.route) },
+                onPersonClick = { id -> navController.navigate(Screen.PersonDetail.createRoute(id)) },
+                onPetClick = { id -> navController.navigate(Screen.PetDetail.createRoute(id)) },
+                onMemoryClick = { id -> navController.navigate(Screen.MemoryDetail.createRoute(id)) },
+                onTripClick = { id -> navController.navigate(Screen.TripDetail.createRoute(id)) },
                 isAdmin = isAdmin
             )
         }
@@ -181,9 +189,73 @@ fun NavGraph() {
                 onBack = { navController.popBackStack() }
             )
         }
-        composable(Screen.People.route) { PeopleScreen(onBack = { navController.popBackStack() }) }
-        composable(Screen.Pets.route) { PetsScreen(onBack = { navController.popBackStack() }) }
-        composable(Screen.Memories.route) { MemoriesScreen(onBack = { navController.popBackStack() }) }
-        composable(Screen.Trips.route) { TripsScreen(onBack = { navController.popBackStack() }) }
+        composable(Screen.People.route) {
+            PeopleScreen(
+                onBack = { navController.popBackStack() },
+                onPersonClick = { id -> navController.navigate(Screen.PersonDetail.createRoute(id)) },
+            )
+        }
+        composable(Screen.Pets.route) {
+            PetsScreen(
+                onBack = { navController.popBackStack() },
+                onPetClick = { id -> navController.navigate(Screen.PetDetail.createRoute(id)) },
+            )
+        }
+        composable(Screen.Memories.route) {
+            MemoriesScreen(
+                onBack = { navController.popBackStack() },
+                onMemoryClick = { id -> navController.navigate(Screen.MemoryDetail.createRoute(id)) },
+            )
+        }
+        composable(Screen.Trips.route) {
+            TripsScreen(
+                onBack = { navController.popBackStack() },
+                onTripClick = { id -> navController.navigate(Screen.TripDetail.createRoute(id)) },
+            )
+        }
+        composable(
+            route = Screen.PersonDetail.route,
+            arguments = listOf(navArgument("clusterId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val clusterId = backStackEntry.arguments?.getLong("clusterId") ?: 0L
+            PersonDetailScreen(
+                clusterId = clusterId,
+                onBack = { navController.popBackStack() },
+                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+            )
+        }
+        composable(
+            route = Screen.PetDetail.route,
+            arguments = listOf(navArgument("clusterId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val clusterId = backStackEntry.arguments?.getLong("clusterId") ?: 0L
+            PetDetailScreen(
+                clusterId = clusterId,
+                onBack = { navController.popBackStack() },
+                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+            )
+        }
+        composable(
+            route = Screen.MemoryDetail.route,
+            arguments = listOf(navArgument("memoryId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val memoryId = backStackEntry.arguments?.getString("memoryId") ?: ""
+            MemoryDetailScreen(
+                memoryId = memoryId,
+                onBack = { navController.popBackStack() },
+                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+            )
+        }
+        composable(
+            route = Screen.TripDetail.route,
+            arguments = listOf(navArgument("tripId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+            TripDetailScreen(
+                tripId = tripId,
+                onBack = { navController.popBackStack() },
+                onPhotoClick = { photoId -> navController.navigate(Screen.PhotoViewer.createRoute(photoId)) },
+            )
+        }
     }
 }

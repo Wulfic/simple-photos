@@ -32,4 +32,16 @@ sealed class Screen(val route: String) {
     data object Pets : Screen("library/pets")
     data object Memories : Screen("library/memories")
     data object Trips : Screen("library/trips")
+    data object PersonDetail : Screen("library/people/{clusterId}") {
+        fun createRoute(clusterId: Long) = "library/people/$clusterId"
+    }
+    data object PetDetail : Screen("library/pets/{clusterId}") {
+        fun createRoute(clusterId: Long) = "library/pets/$clusterId"
+    }
+    data object MemoryDetail : Screen("library/memories/{memoryId}") {
+        fun createRoute(memoryId: String) = "library/memories/$memoryId"
+    }
+    data object TripDetail : Screen("library/trips/{tripId}") {
+        fun createRoute(tripId: String) = "library/trips/$tripId"
+    }
 }

@@ -68,6 +68,20 @@ interface PhotoDao {
     @Query("UPDATE photos SET serverPhotoId = :serverPhotoId, serverBlobId = :blobId, thumbnailBlobId = :thumbBlobId, cropMetadata = :cropMetadata, photoHash = :photoHash, isFavorite = :isFavorite, syncStatus = 'SYNCED' WHERE localId = :localId")
     suspend fun mergeServerPhoto(localId: String, serverPhotoId: String, blobId: String, thumbBlobId: String?, cropMetadata: String?, photoHash: String?, isFavorite: Boolean)
 
+    /**
+     * Back-fill the burst / motion / photo-subtype fields on an already-synced
+     * row. The encrypted-sync pull skips photos that already exist locally, so
+     * subtype data added on the server (or computed after first sync) would
+     * otherwise never reach the device.
+     */
+    @Query("UPDATE photos SET photoSubtype = :subtype, burstId = :burstId, motionVideoBlobId = :motionBlobId WHERE serverPhotoId = :serverPhotoId")
+    suspend fun backfillSubtypeFields(
+        serverPhotoId: String,
+        subtype: String?,
+        burstId: String?,
+        motionBlobId: String?,
+    )
+
     @Query("UPDATE photos SET thumbnailPath = :path WHERE localId = :id")
     suspend fun updateThumbnailPath(id: String, path: String)
 
