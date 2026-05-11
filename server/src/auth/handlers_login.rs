@@ -15,6 +15,7 @@ use crate::state::AppState;
 
 use super::lockout::{check_account_lockout, clear_failed_logins, record_failed_login};
 use super::models::*;
+use super::timing::equalize_login_timing;
 use super::tokens::{create_jwt, hash_token, issue_tokens};
 use super::totp::{verify_backup_code, verify_totp_code};
 use super::validation::{validate_password, validate_username};
@@ -117,15 +118,10 @@ pub async fn login(
     let user = match user {
         Some(u) => u,
         None => {
-            // Timing-safe: always do a password check even if user doesn't exist.
-            // The hash below is a deliberately-published dummy bcrypt digest used only
-            // to keep the failure path's runtime equivalent to the success path. It is
-            // not a credential.
-            // nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
-            const DUMMY_BCRYPT: &str =
-                "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK";
+            // Timing-safe: always do a password check even if user doesn't exist,
+            // using a runtime-generated dummy hash (see auth::timing).
             let pw = req.password.clone();
-            let _ = tokio::task::spawn_blocking(move || bcrypt::verify(&pw, DUMMY_BCRYPT)).await;
+            let _ = tokio::task::spawn_blocking(move || equalize_login_timing(&pw)).await;
             audit::log(
                 &state,
                 AuditEvent::LoginFailure,

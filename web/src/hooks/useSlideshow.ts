@@ -25,11 +25,43 @@ function loadPref<T>(key: string, fallback: T): T {
   }
 }
 
-/** Fisher-Yates shuffle (returns new array). */
+/**
+ * Return a uniformly distributed integer in [0, max] using a CSPRNG.
+ *
+ * Uses rejection sampling on `crypto.getRandomValues` to avoid the modulo
+ * bias that `Math.floor(Math.random() * (max + 1))` would introduce, and to
+ * satisfy security linters that flag non-CSPRNG randomness.
+ *
+ * Falls back to `Math.random()` only on legacy environments where the Web
+ * Crypto API is unavailable (the slideshow shuffle is not security-critical,
+ * so a degraded fallback is acceptable for older browsers).
+ */
+function randomIntInclusive(max: number): number {
+  if (max <= 0) return 0;
+  const cryptoObj: Crypto | undefined =
+    typeof globalThis !== "undefined" ? (globalThis as { crypto?: Crypto }).crypto : undefined;
+  if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+    const range = max + 1;
+    // Largest multiple of `range` that fits in a uint32 — values >= this are
+    // rejected to keep the distribution uniform.
+    const limit = Math.floor(0x100000000 / range) * range;
+    const buf = new Uint32Array(1);
+    // Loop is bounded in practice (rejection rate < range/2^32).
+    while (true) {
+      cryptoObj.getRandomValues(buf);
+      const v = buf[0];
+      if (v < limit) return v % range;
+    }
+  }
+  // eslint-disable-next-line no-restricted-syntax -- documented fallback
+  return Math.floor(Math.random() * (max + 1));
+}
+
+/** Fisher-Yates shuffle (returns new array). Uses a CSPRNG when available. */
 function shuffleArray(arr: number[]): number[] {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = randomIntInclusive(i);
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;

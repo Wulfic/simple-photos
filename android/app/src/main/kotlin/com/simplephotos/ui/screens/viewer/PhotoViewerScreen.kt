@@ -10,6 +10,7 @@ package com.simplephotos.ui.screens.viewer
 import android.app.Activity
 import android.content.ContentValues
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
@@ -816,10 +817,24 @@ fun PhotoViewerScreen(
                                             photo.filename.endsWith(".webm", true) -> "video/webm"
                                             else -> "image/jpeg"
                                         })
-                                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                        }
+                                    }
+                                    // MediaStore.Downloads.EXTERNAL_CONTENT_URI requires API 29 (Q).
+                                    // On older API levels (26-28) fall back to the per-type Media
+                                    // collections, which are available since API 1.
+                                    val isVideo = photo.filename.endsWith(".mp4", true) ||
+                                        photo.filename.endsWith(".webm", true)
+                                    val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                                    } else if (isVideo) {
+                                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                                    } else {
+                                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
                                     }
                                     val destUri = context.contentResolver.insert(
-                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                                        collectionUri, values
                                     )
                                     if (destUri == null) {
                                         downloadMessage = "Download failed"

@@ -71,14 +71,9 @@ async fn require_basic_auth_admin(
     let (user_id, password_hash, role) = match row {
         Some(r) => r,
         None => {
-            // Constant-time: still run bcrypt to prevent timing attacks.
-            // The hash below is a deliberately-published dummy bcrypt digest used only
-            // to equalize timing between the success and failure paths. It is not a
-            // credential.
-            // nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
-            const DUMMY_BCRYPT: &str =
-                "$2b$12$LJ3m9blCPMEtJDZk4CYOqe4CIH55aN38bwSqggfgA1mJm/kzbyPhK";
-            let _ = bcrypt::verify(password, DUMMY_BCRYPT);
+            // Constant-time: still run bcrypt to prevent timing attacks, using
+            // a runtime-generated dummy hash (see auth::timing).
+            crate::auth::timing::equalize_login_timing(password);
             return Err(AppError::Unauthorized(
                 "Invalid username or password".into(),
             ));

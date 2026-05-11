@@ -21,6 +21,7 @@ pub mod handlers_password;
 pub mod lockout;
 pub mod middleware;
 pub mod models;
+pub mod timing;
 pub mod tokens;
 pub mod totp;
 pub mod validation;

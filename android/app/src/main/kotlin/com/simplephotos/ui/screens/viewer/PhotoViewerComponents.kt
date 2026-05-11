@@ -450,6 +450,17 @@ internal fun PhotoPageContent(
                 // Track image load errors for graceful fallback
                 var imageError by remember(photo.localId) { mutableStateOf<String?>(null) }
 
+                // Panorama / 360° equirectangular photos are commonly 8000+px
+                // wide and frequently AVIF.  Coil's default sizing path tries
+                // to fit into the on-screen layout dimensions, which combined
+                // with the platform ImageDecoder + hardware-bitmap budget
+                // routinely produces a decode error for these files.  Force
+                // ORIGINAL size + allowHardware(false) for these photos so
+                // the AVIF/HEIF decode succeeds (same strategy already used
+                // by PanoramaOverlay's live-mode image).
+                val isWidePano = photo.photoSubtype == "panorama" ||
+                                 photo.photoSubtype == "equirectangular"
+
                 when {
                     imageError != null -> {
                         Column(
@@ -475,6 +486,12 @@ internal fun PhotoPageContent(
                         AsyncImage(
                             model = ImageRequest.Builder(context)
                                 .data(Uri.parse(photo.localPath))
+                                .apply {
+                                    if (isWidePano) {
+                                        size(coil.size.Size.ORIGINAL)
+                                        allowHardware(false)
+                                    }
+                                }
                                 .crossfade(true)
                                 .build(),
                             contentDescription = photo.filename,
@@ -518,6 +535,12 @@ internal fun PhotoPageContent(
                         AsyncImage(
                             model = ImageRequest.Builder(context)
                                 .data(imageData)
+                                .apply {
+                                    if (isWidePano) {
+                                        size(coil.size.Size.ORIGINAL)
+                                        allowHardware(false)
+                                    }
+                                }
                                 .crossfade(true)
                                 .build(),
                             contentDescription = photo.filename,
