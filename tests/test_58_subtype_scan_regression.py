@@ -69,6 +69,11 @@ def _find_free_port() -> int:
 
 
 def _write_config(path, port, db_path, storage_root):
+    # TOML basic strings interpret backslash escapes, so a raw Windows path
+    # like C:\Users\... makes \U a (broken) unicode escape. Escape every
+    # backslash in interpolated paths so the config parses on Windows.
+    db_path = db_path.replace("\\", "\\\\")
+    storage_root = storage_root.replace("\\", "\\\\")
     config = f"""
 [server]
 host = "127.0.0.1"
@@ -88,7 +93,7 @@ max_blob_size_bytes = 104857600
 
 [auth]
 jwt_secret = "scan_regression_test_jwt_secret_must_be_32_chars_long_for_security"
-access_token_ttl_secs = 3600
+access_token_ttl_secs = 86400
 refresh_token_ttl_days = 30
 allow_registration = true
 bcrypt_cost = 4

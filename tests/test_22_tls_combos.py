@@ -121,6 +121,11 @@ def _write_tls_config(
     backup_api_key: str = "",
 ) -> None:
     """Write a test config.toml with optional TLS settings."""
+    # Escape backslashes so raw Windows paths parse as TOML basic strings.
+    db_path = db_path.replace("\\", "\\\\")
+    storage_root = storage_root.replace("\\", "\\\\")
+    cert_path = cert_path.replace("\\", "\\\\")
+    key_path = key_path.replace("\\", "\\\\")
     scheme = "https" if tls_enabled else "http"
     tls_section = f"""
 [tls]
@@ -147,7 +152,7 @@ max_blob_size_bytes = 104857600
 
 [auth]
 jwt_secret = "e2e_test_jwt_secret_must_be_at_least_32_characters_long_for_security"
-access_token_ttl_secs = 3600
+access_token_ttl_secs = 86400
 refresh_token_ttl_days = 30
 allow_registration = true
 bcrypt_cost = 4

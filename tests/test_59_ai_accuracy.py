@@ -107,7 +107,11 @@ def ai_server(server_binary, tmp_path_factory):
     os.makedirs(os.path.join(tmpdir, "db"), exist_ok=True)
     os.makedirs(storage_root, exist_ok=True)
 
-    # Write config with AI enabled, fast processing
+    # Write config with AI enabled, fast processing.
+    # Escape backslashes so raw Windows paths parse as TOML basic strings.
+    db_path_cfg = db_path.replace("\\", "\\\\")
+    storage_root_cfg = storage_root.replace("\\", "\\\\")
+    model_dir_cfg = MODEL_DIR.replace("\\", "\\\\")
     config = f"""
 [server]
 host = "127.0.0.1"
@@ -117,17 +121,17 @@ trust_proxy = true
 discovery_port = 0
 
 [database]
-path = "{db_path}"
+path = "{db_path_cfg}"
 max_connections = 8
 
 [storage]
-root = "{storage_root}"
+root = "{storage_root_cfg}"
 default_quota_bytes = 0
 max_blob_size_bytes = 104857600
 
 [auth]
 jwt_secret = "e2e_test_jwt_secret_must_be_at_least_32_characters_long_for_security"
-access_token_ttl_secs = 3600
+access_token_ttl_secs = 86400
 refresh_token_ttl_days = 30
 allow_registration = true
 bcrypt_cost = 4
@@ -150,7 +154,7 @@ photos_per_minute = 600
 face_confidence = 0.5
 object_confidence = 0.3
 quality = "high"
-model_dir = "{MODEL_DIR}"
+model_dir = "{model_dir_cfg}"
 """
     with open(config_path, "w") as f:
         f.write(config)

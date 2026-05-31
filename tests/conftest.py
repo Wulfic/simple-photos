@@ -61,7 +61,11 @@ _load_local_env()
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_DIR = os.path.join(REPO_ROOT, "server")
-SERVER_BINARY = os.path.join(SERVER_DIR, "target", "release", "simple-photos-server")
+# Cargo appends `.exe` to the binary name on Windows. Without it, both the
+# existence check and subprocess.Popen (which does not apply PATHEXT to an
+# explicit path) fail, so the suite can never auto-start the server on Windows.
+_SERVER_BINARY_NAME = "simple-photos-server" + (".exe" if os.name == "nt" else "")
+SERVER_BINARY = os.path.join(SERVER_DIR, "target", "release", _SERVER_BINARY_NAME)
 
 # Test credentials
 ADMIN_USERNAME = "e2eadmin"
@@ -85,6 +89,11 @@ def _find_free_port() -> int:
 def _write_config(path: str, port: int, db_path: str, storage_root: str,
                   backup_api_key: str = "", discovery_port: int = 0) -> None:
     """Write a minimal test config.toml."""
+    # TOML basic strings interpret backslash escapes, so a raw Windows path
+    # like C:\Users\... makes \U a (broken) unicode escape. Escape every
+    # backslash in interpolated paths so the config parses on Windows.
+    db_path = db_path.replace("\\", "\\\\")
+    storage_root = storage_root.replace("\\", "\\\\")
     # Geo: keep `enabled = false` to match the production privacy default
     # (test_53::test_geo_toggle_persists asserts the off-by-default
     # behaviour).  But:
@@ -100,7 +109,7 @@ def _write_config(path: str, port: int, db_path: str, storage_root: str,
         geo_section = (
             "[geo]\n"
             "enabled = false\n"
-            f'dataset_path = "{geo_dataset}"\n'
+            f'dataset_path = "{geo_dataset.replace(chr(92), chr(92) * 2)}"\n'
             "poll_interval_secs = 2\n"
         )
     else:
@@ -122,7 +131,7 @@ def _write_config(path: str, port: int, db_path: str, storage_root: str,
         ai_section = (
             "[ai]\n"
             "enabled = false\n"
-            f'model_dir = "{ai_models_dir}"\n'
+            f'model_dir = "{ai_models_dir.replace(chr(92), chr(92) * 2)}"\n'
         )
     else:
         ai_section = "[ai]\nenabled = false\n"
@@ -145,7 +154,7 @@ max_blob_size_bytes = 104857600
 
 [auth]
 jwt_secret = "e2e_test_jwt_secret_must_be_at_least_32_characters_long_for_security"
-access_token_ttl_secs = 3600
+access_token_ttl_secs = 86400
 refresh_token_ttl_days = 30
 allow_registration = true
 bcrypt_cost = 4
