@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Simple Photos — Install & Setup Script (Windows)
 
@@ -113,7 +113,7 @@ function Download-AiModels {
         -Url "https://github.com/onnx/models/raw/refs/heads/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx" `
         -OutPath (Join-Path $Target "mobilenetv2-12.onnx")
 
-    Write-Info "[ai] Models present in $Target:"
+    Write-Info "[ai] Models present in ${Target}:"
     Get-ChildItem $Target | ForEach-Object { Write-Info "  $($_.Name)  ($([math]::Round($_.Length/1MB,1)) MB)" }
 }
 
@@ -198,13 +198,39 @@ function Read-YesNo {
 
 function New-SecureKey {
     $bytes = [byte[]]::new(32)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
     return ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
 }
 
 function Test-CommandExists {
     param([string]$Cmd)
     return [bool](Get-Command $Cmd -ErrorAction SilentlyContinue)
+}
+
+# Run a native build command (npm, vite, cargo, gradlew) tolerating stderr.
+# The script sets `$ErrorActionPreference = "Stop"` globally for cmdlet
+# safety, but that also turns *any* native-command stderr line into a
+# terminating NativeCommandError. npm, vite, and cargo all write ordinary
+# progress and warnings to stderr even on success, which would otherwise
+# abort the install. We relax the preference for the duration of the call
+# and gate success on the real process exit code ($LASTEXITCODE) instead.
+function Invoke-NativeBuild {
+    param(
+        [Parameter(Mandatory)] [scriptblock]$Command,
+        [string]$What = "build step",
+        [int]$Tail = 5
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Command 2>&1 | Select-Object -Last $Tail
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "$What failed (exit code $LASTEXITCODE)."
+    }
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -316,7 +342,7 @@ Write-Ok "Installation mode: $Mode"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 2: Check & install dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "Step 2/6: Checking dependencies"
+Write-Step "Step 2/7: Checking dependencies"
 
 if ($Mode -eq "docker") {
     # ── Docker ────────────────────────────────────────────────────────────
@@ -488,7 +514,7 @@ if ($Mode -eq "native") {
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Port configuration
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "Step 3/6: Port configuration"
+Write-Step "Step 3/7: Port configuration"
 
 if ($Port -eq 0) {
     $Port = $DefaultPort
@@ -504,7 +530,7 @@ Write-Ok "Server will run on port $Port"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "Step 4/6: Configuration"
+Write-Step "Step 4/7: Configuration"
 
 if (-not $Name) {
     $defaultName = if ($Mode -eq "docker") { "simple-photos-$Port" } else { "simple-photos" }
@@ -528,7 +554,7 @@ $JwtSecret = New-SecureKey
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Build & Install
 # ══════════════════════════════════════════════════════════════════════════════
-Write-Step "Step 5/6: Building"
+Write-Step "Step 5/7: Building"
 
 function Write-Config {
     param(
@@ -610,9 +636,9 @@ if ($Mode -eq "native") {
     # ── Build web frontend ────────────────────────────────────────────────
     Write-Info "Installing npm packages..."
     Set-Location (Join-Path $ScriptDir "web")
-    npm install --silent 2>&1 | Select-Object -Last 1
+    Invoke-NativeBuild -What "npm install" -Tail 1 -Command { npm install --silent }
     Write-Info "Building React app..."
-    npm run build 2>&1 | Select-Object -Last 3
+    Invoke-NativeBuild -What "npm run build" -Tail 3 -Command { npm run build }
     Write-Ok "Web frontend built -> web\dist\"
     Set-Location $ScriptDir
 
@@ -624,7 +650,7 @@ if ($Mode -eq "native") {
     # server\Cargo.toml [features]). The ORT CUDA EP loads cudart lazily
     # at runtime, so the same binary runs on GPU and CPU hosts.
     Write-Info "Building with CUDA execution provider baked in (auto-falls back to CPU at runtime)"
-    cargo build --release 2>&1 | Select-Object -Last 5
+    Invoke-NativeBuild -What "cargo build --release" -Tail 5 -Command { cargo build --release }
     Write-Ok "Server built -> server\target\release\simple-photos-server.exe"
     Set-Location $ScriptDir
 
@@ -735,8 +761,8 @@ if ($Mode -eq "native") {
         if (Test-CommandExists "npm") {
             Write-Info "Building web frontend..."
             Set-Location (Join-Path $ScriptDir "web")
-            npm install --silent 2>&1 | Select-Object -Last 1
-            npm run build 2>&1 | Select-Object -Last 3
+            Invoke-NativeBuild -What "npm install" -Tail 1 -Command { npm install --silent }
+            Invoke-NativeBuild -What "npm run build" -Tail 3 -Command { npm run build }
             Set-Location $ScriptDir
             Write-Ok "Web frontend built"
         } else {
@@ -818,7 +844,7 @@ networks:
     # ── Build image ───────────────────────────────────────────────────────
     Write-Info "Building Docker image... (may take a few minutes on first run)"
     Set-Location $instanceDir
-    docker compose build 2>&1 | Select-Object -Last 10
+    Invoke-NativeBuild -What "docker compose build" -Tail 10 -Command { docker compose build }
     Write-Ok "Docker image built for $Name"
     Set-Location $ScriptDir
 }
@@ -836,7 +862,7 @@ if ($Mode -eq "native" -and -not $NoBuildAndroid) {
             $gradlew = Join-Path $androidDir "gradlew.bat"
             if (Test-Path $gradlew) {
                 try {
-                    & $gradlew assembleDebug 2>&1 | Select-Object -Last 5
+                    Invoke-NativeBuild -What "gradlew assembleDebug" -Tail 5 -Command { & $gradlew assembleDebug }
                     Write-Ok "APK built"
                 } catch {
                     Write-Warn "APK build failed: $_"

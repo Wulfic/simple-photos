@@ -584,7 +584,7 @@ success "Installation mode: $MODE"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 2: Check & install dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 2/6: Checking dependencies"
+step "Step 2/7: Checking dependencies"
 
 # Warm up sudo credentials once so the session is cached for the entire script.
 # This avoids repeated password prompts between long-running steps (e.g. builds).
@@ -968,7 +968,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Port configuration (auto-increment)
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 3/6: Port configuration"
+step "Step 3/7: Port configuration"
 
 if [ -z "$PORT" ]; then
     PORT="$DEFAULT_PORT"
@@ -984,7 +984,7 @@ success "Server will run on port $PORT"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Configuration
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 4/6: Configuration"
+step "Step 4/7: Configuration"
 
 if [ -z "$INSTANCE_NAME" ]; then
     if [[ "$MODE" == "docker" ]]; then
@@ -1011,7 +1011,7 @@ JWT_SECRET=$(generate_key)
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Build & Install
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 5/6: Building"
+step "Step 5/7: Building"
 
 write_config() {
     local dest="$1"
@@ -1295,7 +1295,7 @@ fi
 # Step 6.5: Android APK (optional, native only)
 # ══════════════════════════════════════════════════════════════════════════════
 if [[ "$MODE" == "native" ]] && ! $NO_BUILD_ANDROID; then
-    step "Step 6/6: Android app (optional)"
+    step "Step 6/7: Android app (optional)"
     if command -v javac &>/dev/null && [ -d "$SCRIPT_DIR/android" ]; then
         if prompt_yn "Build the Android APK?" "Y"; then
             info "Building Android APK..."
@@ -1360,7 +1360,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 7: Summary & Launch
 # ══════════════════════════════════════════════════════════════════════════════
-step "Step 6/6: Ready!"
+step "Step 7/7: Ready!"
 
 echo -e "${GREEN}${BOLD}  ✅ Simple Photos is installed and ready!${NC}"
 echo ""
