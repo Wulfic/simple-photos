@@ -6,115 +6,127 @@ package com.simplephotos.data.remote.dto
 
 import com.google.gson.annotations.SerializedName
 
+// Mirrors server `AiStatusResponse` (server/src/ai/models.rs).
 data class AiStatusResponse(
     val enabled: Boolean,
-    @SerializedName("models_loaded") val modelsLoaded: Boolean = false,
-    @SerializedName("processing_active") val processingActive: Boolean = false,
-    @SerializedName("queue_size") val queueSize: Int = 0,
-    @SerializedName("processed_count") val processedCount: Int = 0,
-    @SerializedName("total_photos") val totalPhotos: Int = 0,
-    val message: String? = null,
-)
+    @SerializedName("gpu_available") val gpuAvailable: Boolean = false,
+    @SerializedName("photos_processed") val photosProcessed: Int = 0,
+    @SerializedName("photos_pending") val photosPending: Int = 0,
+    @SerializedName("face_detections") val faceDetections: Int = 0,
+    @SerializedName("face_clusters") val faceClusters: Int = 0,
+    @SerializedName("object_detections") val objectDetections: Int = 0,
+    @SerializedName("pet_detections") val petDetections: Int = 0,
+    @SerializedName("pet_clusters") val petClusters: Int = 0,
+    @SerializedName("face_model_loaded") val faceModelLoaded: Boolean = false,
+    @SerializedName("object_model_loaded") val objectModelLoaded: Boolean = false,
+    @SerializedName("degraded_mode") val degradedMode: Boolean = false,
+    @SerializedName("allow_heuristic_fallback") val allowHeuristicFallback: Boolean = false,
+) {
+    /** Convenience: total = processed + pending. */
+    val totalPhotos: Int get() = photosProcessed + photosPending
+
+    /** Convenience: at least one ONNX model is loaded. */
+    val modelsLoaded: Boolean get() = faceModelLoaded || objectModelLoaded
+}
 
 data class AiToggleRequest(val enabled: Boolean)
-data class AiToggleResponse(val enabled: Boolean, val message: String? = null)
 
+// Server `AiReprocessRequest` — optional list of specific photo IDs.
 data class AiReprocessRequest(
-    @SerializedName("scope") val scope: String? = null,
+    @SerializedName("photo_ids") val photoIds: List<String>? = null,
 )
+
+// Server reprocess returns `{ cleared, message }`.
 data class AiReprocessResponse(
-    val message: String,
-    @SerializedName("queued") val queued: Int = 0,
+    val cleared: Int = 0,
+    val message: String? = null,
 )
 
 // ── Face clusters ───────────────────────────────────────────────────────────
 
+// Mirrors server `FaceClusterSummary` (bare array from GET /api/ai/faces).
 data class FaceCluster(
-    val id: String,
-    val name: String? = null,
+    val id: Long,
+    @SerializedName("label") val name: String? = null,
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("preview_photo_id") val previewPhotoId: String? = null,
-    @SerializedName("preview_blob_id") val previewBlobId: String? = null,
+    @SerializedName("representative") val previewPhotoId: String? = null,
     @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("updated_at") val updatedAt: String? = null,
 )
 
-data class FaceClusterListResponse(
-    val clusters: List<FaceCluster>,
-)
-
+// Server `MergeFacesRequest { cluster_ids: [i64] }`.
 data class FaceClusterMergeRequest(
-    @SerializedName("source_cluster_id") val sourceClusterId: String,
-    @SerializedName("target_cluster_id") val targetClusterId: String,
+    @SerializedName("cluster_ids") val clusterIds: List<Long>,
 )
 
+// Server `SplitFacesRequest { detection_ids: [i64] }`.
 data class FaceClusterSplitRequest(
-    @SerializedName("cluster_id") val clusterId: String,
-    @SerializedName("face_ids") val faceIds: List<String>,
+    @SerializedName("detection_ids") val detectionIds: List<Long>,
 )
 
 data class FaceClusterRenameRequest(val name: String)
 
+// Mirrors server `FaceDetectionRecord` (bare array from .../photos).
 data class FaceClusterPhotoEntry(
-    val id: String,
+    val id: Long = 0,
     @SerializedName("photo_id") val photoId: String,
-    @SerializedName("blob_id") val blobId: String? = null,
-    @SerializedName("face_id") val faceId: String? = null,
-    @SerializedName("confidence") val confidence: Double? = null,
-)
-
-data class FaceClusterPhotosResponse(
-    val photos: List<FaceClusterPhotoEntry>,
+    @SerializedName("cluster_id") val clusterId: Long? = null,
+    @SerializedName("bbox_x") val bboxX: Double = 0.0,
+    @SerializedName("bbox_y") val bboxY: Double = 0.0,
+    @SerializedName("bbox_w") val bboxW: Double = 0.0,
+    @SerializedName("bbox_h") val bboxH: Double = 0.0,
+    val confidence: Double? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
 )
 
 // ── Object classes ──────────────────────────────────────────────────────────
 
+// Mirrors server `ObjectClassSummary` (bare array from GET /api/ai/objects).
 data class ObjectClass(
     @SerializedName("class_name") val className: String,
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("preview_photo_id") val previewPhotoId: String? = null,
+    @SerializedName("avg_confidence") val avgConfidence: Double = 0.0,
 )
 
-data class ObjectClassListResponse(
-    val classes: List<ObjectClass>,
-)
-
+// Mirrors server `ObjectDetectionRecord` (bare array from .../photos).
 data class ObjectClassPhotoEntry(
+    val id: Long = 0,
     @SerializedName("photo_id") val photoId: String,
-    @SerializedName("blob_id") val blobId: String? = null,
+    @SerializedName("class_name") val className: String? = null,
     val confidence: Double? = null,
-)
-
-data class ObjectClassPhotosResponse(
-    val photos: List<ObjectClassPhotoEntry>,
+    @SerializedName("bbox_x") val bboxX: Double = 0.0,
+    @SerializedName("bbox_y") val bboxY: Double = 0.0,
+    @SerializedName("bbox_w") val bboxW: Double = 0.0,
+    @SerializedName("bbox_h") val bboxH: Double = 0.0,
+    @SerializedName("created_at") val createdAt: String? = null,
 )
 
 // ── Pet clusters ────────────────────────────────────────────────────────────
 
+// Mirrors server `PetClusterSummary` (bare array from GET /api/ai/pets).
 data class PetCluster(
-    val id: String,
-    val name: String? = null,
-    @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("preview_photo_id") val previewPhotoId: String? = null,
+    val id: Long,
+    @SerializedName("label") val name: String? = null,
     @SerializedName("species") val species: String? = null,
+    @SerializedName("photo_count") val photoCount: Int,
+    @SerializedName("representative") val previewPhotoId: String? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("updated_at") val updatedAt: String? = null,
 )
 
-data class PetClusterListResponse(
-    val clusters: List<PetCluster>,
-)
-
+// Pet merge shares the server `MergeFacesRequest { cluster_ids: [i64] }` shape.
 data class PetClusterMergeRequest(
-    @SerializedName("source_cluster_id") val sourceClusterId: String,
-    @SerializedName("target_cluster_id") val targetClusterId: String,
+    @SerializedName("cluster_ids") val clusterIds: List<Long>,
 )
 
 data class PetClusterRenameRequest(val name: String)
 
+// Mirrors server `PetDetectionRecord` (bare array from .../photos).
 data class PetClusterPhotoEntry(
+    val id: Long = 0,
     @SerializedName("photo_id") val photoId: String,
-    @SerializedName("blob_id") val blobId: String? = null,
+    @SerializedName("cluster_id") val clusterId: Long? = null,
+    val species: String? = null,
     val confidence: Double? = null,
-)
-
-data class PetClusterPhotosResponse(
-    val photos: List<PetClusterPhotoEntry>,
+    @SerializedName("created_at") val createdAt: String? = null,
 )

@@ -356,98 +356,98 @@ interface ApiService {
     suspend fun getAiStatus(): AiStatusResponse
 
     @POST("api/ai/toggle")
-    suspend fun toggleAi(@Body request: AiToggleRequest): AiToggleResponse
+    suspend fun toggleAi(@Body request: AiToggleRequest): Response<Unit>
 
     @POST("api/ai/reprocess")
     suspend fun reprocessAi(@Body request: AiReprocessRequest): AiReprocessResponse
 
     @GET("api/ai/faces")
-    suspend fun listFaceClusters(): FaceClusterListResponse
+    suspend fun listFaceClusters(): List<FaceCluster>
 
     @POST("api/ai/faces/merge")
-    suspend fun mergeFaceClusters(@Body request: FaceClusterMergeRequest): MessageResponse
+    suspend fun mergeFaceClusters(@Body request: FaceClusterMergeRequest): Response<Unit>
 
     @POST("api/ai/faces/split")
-    suspend fun splitFaceCluster(@Body request: FaceClusterSplitRequest): MessageResponse
+    suspend fun splitFaceCluster(@Body request: FaceClusterSplitRequest): Response<Unit>
 
     @GET("api/ai/faces/{cluster_id}/photos")
-    suspend fun listFaceClusterPhotos(@Path("cluster_id") clusterId: String): FaceClusterPhotosResponse
+    suspend fun listFaceClusterPhotos(@Path("cluster_id") clusterId: String): List<FaceClusterPhotoEntry>
 
     @PUT("api/ai/faces/{cluster_id}/name")
     suspend fun renameFaceCluster(
         @Path("cluster_id") clusterId: String,
         @Body request: FaceClusterRenameRequest,
-    ): MessageResponse
+    ): Response<Unit>
 
     @GET("api/ai/objects")
-    suspend fun listObjectClasses(): ObjectClassListResponse
+    suspend fun listObjectClasses(): List<ObjectClass>
 
     @GET("api/ai/objects/{class_name}/photos")
-    suspend fun listObjectClassPhotos(@Path("class_name") className: String): ObjectClassPhotosResponse
+    suspend fun listObjectClassPhotos(@Path("class_name") className: String): List<ObjectClassPhotoEntry>
 
     @GET("api/ai/pets")
-    suspend fun listPetClusters(): PetClusterListResponse
+    suspend fun listPetClusters(): List<PetCluster>
 
     @POST("api/ai/pets/merge")
-    suspend fun mergePetClusters(@Body request: PetClusterMergeRequest): MessageResponse
+    suspend fun mergePetClusters(@Body request: PetClusterMergeRequest): Response<Unit>
 
     @GET("api/ai/pets/{cluster_id}/photos")
-    suspend fun listPetClusterPhotos(@Path("cluster_id") clusterId: String): PetClusterPhotosResponse
+    suspend fun listPetClusterPhotos(@Path("cluster_id") clusterId: String): List<PetClusterPhotoEntry>
 
     @PUT("api/ai/pets/{cluster_id}/name")
     suspend fun renamePetCluster(
         @Path("cluster_id") clusterId: String,
         @Body request: PetClusterRenameRequest,
-    ): MessageResponse
+    ): Response<Unit>
 
     // ── Geo ──────────────────────────────────────────────────────────────
     @GET("api/settings/geo")
     suspend fun getGeoSettings(): GeoSettings
 
     @POST("api/settings/geo")
-    suspend fun updateGeoSettings(@Body request: UpdateGeoSettingsRequest): GeoSettings
+    suspend fun updateGeoSettings(@Body request: UpdateGeoSettingsRequest): Response<Unit>
 
     @POST("api/geo/scrub")
-    suspend fun scrubGeoData(): GeoScrubResponse
+    suspend fun scrubGeoData(@Body request: GeoScrubRequest): GeoScrubResponse
 
     @GET("api/geo/countries")
-    suspend fun listGeoCountries(): GeoCountryListResponse
+    suspend fun listGeoCountries(): List<GeoCountry>
 
     @GET("api/geo/locations")
-    suspend fun listGeoLocations(): GeoLocationListResponse
+    suspend fun listGeoLocations(): List<GeoLocation>
 
     @GET("api/geo/locations/{country}/{city}")
     suspend fun listGeoLocationPhotos(
         @Path("country") country: String,
         @Path("city") city: String,
-    ): GeoLocationPhotosResponse
+    ): List<GeoPhotoSummary>
 
     @GET("api/geo/map")
-    suspend fun listGeoMapPhotos(): GeoMapResponse
+    suspend fun listGeoMapPhotos(): List<GeoMapPhoto>
 
     @GET("api/geo/timeline")
-    suspend fun listGeoTimeline(): GeoTimelineResponse
+    suspend fun listGeoTimeline(): List<GeoTimelineEntry>
 
     @GET("api/geo/timeline/{year}")
-    suspend fun listGeoTimelineYear(@Path("year") year: Int): GeoTimelineResponse
+    suspend fun listGeoTimelineYear(@Path("year") year: Int): List<GeoTimelineEntry>
 
     @GET("api/geo/timeline/{year}/{month}")
     suspend fun listGeoTimelineMonthPhotos(
         @Path("year") year: Int,
         @Path("month") month: Int,
-    ): GeoTimelinePhotosResponse
+    ): List<GeoPhotoSummary>
 
     @GET("api/geo/memories")
-    suspend fun listGeoMemories(): GeoMemoryListResponse
+    suspend fun listGeoMemories(): List<GeoMemory>
 
     @GET("api/geo/memories/{memory_id}/photos")
-    suspend fun listGeoMemoryPhotos(@Path("memory_id") memoryId: String): GeoMemoryPhotosResponse
+    suspend fun listGeoMemoryPhotos(@Path("memory_id") memoryId: String): List<GeoPhotoSummary>
 
     @GET("api/geo/trips")
-    suspend fun listGeoTrips(): GeoTripListResponse
+    suspend fun listGeoTrips(): List<GeoTrip>
 
     @GET("api/geo/trips/{trip_id}/photos")
-    suspend fun listGeoTripPhotos(@Path("trip_id") tripId: String): GeoTripPhotosResponse
+    suspend fun listGeoTripPhotos(@Path("trip_id") tripId: String): List<GeoPhotoSummary>
 
     // ── Activity / processing status ─────────────────────────────────────
     @GET("api/status/activity")

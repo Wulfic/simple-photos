@@ -13,26 +13,27 @@ class AiRepository @Inject constructor(private val api: ApiService) {
 
     suspend fun status(): AiStatusResponse = api.getAiStatus()
 
-    suspend fun toggle(enabled: Boolean): AiToggleResponse =
+    suspend fun toggle(enabled: Boolean) {
         api.toggleAi(AiToggleRequest(enabled))
+    }
 
-    suspend fun reprocess(scope: String? = null): AiReprocessResponse =
-        api.reprocessAi(AiReprocessRequest(scope))
+    suspend fun reprocess(photoIds: List<String>? = null): AiReprocessResponse =
+        api.reprocessAi(AiReprocessRequest(photoIds))
 
     // Face clusters
     suspend fun listFaceClusters(): List<FaceCluster> =
-        api.listFaceClusters().clusters
+        api.listFaceClusters()
 
-    suspend fun mergeFaceClusters(source: String, target: String) {
-        api.mergeFaceClusters(FaceClusterMergeRequest(source, target))
+    suspend fun mergeFaceClusters(clusterIds: List<Long>) {
+        api.mergeFaceClusters(FaceClusterMergeRequest(clusterIds))
     }
 
-    suspend fun splitFaceCluster(clusterId: String, faceIds: List<String>) {
-        api.splitFaceCluster(FaceClusterSplitRequest(clusterId, faceIds))
+    suspend fun splitFaceCluster(detectionIds: List<Long>) {
+        api.splitFaceCluster(FaceClusterSplitRequest(detectionIds))
     }
 
     suspend fun listFaceClusterPhotos(clusterId: String): List<FaceClusterPhotoEntry> =
-        api.listFaceClusterPhotos(clusterId).photos
+        api.listFaceClusterPhotos(clusterId)
 
     suspend fun renameFaceCluster(clusterId: String, name: String) {
         api.renameFaceCluster(clusterId, FaceClusterRenameRequest(name))
@@ -40,21 +41,21 @@ class AiRepository @Inject constructor(private val api: ApiService) {
 
     // Object classes
     suspend fun listObjectClasses(): List<ObjectClass> =
-        api.listObjectClasses().classes
+        api.listObjectClasses()
 
     suspend fun listObjectClassPhotos(className: String): List<ObjectClassPhotoEntry> =
-        api.listObjectClassPhotos(className).photos
+        api.listObjectClassPhotos(className)
 
     // Pet clusters
     suspend fun listPetClusters(): List<PetCluster> =
-        api.listPetClusters().clusters
+        api.listPetClusters()
 
-    suspend fun mergePetClusters(source: String, target: String) {
-        api.mergePetClusters(PetClusterMergeRequest(source, target))
+    suspend fun mergePetClusters(clusterIds: List<Long>) {
+        api.mergePetClusters(PetClusterMergeRequest(clusterIds))
     }
 
     suspend fun listPetClusterPhotos(clusterId: String): List<PetClusterPhotoEntry> =
-        api.listPetClusterPhotos(clusterId).photos
+        api.listPetClusterPhotos(clusterId)
 
     suspend fun renamePetCluster(clusterId: String, name: String) {
         api.renamePetCluster(clusterId, PetClusterRenameRequest(name))

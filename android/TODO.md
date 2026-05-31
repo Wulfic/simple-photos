@@ -187,3 +187,107 @@ A session is "done" only when:
 2. `./gradlew :app:lintDebug` shows no new errors.
 3. `mcp_gitnexus_detect_changes` shows only intended symbols.
 4. This file's checkboxes are updated.
+
+---
+
+## 4. POST-RELEASE AUDIT — CONFIRMED AI/GEO CONTRACT DRIFT (BLOCKER)
+
+> Found 2026-05-31 during a clean end-to-end release audit. The Sessions 1–7
+> AI + Geo realignment **compiles but does not work**: the DTOs were written
+> against an *assumed* contract, never validated against the running Rust
+> server. `tests/test_78_android_realignment.py` passes only because it
+> asserts the **server's real** shape and never exercises the Android DTOs.
+> Paths and HTTP methods are correct; **response shapes, request bodies, and
+> field names are wrong.** Every AI/Geo list screen currently throws a Gson
+> `JsonSyntaxException` (array-vs-object) or silently shows empty/blank data.
+>
+> Validation requires an Android SDK + JDK 17 build environment (the audit
+> machine had neither — only JDK 11, no `ANDROID_HOME`), so the fix was
+> **deferred to a session that can run `./gradlew :app:assembleDebug`.**
+> Do NOT ship these as part of the server release.
+
+### 4.1 Structural: server returns BARE ARRAYS, Android expects WRAPPED OBJECTS
+
+These AI/Geo list endpoints return `Json<Vec<T>>` (a bare JSON array). The
+Android `ApiService` declares wrapper return types (`…ListResponse { field: [...] }`),
+so Gson fails. Fix: change `ApiService` return type to `List<Element>` and
+update the repository to return the list directly (drop `.clusters` / `.locations`
+/ `.entries` / `.photos`). The wrapper DTOs (`FaceClusterListResponse`,
+`ObjectClassListResponse`, `PetClusterListResponse`, `*PhotosResponse`,
+`GeoCountryListResponse`, `GeoLocationListResponse`, `GeoMapResponse`,
+`GeoTimelineResponse`, `GeoMemoryListResponse`, `GeoTripListResponse`,
+`GeoLocationPhotosResponse`, `GeoTimelinePhotosResponse`,
+`GeoMemoryPhotosResponse`, `GeoTripPhotosResponse`) become unused — delete.
+
+| Endpoint (method) | Server returns | Android currently expects |
+|---|---|---|
+| `GET /api/ai/faces` | `[FaceClusterSummary]` | `{clusters:[FaceCluster]}` |
+| `GET /api/ai/faces/{id}/photos` | `[FaceDetectionRecord]` | `{photos:[FaceClusterPhotoEntry]}` |
+| `GET /api/ai/objects` | `[ObjectClassSummary]` | `{classes:[ObjectClass]}` |
+| `GET /api/ai/objects/{class}/photos` | `[ObjectDetectionRecord]` | `{photos:[ObjectClassPhotoEntry]}` |
+| `GET /api/ai/pets` | `[PetClusterSummary]` | `{clusters:[PetCluster]}` |
+| `GET /api/ai/pets/{id}/photos` | `[PetDetectionRecord]` | `{photos:[PetClusterPhotoEntry]}` |
+| `GET /api/geo/countries` | `[CountryEntry]` | `{countries:[GeoCountry]}` |
+| `GET /api/geo/locations` | `[LocationEntry]` | `{locations:[GeoLocation]}` |
+| `GET /api/geo/locations/{country}/{city}` | `[PhotoSummary]` | `{photos:[PhotoRecord]}` |
+| `GET /api/geo/map` | `[PhotoSummary]` | `{photos:[GeoMapPhoto]}` |
+| `GET /api/geo/timeline` | `[TimelineYearEntry]` | `{entries:[GeoTimelineEntry]}` |
+| `GET /api/geo/timeline/{year}` | `[TimelineMonthEntry]` | `{entries:[GeoTimelineEntry]}` |
+| `GET /api/geo/timeline/{year}/{month}` | `[PhotoSummary]` | `{photos:[PhotoRecord]}` |
+| `GET /api/geo/memories` | `[Memory]` | `{memories:[GeoMemory]}` |
+| `GET /api/geo/memories/{id}/photos` | `[PhotoSummary]` | `{photos:[PhotoRecord]}` |
+| `GET /api/geo/trips` | `[Trip]` | `{trips:[GeoTrip]}` |
+| `GET /api/geo/trips/{id}/photos` | `[PhotoSummary]` | `{photos:[PhotoRecord]}` |
+
+### 4.2 Field-name drift (fix the `@SerializedName`, keep Kotlin property names)
+
+Server is authoritative (`server/src/ai/models.rs`, `server/src/geo/handlers.rs`).
+Note server cluster `id` is an **i64**, not a string.
+
+- **FaceCluster** ← `FaceClusterSummary { id:i64, label, photo_count, representative, created_at, updated_at }`
+  - `name` must map `@SerializedName("label")`; add `representative` (thumb/photo ref); drop `preview_blob_id`/`preview_photo_id` (server has none). `id` is numeric.
+- **PetCluster** ← `PetClusterSummary { id:i64, label, species, photo_count, representative, created_at, updated_at }`
+  - `name` ← `label`; `previewPhotoId` ← `representative`.
+- **ObjectClass** ← `ObjectClassSummary { class_name, photo_count, avg_confidence }`
+  - add `avg_confidence`; drop `preview_photo_id` (not sent).
+- **FaceClusterPhotoEntry** ← `FaceDetectionRecord { id:i64, photo_id, cluster_id:i64, bbox_x/y/w/h, confidence, created_at }`
+  - replace `blob_id`/`face_id` with the real bbox + `cluster_id` fields.
+- **ObjectClassPhotoEntry** ← `ObjectDetectionRecord { id:i64, photo_id, class_name, confidence, bbox_x/y/w/h, created_at }`.
+- **PetClusterPhotoEntry** ← `PetDetectionRecord { id:i64, photo_id, cluster_id:i64, species, confidence, created_at }`.
+- **GeoCountry** ← `CountryEntry { country, country_code, photo_count }` (drop `city_count`, add `country_code`).
+- **GeoLocation** ← `LocationEntry { city, state, country, country_code, photo_count }` (no preview/lat/lng from server).
+- **GeoMapPhoto** ← `PhotoSummary { id, filename, thumb_path, taken_at, latitude, longitude }` — `photoId` must map `@SerializedName("id")`; add `filename`/`taken_at`; drop `blob_id`.
+- **GeoMemory** ← `Memory { id, name, city, country, date_label, photo_count, first_photo_id, first_thumb_path }` — `title`←`name`, `anchorDate`←`date_label`, `previewPhotoId`←`first_photo_id`; add `first_thumb_path`.
+- **GeoTrip** ← `Trip { id, name, city, state, country, country_code, start_date, end_date, date_label, photo_count, day_count, first_photo_id, first_thumb_path }` — `title`←`name`, `startedAt`←`start_date`, `endedAt`←`end_date`, `previewPhotoId`←`first_photo_id`.
+- **GeoTimelineEntry** ← year endpoint `{ year, photo_count }`, month endpoint `{ year, month, photo_count }` (no preview).
+
+### 4.3 Request-body drift (CRITICAL — mutations silently no-op or 4xx)
+
+Server request structs (`server/src/ai/models.rs`, `server/src/geo/handlers.rs`):
+
+- **Face merge** `POST /api/ai/faces/merge` ← `MergeFacesRequest { cluster_ids: [i64] }`.
+  Android sends `{source_cluster_id, target_cluster_id}` → **rewrite** to `{cluster_ids:[Long]}`. Update `AiRepository.mergeFaceClusters` + caller(s).
+- **Face split** `POST /api/ai/faces/split` ← `SplitFacesRequest { detection_ids: [i64] }`.
+  Android sends `{cluster_id, face_ids}` → **rewrite** to `{detection_ids:[Long]}`.
+- **Pet merge** `POST /api/ai/pets/merge` ← same `{cluster_ids:[i64]}` shape.
+- **Rename face/pet** `PUT …/name` ← `{name}` ✓ already correct.
+- **AI reprocess** `POST /api/ai/reprocess` ← `AiReprocessRequest { photo_ids: Option<[String]> }`.
+  Android sends `{scope}` → **rewrite** to `{photo_ids: List<String>?}`. Update `AiRepository.reprocess`.
+- **AI toggle** `POST /api/ai/toggle` ← `{enabled}` ✓.
+
+### 4.4 Geo settings drift (both directions broken)
+
+- `GET /api/settings/geo` ← `GeoStatusResponse { enabled, scrub_on_upload, photos_with_location, photos_without_location, unique_countries, unique_cities }`. Android `GeoSettings { geo_enabled, reverse_geocode_enabled, strip_on_export }` → toggle always reads "off". **Rewrite** `GeoSettings` to the status shape.
+- `POST /api/settings/geo` ← `GeoSettingsRequest { enabled?, scrub_on_upload? }`, returns **empty `200`** (no body). Android sends `{geo_enabled, reverse_geocode_enabled, strip_on_export}` and types the return as `GeoSettings` → toggle no-ops AND empty-body parse throws. **Rewrite** `UpdateGeoSettingsRequest` to `{enabled?, scrub_on_upload?}` and change `ApiService.updateGeoSettings` return type to `Response<Unit>` (or `retrofit2.Response<Unit>`). Update `GeoRepository.updateSettings` + any Settings UI consumer.
+- `POST /api/geo/scrub` ← `ScrubConfirmRequest { confirm: bool }` (Android currently sends no body) and returns `{ scrubbed, ... }` — verify and add the `{confirm:true}` body.
+
+### 4.5 Execution checklist (next session, with a working Android build)
+
+- [ ] Confirm `/api/ai/status` route is registered (handler exists at `ai/handlers.rs:26`).
+- [ ] Apply 4.1 (return types → `List<T>`, drop wrappers) in `ApiService.kt` + `AiRepository`/`GeoRepository`.
+- [ ] Apply 4.2 `@SerializedName` fixes in `AiDto.kt` / `GeoDto.kt` (keep Kotlin prop names to avoid UI churn).
+- [ ] Apply 4.3 request-body rewrites + update repo signatures and the People/Pets/Things screen call sites.
+- [ ] Apply 4.4 geo-settings rewrite.
+- [ ] `./gradlew :app:assembleDebug` + `:app:lintDebug` green.
+- [ ] On-device smoke: People / Pets / Things / Map / Timeline / Locations / Memories / Trips all load; rename + merge + AI/Geo toggle persist.
+- [ ] Fix the false "All pass / no drift detected" claims in Sessions 6–7 above.
