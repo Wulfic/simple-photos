@@ -2968,11 +2968,7 @@ dependencies = [
 
 [[package]]
 name = "simple-photos-server"
-<<<<<<< HEAD
 version = "1.1.42"
-=======
-version = "1.1.5"
->>>>>>> 3315990a7559810e2a25987163dbb852dc81a4cf
 dependencies = [
  "aes-gcm",
  "anyhow",
