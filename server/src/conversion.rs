@@ -298,8 +298,8 @@ pub async fn convert_file(
 async fn convert_image(input: &str, output: &str) -> bool {
     tracing::debug!(input = %input, output = %output, "Image conversion: starting JPEG conversion");
     // FFmpeg: high-quality JPEG output (-q:v 2 ≈ 92% quality).
-    let mut cmd = tokio::process::Command::new("nice");
-    cmd.args(["-n", "19", "ffmpeg", "-y", "-i", input, "-q:v", "2", output])
+    let mut cmd = crate::process::background_command("ffmpeg");
+    cmd.args(["-y", "-i", input, "-q:v", "2", output])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let ffmpeg =
@@ -380,10 +380,8 @@ pub(crate) async fn convert_video(
                 "GPU transcode: FFmpeg command arguments"
             );
             let gpu_start = std::time::Instant::now();
-            let mut cmd = tokio::process::Command::new("nice");
-            let mut nice_args = vec!["-n".to_string(), "19".to_string(), "ffmpeg".to_string()];
-            nice_args.extend(args);
-            cmd.args(&nice_args).stdout(std::process::Stdio::null());
+            let mut cmd = crate::process::background_command("ffmpeg");
+            cmd.args(&args).stdout(std::process::Stdio::null());
             let result =
                 crate::process::run_with_timeout(&mut cmd, std::time::Duration::from_secs(600))
                     .await;
@@ -444,11 +442,8 @@ pub(crate) async fn convert_video(
         "GPU transcode: running CPU software encoding"
     );
     let cpu_start = std::time::Instant::now();
-    let mut cmd = tokio::process::Command::new("nice");
+    let mut cmd = crate::process::background_command("ffmpeg");
     cmd.args([
-        "-n",
-        "19",
-        "ffmpeg",
         "-y",
         "-i",
         input,
@@ -493,11 +488,8 @@ pub(crate) async fn convert_video(
 async fn convert_audio(input: &str, output: &str) -> bool {
     tracing::debug!(input = %input, output = %output, "Audio conversion: starting MP3 conversion");
     tracing::debug!(input = %input, output = %output, "Audio conversion: starting MP3 conversion");
-    let mut cmd = tokio::process::Command::new("nice");
+    let mut cmd = crate::process::background_command("ffmpeg");
     cmd.args([
-        "-n",
-        "19",
-        "ffmpeg",
         "-y",
         "-i",
         input,

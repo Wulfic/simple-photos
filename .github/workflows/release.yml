@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write       # required to create/upload the GitHub Release
+  security-events: write # required by the reusable security-audit workflow
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,6 +36,19 @@ env:
   NODE_VERSION: "20"
 
 jobs:
+  # ───────────────────────────────────────────────────────────────────────
+  #  Quality gates — a version is only ever built/published when the full CI
+  #  suite AND the blocking security gate pass. Every artifact job depends
+  #  (transitively, via `web`) on these, so a failing gate aborts the release.
+  # ───────────────────────────────────────────────────────────────────────
+  gate-ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  gate-security:
+    uses: ./.github/workflows/security-audit.yml
+    secrets: inherit
+
   # ───────────────────────────────────────────────────────────────────────
   #  Resolve version once and share with all downstream jobs.
   # ───────────────────────────────────────────────────────────────────────
@@ -72,6 +86,9 @@ jobs:
   #  Web frontend build — shared by both .deb and .exe so we build once.
   # ───────────────────────────────────────────────────────────────────────
   web:
+    # Gate the entire release on CI + security: nothing downstream builds
+    # until both pass (deb/windows depend on web).
+    needs: [gate-ci, gate-security]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,7 +1,9 @@
-name: Sync dev → main (release-clean)
+name: Gate & Sync dev → main (release-clean)
 
-# Whenever `dev` is pushed, mirror its contents to `main` minus the paths
-# listed in .github/sync-main-exclude.txt. `main` is the lean release branch.
+# Whenever `dev` is pushed, run the FULL validation suite (CI build/test +
+# blocking security gate). ONLY if everything passes do we mirror dev's
+# contents to `main` minus the paths in .github/sync-main-exclude.txt.
+# `main` is the lean release branch and must always be green.
 
 on:
   push:
@@ -10,13 +12,29 @@ on:
 
 permissions:
   contents: write
+  security-events: write
 
 concurrency:
   group: sync-dev-to-main
   cancel-in-progress: false
 
 jobs:
+  # Full CI: Rust build/clippy/unit tests, web typecheck/build, Python E2E smoke.
+  ci:
+    if: github.repository == 'Wulfic/simple-photos'
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  # Full security audit including the BLOCKING security-gate job. The reusable
+  # workflow's conclusion is `failure` if the gate finds a real problem.
+  security:
+    if: github.repository == 'Wulfic/simple-photos'
+    uses: ./.github/workflows/security-audit.yml
+    secrets: inherit
+
   sync:
+    # Implicit success(): this job only runs when BOTH ci and security succeed.
+    needs: [ci, security]
     if: github.repository == 'Wulfic/simple-photos'
     runs-on: ubuntu-latest
     steps:

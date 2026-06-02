@@ -51,7 +51,25 @@ Never begin implementation without a written, user-approved plan.
 
 ---
 
-## 4 — Tool Usage
+## 4 — Skills (Read Before Acting)
+
+Read the relevant skill file before starting common tasks:
+
+| Task | Skill file |
+|------|-----------|
+| Implement a feature end-to-end | `.claude/skills/feature-workflow/SKILL.md` |
+| Create a new test file | `.claude/skills/new-test/SKILL.md` |
+| Write parametrized / DDT tests | `.claude/skills/ddt-test-pattern/SKILL.md` |
+| Add a new Rust API endpoint | `.claude/skills/new-api-endpoint/SKILL.md` |
+| Build server / run tests / debug | `.claude/skills/build-and-test/SKILL.md` |
+| Understand architecture / trace code | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius before editing | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Debug a failing test | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / refactor safely | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+
+---
+
+## 5 — Tool Usage
 
 Use the right tool for the job — don't guess or grep manually when a smarter tool exists:
 

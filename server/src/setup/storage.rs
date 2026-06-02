@@ -635,9 +635,10 @@ pub struct PickDirectoryResponse {
 ///
 /// GET /api/admin/pick-directory
 ///
-/// Tries `zenity` (GNOME/GTK) first, then `kdialog` (KDE). Returns 503 when
-/// neither tool is available or the server has no display (headless).
-/// The frontend falls back to the in-browser FolderBrowserModal in that case.
+/// On Windows shows the native Win32 folder browser; on Linux tries `zenity`
+/// (GNOME/GTK) then `kdialog` (KDE). Returns 400 when no dialog is available
+/// (headless host / service session) or the user cancelled. The frontend
+/// falls back to the in-browser FolderBrowserModal in that case.
 pub async fn pick_directory(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -664,10 +665,86 @@ pub async fn pick_directory(
     Ok(Json(PickDirectoryResponse { path }))
 }
 
-/// Try to launch a native folder-selection dialog. Attempts `zenity` (GTK/GNOME)
-/// then `kdialog` (KDE). Returns the selected path or an error string if
-/// unavailable or cancelled.
+/// Launch a native OS folder-selection dialog on the server machine.
+///
+/// On Windows this shows the standard Win32 folder browser; on Linux it tries
+/// `zenity` (GTK/GNOME) then `kdialog` (KDE). Returns the selected path, or an
+/// error string when the dialog is unavailable (headless / service session) or
+/// the user cancelled.
 async fn spawn_native_picker() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        spawn_native_picker_windows().await
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        spawn_native_picker_unix().await
+    }
+}
+
+/// Windows native folder picker via PowerShell + WinForms `FolderBrowserDialog`.
+///
+/// The dialog must run in a single-threaded apartment (`-Sta`). We refuse to
+/// show it when the process has no interactive desktop (e.g. running as a
+/// Windows Service in session 0) — `ShowDialog` there would block forever —
+/// returning exit code 2 so the frontend cleanly falls back to its in-browser
+/// directory browser.
+#[cfg(target_os = "windows")]
+async fn spawn_native_picker_windows() -> Result<String, String> {
+    const PS: &str = r#"
+if (-not [Environment]::UserInteractive) { exit 2 }
+Add-Type -AssemblyName System.Windows.Forms | Out-Null
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.Opacity = 0
+$owner.Show()
+$dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+$dlg.Description = 'Select Photo Storage Folder'
+$dlg.ShowNewFolderButton = $true
+$result = $dlg.ShowDialog($owner)
+$owner.Close()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::Out.Write($dlg.SelectedPath)
+    exit 0
+}
+exit 1
+"#;
+
+    let out = tokio::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Sta",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            PS,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("native_picker_unavailable: failed to launch powershell: {e}"))?;
+
+    match out.status.code() {
+        Some(0) => {
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if p.is_empty() {
+                Err("native_picker_unavailable: empty selection".into())
+            } else {
+                Ok(p)
+            }
+        }
+        Some(1) => Err("cancelled".into()),
+        // 2 = no interactive desktop; anything else = unexpected failure.
+        other => Err(format!(
+            "native_picker_unavailable: dialog exited with code {other:?}"
+        )),
+    }
+}
+
+/// Linux native folder picker. Tries `zenity` (GTK/GNOME) then `kdialog` (KDE).
+#[cfg(not(target_os = "windows"))]
+async fn spawn_native_picker_unix() -> Result<String, String> {
     // Without a graphical display environment neither zenity nor kdialog can
     // show a window. Both would exit with code 1 — identical to user-cancel —
     // making them undetectable on the frontend. Bail out immediately so the

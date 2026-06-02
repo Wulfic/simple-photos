@@ -37,7 +37,11 @@ pub fn spawn_ai_processor(
     active: Arc<AtomicBool>,
 ) {
     let engine = AiEngine::new(&config);
-    if !engine.has_any_capability() {
+    // Only warn about missing models when the operator has enabled AI globally.
+    // When ai.enabled=false, models are intentionally not loaded yet; the
+    // processor will call ensure_models_loaded() when photos actually need
+    // processing (i.e. when a user has individually enabled AI).
+    if config.enabled && !engine.has_any_capability() {
         if config.allow_heuristic_fallback {
             tracing::warn!(
                 "AI processor: no ONNX models found in '{}'. \
@@ -131,6 +135,12 @@ async fn process_batch(
     if unprocessed.is_empty() {
         return Ok(());
     }
+
+    // Lazily initialise ONNX model sessions on the first batch that actually
+    // needs processing.  When ai.enabled=false at startup, models are not
+    // loaded into memory until this point — only when a user has individually
+    // enabled AI and photos are queued.  The call is idempotent (OnceLock).
+    engine.ensure_models_loaded();
 
     tracing::info!(
         "AI processor: batch of {} photo(s) queued for recognition [provider={}]",

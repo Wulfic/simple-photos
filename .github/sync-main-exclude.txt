@@ -15,6 +15,10 @@ android/TODO.md
 blns.txt
 reset-primary.sh
 reset-server.sh
+reset-primary.ps1
+reset-server.ps1
+bump-version.sh
+bump-version.ps1
 server/build_out.txt
 .github/copilot-instructions.md
 .github/sync-main-exclude.txt

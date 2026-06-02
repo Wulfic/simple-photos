@@ -78,7 +78,7 @@ function Invoke-FileDownload {
         return
     }
     Write-Info "[dl] Downloading $(Split-Path $OutPath -Leaf)…"
-    $part = "$OutPath.part"
+    $part = "$OutPath.$([System.IO.Path]::GetRandomFileName()).part"
     try {
         Invoke-WebRequest -Uri $Url -OutFile $part -UseBasicParsing
         if (-not (Test-Path $part) -or (Get-Item $part).Length -eq 0) {
@@ -115,6 +115,62 @@ function Download-AiModels {
 
     Write-Info "[ai] Models present in ${Target}:"
     Get-ChildItem $Target | ForEach-Object { Write-Info "  $($_.Name)  ($([math]::Round($_.Length/1MB,1)) MB)" }
+}
+
+# Install the Android SDK command-line tools for Windows and set up the SDK
+# components required to build the Android APK (compileSdk=34, buildTools=34.0.0).
+function Install-AndroidSdk {
+    param([string]$SdkRoot = (Join-Path $env:USERPROFILE "android-sdk"))
+
+    Write-Info "Installing Android SDK command-line tools to $SdkRoot..."
+
+    $cmdlineUrl = "https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip"
+    $zipPath = Join-Path $env:TEMP "android-cmdtools-win.zip"
+    try {
+        Invoke-FileDownload -Url $cmdlineUrl -OutPath $zipPath
+
+        $extractTarget = Join-Path $SdkRoot "cmdline-tools"
+        if (-not (Test-Path $extractTarget)) { New-Item -ItemType Directory -Path $extractTarget -Force | Out-Null }
+
+        Write-Info "Extracting Android command-line tools..."
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $extractTarget)
+
+        # The zip extracts to cmdline-tools/cmdline-tools — rename to latest
+        $innerDir = Join-Path $extractTarget "cmdline-tools"
+        $latestDir = Join-Path $extractTarget "latest"
+        if ((Test-Path $innerDir) -and -not (Test-Path $latestDir)) {
+            Rename-Item -Path $innerDir -NewName "latest"
+        }
+    } finally {
+        Remove-Item $zipPath -ErrorAction SilentlyContinue
+    }
+
+    $env:ANDROID_HOME = $SdkRoot
+    $env:PATH = "$SdkRoot\cmdline-tools\latest\bin;$SdkRoot\platform-tools;$env:PATH"
+
+    # Accept all SDK licenses non-interactively
+    $sdkmanager = Join-Path $SdkRoot "cmdline-tools\latest\bin\sdkmanager.bat"
+    if (Test-Path $sdkmanager) {
+        Write-Info "Accepting Android SDK licenses..."
+        "y`ny`ny`ny`ny`ny`n" | & $sdkmanager --licenses 2>$null | Out-Null
+
+        Write-Info "Installing Android SDK components (platform-tools, android-34, build-tools 34.0.0)..."
+        & $sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" 2>&1 | Select-Object -Last 5
+
+        # Persist ANDROID_HOME to user environment
+        [System.Environment]::SetEnvironmentVariable("ANDROID_HOME", $SdkRoot, "User")
+        $userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        $addPaths = @("$SdkRoot\cmdline-tools\latest\bin", "$SdkRoot\platform-tools")
+        foreach ($p in $addPaths) {
+            if ($userPath -notlike "*$p*") { $userPath = "$p;$userPath" }
+        }
+        [System.Environment]::SetEnvironmentVariable("PATH", $userPath, "User")
+
+        Write-Ok "Android SDK installed at $SdkRoot"
+    } else {
+        throw "sdkmanager.bat not found after extraction — Android SDK install failed."
+    }
 }
 
 # Download the GeoNames cities500 dataset for offline reverse geocoding.
@@ -412,6 +468,29 @@ if ($Mode -eq "native") {
         $missingDeps += "java"
     }
 
+    # ── Android SDK (optional, needed for APK build) ──────────────────────
+    if (-not $NoBuildAndroid) {
+        $androidSdkOk = $false
+        $sdkManagerBat = ""
+        if ($env:ANDROID_HOME -and (Test-Path (Join-Path $env:ANDROID_HOME "cmdline-tools\latest\bin\sdkmanager.bat"))) {
+            $sdkManagerBat = Join-Path $env:ANDROID_HOME "cmdline-tools\latest\bin\sdkmanager.bat"
+            $env:PATH = "$env:ANDROID_HOME\cmdline-tools\latest\bin;$env:ANDROID_HOME\platform-tools;$env:PATH"
+            $androidSdkOk = $true
+        } elseif (Test-CommandExists "sdkmanager") {
+            $androidSdkOk = $true
+        } elseif (Test-Path (Join-Path $env:USERPROFILE "android-sdk\cmdline-tools\latest\bin\sdkmanager.bat")) {
+            $env:ANDROID_HOME = Join-Path $env:USERPROFILE "android-sdk"
+            $env:PATH = "$env:ANDROID_HOME\cmdline-tools\latest\bin;$env:ANDROID_HOME\platform-tools;$env:PATH"
+            $androidSdkOk = $true
+        }
+        if ($androidSdkOk) {
+            Write-Ok "Android SDK found ($env:ANDROID_HOME)"
+        } else {
+            Write-Warn "Android SDK not found (required for Android APK build)"
+            $missingDeps += "android-sdk"
+        }
+    }
+
     # ── FFmpeg (required) ────────────────────────────────────────────────
     if (Test-CommandExists "ffmpeg") {
         $ffmpegVer = (ffmpeg -version 2>$null | Select-Object -First 1) -replace "^ffmpeg version ", ""
@@ -474,8 +553,29 @@ if ($Mode -eq "native") {
                         Write-Info "Installing Java JDK 17..."
                         if (Test-CommandExists "winget") {
                             winget install --id Microsoft.OpenJDK.17 --accept-source-agreements --accept-package-agreements --silent 2>$null
+                            # Refresh PATH
+                            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+                            if (Test-CommandExists "javac") {
+                                Write-Ok "Java JDK 17 installed"
+                            } else {
+                                Write-Warn "Java not found on PATH yet — you may need to reopen your terminal."
+                            }
                         } else {
                             Write-Warn "Cannot auto-install Java. Download from: https://adoptium.net"
+                        }
+                    }
+                    "android-sdk" {
+                        # Java must be present before installing the SDK
+                        if (-not (Test-CommandExists "javac")) {
+                            Write-Warn "Java JDK is required before installing the Android SDK."
+                            Write-Warn "Install Java first (https://adoptium.net) and re-run this script."
+                        } else {
+                            try {
+                                Install-AndroidSdk
+                            } catch {
+                                Write-Warn "Android SDK install failed: $_"
+                                Write-Warn "You can install it manually from https://developer.android.com/studio#command-tools"
+                            }
                         }
                     }
                     "ffmpeg" {
@@ -697,37 +797,50 @@ if ($Mode -eq "native") {
     Write-Ok "Data directories ready"
 
     # ── Windows Task Scheduler for auto-start ─────────────────────────────
-    $serverExe = Join-Path $ScriptDir "server\target\release\simple-photos-server.exe"
+    # The task runs server\watchdog.ps1 rather than the server exe directly.
+    # The watchdog restarts the server if it exits, but waits 10 seconds
+    # before doing so.  During that window the user can also kill the watchdog
+    # process in Task Manager → Details (powershell.exe running watchdog.ps1),
+    # which prevents the restart entirely.  This mirrors the behaviour of the
+    # NSSM-managed Windows Service created by the packaged installer.
+    $serverExe     = Join-Path $ScriptDir "server\target\release\simple-photos-server.exe"
+    $watchdogScript = Join-Path $ScriptDir "server\watchdog.ps1"
 
     if (Read-YesNo "Register as a Windows scheduled task (auto-start on login)?" "Y") {
         try {
-            $taskName = "SimplePhotosServer"
+            $taskName  = "SimplePhotosServer"
             $serverDir = Join-Path $ScriptDir "server"
 
             # Remove existing task if present
             Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
 
+            # Run the watchdog script via powershell.exe so the supervisor loop
+            # and the server process are two distinct entries in Task Manager.
             $action  = New-ScheduledTaskAction `
-                -Execute $serverExe `
+                -Execute  "powershell.exe" `
+                -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$watchdogScript`"" `
                 -WorkingDirectory $serverDir
-            $trigger = New-ScheduledTaskTrigger -AtLogon
+            $trigger  = New-ScheduledTaskTrigger -AtLogon
+            # No RestartCount/RestartInterval here — the watchdog script owns
+            # the restart logic with its built-in 10-second grace delay.
             $settings = New-ScheduledTaskSettingsSet `
                 -AllowStartIfOnBatteries `
                 -DontStopIfGoingOnBatteries `
-                -StartWhenAvailable `
-                -RestartCount 3 `
-                -RestartInterval (New-TimeSpan -Minutes 1)
+                -StartWhenAvailable
 
             Register-ScheduledTask `
-                -TaskName $taskName `
-                -Action $action `
-                -Trigger $trigger `
-                -Settings $settings `
-                -Description "Simple Photos Server - self-hosted E2E encrypted photo library" `
-                -RunLevel Highest | Out-Null
+                -TaskName    $taskName `
+                -Action      $action `
+                -Trigger     $trigger `
+                -Settings    $settings `
+                -Description "Simple Photos Server watchdog — self-hosted E2E encrypted photo library" `
+                -RunLevel    Highest | Out-Null
 
-            Write-Ok "Scheduled task '$taskName' registered (auto-starts on login)"
+            Write-Ok "Scheduled task '$taskName' registered (auto-starts on login via watchdog)"
             Write-Info "Manage via: Task Scheduler -> $taskName"
+            Write-Info "To temporarily stop: kill the powershell.exe watchdog in Task Manager -> Details"
+            Write-Info "  (after killing the watchdog you have 10 s to also kill simple-photos-server.exe)"
+            Write-Info "To permanently stop: schtasks /End /TN $taskName  then  schtasks /Change /TN $taskName /DISABLE"
         } catch {
             Write-Warn "Could not register scheduled task (may need admin rights)."
             Write-Warn "You can start the server manually: .\server\target\release\simple-photos-server.exe"
@@ -856,23 +969,74 @@ if ($Mode -eq "native" -and -not $NoBuildAndroid) {
     $androidDir = Join-Path $ScriptDir "android"
     if ((Test-CommandExists "javac") -and (Test-Path $androidDir)) {
         Write-Step "Step 6/7: Android app (optional)"
-        if (Read-YesNo "Build the Android APK?" "N") {
-            Write-Info "Building Android APK..."
-            Set-Location $androidDir
-            $gradlew = Join-Path $androidDir "gradlew.bat"
-            if (Test-Path $gradlew) {
-                try {
-                    Invoke-NativeBuild -What "gradlew assembleDebug" -Tail 5 -Command { & $gradlew assembleDebug }
-                    Write-Ok "APK built"
-                } catch {
-                    Write-Warn "APK build failed: $_"
-                }
+
+        # Resolve ANDROID_HOME if not already set
+        if (-not $env:ANDROID_HOME) {
+            $defaultSdk = Join-Path $env:USERPROFILE "android-sdk"
+            if (Test-Path (Join-Path $defaultSdk "cmdline-tools\latest\bin\sdkmanager.bat")) {
+                $env:ANDROID_HOME = $defaultSdk
             } else {
-                Write-Warn "gradlew.bat not found in android directory"
+                # Try reading the persisted user env var (set by Install-AndroidSdk)
+                $persistedHome = [System.Environment]::GetEnvironmentVariable("ANDROID_HOME", "User")
+                if ($persistedHome -and (Test-Path $persistedHome)) {
+                    $env:ANDROID_HOME = $persistedHome
+                }
             }
-            Set-Location $ScriptDir
+        }
+        if ($env:ANDROID_HOME) {
+            $env:PATH = "$env:ANDROID_HOME\cmdline-tools\latest\bin;$env:ANDROID_HOME\platform-tools;$env:PATH"
+            Write-Ok "ANDROID_HOME = $env:ANDROID_HOME"
+        } else {
+            Write-Warn "ANDROID_HOME is not set — APK build may fail if sdkmanager is not on PATH."
+        }
+
+        if (Read-YesNo "Build the Android APK?" "Y") {
+            Write-Info "Building Android APK..."
+
+            # Bootstrap gradle-wrapper.jar if missing (it is gitignored)
+            $wrapperJar = Join-Path $androidDir "gradle\wrapper\gradle-wrapper.jar"
+            $skipApk = $false
+            if (-not (Test-Path $wrapperJar)) {
+                Write-Info "Downloading gradle-wrapper.jar..."
+                $wrapperDir = Join-Path $androidDir "gradle\wrapper"
+                New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null
+                $wrapperUrl = "https://raw.githubusercontent.com/gradle/gradle/v8.7.0/gradle/wrapper/gradle-wrapper.jar"
+                try {
+                    Invoke-FileDownload -Url $wrapperUrl -OutPath $wrapperJar
+                    Write-Ok "gradle-wrapper.jar downloaded"
+                } catch {
+                    Write-Warn "Could not download gradle-wrapper.jar — APK build skipped."
+                    Write-Warn "  Download manually: $wrapperUrl"
+                    $skipApk = $true
+                }
+            }
+
+            if (-not $skipApk) {
+                Set-Location $androidDir
+                $gradlew = Join-Path $androidDir "gradlew.bat"
+                if (Test-Path $gradlew) {
+                    try {
+                        Invoke-NativeBuild -What "gradlew assembleDebug" -Tail 5 -Command { & $gradlew assembleDebug }
+                        $apkPath = Join-Path $androidDir "app\build\outputs\apk\debug\app-debug.apk"
+                        if (Test-Path $apkPath) {
+                            Write-Ok "APK built -> $apkPath"
+                        } else {
+                            Write-Ok "APK built"
+                        }
+                    } catch {
+                        Write-Warn "APK build failed: $_"
+                    }
+                } else {
+                    Write-Warn "gradlew.bat not found in android directory"
+                }
+                Set-Location $ScriptDir
+            }
         } else {
             Write-Info "Skipping Android build."
+        }
+    } else {
+        if (-not (Test-CommandExists "javac")) {
+            Write-Info "Java JDK not found — skipping Android APK build (install Java 17 to enable)"
         }
     }
 }
@@ -893,9 +1057,10 @@ Write-Host ""
 
 if ($Mode -eq "native") {
     $serverExe = Join-Path $ScriptDir "server\target\release\simple-photos-server.exe"
-    Write-Host "  Start:    .\server\target\release\simple-photos-server.exe"
-    Write-Host "  Or:       schtasks /run /tn SimplePhotosServer"
-    Write-Host "  Stop:     schtasks /end /tn SimplePhotosServer"
+    Write-Host "  Start:    schtasks /Run /TN SimplePhotosServer"
+    Write-Host "  Stop:     Task Manager -> Details: kill powershell.exe (watchdog), then simple-photos-server.exe"
+    Write-Host "  Disable:  schtasks /End /TN SimplePhotosServer  then  schtasks /Change /TN SimplePhotosServer /DISABLE"
+    Write-Host "  Manual:   .\server\target\release\simple-photos-server.exe"
     Write-Host "  Open:     http://localhost:$Port" -ForegroundColor Cyan
 } else {
     Write-Host "  Start:    cd docker-instances\$Name; docker compose up -d"

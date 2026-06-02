@@ -4,10 +4,14 @@ name: CI
 # producing artefacts; this one just keeps `main` green.
 
 on:
+  # `dev` pushes are validated through the Gate & Sync orchestrator
+  # (sync-dev-to-main.yml) which calls this workflow via `workflow_call`,
+  # so we don't also trigger directly on `dev` push (avoids double runs).
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
     branches: [main, dev]
+  workflow_call:
   workflow_dispatch:
 
 permissions:

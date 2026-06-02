@@ -46,9 +46,9 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
 
     let ffmpeg_ok = match preview_ext {
         "jpg" => {
-            let status = tokio::process::Command::new("nice")
+            let status = crate::process::background_command("ffmpeg")
                 .args([
-                    "-n", "19", "ffmpeg", "-y", "-i", input_str, "-q:v", "2", output_str,
+                    "-y", "-i", input_str, "-q:v", "2", output_str,
                 ])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -58,8 +58,8 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
             matches!(status, Ok(s) if s.success())
         }
         "png" => {
-            let status = tokio::process::Command::new("nice")
-                .args(["-n", "19", "ffmpeg", "-y", "-i", input_str, output_str])
+            let status = crate::process::background_command("ffmpeg")
+                .args(["-y", "-i", input_str, output_str])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -68,11 +68,8 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
             matches!(status, Ok(s) if s.success())
         }
         "mp3" => {
-            let status = tokio::process::Command::new("nice")
+            let status = crate::process::background_command("ffmpeg")
                 .args([
-                    "-n",
-                    "19",
-                    "ffmpeg",
                     "-y",
                     "-i",
                     input_str,
