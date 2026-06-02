@@ -1,4 +1,5 @@
 FROM rust:1-slim-trixie AS builder
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
@@ -24,6 +25,7 @@ RUN touch src/main.rs && \
 FROM debian:trixie-slim
 # Run full package upgrade first to pick up all bookworm-security backports,
 # eliminating OS-level CVEs before adding application packages.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends \
     ca-certificates \

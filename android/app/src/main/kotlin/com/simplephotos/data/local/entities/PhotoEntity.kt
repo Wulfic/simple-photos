@@ -46,5 +46,16 @@ data class PhotoEntity(
     /** Camera model / device name (from EXIF data) */
     val cameraModel: String? = null,
     /** Short content-based hash (12 hex chars of SHA-256) for cross-platform alignment */
-    val photoHash: String? = null
+    val photoHash: String? = null,
+    /**
+     * Photo subtype from server (e.g. "burst", "motion", "panorama",
+     * "equirectangular", "hdr"). Drives the special-photo badges and viewers.
+     */
+    val photoSubtype: String? = null,
+    /** Burst group ID; all photos with the same burstId belong to one stack. */
+    val burstId: String? = null,
+    /** Server blob ID of the embedded motion-photo video, if any. */
+    val motionVideoBlobId: String? = null,
+    /** Original source path on the capturing device (for de-duplication). */
+    val sourcePath: String? = null
 )

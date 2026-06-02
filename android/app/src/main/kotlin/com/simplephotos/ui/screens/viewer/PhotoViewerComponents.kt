@@ -79,7 +79,8 @@ internal fun PhotoPageContent(
     playerError: String? = null,
     onMediaSizeLoaded: ((Float, Float) -> Unit)? = null,
     intrinsicWidth: Float = -1f,
-    intrinsicHeight: Float = -1f
+    intrinsicHeight: Float = -1f,
+    onPanoLiveModeChange: ((Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
 
@@ -449,6 +450,17 @@ internal fun PhotoPageContent(
                 // Track image load errors for graceful fallback
                 var imageError by remember(photo.localId) { mutableStateOf<String?>(null) }
 
+                // Panorama / 360° equirectangular photos are commonly 8000+px
+                // wide and frequently AVIF.  Coil's default sizing path tries
+                // to fit into the on-screen layout dimensions, which combined
+                // with the platform ImageDecoder + hardware-bitmap budget
+                // routinely produces a decode error for these files.  Force
+                // ORIGINAL size + allowHardware(false) for these photos so
+                // the AVIF/HEIF decode succeeds (same strategy already used
+                // by PanoramaOverlay's live-mode image).
+                val isWidePano = photo.photoSubtype == "panorama" ||
+                                 photo.photoSubtype == "equirectangular"
+
                 when {
                     imageError != null -> {
                         Column(
@@ -474,6 +486,12 @@ internal fun PhotoPageContent(
                         AsyncImage(
                             model = ImageRequest.Builder(context)
                                 .data(Uri.parse(photo.localPath))
+                                .apply {
+                                    if (isWidePano) {
+                                        size(coil.size.Size.ORIGINAL)
+                                        allowHardware(false)
+                                    }
+                                }
                                 .crossfade(true)
                                 .build(),
                             contentDescription = photo.filename,
@@ -517,6 +535,12 @@ internal fun PhotoPageContent(
                         AsyncImage(
                             model = ImageRequest.Builder(context)
                                 .data(imageData)
+                                .apply {
+                                    if (isWidePano) {
+                                        size(coil.size.Size.ORIGINAL)
+                                        allowHardware(false)
+                                    }
+                                }
                                 .crossfade(true)
                                 .build(),
                             contentDescription = photo.filename,
@@ -538,6 +562,36 @@ internal fun PhotoPageContent(
                         )
                     }
                 }
+            }
+        }
+
+        // ── Special photo overlays (panorama / 360° / motion) ─────────────────
+        // Only on the active page; only after media has loaded successfully.
+        if (isActivePage && !decryptLoading && decryptError == null) {
+            val sub = photo.photoSubtype
+            val isPano = sub == "panorama" || sub == "equirectangular"
+            val isMotionPhoto = photo.motionVideoBlobId != null && photo.mediaType != "video"
+
+            if (isPano) {
+                val panoData: Any? = when {
+                    hasLocalPath -> Uri.parse(photo.localPath)
+                    decryptedData != null -> decryptedData
+                    else -> null
+                }
+                PanoramaOverlay(
+                    imageData = panoData,
+                    intrinsicWidth = if (intrinsicWidth > 0f) intrinsicWidth else photo.width.toFloat(),
+                    intrinsicHeight = if (intrinsicHeight > 0f) intrinsicHeight else photo.height.toFloat(),
+                    is360 = sub == "equirectangular",
+                    contentDescription = photo.filename,
+                    onLiveModeChange = { live -> onPanoLiveModeChange?.invoke(live) },
+                )
+            } else if (isMotionPhoto) {
+                MotionPhotoOverlay(
+                    photo = photo,
+                    serverBaseUrl = serverBaseUrl,
+                    okHttpClient = okHttpClient,
+                )
             }
         }
     }

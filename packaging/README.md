@@ -62,8 +62,13 @@ cd server; cargo build --release --locked; cd ..
 #       packaging\windows\vendor\nssm.exe
 
 # 4. Build with Inno Setup 6
+<<<<<<< HEAD
 iscc /DSP_VERSION=1.1.42 packaging\windows\simple-photos.iss
 # → dist\simple-photos-1.1.42-windows-x64-setup.exe
+=======
+iscc /DSP_VERSION=1.1.5 packaging\windows\simple-photos.iss
+# → dist\simple-photos-1.1.5-windows-x64-setup.exe
+>>>>>>> 3315990a7559810e2a25987163dbb852dc81a4cf
 ```
 
 The installer asks for an install location, registers the server as a

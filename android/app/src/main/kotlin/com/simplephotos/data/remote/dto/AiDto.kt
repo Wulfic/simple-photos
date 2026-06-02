@@ -47,14 +47,23 @@ data class AiReprocessResponse(
 // Mirrors server `FaceClusterSummary` (bare array from GET /api/ai/faces).
 data class FaceCluster(
     val id: Long,
+<<<<<<< HEAD
     @SerializedName("label") val name: String? = null,
     @SerializedName("photo_count") val photoCount: Int,
     @SerializedName("representative") val previewPhotoId: String? = null,
+=======
+    val label: String? = null,
+    @SerializedName("photo_count") val photoCount: Int,
+    val representative: String? = null,
+>>>>>>> 3315990a7559810e2a25987163dbb852dc81a4cf
     @SerializedName("created_at") val createdAt: String? = null,
     @SerializedName("updated_at") val updatedAt: String? = null,
 )
 
+<<<<<<< HEAD
 // Server `MergeFacesRequest { cluster_ids: [i64] }`.
+=======
+>>>>>>> 3315990a7559810e2a25987163dbb852dc81a4cf
 data class FaceClusterMergeRequest(
     @SerializedName("cluster_ids") val clusterIds: List<Long>,
 )
@@ -106,15 +115,25 @@ data class ObjectClassPhotoEntry(
 // Mirrors server `PetClusterSummary` (bare array from GET /api/ai/pets).
 data class PetCluster(
     val id: Long,
+<<<<<<< HEAD
     @SerializedName("label") val name: String? = null,
     @SerializedName("species") val species: String? = null,
     @SerializedName("photo_count") val photoCount: Int,
     @SerializedName("representative") val previewPhotoId: String? = null,
+=======
+    val label: String? = null,
+    val species: String,
+    @SerializedName("photo_count") val photoCount: Int,
+    val representative: String? = null,
+>>>>>>> 3315990a7559810e2a25987163dbb852dc81a4cf
     @SerializedName("created_at") val createdAt: String? = null,
     @SerializedName("updated_at") val updatedAt: String? = null,
 )
 
+<<<<<<< HEAD
 // Pet merge shares the server `MergeFacesRequest { cluster_ids: [i64] }` shape.
+=======
+>>>>>>> 3315990a7559810e2a25987163dbb852dc81a4cf
 data class PetClusterMergeRequest(
     @SerializedName("cluster_ids") val clusterIds: List<Long>,
 )

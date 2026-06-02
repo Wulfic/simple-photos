@@ -537,7 +537,25 @@ class PhotoRepository @Inject constructor(
                 // Skip if already in local DB — use serverPhotoId (unique per
                 // photo row) instead of blobId because duplicates / edit copies
                 // share the same encrypted_blob_id.
-                if (db.photoDao().getByServerPhotoId(photo.id) != null) continue
+                val existing = db.photoDao().getByServerPhotoId(photo.id)
+                if (existing != null) {
+                    // Back-fill burst / motion / photo-subtype fields whenever
+                    // they have appeared (or changed) on the server. Without
+                    // this, photos synced before the server learnt their
+                    // subtype would never get burst-stacking or LIVE overlay
+                    // on this device.
+                    if (existing.photoSubtype != photo.photoSubtype ||
+                        existing.burstId != photo.burstId ||
+                        existing.motionVideoBlobId != photo.motionVideoBlobId) {
+                        db.photoDao().backfillSubtypeFields(
+                            serverPhotoId = photo.id,
+                            subtype = photo.photoSubtype,
+                            burstId = photo.burstId,
+                            motionBlobId = photo.motionVideoBlobId,
+                        )
+                    }
+                    continue
+                }
 
                 val serverTimestamp = photo.takenAt ?: photo.createdAt
                 val takenAtMs = parseIsoToEpochMs(serverTimestamp)
@@ -561,6 +579,17 @@ class PhotoRepository @Inject constructor(
                         photoHash = photo.photoHash,
                         isFavorite = photo.isFavorite
                     )
+                    // mergeServerPhoto only sets the core identity columns;
+                    // back-fill burst/motion/subtype separately so the merged
+                    // row participates in burst stacking and LIVE overlays.
+                    if (photo.photoSubtype != null || photo.burstId != null || photo.motionVideoBlobId != null) {
+                        db.photoDao().backfillSubtypeFields(
+                            serverPhotoId = photo.id,
+                            subtype = photo.photoSubtype,
+                            burstId = photo.burstId,
+                            motionBlobId = photo.motionVideoBlobId,
+                        )
+                    }
                     android.util.Log.d("PhotoRepository", "syncFromServerEncrypted: merged server photo '${photo.filename}' (${photo.id}) into local entity ${localMatch.localId}")
                     merged++
                     continue
@@ -618,7 +647,11 @@ class PhotoRepository @Inject constructor(
                     isFavorite = photo.isFavorite,
                     cropMetadata = photo.cropMetadata,
                     photoHash = photo.photoHash,
-                    serverPhotoId = photo.id
+                    serverPhotoId = photo.id,
+                    photoSubtype = photo.photoSubtype,
+                    burstId = photo.burstId,
+                    motionVideoBlobId = photo.motionVideoBlobId,
+                    sourcePath = photo.sourcePath
                 )
                 db.photoDao().insert(entity)
                 imported++

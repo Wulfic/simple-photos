@@ -62,6 +62,8 @@ import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
 import com.simplephotos.ui.components.ConversionBanner
 import com.simplephotos.ui.components.EncryptionBanner
+import com.simplephotos.ui.components.GeoBanner
+import com.simplephotos.ui.components.AiBanner
 import com.simplephotos.ui.components.HeaderNavigation
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_DIAGNOSTIC_LOGGING
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_USERNAME
@@ -92,7 +94,6 @@ fun GalleryScreen(
     onSecureGalleryClick: () -> Unit = {},
     onSharedAlbumsClick: () -> Unit = {},
     onDiagnosticsClick: () -> Unit = {},
-    onLibraryClick: () -> Unit = {},
     onLogout: () -> Unit,
     isAdmin: Boolean = false,
     viewModel: GalleryViewModel = hiltViewModel()
@@ -109,8 +110,25 @@ fun GalleryScreen(
         else photos.filter { it.serverBlobId == null || it.serverBlobId !in viewModel.secureBlobIds }
     }
 
+    // Collapse burst stacks: keep only the first frame of each burstId (matches web)
+    val collapsedPhotos = remember(visiblePhotos) {
+        val seenBursts = HashSet<String>()
+        visiblePhotos.filter { p ->
+            val bid = p.burstId
+            if (bid.isNullOrEmpty()) true else seenBursts.add(bid)
+        }
+    }
+
+    // Burst frame counts per burstId (used by the badge stack indicator).
+    val burstCounts = remember(visiblePhotos) {
+        visiblePhotos.asSequence()
+            .mapNotNull { it.burstId?.takeIf { id -> id.isNotEmpty() } }
+            .groupingBy { it }
+            .eachCount()
+    }
+
     // Build day-grouped grid items
-    val gridItems = remember(visiblePhotos) { buildGridItems(groupPhotosByDay(visiblePhotos)) }
+    val gridItems = remember(collapsedPhotos) { buildGridItems(groupPhotosByDay(collapsedPhotos)) }
 
     val pickMediaLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -189,7 +207,6 @@ fun GalleryScreen(
                         onSecureGalleryClick = onSecureGalleryClick,
                         onSharedAlbumsClick = onSharedAlbumsClick,
                         onDiagnosticsClick = onDiagnosticsClick,
-                        onLibraryClick = onLibraryClick,
                         onLogout = { viewModel.logout(onLogout) },
                         onToggleTheme = { ThemeState.toggle(viewModel.dataStore, ThemeState.isDark(isSystemDark)) },
                         isAdmin = isAdmin
@@ -286,9 +303,11 @@ fun GalleryScreen(
                         map
                     }
 
-                    // Flat photo list for the grid
-                    val photoItems = remember(visiblePhotos) {
-                        visiblePhotos
+                    // Flat photo list for the grid — MUST use the burst-collapsed
+                    // list (one tile per burstId) so burst stacks render as a single
+                    // tile with a "BURST N" badge instead of N separate tiles.
+                    val photoItems = remember(collapsedPhotos) {
+                        collapsedPhotos
                             .sortedWith(compareByDescending<PhotoEntity> { it.takenAt }.thenBy { it.filename })
                     }
 
@@ -329,6 +348,7 @@ fun GalleryScreen(
                             serverBaseUrl = viewModel.serverBaseUrl,
                             isSelectionMode = viewModel.isSelectionMode,
                             isSelected = item.localId in viewModel.selectedIds,
+                            burstCount = item.burstId?.let { burstCounts[it] } ?: 0,
                             onTap = {
                                 if (viewModel.isSelectionMode) viewModel.toggleSelect(item.localId)
                                 else onPhotoClick(item.localId)
@@ -352,6 +372,8 @@ fun GalleryScreen(
             ) {
                 ConversionBanner(api = viewModel.apiService)
                 EncryptionBanner(api = viewModel.apiService)
+                GeoBanner(api = viewModel.apiService)
+                AiBanner(api = viewModel.apiService)
             }
         }
     }
@@ -521,6 +543,7 @@ private fun MediaTile(
     isSelected: Boolean,
     onTap: () -> Unit,
     onLongPress: () -> Unit,
+    burstCount: Int = 0,
     widthDp: Dp = 100.dp,
     heightDp: Dp = 100.dp
 ) {
@@ -666,13 +689,43 @@ private fun MediaTile(
             }
         }
 
-        // Selection circle (top-right)
+        // Photo subtype badges (top-left): panorama / 360 / burst / motion
+        run {
+            val sub = photo.photoSubtype
+            val burstBadge = photo.burstId != null || sub == "burst"
+            val motionBadge = photo.motionVideoBlobId != null || sub == "motion"
+            val panoBadge = sub == "panorama" || sub == "equirectangular"
+            val label = when {
+                panoBadge && sub == "equirectangular" -> "360°"
+                panoBadge -> "PANO"
+                motionBadge -> "LIVE"
+                burstBadge -> if (burstCount > 1) "BURST $burstCount" else "BURST"
+                else -> null
+            }
+            if (label != null) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+                    shape = MaterialTheme.shapes.extraSmall,
+                    color = Color.Black.copy(alpha = 0.6f)
+                ) {
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        // Selection circle (top-right) — sized to match web (~20% smaller than original)
         if (isSelectionMode) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(24.dp)
+                    .padding(5.dp)
+                    .size(19.dp)
                     .clip(CircleShape)
                     .background(if (isSelected) Color(0xFF22C55E) else Color.White.copy(alpha = 0.8f))
                     .border(
@@ -683,7 +736,7 @@ private fun MediaTile(
                 contentAlignment = Alignment.Center
             ) {
                 if (isSelected) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
                 }
             }
         }

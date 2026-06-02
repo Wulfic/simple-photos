@@ -10,6 +10,7 @@ package com.simplephotos.ui.screens.viewer
 import android.app.Activity
 import android.content.ContentValues
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -217,8 +219,19 @@ fun PhotoViewerScreen(
 
 
 
-    // Controls overlay visibility — tap photo to toggle
-    var showOverlay by remember { mutableStateOf(true) }
+    // Controls overlay visibility — starts hidden so the photo is the focus.
+    // Single tap toggles; when shown, auto-hide after 3 s of inactivity.
+    var showOverlay by remember { mutableStateOf(false) }
+    LaunchedEffect(showOverlay) {
+        if (showOverlay) {
+            kotlinx.coroutines.delay(3_000)
+            showOverlay = false
+        }
+    }
+
+    // Panorama / 360 live-pan state — hoisted from PanoramaOverlay so we can
+    // disable HorizontalPager paging while the user is panning the image.
+    var panoLiveActive by remember { mutableStateOf(false) }
 
     // ── Info panel state ─────────────────────────────────────────────
     var showInfoPanel by remember { mutableStateOf(false) }
@@ -409,12 +422,17 @@ fun PhotoViewerScreen(
                 // Only at the top level so it doesn't conflict with zoom panning
                 if (editMode) return@pointerInput
                 awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalY = 0f
                     var totalX = 0f
                     var consumed = false
+                    var verticalLocked = false
                     while (true) {
-                        val event = awaitPointerEvent()
+                        // Read on Initial pass so we see drags BEFORE the
+                        // HorizontalPager child consumes them. Once we've
+                        // confirmed a vertical-dominant swipe we consume the
+                        // changes so the pager doesn't also flip pages.
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull() ?: break
                         if (!change.pressed) {
                             // Finger lifted — evaluate the swipe
@@ -422,10 +440,8 @@ fun PhotoViewerScreen(
                                 kotlin.math.abs(totalY) > kotlin.math.abs(totalX) * 1.5f
                             ) {
                                 if (totalY < 0) {
-                                    // Swipe up → show info panel
                                     showInfoPanel = true
                                 } else {
-                                    // Swipe down → close viewer
                                     if (showInfoPanel) {
                                         showInfoPanel = false
                                     } else {
@@ -435,10 +451,24 @@ fun PhotoViewerScreen(
                             }
                             break
                         }
-                        // Only track single-finger vertical movement
                         if (event.changes.count { it.pressed } == 1) {
-                            totalY += change.positionChange().y
-                            totalX += change.positionChange().x
+                            val dy = change.positionChange().y
+                            val dx = change.positionChange().x
+                            totalY += dy
+                            totalX += dx
+                            // Lock to vertical once clearly dominant + past
+                            // a small initial threshold so casual horizontal
+                            // pager swipes still work.
+                            if (!verticalLocked &&
+                                kotlin.math.abs(totalY) > 24f &&
+                                kotlin.math.abs(totalY) > kotlin.math.abs(totalX) * 1.5f
+                            ) {
+                                verticalLocked = true
+                            }
+                            if (verticalLocked) {
+                                // Consume so HorizontalPager ignores this drag.
+                                change.consume()
+                            }
                         } else {
                             consumed = true // multi-touch — don't interpret as swipe
                         }
@@ -455,7 +485,7 @@ fun PhotoViewerScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize().padding(cropPadding),
             beyondBoundsPageCount = 0,
-            userScrollEnabled = !editMode,
+            userScrollEnabled = !editMode && !panoLiveActive,
             key = { viewModel.allPhotos.getOrNull(it)?.localId ?: it }
         ) { page ->
             val photo = viewModel.allPhotos.getOrNull(page)
@@ -491,6 +521,9 @@ fun PhotoViewerScreen(
                     activeVideoUri = activeVideoUri,
                     intrinsicWidth = if (pagerState.currentPage == page) mediaIntrinsicWidth else -1f,
                     intrinsicHeight = if (pagerState.currentPage == page) mediaIntrinsicHeight else -1f,
+                    onPanoLiveModeChange = { live ->
+                        if (pagerState.currentPage == page) panoLiveActive = live
+                    },
                     onVideoUriReady = { uri, filename ->
                         // Load the new media item into the shared player.
                         // Only swap if the URI actually changed (avoids re-prepare
@@ -784,10 +817,24 @@ fun PhotoViewerScreen(
                                             photo.filename.endsWith(".webm", true) -> "video/webm"
                                             else -> "image/jpeg"
                                         })
-                                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                        }
+                                    }
+                                    // MediaStore.Downloads.EXTERNAL_CONTENT_URI requires API 29 (Q).
+                                    // On older API levels (26-28) fall back to the per-type Media
+                                    // collections, which are available since API 1.
+                                    val isVideo = photo.filename.endsWith(".mp4", true) ||
+                                        photo.filename.endsWith(".webm", true)
+                                    val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                                    } else if (isVideo) {
+                                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                                    } else {
+                                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
                                     }
                                     val destUri = context.contentResolver.insert(
-                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                                        collectionUri, values
                                     )
                                     if (destUri == null) {
                                         downloadMessage = "Download failed"

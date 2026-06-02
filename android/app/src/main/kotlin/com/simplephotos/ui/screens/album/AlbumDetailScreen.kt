@@ -11,6 +11,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import com.simplephotos.ui.components.JustifiedGrid
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -268,25 +269,30 @@ fun AlbumDetailScreen(
                             )
                         }
 
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(100.dp),
-                            contentPadding = PaddingValues(2.dp),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            items(viewModel.photos, key = { it.localId }) { photo ->
-                                AlbumPhotoTile(
-                                    photo = photo,
-                                    serverBaseUrl = viewModel.serverBaseUrl,
-                                    isSelectionMode = viewModel.isSelectionMode,
-                                    isSelected = photo.localId in viewModel.selectedIds,
-                                    onTap = {
-                                        if (viewModel.isSelectionMode) viewModel.toggleSelect(photo.localId)
-                                        else onPhotoClick(photo.localId)
-                                    },
-                                    onLongPress = { viewModel.enterSelectionMode(photo.localId) }
-                                )
-                            }
+                        // Justified grid matches the main gallery layout so
+                        // albums look the same as the Photos page.
+                        JustifiedGrid(
+                            items = viewModel.photos,
+                            getAspectRatio = { p ->
+                                if (p.width > 0 && p.height > 0) p.width.toFloat() / p.height
+                                else 1f
+                            },
+                            getKey = { it.localId },
+                            targetRowHeight = 180.dp,
+                            gap = 2.dp,
+                        ) { photo, widthDp, heightDp ->
+                            AlbumPhotoTile(
+                                photo = photo,
+                                serverBaseUrl = viewModel.serverBaseUrl,
+                                isSelectionMode = viewModel.isSelectionMode,
+                                isSelected = photo.localId in viewModel.selectedIds,
+                                onTap = {
+                                    if (viewModel.isSelectionMode) viewModel.toggleSelect(photo.localId)
+                                    else onPhotoClick(photo.localId)
+                                },
+                                onLongPress = { viewModel.enterSelectionMode(photo.localId) },
+                                modifier = Modifier.size(widthDp, heightDp),
+                            )
                         }
                     }
                 }
@@ -402,13 +408,13 @@ private fun AlbumPhotoTile(
     isSelectionMode: Boolean,
     isSelected: Boolean,
     onTap: () -> Unit,
-    onLongPress: () -> Unit
+    onLongPress: () -> Unit,
+    modifier: Modifier = Modifier.aspectRatio(1f),
 ) {
     val context = LocalContext.current
 
     Box(
-        modifier = Modifier
-            .aspectRatio(1f)
+        modifier = modifier
             .clip(MaterialTheme.shapes.small)
             .combinedClickable(
                 onClick = onTap,

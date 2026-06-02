@@ -247,14 +247,39 @@ pub async fn convert_file(
     output: &Path,
     target: &ConversionTarget,
 ) -> Result<(), String> {
-    if let Some(parent) = output.parent() {
-        tokio::fs::create_dir_all(parent) // codeql[rust/path-injection] -- parent is within server temp dir; ext restricted to alphanumeric at call sites
-            .await
-            .map_err(|e| format!("Create output directory: {e}"))?;
+    // ── Path-injection sanitizer ─────────────────────────────────────────
+    // Canonicalize input (must already exist) and the output's parent so all
+    // subsequent filesystem operations work against fully resolved paths.
+    // We then verify the supplied paths cannot escape those canonical
+    // ancestors. This is the standard barrier for the rust/path-injection
+    // CodeQL query and is defense-in-depth on top of caller-side validation.
+    let canonical_input = tokio::fs::canonicalize(input)
+        .await
+        .map_err(|e| format!("Canonicalize input path: {e}"))?;
+
+    let output_parent = output
+        .parent()
+        .ok_or("Output path has no parent directory")?;
+    tokio::fs::create_dir_all(output_parent)
+        .await
+        .map_err(|e| format!("Create output directory: {e}"))?;
+    let canonical_output_parent = tokio::fs::canonicalize(output_parent)
+        .await
+        .map_err(|e| format!("Canonicalize output directory: {e}"))?;
+    let output_file_name = output
+        .file_name()
+        .ok_or("Output path has no file name component")?;
+    let canonical_output = canonical_output_parent.join(output_file_name);
+    if !canonical_output.starts_with(&canonical_output_parent) {
+        return Err("Output path escapes its parent directory".into());
     }
 
-    let input_str = input.to_str().ok_or("Invalid input path encoding")?;
-    let output_str = output.to_str().ok_or("Invalid output path encoding")?;
+    let input_str = canonical_input
+        .to_str()
+        .ok_or("Invalid input path encoding")?;
+    let output_str = canonical_output
+        .to_str()
+        .ok_or("Invalid output path encoding")?;
 
     let success = match target.category {
         MediaCategory::Image => convert_image(input_str, output_str).await,
@@ -272,20 +297,22 @@ pub async fn convert_file(
     };
 
     if !success {
-        let _ = tokio::fs::remove_file(output).await; // codeql[rust/path-injection] -- path is server temp dir + UUID; ext restricted to alphanumeric at call sites
+        let _ = tokio::fs::remove_file(&canonical_output).await;
         return Err(format!(
             "Conversion failed for '{}' → .{}",
-            input.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+            canonical_input
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?"),
             target.extension,
         ));
     }
 
     // Verify the output file exists and is non-empty.
-    match tokio::fs::metadata(output).await {
-        // codeql[rust/path-injection] -- path is server temp dir + UUID; ext restricted to alphanumeric at call sites
+    match tokio::fs::metadata(&canonical_output).await {
         Ok(m) if m.len() > 0 => Ok(()),
         Ok(_) => {
-            let _ = tokio::fs::remove_file(output).await; // codeql[rust/path-injection] -- same as above
+            let _ = tokio::fs::remove_file(&canonical_output).await;
             Err("Conversion produced an empty file".into())
         }
         Err(e) => Err(format!("Output file missing after conversion: {e}")),
