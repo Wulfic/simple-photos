@@ -5,12 +5,10 @@
 //! coordinates fall within. Lookups check the cell + its 8 neighbours and
 //! find the nearest city by haversine distance.
 //!
-//! Optional companion files (looked up next to the cities dataset):
-//!  * `admin1CodesASCII.txt` — promotes the 2-char ADM1 code to a full
-//!    state/region name (e.g. "California" instead of "CA").
-//!  * `admin2Codes.txt`      — county/district names, used as a finer
-//!    "neighborhood" hint when the resolved city is more than ~5 km
-//!    away from the query coordinates.
+//! Optional companion file (looked up next to the cities dataset):
+//!  * `admin1CodesASCII.txt` — promotes the raw ADM1 code to a full
+//!    state/region name (e.g. "California" instead of "CA"; without it
+//!    most countries show meaningless numeric codes like "07").
 //!
 //! Streaming line-parser keeps peak RAM low (~30 MB instead of the
 //! 25 MB file slurp + parsed copy) which matters on small CPU-only VPS
@@ -40,6 +38,31 @@ struct City {
     admin1_key: Option<String>,
     country: String,
     country_code: String,
+    /// Population from the dataset (0 when unknown).
+    population: i64,
+    /// Significance weight derived from the GeoNames feature code at load
+    /// time — capitals rank far above neighbourhood entries (PPLX).
+    weight: f32,
+}
+
+/// Significance weight for a GeoNames feature code (column 7).
+///
+/// cities500 contains not just cities but city *sections* (PPLX — e.g.
+/// "Tiergarten" inside Berlin), localities, and historical places.  Pure
+/// nearest-distance lookup therefore labels photos with obscure
+/// neighbourhood names.  These weights bias the ranking toward real,
+/// significant places.
+fn feature_weight(code: &str) -> f32 {
+    match code {
+        "PPLC" => 10.0,                          // national capital
+        "PPLA" => 6.0,                           // seat of first-order admin division
+        "PPLA2" => 3.0,                          // seat of second-order admin division
+        "PPLA3" | "PPLA4" | "PPLA5" => 1.5,      // lower-order admin seats
+        "PPL" | "PPLS" => 1.0,                   // ordinary populated places
+        "PPLX" => 0.05,                          // section of a populated place
+        "PPLQ" | "PPLH" | "PPLW" | "PPLR" => 0.1, // abandoned / historical / destroyed / religious
+        _ => 0.5,                                // PPLL, PPLF, PPLG, unknown
+    }
 }
 
 /// Grid-based spatial index for fast nearest-city lookup.
@@ -96,6 +119,8 @@ impl ReverseGeocoder {
                 Some(format!("{}.{}", fields[8], fields[10]))
             };
 
+            let population: i64 = fields[14].parse().unwrap_or(0);
+
             let city = City {
                 name: fields[1].to_string(),
                 lat,
@@ -103,6 +128,8 @@ impl ReverseGeocoder {
                 admin1_key,
                 country: fields[8].to_string(), // country code initially; resolved below
                 country_code: fields[8].to_string(),
+                population,
+                weight: feature_weight(fields[7]),
             };
 
             let bucket = (lat.floor() as i32, lon.floor() as i32);
@@ -143,7 +170,10 @@ impl ReverseGeocoder {
         })
     }
 
-    /// Create an empty geocoder (for when geo is disabled or dataset isn't available).
+    /// Create an empty geocoder.  Production code now treats a missing
+    /// dataset as "retry next cycle" instead of caching an empty instance;
+    /// kept for tests.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn empty() -> Self {
         Self {
             grid: HashMap::new(),
@@ -163,7 +193,20 @@ impl ReverseGeocoder {
         self.city_count
     }
 
-    /// Look up the nearest city to the given coordinates.
+    /// Look up the best-matching city for the given coordinates.
+    ///
+    /// Two-stage ranking instead of pure nearest-distance:
+    ///
+    /// 1. Gather all candidates in the 3×3 bucket neighbourhood (with
+    ///    longitude wraparound at the antimeridian — a photo at 179.9°E
+    ///    must see cities at 179.9°W).
+    /// 2. Among candidates not meaningfully farther than the nearest one,
+    ///    pick the most *significant* place (feature-code weight ×
+    ///    population, discounted by distance).  This makes a photo at the
+    ///    Brandenburg Gate resolve to "Berlin", not the "Tiergarten"
+    ///    neighbourhood entry that happens to sit 2 km closer, while a
+    ///    village photo still resolves to the village rather than a
+    ///    metropolis 50 km away (the radius cap).
     pub fn lookup(&self, lat: f64, lon: f64) -> Option<GeoLocation> {
         if self.grid.is_empty() {
             return None;
@@ -172,37 +215,67 @@ impl ReverseGeocoder {
         let bucket_lat = lat.floor() as i32;
         let bucket_lon = lon.floor() as i32;
 
-        let mut best: Option<(&City, f64)> = None;
+        let mut candidates: Vec<(&City, f64)> = Vec::new();
 
         // Check the target cell and all 8 neighbours
         for dlat in -1..=1 {
             for dlon in -1..=1 {
-                let key = (bucket_lat + dlat, bucket_lon + dlon);
-                if let Some(cities) = self.grid.get(&key) {
+                let lat_key = bucket_lat + dlat;
+                // Longitude buckets wrap at ±180°. Latitude does not wrap;
+                // out-of-range keys simply match no bucket.
+                let mut lon_key = bucket_lon + dlon;
+                if lon_key < -180 {
+                    lon_key += 360;
+                } else if lon_key > 179 {
+                    lon_key -= 360;
+                }
+                if let Some(cities) = self.grid.get(&(lat_key, lon_key)) {
                     for city in cities {
                         let dist = haversine_km(lat, lon, city.lat, city.lon);
-                        if best.as_ref().is_none_or(|(_, d)| dist < *d) {
-                            best = Some((city, dist));
-                        }
+                        candidates.push((city, dist));
                     }
                 }
             }
         }
 
-        best.map(|(city, _)| {
-            let state = city.admin1_key.as_ref().and_then(|k| {
-                self.admin1_names
-                    .get(k)
-                    .cloned()
-                    .or_else(|| k.split('.').nth(1).map(|s| s.to_string()))
-            });
-            GeoLocation {
-                city: city.name.clone(),
-                state,
-                country: city.country.clone(),
-                country_code: city.country_code.clone(),
-            }
-        })
+        let (nearest, d_min) = candidates
+            .iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|&(c, d)| (c, d))?;
+
+        // Radius: scale with the nearest distance (dense urban cores have
+        // d_min well under 1 km; the city centre entry may be a few km out)
+        // but never wander more than 12 km past the nearest match.
+        let radius = (d_min * 2.5).max(d_min + 5.0).min(d_min + 12.0);
+
+        let best = candidates
+            .iter()
+            .filter(|(_, d)| *d <= radius)
+            .max_by(|(a, da), (b, db)| {
+                let score_a = a.weight as f64 * (a.population.max(0) + 1) as f64 / (1.0 + da);
+                let score_b = b.weight as f64 * (b.population.max(0) + 1) as f64 / (1.0 + db);
+                score_a.total_cmp(&score_b)
+            })
+            .map(|(c, _)| *c)
+            .unwrap_or(nearest);
+
+        Some(self.to_location(best))
+    }
+
+    /// Build the public result struct for a matched city.
+    fn to_location(&self, city: &City) -> GeoLocation {
+        let state = city.admin1_key.as_ref().and_then(|k| {
+            self.admin1_names
+                .get(k)
+                .cloned()
+                .or_else(|| k.split('.').nth(1).map(|s| s.to_string()))
+        });
+        GeoLocation {
+            city: city.name.clone(),
+            state,
+            country: city.country.clone(),
+            country_code: city.country_code.clone(),
+        }
     }
 
     /// Batch lookup for multiple coordinates.
@@ -215,7 +288,8 @@ impl ReverseGeocoder {
 }
 
 /// Haversine distance in kilometres between two points on Earth.
-fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+/// Also used by burst detection's spatial-coherence guard.
+pub(crate) fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     const R: f64 = 6371.0; // Earth radius in km
     let d_lat = (lat2 - lat1).to_radians();
     let d_lon = (lon2 - lon1).to_radians();
@@ -472,4 +546,92 @@ fn country_code_map() -> HashMap<&'static str, &'static str> {
     m.insert("ZM", "Zambia");
     m.insert("ZW", "Zimbabwe");
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_geocoder(cities: Vec<City>) -> ReverseGeocoder {
+        let mut grid: HashMap<(i32, i32), Vec<City>> = HashMap::new();
+        let count = cities.len();
+        for city in cities {
+            let bucket = (city.lat.floor() as i32, city.lon.floor() as i32);
+            grid.entry(bucket).or_default().push(city);
+        }
+        ReverseGeocoder {
+            grid,
+            admin1_names: HashMap::new(),
+            city_count: count,
+        }
+    }
+
+    fn city(name: &str, lat: f64, lon: f64, feature: &str, population: i64) -> City {
+        City {
+            name: name.to_string(),
+            lat,
+            lon,
+            admin1_key: None,
+            country: "Testland".to_string(),
+            country_code: "TL".to_string(),
+            population,
+            weight: feature_weight(feature),
+        }
+    }
+
+    #[test]
+    fn capital_beats_closer_neighbourhood() {
+        // Brandenburg Gate scenario: the PPLX section entry is 2 km closer
+        // than the Berlin PPLC entry, but "Berlin" is the right answer.
+        let gc = make_geocoder(vec![
+            city("Tiergarten", 52.5167, 13.3667, "PPLX", 12_000),
+            city("Berlin", 52.5244, 13.4105, "PPLC", 3_400_000),
+        ]);
+        let loc = gc.lookup(52.5163, 13.3777).expect("must resolve");
+        assert_eq!(loc.city, "Berlin");
+    }
+
+    #[test]
+    fn village_does_not_jump_to_distant_metropolis() {
+        // ~44 km separation: the village must win despite the metropolis's
+        // population.
+        let gc = make_geocoder(vec![
+            city("Smallville", 10.0, 10.0, "PPL", 800),
+            city("Megacity", 10.4, 10.0, "PPLC", 5_000_000),
+        ]);
+        let loc = gc.lookup(10.001, 10.001).expect("must resolve");
+        assert_eq!(loc.city, "Smallville");
+    }
+
+    #[test]
+    fn antimeridian_wraps_to_other_side() {
+        // City just west of the dateline; query just east of it.  The
+        // 3×3 bucket scan must wrap -181 → 179.
+        let gc = make_geocoder(vec![city("Dateline City", 51.9, -179.95, "PPL", 5_000)]);
+        let loc = gc.lookup(51.9, 179.95).expect("must resolve across the antimeridian");
+        assert_eq!(loc.city, "Dateline City");
+    }
+
+    #[test]
+    fn nearest_wins_among_equal_significance() {
+        let gc = make_geocoder(vec![
+            city("Near", 20.0, 20.0, "PPL", 10_000),
+            city("Far", 20.3, 20.0, "PPL", 10_000),
+        ]);
+        let loc = gc.lookup(20.01, 20.0).expect("must resolve");
+        assert_eq!(loc.city, "Near");
+    }
+
+    #[test]
+    fn empty_geocoder_returns_none() {
+        let gc = ReverseGeocoder::empty();
+        assert!(gc.lookup(50.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn no_cities_in_neighbourhood_returns_none() {
+        let gc = make_geocoder(vec![city("Lonely", 0.0, 0.0, "PPL", 1_000)]);
+        // Deep ocean, far from any bucket with cities.
+        assert!(gc.lookup(45.0, -140.0).is_none());
+    }
 }

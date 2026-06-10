@@ -10,10 +10,16 @@
  *       - For `panorama` (cylindrical / wide stitch) → renders a flat
  *         scrollable viewport at the image's natural aspect ratio.
  *
- * The flat live view does NOT apply any horizontal CSS scaling — that
- * previously stretched the image and clipped both ends of the visible
- * range.  Instead we size the image at its true aspect ratio relative to
- * the container and translate it in pixels.
+ * The flat live view pans along the image's long axis: horizontal stitches
+ * pan left/right, vertical panoramas (h/w ≥ 2.5, e.g. Samsung vertical
+ * pano) pan up/down — previously they got the horizontal-only viewer,
+ * which computed a 0-pixel pan range and did nothing.
+ *
+ * Input handling uses pointer events exclusively (they cover mouse, pen,
+ * and touch).  The old parallel touch handlers called `preventDefault()`
+ * inside React's passive listeners — a no-op that let the page scroll
+ * instead of panning on mobile.  `touch-action: none` on the live viewport
+ * is what actually stops the browser from hijacking the gesture.
  */
 import { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import Sphere360Viewer from "./Sphere360Viewer";
@@ -36,12 +42,12 @@ export default function PanoramaViewer({ mediaUrl, subtype, imageWidth, imageHei
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
 
-  // Pan offset in *rendered-image* pixels.  0 = left edge of image aligned
-  // with left edge of viewport.
-  const [panX, setPanX] = useState(0);
+  // Pan offset in *rendered-image* pixels along the pan axis.
+  // 0 = leading edge of image aligned with leading edge of viewport.
+  const [pan, setPan] = useState(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
-  // Track container size so we can compute rendered image width.
+  // Track container size so we can compute rendered image dimensions.
   useLayoutEffect(() => {
     if (mode !== "live") return;
     const el = containerRef.current;
@@ -55,60 +61,59 @@ export default function PanoramaViewer({ mediaUrl, subtype, imageWidth, imageHei
 
   // Reset pan when switching modes or image changes.
   useEffect(() => {
-    setPanX(0);
+    setPan(0);
   }, [mediaUrl, mode]);
 
-  // Rendered image dimensions when displayed at h-full preserving aspect.
   const aspect = imageWidth > 0 && imageHeight > 0 ? imageWidth / imageHeight : 1;
-  const renderedHeight = containerSize.height || 1;
-  const renderedWidth = renderedHeight * aspect;
-  const maxPan = Math.max(0, renderedWidth - containerSize.width);
+  // Pan along the image's long axis.
+  const horizontal = aspect >= 1;
+
+  // Rendered dimensions: the short axis fills the container, the long axis
+  // overflows and is translated.
+  const renderedWidth = horizontal
+    ? (containerSize.height || 1) * aspect
+    : containerSize.width || 1;
+  const renderedHeight = horizontal
+    ? containerSize.height || 1
+    : (containerSize.width || 1) / aspect;
+  const viewportSpan = horizontal ? containerSize.width : containerSize.height;
+  const renderedSpan = horizontal ? renderedWidth : renderedHeight;
+  const maxPan = Math.max(0, renderedSpan - viewportSpan);
 
   const clampPan = useCallback(
     (next: number): number => Math.max(0, Math.min(maxPan, next)),
     [maxPan],
   );
 
-  // Pointer drag.
+  // Pointer drag (mouse, pen, and touch — touch-action: none makes touch
+  // pointer events fire reliably without page scroll).
   const isDragging = useRef(false);
-  const dragStartX = useRef(0);
-  const panStartX = useRef(0);
+  const dragStart = useRef(0);
+  const panStart = useRef(0);
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (mode !== "live") return;
     isDragging.current = true;
-    dragStartX.current = e.clientX;
-    panStartX.current = panX;
+    dragStart.current = horizontal ? e.clientX : e.clientY;
+    panStart.current = pan;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  }, [mode, panX]);
+  }, [mode, pan, horizontal]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!isDragging.current || mode !== "live") return;
-    // Drag right ⇒ image moves right ⇒ panX decreases.
-    const dx = e.clientX - dragStartX.current;
-    setPanX(clampPan(panStartX.current - dx));
-  }, [mode, clampPan]);
+    // Drag toward positive screen axis ⇒ image follows ⇒ pan decreases.
+    const delta = (horizontal ? e.clientX : e.clientY) - dragStart.current;
+    setPan(clampPan(panStart.current - delta));
+  }, [mode, clampPan, horizontal]);
 
-  const handlePointerUp = useCallback(() => {
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
     isDragging.current = false;
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer capture may already be released */
+    }
   }, []);
-
-  // Touch handling for mobile swipe.
-  const touchStartX = useRef(0);
-  const touchPanStart = useRef(0);
-
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (mode !== "live" || e.touches.length !== 1) return;
-    touchStartX.current = e.touches[0].clientX;
-    touchPanStart.current = panX;
-  }, [mode, panX]);
-
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (mode !== "live" || e.touches.length !== 1) return;
-    e.preventDefault();
-    const dx = e.touches[0].clientX - touchStartX.current;
-    setPanX(clampPan(touchPanStart.current - dx));
-  }, [mode, clampPan]);
 
   if (mode === "full") {
     return (
@@ -129,32 +134,31 @@ export default function PanoramaViewer({ mediaUrl, subtype, imageWidth, imageHei
     return <Sphere360Viewer mediaUrl={mediaUrl} onExitToFull={() => setMode("full")} />;
   }
 
-  // ── Live view, cylindrical panorama: flat scrollable viewport ────────
-  // The image is rendered at its natural aspect ratio with height matching
-  // the container, then translated in screen pixels.  No scaleX hacks —
-  // the image is never stretched.
-  const tx = -panX;
-  const indicatorPosition = renderedWidth > 0 ? panX / renderedWidth : 0;
-  const indicatorWidth = renderedWidth > 0
-    ? Math.min(1, containerSize.width / renderedWidth)
-    : 0;
+  // ── Live view, flat panorama: scrollable viewport along the long axis ─
+  // The image is rendered at its natural aspect ratio with the short side
+  // matching the container, then translated in screen pixels.  No scale
+  // hacks — the image is never stretched.
+  const tx = horizontal ? -pan : 0;
+  const ty = horizontal ? 0 : -pan;
+  const indicatorPosition = renderedSpan > 0 ? pan / renderedSpan : 0;
+  const indicatorWidth = renderedSpan > 0 ? Math.min(1, viewportSpan / renderedSpan) : 0;
 
   return (
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden cursor-grab active:cursor-grabbing select-none"
+      style={{ touchAction: "none" }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
     >
       <div
-        className="absolute top-0 left-0 h-full"
+        className="absolute top-0 left-0"
         style={{
           width: renderedWidth ? `${renderedWidth}px` : "auto",
-          transform: `translate3d(${tx}px, 0, 0)`,
+          height: renderedHeight ? `${renderedHeight}px` : "100%",
+          transform: `translate3d(${tx}px, ${ty}px, 0)`,
           willChange: "transform",
         }}
       >

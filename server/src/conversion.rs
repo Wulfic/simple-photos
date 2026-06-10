@@ -321,6 +321,18 @@ pub async fn convert_file(
 
 // ── Format-specific converters ───────────────────────────────────────────────
 
+/// ImageMagick invocation.  IM7 on Windows installs `magick.exe`; plain
+/// `convert` there resolves to the Windows filesystem utility
+/// (System32\convert.exe), which made this fallback silently dead on
+/// every Windows host.  Unix distros still ship IM6-style `convert`.
+pub(crate) fn imagemagick_command() -> tokio::process::Command {
+    if cfg!(windows) {
+        tokio::process::Command::new("magick")
+    } else {
+        tokio::process::Command::new("convert")
+    }
+}
+
 /// Image → JPEG.  Tries FFmpeg first, falls back to ImageMagick.
 async fn convert_image(input: &str, output: &str) -> bool {
     tracing::debug!(input = %input, output = %output, "Image conversion: starting JPEG conversion");
@@ -337,9 +349,9 @@ async fn convert_image(input: &str, output: &str) -> bool {
         return true;
     }
 
-    // Fallback: ImageMagick `convert` (handles RAW, PSD, SVG, etc.)
+    // Fallback: ImageMagick (handles RAW, PSD, SVG, etc.)
     tracing::debug!(input = %input, "Image conversion: FFmpeg failed, trying ImageMagick");
-    let mut cmd = tokio::process::Command::new("convert");
+    let mut cmd = imagemagick_command();
     cmd.args([
         &format!("{input}[0]"), // [0] = first frame/page
         "-quality",

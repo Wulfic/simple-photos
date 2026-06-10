@@ -199,6 +199,21 @@ function Download-GeoData {
         }
         $lines = (Get-Content $Target | Measure-Object -Line).Lines
         Write-Info "[geo] Done — $lines cities written to $Target"
+
+        # Companion file: admin1 region names ("California" instead of the
+        # raw GeoNames code "CA" / "07").  The server looks for it next to
+        # cities500.txt.  install.sh already fetched this; without it every
+        # non-US state renders as a meaningless numeric code.
+        $adminTarget = Join-Path $dir "admin1CodesASCII.txt"
+        try {
+            Write-Info "[geo] Downloading GeoNames admin1 region names…"
+            Invoke-WebRequest `
+                -Uri "https://download.geonames.org/export/dump/admin1CodesASCII.txt" `
+                -OutFile $adminTarget -UseBasicParsing
+            Write-Info "[geo] Done — region names written to $adminTarget"
+        } catch {
+            Write-Warn "[geo] admin1CodesASCII.txt download failed ($($_.Exception.Message)) — states will show as raw codes"
+        }
     } finally {
         Remove-Item $zipPath -ErrorAction SilentlyContinue
     }

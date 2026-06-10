@@ -637,23 +637,41 @@ pub async fn serve_motion_video(
         ));
     }
 
-    // If a motion video blob is already stored separately, serve it
+    // If a motion video blob is already stored separately, serve it.
+    // Resolve via the blobs table's recorded storage_path — deriving the
+    // path by convention broke here before: extraction wrote flat
+    // `blobs/{id}.mp4` while this handler guessed the sharded `.bin`
+    // layout, so the stored blob was never served.
     if let Some(ref blob_id) = motion_blob_id {
         let storage_root = (**state.storage_root.load()).clone();
-        let blob_path = crate::blobs::storage::blob_path(&storage_root, &auth.user_id, blob_id);
-        if tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
-            let meta = tokio::fs::metadata(&blob_path).await.map_err(|e| {
-                AppError::Internal(format!("Failed to read motion video blob: {e}"))
-            })?;
-            let data = tokio::fs::read(&blob_path).await.map_err(|e| {
-                AppError::Internal(format!("Failed to read motion video blob: {e}"))
-            })?;
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "video/mp4")
-                .header("Content-Length", meta.len())
-                .body(Body::from(data))
-                .map_err(|e| AppError::Internal(format!("Response build: {e}")));
+        let recorded: Option<(String,)> = sqlx::query_as(
+            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.read_pool)
+        .await?;
+
+        if let Some((storage_path,)) = recorded {
+            let blob_path = storage_root.join(&storage_path);
+            if tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
+                let data = tokio::fs::read(&blob_path).await.map_err(|e| {
+                    AppError::Internal(format!("Failed to read motion video blob: {e}"))
+                })?;
+                let len = data.len();
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "video/mp4")
+                    .header("Content-Length", len)
+                    .body(Body::from(data))
+                    .map_err(|e| AppError::Internal(format!("Response build: {e}")));
+            }
+            tracing::warn!(
+                photo_id = %photo_id,
+                blob_id = %blob_id,
+                storage_path = %storage_path,
+                "Motion video blob row exists but file is missing — falling back to on-the-fly extraction"
+            );
         }
     }
 

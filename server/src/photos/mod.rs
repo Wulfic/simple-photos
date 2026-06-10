@@ -23,6 +23,7 @@ pub mod handlers;
 pub mod metadata;
 pub mod metadata_edit;
 pub mod models;
+pub mod motion;
 pub mod scan;
 pub mod serve;
 pub mod server_migrate;

@@ -26,11 +26,9 @@ use crate::media::{is_media_file, mime_from_extension};
 use crate::setup::admin::require_admin;
 use crate::state::AppState;
 
-use super::metadata::{extract_media_metadata_async, extract_motion_video, extract_xmp_subtype};
+use super::metadata::{extract_media_metadata_async, extract_xmp_subtype};
 use super::thumbnail::generate_thumbnail_file;
 use super::utils::{compute_photo_hash_streaming, normalize_iso_timestamp, utc_now_iso};
-
-use chrono::Utc;
 
 /// Maximum concurrent file processing tasks during scan.
 const SCAN_PARALLELISM: usize = 4;
@@ -195,10 +193,23 @@ pub async fn scan_and_register(
             let photo_hash = compute_photo_hash_streaming(&candidate.abs_path).await;
 
             // ── XMP subtype detection (motion, panorama, burst, HDR) ────
-            let file_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
-            let mut subtype_info = extract_xmp_subtype(&file_bytes);
+            // Photos only, and only the file prefix: scanning a video's
+            // bytes for XMP is meaningless, and reading whole files here
+            // used to pull multi-GB videos into RAM four at a time.
+            let mut subtype_info = if candidate.media_type == "photo" {
+                let prefix = super::metadata::read_file_prefix(
+                    &candidate.abs_path,
+                    super::metadata::XMP_SCAN_PREFIX_BYTES,
+                )
+                .await;
+                extract_xmp_subtype(&prefix)
+            } else {
+                Default::default()
+            };
             // Aspect-ratio fallback for panoramas / 360° photos missing XMP.
-            super::metadata::apply_aspect_subtype_fallback(&mut subtype_info, img_w, img_h);
+            if candidate.media_type == "photo" {
+                super::metadata::apply_aspect_subtype_fallback(&mut subtype_info, img_w, img_h);
+            }
 
             let insert_result = sqlx::query(
                 "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
@@ -240,51 +251,20 @@ pub async fn scan_and_register(
             }
 
             // ── Extract and store motion video blob ─────────────────────
+            // Only now read the full file — motion photos are stills, so
+            // this stays bounded; videos never reach this branch.
             if subtype_info.photo_subtype.as_deref() == Some("motion") {
-                if let Some(offset) = subtype_info.motion_video_offset {
-                    if let Some(video_bytes) = extract_motion_video(&file_bytes, offset) {
-                        let blob_id = Uuid::new_v4().to_string();
-                        let blob_storage_dir = storage_root.join("blobs");
-                        let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
-                        let blob_rel = format!("blobs/{blob_id}.mp4");
-                        let blob_abs = storage_root.join(&blob_rel);
-
-                        if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {
-                            let blob_size = video_bytes.len() as i64;
-                            let blob_now = Utc::now().to_rfc3339();
-
-                            let insert_ok = sqlx::query(
-                                "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
-                                 VALUES (?, ?, 'motion_video', ?, ?, ?)",
-                            )
-                            .bind(&blob_id)
-                            .bind(&user_id)
-                            .bind(blob_size)
-                            .bind(&blob_now)
-                            .bind(&blob_rel)
-                            .execute(&pool)
-                            .await;
-
-                            if insert_ok.is_ok() {
-                                let _ = sqlx::query(
-                                    "UPDATE photos SET motion_video_blob_id = ? WHERE id = ?",
-                                )
-                                .bind(&blob_id)
-                                .bind(&photo_id)
-                                .execute(&pool)
-                                .await;
-
-                                tracing::info!(
-                                    photo_id = %photo_id,
-                                    blob_id = %blob_id,
-                                    size = blob_size,
-                                    "Scan: extracted and stored motion video blob"
-                                );
-                            } else {
-                                let _ = tokio::fs::remove_file(&blob_abs).await;
-                            }
-                        }
-                    }
+                let file_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
+                if !file_bytes.is_empty() {
+                    super::motion::extract_and_store_motion_video(
+                        &pool,
+                        &storage_root,
+                        &user_id,
+                        &photo_id,
+                        &file_bytes,
+                        subtype_info.motion_video_offset,
+                    )
+                    .await;
                 }
             }
 
@@ -318,17 +298,34 @@ pub async fn scan_and_register(
     tracing::info!("Scan complete: registered {} new files", new_count,);
 
     // ── Retroactively fill missing metadata for existing photos ──────────
-    // Also re-check video dimensions: uploads prior to the ffprobe SAR fix
-    // may have stored coded pixel dimensions instead of display dimensions.
-    let photos_needing_fix: Vec<(String, String, String)> = sqlx::query_as(
+    // Also re-check video dimensions ONCE per user: uploads prior to the
+    // ffprobe SAR fix may have stored coded pixel dimensions instead of
+    // display dimensions.  Without the one-time flag, every scan re-hashed
+    // and re-probed every video in the library forever.
+    let video_repair_key = format!("video_dim_repair_v1:{}", auth.user_id);
+    let video_repair_done: bool = sqlx::query_scalar(
+        "SELECT value = 'true' FROM server_settings WHERE key = ?",
+    )
+    .bind(&video_repair_key)
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(false);
+
+    let fix_query = if video_repair_done {
+        "SELECT id, file_path, media_type FROM photos WHERE user_id = ? AND \
+         (width = 0 OR height = 0 OR camera_model IS NULL OR photo_hash IS NULL)"
+    } else {
         "SELECT id, file_path, media_type FROM photos WHERE user_id = ? AND \
          (width = 0 OR height = 0 OR camera_model IS NULL OR photo_hash IS NULL \
-          OR media_type = 'video')",
-    )
-    .bind(&auth.user_id)
-    .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
+          OR media_type = 'video')"
+    };
+    let photos_needing_fix: Vec<(String, String, String)> = sqlx::query_as(fix_query)
+        .bind(&auth.user_id)
+        .fetch_all(&state.pool)
+        .await
+        .unwrap_or_default();
 
     let fixed_count = Arc::new(AtomicI64::new(0));
     {
@@ -404,12 +401,28 @@ pub async fn scan_and_register(
         tracing::info!("Updated metadata for {} existing photos", fixed_count);
     }
 
+    // Mark the one-time per-user video dimension repair as done so later
+    // scans stop re-hashing/re-probing every video in the library.
+    if !video_repair_done {
+        if let Err(e) = sqlx::query(
+            "INSERT INTO server_settings (key, value) VALUES (?, 'true') \
+             ON CONFLICT(key) DO UPDATE SET value = 'true'",
+        )
+        .bind(&video_repair_key)
+        .execute(&state.pool)
+        .await
+        {
+            tracing::warn!(error = %e, "Failed to persist video dimension repair flag");
+        }
+    }
+
     // ── Retroactively fill missing XMP subtypes for existing photos ──────
     // Detect motion, panorama, burst, HDR subtypes that were missed by
     // earlier scan versions that didn't do XMP extraction.
     let photos_needing_subtype: Vec<(String, String, i64, i64)> = sqlx::query_as(
         "SELECT id, file_path, COALESCE(width, 0), COALESCE(height, 0) FROM photos \
-         WHERE user_id = ? AND photo_subtype IS NULL AND file_path != ''",
+         WHERE user_id = ? AND photo_subtype IS NULL AND file_path != '' \
+         AND media_type = 'photo'",
     )
     .bind(&auth.user_id)
     .fetch_all(&state.pool)
@@ -438,7 +451,11 @@ pub async fn scan_and_register(
 
             handles.push(tokio::spawn(async move {
                 let _permit = sem.acquire().await;
-                let file_bytes = tokio::fs::read(&abs).await.unwrap_or_default();
+                let file_bytes = super::metadata::read_file_prefix(
+                    &abs,
+                    super::metadata::XMP_SCAN_PREFIX_BYTES,
+                )
+                .await;
                 let mut sub = extract_xmp_subtype(&file_bytes);
 
                 // If the photos row never recorded width/height (legacy
@@ -488,45 +505,21 @@ pub async fn scan_and_register(
                     .await
                     .ok();
 
-                    // Extract motion video blob if applicable
+                    // Extract motion video blob if applicable.  The trailer
+                    // lives at end-of-file, so this is the one case that
+                    // needs the full bytes (bounded: motion photos are stills).
                     if subtype == "motion" {
-                        if let Some(offset) = sub.motion_video_offset {
-                            if let Some(video_bytes) = extract_motion_video(&file_bytes, offset) {
-                                let blob_id = Uuid::new_v4().to_string();
-                                let blob_storage_dir = storage_root.join("blobs");
-                                let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
-                                let blob_rel = format!("blobs/{blob_id}.mp4");
-                                let blob_abs = storage_root.join(&blob_rel);
-
-                                if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {
-                                    let blob_size = video_bytes.len() as i64;
-                                    let blob_now = Utc::now().to_rfc3339();
-
-                                    let insert_ok = sqlx::query(
-                                        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
-                                         VALUES (?, ?, 'motion_video', ?, ?, ?)",
-                                    )
-                                    .bind(&blob_id)
-                                    .bind(&user_id)
-                                    .bind(blob_size)
-                                    .bind(&blob_now)
-                                    .bind(&blob_rel)
-                                    .execute(&pool)
-                                    .await;
-
-                                    if insert_ok.is_ok() {
-                                        let _ = sqlx::query(
-                                            "UPDATE photos SET motion_video_blob_id = ? WHERE id = ?",
-                                        )
-                                        .bind(&blob_id)
-                                        .bind(&pid)
-                                        .execute(&pool)
-                                        .await;
-                                    } else {
-                                        let _ = tokio::fs::remove_file(&blob_abs).await;
-                                    }
-                                }
-                            }
+                        let full_bytes = tokio::fs::read(&abs).await.unwrap_or_default();
+                        if !full_bytes.is_empty() {
+                            super::motion::extract_and_store_motion_video(
+                                &pool,
+                                &storage_root,
+                                &user_id,
+                                &pid,
+                                &full_bytes,
+                                sub.motion_video_offset,
+                            )
+                            .await;
                         }
                     }
 
