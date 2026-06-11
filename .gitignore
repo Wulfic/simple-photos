@@ -140,3 +140,7 @@ env/
 # Network-fetched AI sample assets (face grouping etc.) — generated on demand
 tests/test_data/downloaded_*/
 tests/.cache/
+
+.mcp.json
+CLAUDE.md
+.claude/
