@@ -290,7 +290,7 @@ def test_http_redirect_preserves_host_header(redirect_server):
         timeout=5,
     )
     assert res.status_code in (301, 308)
-    assert "photos.example.com" in res.headers.get("Location", "")
+    assert "photos.example.com" in res.headers.get("Location", "")  # codeql[py/incomplete-url-substring-sanitization]
 
 
 # ── Negative case: redirect disabled ─────────────────────────────────────────

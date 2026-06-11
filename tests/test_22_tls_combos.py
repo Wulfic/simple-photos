@@ -168,7 +168,7 @@ auto_scan_interval_secs = 0
 """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:  # codeql[py/clear-text-storage-sensitive-data] -- test-only config with intentionally weak JWT secret
-        f.write(config)
+        f.write(config)  # codeql[py/clear-text-storage-sensitive-data]
 
 
 class TLSServerInstance:

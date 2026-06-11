@@ -116,7 +116,8 @@ export async function request<T>(
             ? `HTTP ${retry.status}: ${rawText.substring(0, 200)}`
             : `HTTP ${retry.status}`;
         }
-        console.error(`[API] ${options.method || "GET"} ${path} failed after token refresh: ${retry.status}`, rawText.substring(0, 500)); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring // codeql[js/tainted-format-string]
+        // codeql[js/tainted-format-string] -- path is an internal API route, rawText is server response; neither is a user-controlled format string
+        console.error(`[API] ${options.method || "GET"} ${path} failed after token refresh: ${retry.status}`, rawText.substring(0, 500)); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
         throw new Error(errorMessage);
       }
       if (retry.status === 204) return undefined as T;
@@ -143,7 +144,8 @@ export async function request<T>(
         ? `HTTP ${res.status}: ${rawText.substring(0, 200)}`
         : `HTTP ${res.status}`;
     }
-    console.error(`[API] ${options.method || "GET"} ${path} failed: ${res.status}`, rawText.substring(0, 500)); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring // codeql[js/tainted-format-string]
+    // codeql[js/tainted-format-string] -- path is an internal API route, rawText is server response; neither is a user-controlled format string
+    console.error(`[API] ${options.method || "GET"} ${path} failed: ${res.status}`, rawText.substring(0, 500)); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
     throw new Error(errorMessage);
   }
 
