@@ -125,21 +125,25 @@ Goal: surface new server features in Compose.
 
 - [x] **People screen** (face clusters): list view of clusters with name + count.
 - [x] **Pets screen**: list view of pet clusters.
-- [x] **Things/Objects screen**: object classes list.
-- [x] **Map screen**: list of geo-tagged photos with lat/long (full map widget deferred — needs Maps SDK).
-- [x] **Timeline screen**: year/month list.
-- [x] **Locations screen**: country + city list.
 - [x] **Memories screen**: auto-curated highlights.
 - [x] **Trips screen**: auto-detected trips.
-- [x] **Export screen**: options form + start + progress + completed archive list.
-- [x] **Library hub** card grid surfacing all of the above (`LibraryScreen`).
-- [x] Wired into `AppHeader` dropdown menu.
-- [ ] Per-cluster photo drill-down → PhotoViewer (deferred — requires server-id ↔ local-id resolver for non-synced photos).
-- [ ] Settings additions (port, restart, browse, AI/Geo toggles, backup mode, audit logs) — DTOs + repos in place; UI is a future polish pass.
+- [x] Per-cluster photo drill-down → PhotoViewer (`PersonDetail` / `PetDetail` /
+      `MemoryDetail` / `TripDetail` in `LibraryFeatureScreens.kt`, wired in
+      `NavGraph.kt`; thumbnails served by server photo id).
+- [x] **Albums-page Discover sections** — People / Pets / Memories / Trips
+      rows embedded in `AlbumListScreen` (matches the web's Albums page).
+- [x] ~~Things/Map/Timeline/Locations/Export screens + Library hub~~ —
+      **removed by design** (2026-06): the web experience surfaces only
+      People/Pets/Memories/Trips on the Albums page; a separate Library hub
+      and the extra screens were dropped to stay aligned. DTOs + repos for
+      objects/map/timeline/locations/export remain in place for future use.
+- [ ] Settings additions (port, restart, browse, AI/Geo toggles, backup mode, audit logs) — DTOs + repos in place; Settings UI intentionally untouched.
 - [ ] Setup wizard pair flow UI — DTOs + repo in place; UI deferred.
 - [ ] Photo viewer surface (source-file, render, metadata sidecar) — DTOs + repo in place; UI deferred.
 - [ ] Edit copies list UI — DTOs + repo in place; UI deferred.
-- [ ] Secure-gallery item delete UI — endpoint wired; UI button is a small follow-up.
+- [x] Secure-gallery item delete UI — remove button + confirm dialog in
+      `SecurePhotoViewer`; `SecureGalleryViewModel.removeItem` →
+      `SecureGalleryRepository.removeItem` → `DELETE /api/galleries/secure/{id}/items/{item_id}` (2026-06-10).
 
 ### Session 5 — Navigation + DI wiring + theme
 
@@ -162,7 +166,8 @@ Goal: surface new server features in Compose.
 - [x] Bump `versionCode` 69 → 70 / `versionName` 0.6.9 → 0.7.0.
 - [x] `./gradlew :app:assembleDebug` — BUILD SUCCESSFUL. APK at `android/app/build/outputs/apk/debug/app-debug.apk` (29 MB).
 - [x] Copy APK to `downloads/simple-photos.apk` (used `.env ROOT_PASS` for sudo).
-- [ ] Update README + API_REFERENCE — no drift detected during work.
+- [x] Update README + API_REFERENCE — drift WAS present (AI / Geo / Export /
+      Activity / secure-item-delete were undocumented); fixed 2026-06-10.
 - [ ] Run `mcp_gitnexus_detect_changes` before final commit.
 
 ---
@@ -281,13 +286,24 @@ Server request structs (`server/src/ai/models.rs`, `server/src/geo/handlers.rs`)
 - `POST /api/settings/geo` ← `GeoSettingsRequest { enabled?, scrub_on_upload? }`, returns **empty `200`** (no body). Android sends `{geo_enabled, reverse_geocode_enabled, strip_on_export}` and types the return as `GeoSettings` → toggle no-ops AND empty-body parse throws. **Rewrite** `UpdateGeoSettingsRequest` to `{enabled?, scrub_on_upload?}` and change `ApiService.updateGeoSettings` return type to `Response<Unit>` (or `retrofit2.Response<Unit>`). Update `GeoRepository.updateSettings` + any Settings UI consumer.
 - `POST /api/geo/scrub` ← `ScrubConfirmRequest { confirm: bool }` (Android currently sends no body) and returns `{ scrubbed, ... }` — verify and add the `{confirm:true}` body.
 
-### 4.5 Execution checklist (next session, with a working Android build)
+### 4.5 Execution checklist
 
-- [ ] Confirm `/api/ai/status` route is registered (handler exists at `ai/handlers.rs:26`).
-- [ ] Apply 4.1 (return types → `List<T>`, drop wrappers) in `ApiService.kt` + `AiRepository`/`GeoRepository`.
-- [ ] Apply 4.2 `@SerializedName` fixes in `AiDto.kt` / `GeoDto.kt` (keep Kotlin prop names to avoid UI churn).
-- [ ] Apply 4.3 request-body rewrites + update repo signatures and the People/Pets/Things screen call sites.
-- [ ] Apply 4.4 geo-settings rewrite.
-- [ ] `./gradlew :app:assembleDebug` + `:app:lintDebug` green.
-- [ ] On-device smoke: People / Pets / Things / Map / Timeline / Locations / Memories / Trips all load; rename + merge + AI/Geo toggle persist.
-- [ ] Fix the false "All pass / no drift detected" claims in Sessions 6–7 above.
+- [x] Confirm `/api/ai/status` route is registered (`routes.rs:752`).
+- [x] Apply 4.1 (return types → `List<T>`, drop wrappers) in `ApiService.kt` + `AiRepository`/`GeoRepository` (commit 486760e).
+- [x] Apply 4.2 field fixes in `AiDto.kt` / `GeoDto.kt`. **Note:** the original
+      plan ("keep Kotlin prop names") was reversed on 2026-06-10 — the UI
+      written in 4445b1f uses the raw server field names (`label`,
+      `representative`, `name`, `firstPhotoId`, `dateLabel`), and the merge
+      of both branches left HEAD uncompilable (33 unresolved references).
+      DTO properties now match server JSON names directly.
+- [x] Apply 4.3 request-body rewrites (merge `{cluster_ids}`, split
+      `{detection_ids}`, reprocess `{photo_ids?}`) — verified against
+      `server/src/ai/models.rs`.
+- [x] Apply 4.4 geo-settings rewrite (`GeoStatusResponse` shape, POST returns
+      empty 200 → `Response<Unit>`, scrub sends `{confirm:true}`).
+- [x] `./gradlew :app:assembleDebug` + `:app:lintDebug` green (2026-06-10, Windows/JDK17).
+- [ ] On-device smoke: People / Pets / Memories / Trips all load; rename + merge persist.
+- [x] Fix the false "All pass / no drift detected" claims in Sessions 6–7
+      above — Session 4 list corrected (removed-by-design screens), and
+      API_REFERENCE.md gained the missing AI / Geo / Export / Activity
+      sections it was claimed to already have (2026-06-10).

@@ -217,6 +217,28 @@ class SecureGalleryViewModel @Inject constructor(
     }
 
     /**
+     * Remove a single item from the selected secure gallery. The original
+     * photo becomes visible again in the regular gallery (mirrors the web's
+     * per-item removal).
+     */
+    fun removeItem(item: SecureGalleryItem) {
+        val gallery = selectedGallery ?: return
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    secureGalleryRepository.removeItem(gallery.id, item.id)
+                }
+                Log.i(TAG, "Removed item ${item.id} from gallery ${gallery.id}")
+                loadItems(gallery.id)
+                loadGalleries()
+            } catch (e: Exception) {
+                Log.e(TAG, "Remove item failed: ${item.id}", e)
+                error = "Remove failed: ${e.message}"
+            }
+        }
+    }
+
+    /**
      * Download and decrypt an encrypted blob, returning the raw image bytes.
      *
      * Uses file-based streaming to avoid OOM on large blobs:

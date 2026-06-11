@@ -412,7 +412,11 @@ internal fun GalleryDetailView(
             items = items,
             initialIndex = viewerIndex!!,
             viewModel = viewModel,
-            onBack = { viewerIndex = null }
+            onBack = { viewerIndex = null },
+            onRemove = { item ->
+                viewModel.removeItem(item)
+                viewerIndex = null
+            }
         )
         return
     }
@@ -746,12 +750,32 @@ internal fun SecurePhotoViewer(
     items: List<SecureGalleryItem>,
     initialIndex: Int,
     viewModel: SecureGalleryViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onRemove: ((SecureGalleryItem) -> Unit)? = null
 ) {
     val pagerState = rememberPagerState(
         initialPage = initialIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
         pageCount = { items.size }
     )
+    var confirmRemove by remember { mutableStateOf(false) }
+
+    if (confirmRemove) {
+        val current = items.getOrNull(pagerState.currentPage)
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            title = { Text("Remove from secure album?") },
+            text = { Text("The photo will return to your regular gallery.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemove = false
+                    current?.let { onRemove?.invoke(it) }
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemove = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -825,6 +849,23 @@ internal fun SecurePhotoViewer(
                 contentDescription = "Back",
                 tint = Color.White
             )
+        }
+
+        // Remove-from-album overlay (mirrors web's per-item removal)
+        if (onRemove != null && items.isNotEmpty()) {
+            IconButton(
+                onClick = { confirmRemove = true },
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(8.dp)
+                    .align(Alignment.TopEnd)
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Remove from album",
+                    tint = Color.White
+                )
+            }
         }
     }
 }

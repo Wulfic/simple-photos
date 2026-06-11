@@ -88,13 +88,13 @@ data class GeoTimelineEntry(
 // Mirrors server `Memory` (bare array from GET /api/geo/memories).
 data class GeoMemory(
     val id: String,
-    @SerializedName("name") val title: String,
-    val city: String? = null,
-    val country: String? = null,
-    @SerializedName("date_label") val anchorDate: String? = null,
+    val name: String,
+    val city: String = "",
+    val country: String = "",
+    @SerializedName("date_label") val dateLabel: String = "",
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("first_photo_id") val previewPhotoId: String? = null,
-    @SerializedName("first_thumb_path") val previewThumbPath: String? = null,
+    @SerializedName("first_photo_id") val firstPhotoId: String? = null,
+    @SerializedName("first_thumb_path") val firstThumbPath: String? = null,
 ) {
     /** Location line, derived from city/country (server sends no subtitle). */
     val subtitle: String?
@@ -107,16 +107,16 @@ data class GeoMemory(
 // Mirrors server `Trip` (bare array from GET /api/geo/trips).
 data class GeoTrip(
     val id: String,
-    @SerializedName("name") val title: String,
-    val city: String? = null,
+    val name: String,
+    val city: String = "",
     val state: String? = null,
-    val country: String? = null,
+    val country: String = "",
     @SerializedName("country_code") val countryCode: String? = null,
-    @SerializedName("start_date") val startedAt: String? = null,
-    @SerializedName("end_date") val endedAt: String? = null,
-    @SerializedName("date_label") val dateLabel: String? = null,
+    @SerializedName("start_date") val startDate: String? = null,
+    @SerializedName("end_date") val endDate: String? = null,
+    @SerializedName("date_label") val dateLabel: String = "",
     @SerializedName("photo_count") val photoCount: Int,
     @SerializedName("day_count") val dayCount: Int = 0,
-    @SerializedName("first_photo_id") val previewPhotoId: String? = null,
-    @SerializedName("first_thumb_path") val previewThumbPath: String? = null,
+    @SerializedName("first_photo_id") val firstPhotoId: String? = null,
+    @SerializedName("first_thumb_path") val firstThumbPath: String? = null,
 )

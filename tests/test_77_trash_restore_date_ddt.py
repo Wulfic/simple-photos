@@ -80,8 +80,9 @@ def test_restore_preserves_original_date(
 
     # 2. If we want a specific taken_at, set it via the metadata editor
     #    (the upload pipeline only assigns one when EXIF carries it).
+    #    The server route (and the web client) use PATCH, not PUT.
     if taken_at is not None:
-        r = user_client.put(
+        r = user_client.patch(
             f"/api/photos/{photo_id}/metadata",
             json_data={"taken_at": taken_at},
         )

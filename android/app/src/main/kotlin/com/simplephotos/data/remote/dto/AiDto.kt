@@ -47,9 +47,10 @@ data class AiReprocessResponse(
 // Mirrors server `FaceClusterSummary` (bare array from GET /api/ai/faces).
 data class FaceCluster(
     val id: Long,
-    @SerializedName("label") val name: String? = null,
+    val label: String? = null,
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("representative") val previewPhotoId: String? = null,
+    /** Representative photo id used as the cluster thumbnail. */
+    val representative: String? = null,
     @SerializedName("created_at") val createdAt: String? = null,
     @SerializedName("updated_at") val updatedAt: String? = null,
 )
@@ -106,10 +107,11 @@ data class ObjectClassPhotoEntry(
 // Mirrors server `PetClusterSummary` (bare array from GET /api/ai/pets).
 data class PetCluster(
     val id: Long,
-    @SerializedName("label") val name: String? = null,
-    @SerializedName("species") val species: String? = null,
+    val label: String? = null,
+    val species: String = "",
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("representative") val previewPhotoId: String? = null,
+    /** Representative photo id used as the cluster thumbnail. */
+    val representative: String? = null,
     @SerializedName("created_at") val createdAt: String? = null,
     @SerializedName("updated_at") val updatedAt: String? = null,
 )

@@ -118,8 +118,9 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `POST` | `/api/galleries/secure/unlock` | Bearer | `{ password }` | `{ gallery_token, expires_in }` |
 | `GET` | `/api/galleries/secure/blob-ids` | Bearer | — | `{ blob_ids: [string] }` |
 | `DELETE` | `/api/galleries/secure/{id}` | Bearer | — | **204** |
-| `GET` | `/api/galleries/secure/{id}/items` | Bearer | Header: `x-gallery-token` | `{ items: [{ id, blob_id, added_at }] }` |
+| `GET` | `/api/galleries/secure/{id}/items` | Bearer | Header: `x-gallery-token` | `{ items: [{ id, blob_id, added_at, encrypted_thumb_blob_id, width, height, media_type }] }` |
 | `POST` | `/api/galleries/secure/{id}/items` | Bearer | `{ blob_id }` | **201** `{ item_id }` |
+| `DELETE` | `/api/galleries/secure/{id}/items/{item_id}` | Bearer | — | **204** (cloned blob deleted; original photo returns to the gallery) |
 
 ---
 
@@ -149,6 +150,81 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 | `POST` | `/api/photos/{id}/tags` | Bearer | `{ tag }` | **201** |
 | `DELETE` | `/api/photos/{id}/tags` | Bearer | `{ tag }` | **204** |
 | `GET` | `/api/search` | Bearer | Query: `q`, `limit` | `{ results: [{ id, filename, media_type, mime_type, thumb_path, created_at, taken_at, latitude, longitude, width, height, tags }] }` |
+
+---
+
+## AI Recognition
+
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `GET` | `/api/ai/status` | Bearer | — | `{ enabled, gpu_available, photos_processed, photos_pending, face_detections, face_clusters, object_detections, pet_detections, pet_clusters, face_model_loaded, object_model_loaded, degraded_mode, allow_heuristic_fallback }` |
+| `POST` | `/api/ai/toggle` | Bearer | `{ enabled }` | **200** |
+| `POST` | `/api/ai/reprocess` | Bearer | `{ photo_ids?: [string] }` | `{ cleared, message }` |
+| `GET` | `/api/ai/faces` | Bearer | — | `[{ id, label, photo_count, representative, created_at, updated_at }]` |
+| `POST` | `/api/ai/faces/merge` | Bearer | `{ cluster_ids: [i64] }` | **200** |
+| `POST` | `/api/ai/faces/split` | Bearer | `{ detection_ids: [i64] }` | **200** |
+| `GET` | `/api/ai/faces/{cluster_id}/photos` | Bearer | — | `[{ id, photo_id, cluster_id, bbox_x, bbox_y, bbox_w, bbox_h, confidence, created_at }]` |
+| `PUT` | `/api/ai/faces/{cluster_id}/name` | Bearer | `{ name }` | **200** |
+| `GET` | `/api/ai/objects` | Bearer | — | `[{ class_name, photo_count, avg_confidence }]` |
+| `GET` | `/api/ai/objects/{class_name}/photos` | Bearer | — | `[{ id, photo_id, class_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h, created_at }]` |
+| `GET` | `/api/ai/pets` | Bearer | — | `[{ id, label, species, photo_count, representative, created_at, updated_at }]` |
+| `POST` | `/api/ai/pets/merge` | Bearer | `{ cluster_ids: [i64] }` | **200** |
+| `GET` | `/api/ai/pets/{cluster_id}/photos` | Bearer | — | `[{ id, photo_id, cluster_id, species, confidence, created_at }]` |
+| `PUT` | `/api/ai/pets/{cluster_id}/name` | Bearer | `{ name }` | **200** |
+
+> List endpoints return **bare JSON arrays**, not wrapper objects. Cluster
+> ids are numeric (`i64`); `representative` is a photo id usable with
+> `/api/photos/{id}/thumb`.
+
+---
+
+## Geolocation & Timeline
+
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `GET` | `/api/settings/geo` | Bearer | — | `{ enabled, scrub_on_upload, photos_with_location, photos_without_location, unique_countries, unique_cities }` |
+| `POST` | `/api/settings/geo` | Bearer | `{ enabled?, scrub_on_upload? }` | **200** (empty body) |
+| `GET` | `/api/geo/locations` | Bearer | — | `[{ city, state, country, country_code, photo_count }]` |
+| `GET` | `/api/geo/locations/{country}/{city}` | Bearer | — | `[PhotoSummary]` |
+| `GET` | `/api/geo/countries` | Bearer | — | `[{ country, country_code, photo_count }]` |
+| `GET` | `/api/geo/map` | Bearer | — | `[PhotoSummary]` |
+| `GET` | `/api/geo/timeline` | Bearer | — | `[{ year, photo_count }]` |
+| `GET` | `/api/geo/timeline/{year}` | Bearer | — | `[{ year, month, photo_count }]` |
+| `GET` | `/api/geo/timeline/{year}/{month}` | Bearer | — | `[PhotoSummary]` |
+| `GET` | `/api/geo/memories` | Bearer | — | `[{ id, name, city, country, date_label, photo_count, first_photo_id, first_thumb_path }]` |
+| `GET` | `/api/geo/memories/{memory_id}/photos` | Bearer | — | `[PhotoSummary]` |
+| `GET` | `/api/geo/trips` | Bearer | — | `[{ id, name, city, state, country, country_code, start_date, end_date, date_label, photo_count, day_count, first_photo_id, first_thumb_path }]` |
+| `GET` | `/api/geo/trips/{trip_id}/photos` | Bearer | — | `[PhotoSummary]` |
+| `POST` | `/api/geo/scrub` | Bearer | `{ confirm: true }` | `{ scrubbed_photos }` |
+
+**PhotoSummary fields:** `id, filename, thumb_path, taken_at, latitude, longitude`
+
+> List endpoints return **bare JSON arrays**, not wrapper objects.
+
+---
+
+## Library Export
+
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `POST` | `/api/export` | Bearer | `{ size_limit }` (bytes per zip) | `ExportJob` |
+| `GET` | `/api/export/status` | Bearer | — | `{ job: ExportJob, files: [ExportFile] }` |
+| `GET` | `/api/export/files` | Bearer | — | `{ files: [ExportFile] }` |
+| `GET` | `/api/export/files/{id}/download` | Bearer | — | `application/zip` stream |
+| `DELETE` | `/api/export/{job_id}` | Bearer | — | **204** |
+
+**ExportJob fields:** `id, status, size_limit, created_at, completed_at, error`
+**ExportFile fields:** `id, job_id, filename, size_bytes, created_at, expires_at, download_url`
+
+---
+
+## Server Activity & Transcode Status
+
+| Method | Path | Auth | Request Body | Response |
+|--------|------|------|-------------|----------|
+| `GET` | `/api/status/activity` | Bearer | — | `{ ai, geo, active, ai_progress: { running, active, total, done, pending }, geo_progress: { running, active, total, done, pending } }` |
+| `GET` | `/api/admin/conversion-status` | Bearer | — | `{ active, total, done }` |
+| `GET` | `/api/transcode/status` | Bearer | — | `{ gpu_available, accel_type, video_encoder, device, gpu_enabled, fallback_to_cpu }` |
 
 ---
 

@@ -52,6 +52,14 @@ class SecureGalleryRepository @Inject constructor(
     suspend fun addItem(galleryId: String, blobId: String): SecureGalleryAddItemResponse =
         api.addSecureGalleryItem(galleryId, SecureGalleryAddItemRequest(blobId))
 
+    /**
+     * Remove a single item from a secure gallery. The server deletes the
+     * cloned blob and the original photo returns to the regular gallery.
+     */
+    suspend fun removeItem(galleryId: String, itemId: String) {
+        api.deleteSecureGalleryItem(galleryId, itemId)
+    }
+
     /** Return all blob IDs that belong to any secure gallery for the current user. */
     suspend fun getSecureBlobIds(): Set<String> =
         try { api.getSecureBlobIds().blobIds.toSet() } catch (_: Exception) { emptySet() }
