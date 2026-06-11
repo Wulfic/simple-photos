@@ -26,6 +26,7 @@ use crate::state::AppState;
 pub async fn download(
     State(state): State<AppState>,
     auth: AuthUser,
+    gallery_token: crate::gallery::access::GalleryToken,
     headers: HeaderMap,
     Path(blob_id): Path<String>,
 ) -> Result<Response, AppError> {
@@ -47,6 +48,11 @@ pub async fn download(
     .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // Secure-album gate: blobs that belong to a secure gallery require a valid
+    // unlock token, not just the account session.
+    crate::gallery::access::require_secure_access(&state, &auth.user_id, &blob_id, &gallery_token)
+        .await?;
 
     tracing::info!(
         blob_id = %blob_id,
@@ -208,6 +214,7 @@ pub async fn download(
 pub async fn download_thumb(
     State(state): State<AppState>,
     auth: AuthUser,
+    gallery_token: crate::gallery::access::GalleryToken,
     headers: HeaderMap,
     Path(blob_id): Path<String>,
 ) -> Result<Response, AppError> {
@@ -235,6 +242,11 @@ pub async fn download_thumb(
     .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // Secure-album gate: the parent photo's encrypted blob id is what callers
+    // pass here; gate it the same way as the full blob.
+    crate::gallery::access::require_secure_access(&state, &auth.user_id, &blob_id, &gallery_token)
+        .await?;
 
     // Path traversal guard
     if storage_path.contains("..") || std::path::Path::new(&storage_path).is_absolute() {

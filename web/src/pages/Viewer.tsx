@@ -32,6 +32,7 @@ import Slideshow from "../components/viewer/Slideshow";
 import { diagnosticLogger } from "../utils/diagnosticLogger";
 import { castMedia, getCastState } from "../utils/cast";
 import { useAuthStore } from "../store/auth";
+import { appendGalleryTokenParam } from "../utils/galleryToken";
 import type { PhotoInfoData } from "../hooks/useViewerMedia";
 
 // ── Navigation context passed via location.state ─────────────────────────────
@@ -165,7 +166,9 @@ export default function Viewer() {
       if (cancelled) return;
       const serverId = cached?.serverPhotoId ?? id;
       const { accessToken } = useAuthStore.getState();
-      const castUrl = `${window.location.origin}/api/photos/${serverId}/file${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ""}`;
+      const castUrl = appendGalleryTokenParam(
+        `${window.location.origin}/api/photos/${serverId}/file${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ""}`,
+      );
       const kind: "photo" | "video" =
         cached?.mediaType === "video" || (mimeType ?? "").startsWith("video/")
           ? "video"

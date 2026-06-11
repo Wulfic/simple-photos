@@ -8,6 +8,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import com.simplephotos.data.remote.ApiService
+import com.simplephotos.data.remote.GalleryTokenHolder
 import com.simplephotos.data.remote.dto.RefreshRequest
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_ACCESS_TOKEN
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_REFRESH_TOKEN
@@ -77,6 +78,10 @@ object NetworkModule {
             if (token != null) {
                 builder.addHeader("Authorization", "Bearer $token")
             }
+            // Secure-album gate: attach the unlock token (when a secure album is
+            // unlocked) so requests for secure-album media pass the server's
+            // check. Ignored by the server for non-secure endpoints.
+            GalleryTokenHolder.token?.let { builder.addHeader("X-Gallery-Token", it) }
             chain.proceed(builder.build())
         }
 

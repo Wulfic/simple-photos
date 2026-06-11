@@ -153,6 +153,7 @@ pub(crate) async fn serve_file_with_range(
 pub async fn serve_photo(
     State(state): State<AppState>,
     auth: AuthUser,
+    gallery_token: crate::gallery::access::GalleryToken,
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
@@ -178,6 +179,11 @@ pub async fn serve_photo(
             );
             AppError::NotFound
         })?;
+
+    // Secure-album gate: if this photo lives in a secure gallery, require a
+    // valid unlock token in addition to the account session.
+    crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
+        .await?;
 
     // ── Encrypted blob fallback (blob-only photos, e.g. rendered duplicates) ─
     if file_path.is_empty() {
@@ -351,6 +357,7 @@ pub async fn serve_photo(
 pub async fn serve_thumbnail(
     State(state): State<AppState>,
     auth: AuthUser,
+    gallery_token: crate::gallery::access::GalleryToken,
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
@@ -368,6 +375,10 @@ pub async fn serve_thumbnail(
     .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // Secure-album gate (see `serve_photo`).
+    crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
+        .await?;
 
     // ── Encrypted thumbnail fallback (blob-only duplicates) ──────────────────
     if thumb_path_opt.is_none() {
@@ -490,6 +501,7 @@ pub async fn serve_thumbnail(
 pub async fn serve_web(
     State(state): State<AppState>,
     auth: AuthUser,
+    gallery_token: crate::gallery::access::GalleryToken,
     headers: HeaderMap,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
@@ -506,6 +518,10 @@ pub async fn serve_web(
     .fetch_optional(&state.read_pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // Secure-album gate (see `serve_photo`).
+    crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
+        .await?;
 
     let storage_root = (**state.storage_root.load()).clone();
     let full_path = storage_root.join(&file_path);
@@ -613,6 +629,7 @@ pub async fn serve_source_file(
 pub async fn serve_motion_video(
     State(state): State<AppState>,
     auth: AuthUser,
+    gallery_token: crate::gallery::access::GalleryToken,
     Path(photo_id): Path<String>,
 ) -> Result<Response, AppError> {
     if !state.is_storage_available() {
@@ -630,6 +647,10 @@ pub async fn serve_motion_video(
     .await?;
 
     let (file_path, motion_blob_id, subtype) = row.ok_or(AppError::NotFound)?;
+
+    // Secure-album gate (see `serve_photo`).
+    crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
+        .await?;
 
     if subtype.as_deref() != Some("motion") {
         return Err(AppError::BadRequest(

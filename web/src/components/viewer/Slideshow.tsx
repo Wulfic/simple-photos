@@ -17,6 +17,7 @@ import SlideshowTransitions from "./SlideshowTransitions";
 import type { SlideshowTransition } from "../../hooks/useSlideshow";
 import { castMedia, getCastState } from "../../utils/cast";
 import { useAuthStore } from "../../store/auth";
+import { appendGalleryTokenParam } from "../../utils/galleryToken";
 
 interface Props {
   currentBlobId: string | undefined;
@@ -129,8 +130,14 @@ export default function Slideshow({
         let filename: string;
 
         if (dbCached?.serverSide && dbCached.serverPhotoId) {
-          // Server-side (unencrypted) — fetch the file directly.
-          const res = await fetch(`/api/photos/${dbCached.serverPhotoId}/file`, {
+          // Server-side (unencrypted) — fetch the file directly. Carry the
+          // access token (?token=) and, for secure-album clones, the gallery
+          // unlock token so the server's secure gate is satisfied.
+          const { accessToken } = useAuthStore.getState();
+          const fileUrl = appendGalleryTokenParam(
+            `/api/photos/${dbCached.serverPhotoId}/file${accessToken ? `?token=${encodeURIComponent(accessToken)}` : ""}`,
+          );
+          const res = await fetch(fileUrl, {
             credentials: "include",
           });
           if (cancelled) return;
@@ -221,9 +228,10 @@ export default function Slideshow({
       if (cancelled) return;
       const serverId = cached?.serverPhotoId ?? cached?.storageBlobId ?? currentBlobId;
       const { accessToken } = useAuthStore.getState();
-      const castUrl =
+      const castUrl = appendGalleryTokenParam(
         `${window.location.origin}/api/photos/${encodeURIComponent(serverId)}/file` +
-        (accessToken ? `?token=${encodeURIComponent(accessToken)}` : "");
+        (accessToken ? `?token=${encodeURIComponent(accessToken)}` : ""),
+      );
       const mime = cached?.mimeType ?? "image/jpeg";
       const kind: "photo" | "video" =
         cached?.mediaType === "video" || mime.startsWith("video/") ? "video" : "photo";

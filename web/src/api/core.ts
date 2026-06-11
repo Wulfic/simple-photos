@@ -2,6 +2,7 @@ import { useAuthStore } from "../store/auth";
 import { clearAllUserData } from "../db";
 import { thumbMemoryCache } from "../utils/gallery";
 import { clearKey } from "../crypto/crypto";
+import { getGalleryToken } from "../utils/galleryToken";
 
 export const BASE = "/api";
 
@@ -35,6 +36,14 @@ export async function request<T>(
 
   if (accessToken) {
     headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
+  // Attach the secure-gallery unlock token (if the user has unlocked a secure
+  // album) so requests for secure-album media pass the server's gate. Harmless
+  // for non-secure endpoints. Don't clobber an explicitly-provided header.
+  if (!headers["X-Gallery-Token"]) {
+    const gt = getGalleryToken();
+    if (gt) headers["X-Gallery-Token"] = gt;
   }
 
   // Only set Content-Type for JSON bodies (not raw blob uploads)
@@ -219,6 +228,10 @@ export async function downloadRaw(url: string, signal?: AbortSignal): Promise<Ar
   if (accessToken) {
     headers["Authorization"] = `Bearer ${accessToken}`;
   }
+  // Secure-album gate (see request()): needed for raw blob/thumbnail downloads
+  // of secure-album media.
+  const gt = getGalleryToken();
+  if (gt) headers["X-Gallery-Token"] = gt;
 
   const res = await fetch(url, { headers, signal });
 
@@ -260,6 +273,10 @@ export async function postRaw(path: string, body: string): Promise<Blob> {
     "X-Requested-With": "SimplePhotos",
   };
   if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+  // Secure-album gate (see request()): server-side render endpoints operate on
+  // the same secure-album media.
+  const gt = getGalleryToken();
+  if (gt) headers["X-Gallery-Token"] = gt;
 
   const doFetch = (tok: string | null) =>
     fetch(`${BASE}${path}`, {

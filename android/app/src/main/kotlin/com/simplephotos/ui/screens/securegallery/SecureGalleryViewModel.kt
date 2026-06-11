@@ -83,6 +83,9 @@ class SecureGalleryViewModel @Inject constructor(
                     secureGalleryRepository.unlock(password)
                 }
                 galleryToken = res.galleryToken
+                // Publish to the network holder so the auth interceptor attaches
+                // X-Gallery-Token to secure-album media requests (photos/blobs).
+                com.simplephotos.data.remote.GalleryTokenHolder.token = res.galleryToken
                 isAuthenticated = true
                 Log.i(TAG, "Unlock successful, token obtained")
                 loadGalleries()

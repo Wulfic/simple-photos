@@ -6,6 +6,7 @@
  * every API request (see api/core.ts).
  */
 import { create } from "zustand";
+import { clearGalleryToken } from "../utils/galleryToken";
 
 interface AuthState {
   accessToken: string | null;
@@ -39,6 +40,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.removeItem("sp_access_token");
     localStorage.removeItem("sp_refresh_token");
     localStorage.removeItem("sp_username");
+    // Drop the secure-album unlock token so a re-login must re-unlock.
+    clearGalleryToken();
     set({
       accessToken: null,
       refreshToken: null,

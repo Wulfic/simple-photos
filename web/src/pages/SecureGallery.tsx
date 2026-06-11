@@ -18,6 +18,7 @@ import { getErrorMessage } from "../utils/formatters";
 import { diagnosticLogger } from "../utils/diagnosticLogger";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
+import { setGalleryToken as persistGalleryToken } from "../utils/galleryToken";
 import { SecureGalleryItem, PickerThumbnail, type ThumbnailSource } from "../gallery";
 
 interface Gallery {
@@ -144,6 +145,10 @@ export default function SecureGallery() {
     try {
       const res = await api.secureGalleries.unlock(password);
       setGalleryToken(res.gallery_token);
+      // Persist to sessionStorage so media requests (thumbnails in this grid,
+      // and the full Viewer opened on a separate route) can present the token
+      // to the server's secure-album gate.
+      persistGalleryToken(res.gallery_token);
       setAuthenticated(true);
       setPassword("");
     } catch (err: unknown) {
