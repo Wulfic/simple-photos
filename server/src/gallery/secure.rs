@@ -75,12 +75,11 @@ pub async fn create_secure_gallery(
 
 /// POST /api/galleries/secure/unlock
 /// Verify the user's account password. Returns a gallery access token
-/// (HMAC-SHA256 signed, 1-hour TTL).
+/// (keyed-SHA256 signed, 1-hour TTL) that must be presented as
+/// `X-Gallery-Token` to list a gallery's items.
 ///
-/// **NOTE:** The token's expiration is currently NOT validated on the
-/// read path (`list_gallery_items`) — any non-empty token string is
-/// accepted. This is a known gap; callers should treat the TTL as
-/// advisory until server-side validation is added.
+/// The token is now verified server-side on the read path — see
+/// [`crate::gallery::secure_token`] and [`list_gallery_items`].
 pub async fn unlock_secure_galleries(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -99,14 +98,8 @@ pub async fn unlock_secure_galleries(
         return Err(AppError::Unauthorized("Invalid password".into()));
     }
 
-    let now = Utc::now().timestamp();
-    let expires_in = 3600u64; // 1 hour
-    let payload = format!("secure:{}:{}", auth.user_id, now);
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(payload.as_bytes());
-    hasher.update(state.config.auth.jwt_secret.as_bytes());
-    let token = format!("sec_{}_{}", now, hex::encode(hasher.finalize()));
+    let (token, expires_in) =
+        crate::gallery::secure_token::generate(&auth.user_id, &state.config.auth.jwt_secret);
 
     Ok(Json(SecureGalleryUnlockResponse {
         gallery_token: token,
@@ -771,12 +764,21 @@ pub async fn list_gallery_items(
         return Err(AppError::NotFound);
     }
 
-    let _token = headers
+    // Verify the unlock token: it must be a non-expired, correctly-signed
+    // token issued to *this* user. Previously any non-empty string was
+    // accepted, which made the password gate cosmetic.
+    let token = headers
         .get("x-gallery-token")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
             AppError::Unauthorized("Gallery token required. Unlock the gallery first.".into())
         })?;
+
+    if !crate::gallery::secure_token::verify(token, &auth.user_id, &state.config.auth.jwt_secret) {
+        return Err(AppError::Unauthorized(
+            "Invalid or expired gallery token. Unlock the gallery again.".into(),
+        ));
+    }
 
     let items: Vec<(String, String, String, Option<String>, Option<i64>, Option<i64>, Option<String>)> = sqlx::query_as(
         "SELECT gi.id, \

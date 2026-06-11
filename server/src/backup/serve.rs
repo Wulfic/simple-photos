@@ -65,7 +65,14 @@ pub(super) async fn validate_api_key(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| AppError::Unauthorized("Missing X-API-Key header".into()))?;
 
-    if provided_key != configured_key {
+    // Constant-time comparison — a plain `!=` short-circuits on the first
+    // differing byte and leaks the shared key's length/prefix through timing.
+    use subtle::ConstantTimeEq;
+    let matches: bool = provided_key
+        .as_bytes()
+        .ct_eq(configured_key.as_bytes())
+        .into();
+    if !matches {
         return Err(AppError::Unauthorized("Invalid API key".into()));
     }
 
