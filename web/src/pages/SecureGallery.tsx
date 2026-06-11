@@ -417,7 +417,7 @@ export default function SecureGallery() {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         <AppHeader />
-        <main className="max-w-6xl mx-auto p-4">
+        <main className="p-4">
           {/* Add photos action bar */}
           {showAddPhotos && (
             <div className="flex justify-end gap-2 mb-4">
@@ -504,51 +504,59 @@ export default function SecureGallery() {
                     : "All photos are already in this album."}
                 </p>
               ) : (
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-1.5 max-h-80 overflow-y-auto">
-                  {availablePhotos.map((photo) => {
-                    const isSelected = selectedPhotos.has(photo.blobId);
-                    return (
-                      <div
-                        key={photo.blobId}
-                        className={`relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
-                          isSelected
-                            ? "border-blue-600 ring-2 ring-blue-400"
-                            : "border-transparent hover:border-gray-300 dark:hover:border-gray-500"
-                        }`}
-                        onClick={() => togglePhotoSelection(photo.blobId)}
-                      >
-                        <PickerThumbnail
-                          source={{
-                            blobId: photo.blobId,
-                            storageBlobId: photo.storageBlobId,
-                            serverPhotoId: photo.serverPhotoId,
-                            serverSide: photo.serverSide,
-                            thumbnailData: photo.thumbnailData,
-                            thumbnailMimeType: photo.thumbnailMimeType,
-                          }}
-                          filename={photo.filename}
-                        />
-                        {/* Selection circle in top-right */}
+                // Use a JustifiedGrid so the picker matches the rest of the
+                // gallery's layout (variable aspect ratios, no square crop).
+                <div className="max-h-[60vh] overflow-y-auto pr-1">
+                  <JustifiedGrid
+                    items={availablePhotos}
+                    getAspectRatio={(p) =>
+                      p.width && p.height ? p.width / p.height : 1
+                    }
+                    getKey={(p) => p.blobId}
+                    renderItem={(photo) => {
+                      const isSelected = selectedPhotos.has(photo.blobId);
+                      return (
                         <div
-                          className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                          className={`relative w-full h-full rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
                             isSelected
-                              ? "bg-blue-600 border-blue-600"
-                              : "bg-white/70 border-gray-400 dark:bg-gray-800/70 dark:border-gray-500"
+                              ? "border-blue-600 ring-2 ring-blue-400"
+                              : "border-transparent hover:border-gray-300 dark:hover:border-gray-500"
                           }`}
+                          onClick={() => togglePhotoSelection(photo.blobId)}
                         >
-                          {isSelected && (
-                            <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                              <path
-                                fillRule="evenodd"
-                                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                                clipRule="evenodd"
-                              />
-                            </svg>
-                          )}
+                          <PickerThumbnail
+                            source={{
+                              blobId: photo.blobId,
+                              storageBlobId: photo.storageBlobId,
+                              serverPhotoId: photo.serverPhotoId,
+                              serverSide: photo.serverSide,
+                              thumbnailData: photo.thumbnailData,
+                              thumbnailMimeType: photo.thumbnailMimeType,
+                            }}
+                            filename={photo.filename}
+                          />
+                          {/* Selection circle in top-right */}
+                          <div
+                            className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+                              isSelected
+                                ? "bg-blue-600 border-blue-600"
+                                : "bg-white/70 border-gray-400 dark:bg-gray-800/70 dark:border-gray-500"
+                            }`}
+                          >
+                            {isSelected && (
+                              <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path
+                                  fillRule="evenodd"
+                                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    }}
+                  />
                 </div>
               )}
             </div>

@@ -28,9 +28,6 @@
 .PARAMETER NoStart
     Don't start the server after install
 
-.PARAMETER SkipModels
-    Don't download AI ONNX models or the GeoNames dataset
-
 .PARAMETER Yes
     Auto-accept all prompts
 
@@ -56,7 +53,6 @@ param(
     [switch]$LocalCa,
     [switch]$NoBuildAndroid,
     [switch]$NoStart,
-    [switch]$SkipModels,
     [switch]$Yes
 )
 
@@ -632,28 +628,26 @@ if ($Mode -eq "native") {
     Write-Ok "Server built -> server\target\release\simple-photos-server.exe"
     Set-Location $ScriptDir
 
-    # ── AI models + GeoNames dataset ──────────────────────────────────────
-    if ($SkipModels) {
-        Write-Warn "Skipping AI models / GeoNames dataset download (-SkipModels). Server will start in degraded_mode until models are downloaded."
-    } else {
-        Write-Info "Fetching AI ONNX models -> server\models\  (~200 MB, mandatory for face/object recognition)"
-        try {
-            Download-AiModels -Target (Join-Path $ScriptDir "server\models")
-            Write-Ok "AI models installed"
-        } catch {
-            Write-Err "AI model download failed: $_"
-            Write-Err "Re-run install.ps1 or call Download-AiModels manually before starting the server, or pass -SkipModels to install without AI features."
-            exit 1
-        }
+    # ── AI models + GeoNames dataset (mandatory) ─────────────────────────
+    # Face/object recognition and reverse geocoding have no working
+    # fallbacks, so the installer always downloads these assets.
+    Write-Info "Fetching AI ONNX models -> server\models\  (~200 MB, mandatory for face/object recognition)"
+    try {
+        Download-AiModels -Target (Join-Path $ScriptDir "server\models")
+        Write-Ok "AI models installed"
+    } catch {
+        Write-Err "AI model download failed: $_"
+        Write-Err "Re-run install.ps1 once the network issue is resolved."
+        exit 1
+    }
 
-        Write-Info "Fetching GeoNames cities500 -> server\data\cities500.txt  (~25 MB, mandatory for reverse geocoding)"
-        try {
-            Download-GeoData -Target (Join-Path $ScriptDir "server\data\cities500.txt")
-            Write-Ok "GeoNames dataset installed"
-        } catch {
-            Write-Warn "Geo dataset download failed: $_"
-            Write-Warn "Reverse-geocoding will be disabled until you re-run install.ps1 or call Download-GeoData manually."
-        }
+    Write-Info "Fetching GeoNames cities500 -> server\data\cities500.txt  (~25 MB, mandatory for reverse geocoding)"
+    try {
+        Download-GeoData -Target (Join-Path $ScriptDir "server\data\cities500.txt")
+        Write-Ok "GeoNames dataset installed"
+    } catch {
+        Write-Warn "Geo dataset download failed: $_"
+        Write-Warn "Reverse-geocoding will be disabled until you re-run install.ps1."
     }
 
     # ── Config ────────────────────────────────────────────────────────────

@@ -27,7 +27,7 @@
 #define AppId          "{{B7A3F8C2-9D1E-4F2B-8E5A-1C2D3E4F5A6B}"
 ; SP_VERSION is supplied by CI via /DSP_VERSION=x.y.z. Falls back to 1.0.0.
 #ifndef SP_VERSION
-  #define SP_VERSION "1.0.0"
+  #define SP_VERSION "1.1.5"
 #endif
 
 [Setup]
@@ -63,7 +63,6 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "service";    Description: "Install Simple Photos as a Windows Service (auto-start)"; GroupDescription: "Service:"; Flags: unchecked
 Name: "firewall";   Description: "Add Windows Firewall rule for TCP port 8080 (Private + Domain networks)"; GroupDescription: "Network:"
-Name: "fetchmodels";Description: "Download AI models + GeoNames dataset after install (~225 MB)"; GroupDescription: "Optional:"
 
 [Files]
 ; ── Server binary ──────────────────────────────────────────────────────────
@@ -121,7 +120,7 @@ Filename: "{app}\bin\nssm.exe"; \
     Flags: runhidden; \
     Tasks: service
 Filename: "{app}\bin\nssm.exe"; \
-    Parameters: "set SimplePhotos AppEnvironmentExtra SIMPLE_PHOTOS_CONFIG=""{commonappdata}\SimplePhotos\config.toml"" RUST_LOG=info"; \
+    Parameters: "set SimplePhotos AppEnvironmentExtra SIMPLE_PHOTOS_CONFIG=""{commonappdata}\SimplePhotos\config.toml"" RUST_LOG=info PATH=""{app}\bin;%PATH%"""; \
     Flags: runhidden; \
     Tasks: service
 Filename: "{app}\bin\nssm.exe"; \
@@ -149,11 +148,13 @@ Filename: "powershell.exe"; \
     Flags: runhidden; \
     Tasks: firewall
 
-; ── Optional: download AI models + GeoNames in the background ────────────
+; ── Mandatory: download ffmpeg + AI models + GeoNames (≋ 325 MB total). ──
+; ffmpeg is required for video thumbnails / transcoding; the ONNX models
+; back face/object recognition; the GeoNames dataset powers reverse
+; geocoding. None of these have a working fallback so we always fetch.
 Filename: "powershell.exe"; \
-    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-assets.ps1"" -DataDir ""{commonappdata}\SimplePhotos"""; \
-    StatusMsg: "Downloading AI models + GeoNames (~225 MB) ..."; \
-    Tasks: fetchmodels
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-assets.ps1"" -InstallDir ""{app}"" -DataDir ""{commonappdata}\SimplePhotos"""; \
+    StatusMsg: "Downloading ffmpeg + AI models + GeoNames (~325 MB) ..."
 
 ; ── Open the browser when finished ───────────────────────────────────────
 Filename: "http://localhost:8080"; \

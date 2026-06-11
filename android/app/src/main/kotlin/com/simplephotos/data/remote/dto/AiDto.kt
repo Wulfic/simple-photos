@@ -30,16 +30,12 @@ data class AiReprocessResponse(
 // ── Face clusters ───────────────────────────────────────────────────────────
 
 data class FaceCluster(
-    val id: String,
-    val name: String? = null,
+    val id: Long,
+    val label: String? = null,
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("preview_photo_id") val previewPhotoId: String? = null,
-    @SerializedName("preview_blob_id") val previewBlobId: String? = null,
+    val representative: String? = null,
     @SerializedName("created_at") val createdAt: String? = null,
-)
-
-data class FaceClusterListResponse(
-    val clusters: List<FaceCluster>,
+    @SerializedName("updated_at") val updatedAt: String? = null,
 )
 
 data class FaceClusterMergeRequest(
@@ -91,15 +87,13 @@ data class ObjectClassPhotosResponse(
 // ── Pet clusters ────────────────────────────────────────────────────────────
 
 data class PetCluster(
-    val id: String,
-    val name: String? = null,
+    val id: Long,
+    val label: String? = null,
+    val species: String,
     @SerializedName("photo_count") val photoCount: Int,
-    @SerializedName("preview_photo_id") val previewPhotoId: String? = null,
-    @SerializedName("species") val species: String? = null,
-)
-
-data class PetClusterListResponse(
-    val clusters: List<PetCluster>,
+    val representative: String? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+    @SerializedName("updated_at") val updatedAt: String? = null,
 )
 
 data class PetClusterMergeRequest(

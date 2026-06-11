@@ -27,15 +27,21 @@ sealed class Screen(val route: String) {
     data object SecureGallery : Screen("secure_gallery")
     data object SharedAlbums : Screen("shared_albums")
     data object Diagnostics : Screen("diagnostics")
-    // ── Library hub + sub-pages ────────────────────────────────────────────
-    data object Library : Screen("library")
+    // ── Smart album sub-pages (entered from Albums screen, not Library hub) ──
     data object People : Screen("library/people")
     data object Pets : Screen("library/pets")
-    data object Things : Screen("library/things")
-    data object Map : Screen("library/map")
-    data object Timeline : Screen("library/timeline")
     data object Memories : Screen("library/memories")
     data object Trips : Screen("library/trips")
-    data object Locations : Screen("library/locations")
-    data object Export : Screen("library/export")
+    data object PersonDetail : Screen("library/people/{clusterId}") {
+        fun createRoute(clusterId: Long) = "library/people/$clusterId"
+    }
+    data object PetDetail : Screen("library/pets/{clusterId}") {
+        fun createRoute(clusterId: Long) = "library/pets/$clusterId"
+    }
+    data object MemoryDetail : Screen("library/memories/{memoryId}") {
+        fun createRoute(memoryId: String) = "library/memories/$memoryId"
+    }
+    data object TripDetail : Screen("library/trips/{tripId}") {
+        fun createRoute(tripId: String) = "library/trips/$tripId"
+    }
 }

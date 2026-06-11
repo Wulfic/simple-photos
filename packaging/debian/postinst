@@ -53,6 +53,23 @@ case "$1" in
             chown root:"$GROUP" "$CONF"
             chmod 640 "$CONF"
         fi
+
+        # 4. NVIDIA / CUDA runtime check (informational — not a hard dep).
+        #    The server binary includes the CUDA execution provider and will
+        #    use GPU inference automatically when libcudart is present.
+        #    If nvidia-smi is found but the CUDA runtime is absent, advise
+        #    the operator so they can install it.
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            if ! ldconfig -p 2>/dev/null | grep -q 'libcudart'; then
+                echo "simple-photos: NVIDIA GPU detected but CUDA runtime not found."
+                echo "  Install the CUDA runtime for GPU-accelerated AI inference:"
+                echo "    sudo apt-get install nvidia-cuda-toolkit"
+                echo "  (or follow https://developer.nvidia.com/cuda-downloads for the"
+                echo "   NVIDIA-published packages, which are usually more up to date)"
+            else
+                echo "simple-photos: NVIDIA GPU + CUDA runtime detected — GPU inference enabled."
+            fi
+        fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)
         ;;

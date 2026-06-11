@@ -19,6 +19,8 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **Geolocation support** — optional reverse geocoding to country/city.  
 - **Geolocation Stripping** — option to remove geolocation metadata during import for privacy
 - **GPU acceleration** — optional GPU-accelerated media processing and AI inference for faster performance on supported hardware(AMD/INTEL GPUs have not been tested but should work, I only own nvidia)
+- **PWA** -  Progessive Web App to install on devices for easier access. 
+
 ### Media
 - **Supported Photo, video, and audio formats** — JPEG, PNG, GIF, WebP, AVIF, BMP, MP4, WebM, MP3, FLAC, OGG, WAV
 - **Media conversion** — automatic FFmpeg-based conversion of non-native formats (I.E HEIC → JPEG, MKV → MP4, WMA → MP3) during import and scan

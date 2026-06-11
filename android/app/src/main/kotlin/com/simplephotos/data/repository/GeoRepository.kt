@@ -41,12 +41,12 @@ class GeoRepository @Inject constructor(private val api: ApiService) {
     suspend fun listTimelineMonthPhotos(year: Int, month: Int): List<PhotoRecord> =
         api.listGeoTimelineMonthPhotos(year, month).photos
 
-    suspend fun listMemories(): List<GeoMemory> = api.listGeoMemories().memories
+    suspend fun listMemories(): List<GeoMemory> = api.listGeoMemories()
 
     suspend fun listMemoryPhotos(memoryId: String): List<PhotoRecord> =
         api.listGeoMemoryPhotos(memoryId).photos
 
-    suspend fun listTrips(): List<GeoTrip> = api.listGeoTrips().trips
+    suspend fun listTrips(): List<GeoTrip> = api.listGeoTrips()
 
     suspend fun listTripPhotos(tripId: String): List<PhotoRecord> =
         api.listGeoTripPhotos(tripId).photos

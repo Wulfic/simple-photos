@@ -32,7 +32,6 @@
 # ║                                  per-platform install scripts.          ║
 # ║    --no-build-android      Skip Android APK build prompt                ║
 # ║    --no-start              Don't start the server after install          ║
-# ║    --skip-models           Don't download AI models / GeoNames dataset   ║
 # ║    --yes                   Auto-accept all prompts                       ║
 # ║    --help                  Show this help                                ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
@@ -180,7 +179,6 @@ LE_AGREE_TOS=false
 LOCAL_CA=false
 NO_BUILD_ANDROID=false
 NO_START=false
-SKIP_MODELS=false
 AUTO_YES=false
 DEFAULT_PORT=8080
 DOCKER_CMD="docker"
@@ -206,7 +204,6 @@ while [[ $# -gt 0 ]]; do
         --local-ca)       LOCAL_CA=true; shift ;;
         --no-build-android) NO_BUILD_ANDROID=true; shift ;;
         --no-start)       NO_START=true; shift ;;
-        --skip-models)    SKIP_MODELS=true; shift ;;
         --yes|-y)         AUTO_YES=true; shift ;;
         --help|-h)        show_help ;;
         *)                error "Unknown option: $1"; echo "Use --help for usage."; exit 1 ;;
@@ -1110,29 +1107,20 @@ if [[ "$MODE" == "native" ]]; then
     # return empty results.  These models are mandatory for a "fully
     # installed" instance.  GeoNames is similar for reverse geocoding —
     # without it `geo_city` / `geo_country` are never populated for
-    # photos with GPS EXIF.  Both are downloaded unconditionally; opting
-    # out is supported via `--skip-models` for users who manage models
-    # out-of-band (network-restricted environments, custom mirror, etc.).
-    if [[ "${SKIP_MODELS:-false}" == "true" ]]; then
-        warn "Skipping AI models / GeoNames dataset download (--skip-models). \
-              Server will start in degraded_mode until models are downloaded."
-    else
-        info "Fetching AI ONNX models → server/models/  (~200 MB, mandatory for face/object recognition)"
-        if ! download_ai_models "$SCRIPT_DIR/server/models"; then
-            error "AI model download failed.  Re-run install.sh (or call download_ai_models \
-                   manually) before starting the server, or pass --skip-models to install \
-                   without AI features."
-            exit 1
-        fi
-        success "AI models installed"
+    # photos with GPS EXIF.  Both are downloaded unconditionally.
+    info "Fetching AI ONNX models → server/models/  (~200 MB, mandatory for face/object recognition)"
+    if ! download_ai_models "$SCRIPT_DIR/server/models"; then
+        error "AI model download failed.  Re-run install.sh once the network issue is resolved."
+        exit 1
+    fi
+    success "AI models installed"
 
-        info "Fetching GeoNames cities500 → server/data/cities500.txt  (~25 MB, mandatory for reverse geocoding)"
-        if ! download_geo_data "$SCRIPT_DIR/server/data/cities500.txt"; then
-            warn "Geo dataset download failed; reverse-geocoding will be disabled \
-                  until you re-run install.sh or call download_geo_data manually."
-        else
-            success "GeoNames dataset installed"
-        fi
+    info "Fetching GeoNames cities500 → server/data/cities500.txt  (~25 MB, mandatory for reverse geocoding)"
+    if ! download_geo_data "$SCRIPT_DIR/server/data/cities500.txt"; then
+        warn "Geo dataset download failed; reverse-geocoding will be disabled \
+              until you re-run install.sh."
+    else
+        success "GeoNames dataset installed"
     fi
 
     # ── Config ────────────────────────────────────────────────────────────

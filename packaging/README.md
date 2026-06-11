@@ -56,19 +56,41 @@ sudo systemctl restart simple-photos
 cd web; npm ci; npm run build; cd ..
 
 # 2. Server release build
-cd server; cargo build --release --no-default-features --locked; cd ..
+cd server; cargo build --release --locked; cd ..
 
 # 3. Drop NSSM (https://nssm.cc/release/nssm-2.24.zip) into:
 #       packaging\windows\vendor\nssm.exe
 
 # 4. Build with Inno Setup 6
-iscc /DSP_VERSION=1.0.0 packaging\windows\simple-photos.iss
-# → dist\simple-photos-1.0.0-windows-x64-setup.exe
+iscc /DSP_VERSION=1.1.5 packaging\windows\simple-photos.iss
+# → dist\simple-photos-1.1.5-windows-x64-setup.exe
 ```
 
 The installer asks for an install location, registers the server as a
-Windows Service via NSSM, opens TCP 8080 in the firewall, and (optionally)
-downloads the AI models + GeoNames in the background.
+Windows Service via NSSM, opens TCP 8080 in the firewall, and downloads
+the AI models + GeoNames dataset + ffmpeg.exe (~325 MB) -- all three are
+required for full functionality and have no working fallback.
+
+#### NVIDIA GPU acceleration (optional)
+
+The Windows build is compiled with the `cuda` ONNX Runtime execution
+provider. The CUDA libraries are loaded lazily at runtime (`dlopen`), so
+the installer runs unmodified on machines without an NVIDIA card and
+falls back to CPU.
+
+To enable GPU acceleration, install on the host:
+
+1. **NVIDIA GPU driver** (latest Game Ready / Studio driver from
+   [nvidia.com/Download](https://www.nvidia.com/Download/index.aspx)).
+2. **CUDA Toolkit 12.x** (12.2 or newer) — the installer ships
+   `cudart64_12.dll` and `cublas64_12.dll`, which ORT loads on demand.
+   <https://developer.nvidia.com/cuda-downloads>
+3. **cuDNN 9.x for CUDA 12** (extract into the CUDA Toolkit `bin` dir,
+   or anywhere on `PATH`). <https://developer.nvidia.com/cudnn>
+
+Restart the `SimplePhotos` service after installing CUDA. The startup
+log line `AI engine: GPU available (CUDA detected)` confirms acceleration
+is active; without it the engine quietly uses CPU.
 
 ## CI/CD
 
