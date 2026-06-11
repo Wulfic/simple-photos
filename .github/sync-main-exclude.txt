@@ -22,6 +22,6 @@ bump-version.ps1
 server/build_out.txt
 .github/copilot-instructions.md
 .github/sync-main-exclude.txt
-.github/workflows/sync-dev-to-main.yml
+.github/workflows/pipeline.yml
 .vscode
 pytest.ini

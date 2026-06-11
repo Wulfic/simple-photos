@@ -1,18 +1,15 @@
 name: CI
 
-# Quick build/test loop on every push and PR.  The Release workflow handles
-# producing artefacts; this one just keeps `main` green.
+# Reusable component of the unified Release Pipeline (pipeline.yml).
+# Rust build/clippy/unit tests, web typecheck/build, Python E2E smoke.
+#
+# This workflow has NO triggers of its own — it only runs when the Release
+# Pipeline calls it via `workflow_call` after CodeQL + the security audit are
+# clean. Nothing runs on a plain push or PR anymore; a release is validated
+# end-to-end only when a version tag is pushed.
 
 on:
-  # `dev` pushes are validated through the Gate & Sync orchestrator
-  # (sync-dev-to-main.yml) which calls this workflow via `workflow_call`,
-  # so we don't also trigger directly on `dev` push (avoids double runs).
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main, dev]
   workflow_call:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -88,8 +85,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [rust, web]
     # Tests live on `dev` only; main is the lean release branch and has no
-    # tests/ directory.
-    if: github.event_name == 'push' && github.ref_name == 'dev' || github.event_name == 'pull_request' && github.head_ref == 'dev'
+    # tests/ directory. The pipeline tags `dev` tips, so the tagged tree still
+    # carries tests/ — run the E2E smoke on tag pushes too.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
 

@@ -1,17 +1,15 @@
 name: Security Audit
 
+# Reusable component of the unified Release Pipeline (pipeline.yml).
+# Blocking security gate + full informational audit report.
+#
+# This workflow has NO triggers of its own — it only runs when the Release
+# Pipeline calls it via `workflow_call` after CodeQL is clean. The previous
+# weekly CVE cron and push/PR runs were removed: everything is now validated
+# at release (tag) time only.
+
 on:
-  # `dev` pushes are validated through the Gate & Sync orchestrator
-  # (sync-dev-to-main.yml) which calls this workflow via `workflow_call`.
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main, dev]
-  schedule:
-    # Run weekly on Monday at 06:00 UTC to catch new CVEs
-    - cron: "0 6 * * 1"
   workflow_call:
-  workflow_dispatch:
 
 permissions:
   contents: read
