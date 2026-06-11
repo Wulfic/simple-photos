@@ -84,10 +84,10 @@ jobs:
     name: Python E2E (smoke)
     runs-on: ubuntu-24.04
     needs: [rust, web]
-    # Tests live on `dev` only; main is the lean release branch and has no
-    # tests/ directory. The pipeline tags `dev` tips, so the tagged tree still
-    # carries tests/ — run the E2E smoke on tag pushes too.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    # ci.yml is only ever called from pipeline.yml, which only fires on a dev
+    # tag push — dev always carries tests/. Drop the event_name guard since
+    # github.event_name is always 'workflow_call' inside a reusable workflow.
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
 
