@@ -110,6 +110,9 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          # Scope analysis to shipped code; the tests/ E2E harness is excluded
+          # (see .github/codeql/codeql-config.yml).
+          config-file: ./.github/codeql/codeql-config.yml
 
       # build-mode: manual → we must build between init and analyze so the
       # extractor sees the Kotlin/Java compilation. Debug build is enough for
@@ -122,28 +125,90 @@ jobs:
           ./gradlew --no-daemon :app:assembleDebug
 
       - name: Perform CodeQL Analysis
+        id: analyze
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
-          output: sarif-results
           upload: always
 
-      - name: Enforce CodeQL gate (fail on any finding)
+      # ───────────────────────────────────────────────────────────────────
+      # Gate on OPEN code-scanning alerts, not raw SARIF results.
+      #
+      # The previous gate counted every result in the freshly-generated SARIF
+      # (`jq '[.runs[].results[]?] | length'`). That count includes findings
+      # the maintainer has already triaged and DISMISSED in the Security tab
+      # (false positive / won't fix / used in tests) — dismissal is server-side
+      # code-scanning state and never appears in the local SARIF, so the gate
+      # could never reach zero no matter how many alerts were dismissed or how
+      # many inline `// codeql[...]` suppressions were added.
+      #
+      # Instead: wait for GitHub to finish processing this run's upload, then
+      # fail only if there is at least one OPEN (untriaged / unfixed) alert for
+      # this language. Dismissed and fixed alerts do not block; a genuinely new
+      # finding does, until it is triaged in the Security tab.
+      # ───────────────────────────────────────────────────────────────────
+      - name: Enforce CodeQL gate (block on OPEN alerts only)
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATRIX_LANGUAGE: ${{ matrix.language }}
+          SARIF_ID: ${{ steps.analyze.outputs.sarif-id }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          total=0
-          for f in sarif-results/*.sarif; do
-            n=$(jq '[.runs[].results[]?] | length' "$f")
-            echo "$f: $n result(s)"
-            total=$((total + n))
-          done
-          if [ "$total" -gt 0 ]; then
-            echo "::error::CodeQL reported $total finding(s) for ${{ matrix.language }} — blocking the release. Review the Security tab."
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
+
+          # CodeQL rule ids are language-prefixed; gate each matrix job only on
+          # its own language so failures are attributable.
+          case "${MATRIX_LANGUAGE}" in
+            rust)                   prefix="rust/" ;;
+            python)                 prefix="py/"   ;;
+            javascript-typescript)  prefix="js/"   ;;
+            java-kotlin)            prefix="java/" ;;
+            *) echo "::error::Unmapped CodeQL language '${MATRIX_LANGUAGE}'"; exit 1 ;;
+          esac
+
+          if [ -z "${SARIF_ID:-}" ]; then
+            echo "::error::analyze step produced no sarif-id — upload did not happen."
             exit 1
           fi
-          echo "CodeQL clean for ${{ matrix.language }}."
+
+          # 1) Wait for GitHub to finish ingesting this run's SARIF so the alert
+          #    list reflects the commit we are releasing (≈10 min ceiling).
+          status=""
+          for i in $(seq 1 60); do
+            # Tolerate transient errors (the sarifs endpoint can 404 briefly
+            # right after upload) — treat any failure as "pending" and retry.
+            resp="$(curl -fsSL "${auth[@]}" "${api}/code-scanning/sarifs/${SARIF_ID}" 2>/dev/null || true)"
+            status="$(echo "${resp}" | jq -r '.processing_status // "pending"' 2>/dev/null || echo pending)"
+            echo "sarif ${SARIF_ID}: processing_status=${status} (attempt ${i}/60)"
+            case "${status}" in
+              complete) break ;;
+              failed)   echo "::error::CodeQL SARIF processing failed for ${MATRIX_LANGUAGE}."; exit 1 ;;
+            esac
+            sleep 10
+          done
+          if [ "${status}" != "complete" ]; then
+            echo "::error::Timed out waiting for CodeQL SARIF processing (${MATRIX_LANGUAGE})."
+            exit 1
+          fi
+
+          # 2) Count OPEN alerts for this language repo-wide. We deliberately do
+          #    NOT filter by ref: the code-scanning alert list is the maintainer's
+          #    triage surface (kept at zero open), and a tag-ref filter can return
+          #    nothing for a tag — which would make the gate silently pass. A
+          #    repo-wide check is fail-closed: any untriaged finding blocks.
+          alerts="$(curl -fsSL "${auth[@]}" \
+            "${api}/code-scanning/alerts?state=open&tool_name=CodeQL&per_page=100")"
+          open="$(echo "${alerts}" | jq --arg p "${prefix}" '[.[] | select(.rule.id | startswith($p))] | length')"
+
+          if [ "${open}" -gt 0 ]; then
+            echo "::error::${open} OPEN CodeQL alert(s) for ${MATRIX_LANGUAGE} — triage them in the Security tab (dismiss or fix) before releasing:"
+            echo "${alerts}" | jq -r --arg p "${prefix}" \
+              '.[] | select(.rule.id | startswith($p)) | "  #\(.number) [\(.rule.security_severity_level // .rule.severity)] \(.rule.id) :: \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"'
+            exit 1
+          fi
+          echo "CodeQL clean for ${MATRIX_LANGUAGE}: no open alerts."
 
   # ───────────────────────────────────────────────────────────────────────
   #  Stage 2 — Security Audit (BLOCKING). Reusable workflow; its conclusion
