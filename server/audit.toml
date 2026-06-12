@@ -1,8 +1,7 @@
 # cargo-audit configuration
 # https://github.com/rustsec/rustsec/tree/main/cargo-audit#configuration
 #
-# Ignored advisories must also be documented in deny.toml so cargo-deny is in
-# sync. Each entry must have a justification.
+# Each ignored advisory must have a justification comment below.
 
 [advisories]
 ignore = [

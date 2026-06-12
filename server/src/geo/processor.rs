@@ -119,29 +119,37 @@ async fn geo_resolution_needed(pool: &SqlitePool, config_default_enabled: bool) 
 }
 
 /// Load the GeoNames dataset off the runtime thread.  Returns `None` if
-/// the file is missing or fails to parse — callers should treat that as
+/// the file is missing or fails to parse — callers must treat that as
 /// "geocoding unavailable" and try again on the next cycle.
+///
+/// Returning `None` (instead of caching an empty geocoder) is what makes
+/// the retry actually happen: the poll loop only loads while its cached
+/// slot `is_none()`, so a `Some(empty)` here used to freeze geocoding
+/// until restart even after the operator installed the dataset.
 async fn load_geocoder(config: &GeoConfig) -> Option<Arc<ReverseGeocoder>> {
     let dataset_path = config.dataset_path.clone();
     match tokio::task::spawn_blocking(move || {
         let path = std::path::Path::new(&dataset_path);
         if path.exists() {
-            ReverseGeocoder::load(path)
+            ReverseGeocoder::load(path).map(Some)
         } else {
             tracing::error!(
                 path = %dataset_path,
+                cwd = ?std::env::current_dir().ok(),
                 "GeoNames cities500.txt not found — reverse geocoding is \
-                 DISABLED.  Photos with GPS EXIF will never have geo_city / \
-                 geo_country populated.  Run scripts/fetch_geo_data.sh or \
-                 download the dataset from \
-                 https://download.geonames.org/export/dump/cities500.zip"
+                 unavailable until the file appears (re-checked every poll \
+                 cycle).  Note the path resolves relative to the server's \
+                 working directory.  The installer downloads it; or fetch \
+                 https://download.geonames.org/export/dump/cities500.zip \
+                 manually"
             );
-            Ok(ReverseGeocoder::empty())
+            Ok(None)
         }
     })
     .await
     {
-        Ok(Ok(gc)) => Some(Arc::new(gc)),
+        Ok(Ok(Some(gc))) => Some(Arc::new(gc)),
+        Ok(Ok(None)) => None,
         Ok(Err(e)) => {
             tracing::error!(error = %e, "Failed to load GeoNames dataset");
             None

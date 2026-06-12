@@ -153,6 +153,7 @@ export default function useSlideshow(
 
   const startTimer = useCallback(() => {
     clearTimer();
+    if (totalSlides === 0) return; // nothing to advance through
     timerRef.current = setInterval(() => {
       setDirection(1);
       setCurrentSlide((prev) => (prev + 1) % totalSlides);
@@ -198,6 +199,7 @@ export default function useSlideshow(
   }, []);
 
   const next = useCallback(() => {
+    if (totalSlides === 0) return; // guard: avoid `% 0` → NaN
     setDirection(1);
     setCurrentSlide((prev) => (prev + 1) % totalSlides);
     // Reset timer on manual advance.
@@ -205,6 +207,7 @@ export default function useSlideshow(
   }, [totalSlides, isPlaying, startTimer]);
 
   const prev = useCallback(() => {
+    if (totalSlides === 0) return; // guard: avoid `% 0` → NaN
     setDirection(-1);
     setCurrentSlide((prev) => (prev - 1 + totalSlides) % totalSlides);
     if (isPlaying) startTimer();

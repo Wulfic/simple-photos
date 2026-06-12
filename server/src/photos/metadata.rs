@@ -96,8 +96,14 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                             + lon_vals[2].to_f64() / 3600.0;
                         let lat_ref_str = lat_ref.display_value().to_string();
                         let lon_ref_str = lon_ref.display_value().to_string();
-                        latitude = Some(if lat_ref_str.contains('S') { -lat } else { lat });
-                        longitude = Some(if lon_ref_str.contains('W') { -lon } else { lon });
+                        let lat_signed = if lat_ref_str.contains('S') { -lat } else { lat };
+                        let lon_signed = if lon_ref_str.contains('W') { -lon } else { lon };
+                        // Exactly (0,0) — "null island" — is the classic
+                        // no-fix value; treat it as "no location".
+                        if lat_signed.abs() > 1e-7 || lon_signed.abs() > 1e-7 {
+                            latitude = Some(lat_signed);
+                            longitude = Some(lon_signed);
+                        }
                     }
                 }
             }
@@ -253,8 +259,16 @@ pub(crate) fn extract_media_metadata_from_bytes(
                         + lon_vals[2].to_f64() / 3600.0;
                     let lat_ref_str = lat_ref.display_value().to_string();
                     let lon_ref_str = lon_ref.display_value().to_string();
-                    latitude = Some(if lat_ref_str.contains('S') { -lat } else { lat });
-                    longitude = Some(if lon_ref_str.contains('W') { -lon } else { lon });
+                    let lat_signed = if lat_ref_str.contains('S') { -lat } else { lat };
+                    let lon_signed = if lon_ref_str.contains('W') { -lon } else { lon };
+                    // Exactly (0,0) — "null island" — is the classic value a
+                    // camera writes when it has a GPS chip but no fix.  Treat
+                    // it as "no location" rather than placing the photo in
+                    // the Gulf of Guinea.
+                    if lat_signed.abs() > 1e-7 || lon_signed.abs() > 1e-7 {
+                        latitude = Some(lat_signed);
+                        longitude = Some(lon_signed);
+                    }
                 }
             }
         }
@@ -428,7 +442,9 @@ async fn probe_video_display_dimensions(path: &std::path::Path) -> Option<(i64, 
 
     // Check for rotation in remaining fields: 90 or 270 degrees means portrait.
     // Rotation can appear as side_data rotation or format tag "rotate".
-    let has_90_270_rotation = parts[3..].iter().any(|p| {
+    // `get(3..)` — ffprobe omits absent fields entirely, so a two-field
+    // line must not panic the scan task.
+    let has_90_270_rotation = parts.get(3..).unwrap_or(&[]).iter().any(|p| {
         let trimmed = p.trim();
         // Match rotation values that indicate portrait: 90, -90, 270, -270
         matches!(trimmed, "90" | "-90" | "270" | "-270")
@@ -562,6 +578,14 @@ pub async fn repair_orientation_dimensions(
 /// Scans the first 128 KB of the file for an `<x:xmpmeta` block and looks
 /// for known XMP properties that indicate motion photos, panoramas, 360°
 /// equirectangular projections, HDR Gainmaps, and burst sequences.
+///
+/// `burst_id` is extracted **independently** of the single `photo_subtype`
+/// value: real-world Pixel burst frames frequently also carry the Ultra HDR
+/// `hdrgm:` marker (and can be motion photos), and dropping the BurstID in
+/// those cases silently breaks burst grouping.
+///
+/// Subtype precedence when several markers are present:
+/// motion > panorama/equirectangular > burst > hdr.
 pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
     let mut info = SubtypeInfo::default();
 
@@ -575,9 +599,19 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
         Err(_) => String::from_utf8_lossy(chunk).to_string(),
     };
 
+    // ── Burst ID (orthogonal to subtype) ────────────────────────────────
+    // Google: GCamera:BurstID — always captured so grouping survives the
+    // subtype precedence rules below.
+    if let Some(bid) = extract_xmp_str_attr(&text, "BurstID") {
+        tracing::debug!(burst_id = %bid, "[xmp] Burst ID found");
+        info.burst_id = Some(bid);
+    }
+
     // ── Motion Photo detection ──────────────────────────────────────────
     // Old schema: Camera:MicroVideo + Camera:MicroVideoOffset
-    // New schema: GCamera:MotionPhoto + GCamera:MotionVideoOffset (or MicroVideoOffset)
+    // New schema: GCamera:MotionPhoto + GCamera:MotionVideoOffset, or the
+    // Container:Directory item list (Pixel 2017+) where the video item's
+    // Item:Length is the MP4 trailer size from end-of-file.
     //
     // The attribute helpers below tolerate either quote style and any
     // namespace prefix, so a file that emits `gcamera:MotionPhoto='1'`
@@ -595,9 +629,12 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
     if is_motion {
         info.photo_subtype = Some("motion".to_string());
 
-        // Extract video offset — try both attribute names
+        // Offset: legacy attributes first, then the modern Container
+        // directory schema used by current Pixel firmware (which carries
+        // no *Offset attribute at all).
         if let Some(offset) = extract_xmp_int_attr(&text, "MicroVideoOffset")
             .or_else(|| extract_xmp_int_attr(&text, "MotionVideoOffset"))
+            .or_else(|| extract_container_video_offset(&text))
         {
             info.motion_video_offset = Some(offset);
         }
@@ -610,24 +647,35 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
         return info;
     }
 
-    // ── Panorama / 360° detection ──────────────────────────────────────────────────
-    // XMP: GPano:ProjectionType="equirectangular" or "cylindrical"
+    // ── Panorama / 360° detection ──────────────────────────────────────
+    // XMP: GPano:ProjectionType="equirectangular", "cylindrical", or
+    // "fisheye".  Fisheye cannot be sphere-rendered, but it is still a
+    // panorama capture — route it to the flat panorama viewer rather
+    // than leaving it untagged.
     if let Some(proj) = extract_xmp_str_attr(&text, "ProjectionType") {
         let proj_lower = proj.to_ascii_lowercase();
         if proj_lower == "equirectangular" {
             info.photo_subtype = Some("equirectangular".to_string());
             tracing::debug!(projection = %proj, "[xmp] Panorama detected: equirectangular (360°)");
             return info;
-        } else if proj_lower == "cylindrical" {
+        } else if proj_lower == "cylindrical" || proj_lower == "fisheye" {
             info.photo_subtype = Some("panorama".to_string());
-            tracing::debug!(projection = %proj, "[xmp] Panorama detected: cylindrical");
+            tracing::debug!(projection = %proj, "[xmp] Panorama detected");
             return info;
         } else {
             tracing::debug!(projection = %proj, "[xmp] GPano:ProjectionType found but unrecognised, ignoring");
         }
     }
 
-    // ── HDR Gainmap detection ──────────────────────────────────────────────────
+    // ── Burst subtype ───────────────────────────────────────────────────
+    // Checked BEFORE the HDR marker: Pixel bursts are routinely Ultra HDR,
+    // and stacking in the gallery matters more than the HDR badge.
+    if info.burst_id.is_some() {
+        info.photo_subtype = Some("burst".to_string());
+        return info;
+    }
+
+    // ── HDR Gainmap detection ───────────────────────────────────────────
     // Ultra HDR: hdrgm:Version present in XMP
     if text.contains("hdrgm:Version") || text.contains("HDRGainMap") {
         info.photo_subtype = Some("hdr".to_string());
@@ -641,19 +689,32 @@ pub(crate) fn extract_xmp_subtype(data: &[u8]) -> SubtypeInfo {
         return info;
     }
 
-    // ── Burst detection ─────────────────────────────────────────────────────────────
-    // Google: GCamera:BurstID or com.google.photos.burst.id
-    if let Some(bid) = extract_xmp_str_attr(&text, "BurstID") {
-        info.photo_subtype = Some("burst".to_string());
-        info.burst_id = Some(bid.clone());
-        tracing::debug!(
-            burst_id = %bid,
-            "[xmp] Burst photo detected"
-        );
-        return info;
-    }
-
     info
+}
+
+/// Extract the motion-video trailer offset from the modern GCamera
+/// `Container:Directory` XMP schema (Pixel "Motion Photo v1", 2017+).
+///
+/// The directory lists the file's concatenated items in order; the
+/// `video/mp4` item's `Item:Length` is the byte length of the MP4 trailer
+/// measured from the end of the file.  `Item:Padding`, when present on the
+/// same item, sits between the trailer start and the MP4 data and must be
+/// included in the offset.
+fn extract_container_video_offset(text: &str) -> Option<u64> {
+    let vid_pos = text
+        .find("Item:Mime=\"video/mp4\"")
+        .or_else(|| text.find("Item:Mime='video/mp4'"))?;
+    // Bound the attribute search to the enclosing XML element so we don't
+    // pick up the primary image item's attributes.
+    let elem_start = text[..vid_pos].rfind('<').unwrap_or(0);
+    let elem_end = text[vid_pos..]
+        .find('>')
+        .map(|i| vid_pos + i)
+        .unwrap_or(text.len());
+    let elem = &text[elem_start..elem_end];
+    let len = extract_xmp_int_attr(elem, "Item:Length")?;
+    let pad = extract_xmp_int_attr(elem, "Item:Padding").unwrap_or(0);
+    Some(len + pad)
 }
 
 /// Aspect-ratio fallback for panorama / equirectangular detection.
@@ -722,15 +783,51 @@ pub(crate) fn apply_aspect_subtype_fallback(info: &mut SubtypeInfo, width: i64, 
     info.photo_subtype = Some(subtype.to_string());
 }
 
-/// Extract photo subtype from a file on disk (reads first 128 KB).
+/// How much of a file the XMP subtype scanner actually needs.  XMP packets
+/// sit in the first few KB of JPEG/HEIC files; 256 KB gives generous slack
+/// without ever pulling a multi-gigabyte video into memory.
+pub(crate) const XMP_SCAN_PREFIX_BYTES: usize = 256 * 1024;
+
+/// Read at most `cap` bytes from the start of a file.  Returns an empty
+/// vec on any I/O error (callers treat that as "no metadata found").
+pub(crate) async fn read_file_prefix(path: &std::path::Path, cap: usize) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "[xmp] Failed to open file for prefix read");
+            return Vec::new();
+        }
+    };
+    let mut buf = Vec::with_capacity(cap.min(64 * 1024));
+    let mut handle = file.take(cap as u64);
+    if let Err(e) = handle.read_to_end(&mut buf).await {
+        tracing::warn!(path = %path.display(), error = %e, "[xmp] Prefix read failed");
+        return Vec::new();
+    }
+    buf
+}
+
+/// Extract photo subtype from a file on disk (reads only the XMP prefix,
+/// never the whole file).
 pub(crate) fn extract_xmp_subtype_from_file(path: &std::path::Path) -> SubtypeInfo {
-    match std::fs::read(path) {
-        Ok(data) => extract_xmp_subtype(&data),
+    use std::io::Read;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
         Err(e) => {
             tracing::warn!("[xmp] Failed to read file for XMP extraction: {}", e);
-            SubtypeInfo::default()
+            return SubtypeInfo::default();
         }
+    };
+    let mut buf = Vec::with_capacity(64 * 1024);
+    if let Err(e) = file
+        .take(XMP_SCAN_PREFIX_BYTES as u64)
+        .read_to_end(&mut buf)
+    {
+        tracing::warn!("[xmp] Failed to read file for XMP extraction: {}", e);
+        return SubtypeInfo::default();
     }
+    extract_xmp_subtype(&buf)
 }
 
 /// Async wrapper for file-based XMP extraction.
@@ -764,10 +861,13 @@ pub async fn backfill_photo_subtypes_all_users(
     use std::sync::Arc;
     use tokio::sync::Semaphore;
 
+    // XMP subtypes only apply to still photos.  Including videos here used
+    // to pull entire multi-GB files into memory for a string scan.
     let rows: Vec<(String, String, i64, i64)> = match sqlx::query_as(
         "SELECT id, file_path, COALESCE(width, 0), COALESCE(height, 0) \
          FROM photos \
          WHERE photo_subtype IS NULL AND file_path != '' \
+         AND media_type = 'photo' \
          LIMIT ?",
     )
     .bind(max_files as i64)
@@ -808,7 +908,7 @@ pub async fn backfill_photo_subtypes_all_users(
                 Ok(p) => p,
                 Err(_) => return,
             };
-            let bytes = tokio::fs::read(&abs).await.unwrap_or_default();
+            let bytes = read_file_prefix(&abs, XMP_SCAN_PREFIX_BYTES).await;
             if bytes.is_empty() {
                 return;
             }
@@ -1077,6 +1177,59 @@ mod xmp_tests {
         let xmp = r#"<x:xmpmeta><rdf:Description hdrgm:Version="1.0" /></x:xmpmeta>"#;
         let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
         assert_eq!(info.photo_subtype.as_deref(), Some("hdr"));
+    }
+
+    #[test]
+    fn burst_with_hdr_keeps_burst_id_and_burst_subtype() {
+        // Pixel Ultra HDR burst frame: both markers present.  The frame must
+        // stack with its burst group — burst wins over the hdr badge, and
+        // burst_id must never be dropped.
+        let xmp = r#"<x:xmpmeta><rdf:Description GCamera:BurstID="b-42" hdrgm:Version="1.0" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("burst"));
+        assert_eq!(info.burst_id.as_deref(), Some("b-42"));
+    }
+
+    #[test]
+    fn motion_with_burst_id_keeps_both() {
+        let xmp = r#"<x:xmpmeta><rdf:Description GCamera:MotionPhoto="1" GCamera:MotionVideoOffset="99" GCamera:BurstID="b-7" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("motion"));
+        assert_eq!(info.burst_id.as_deref(), Some("b-7"));
+        assert_eq!(info.motion_video_offset, Some(99));
+    }
+
+    #[test]
+    fn fisheye_projection_is_panorama() {
+        let xmp = r#"<x:xmpmeta><rdf:Description GPano:ProjectionType="fisheye" /></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("panorama"));
+    }
+
+    #[test]
+    fn motion_container_directory_schema_offset() {
+        // Modern Pixel schema: no *Offset attribute; the video Item:Length
+        // (plus Item:Padding) gives the trailer offset from EOF.
+        let xmp = r#"<x:xmpmeta xmlns:Container="http://ns.google.com/photos/1.0/container/"
+            xmlns:Item="http://ns.google.com/photos/1.0/container/item/">
+            <rdf:Description GCamera:MotionPhoto="1" GCamera:MotionPhotoVersion="1">
+            <Container:Directory><rdf:Seq>
+            <rdf:li rdf:parseType="Resource"><Container:Item Item:Mime="image/jpeg" Item:Semantic="Primary" Item:Length="0" Item:Padding="0"/></rdf:li>
+            <rdf:li rdf:parseType="Resource"><Container:Item Item:Mime="video/mp4" Item:Semantic="MotionPhoto" Item:Length="4061821" Item:Padding="0"/></rdf:li>
+            </rdf:Seq></Container:Directory></rdf:Description></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.photo_subtype.as_deref(), Some("motion"));
+        assert_eq!(info.motion_video_offset, Some(4061821));
+    }
+
+    #[test]
+    fn motion_container_schema_with_padding() {
+        let xmp = r#"<x:xmpmeta><rdf:Description GCamera:MotionPhoto="1">
+            <Container:Item Item:Mime="image/jpeg" Item:Length="0"/>
+            <Container:Item Item:Mime="video/mp4" Item:Length="1000" Item:Padding="8"/>
+            </rdf:Description></x:xmpmeta>"#;
+        let info = extract_xmp_subtype(&jpeg_with_xmp(xmp));
+        assert_eq!(info.motion_video_offset, Some(1008));
     }
 
     #[test]

@@ -27,7 +27,7 @@
 #define AppId          "{{B7A3F8C2-9D1E-4F2B-8E5A-1C2D3E4F5A6B}"
 ; SP_VERSION is supplied by CI via /DSP_VERSION=x.y.z. Falls back to 1.0.0.
 #ifndef SP_VERSION
-  #define SP_VERSION "1.1.5"
+  #define SP_VERSION "1.3.44"
 #endif
 
 [Setup]
@@ -61,8 +61,13 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "service";    Description: "Install Simple Photos as a Windows Service (auto-start)"; GroupDescription: "Service:"; Flags: unchecked
+; Checked by default: Simple Photos is a server and most users expect it to
+; run on boot. Unchecking installs files only (run manually / foreground).
+Name: "service";    Description: "Install Simple Photos as a Windows Service (auto-start on boot)"; GroupDescription: "Service:"
 Name: "firewall";   Description: "Add Windows Firewall rule for TCP port 8080 (Private + Domain networks)"; GroupDescription: "Network:"
+; Unchecked by default: only useful with an NVIDIA GPU and pulls ~0.6-1 GB of
+; CUDA 12 + cuDNN 9 runtime DLLs. Without it, AI inference runs on CPU.
+Name: "gpu";        Description: "Enable NVIDIA GPU acceleration for AI (downloads CUDA 12 + cuDNN 9 runtime, ~0.6-1 GB)"; GroupDescription: "AI acceleration:"; Flags: unchecked
 
 [Files]
 ; ── Server binary ──────────────────────────────────────────────────────────
@@ -82,6 +87,9 @@ Source: "vendor\nssm.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 
 ; ── Post-install asset fetcher ─────────────────────────────────────────────
 Source: "fetch-assets.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
+
+; ── CUDA runtime fetcher (optional GPU component) ──────────────────────────
+Source: "fetch-cuda-runtime.ps1"; DestDir: "{app}\bin"; Flags: ignoreversion
 
 ; ── Documentation ──────────────────────────────────────────────────────────
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
@@ -135,6 +143,16 @@ Filename: "{app}\bin\nssm.exe"; \
     Parameters: "set SimplePhotos Start SERVICE_AUTO_START"; \
     Flags: runhidden; \
     Tasks: service
+; ── Restart behaviour ─────────────────────────────────────────────────────
+; Wait 15 seconds before restarting the server after it exits (crash or
+; manual kill). This gives the user enough time to also stop the Windows
+; Service (via "Stop service" shortcut, services.msc, or Task Manager →
+; Services tab) before NSSM restarts the process. Without this delay NSSM
+; would respawn immediately, making a Task Manager kill ineffective.
+Filename: "{app}\bin\nssm.exe"; \
+    Parameters: "set SimplePhotos AppRestartDelay 15000"; \
+    Flags: runhidden; \
+    Tasks: service
 Filename: "{sys}\sc.exe"; \
     Parameters: "start SimplePhotos"; \
     StatusMsg: "Starting Simple Photos service..."; \
@@ -155,6 +173,14 @@ Filename: "powershell.exe"; \
 Filename: "powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-assets.ps1"" -InstallDir ""{app}"" -DataDir ""{commonappdata}\SimplePhotos"""; \
     StatusMsg: "Downloading ffmpeg + AI models + GeoNames (~325 MB) ..."
+
+; ── Optional: download CUDA 12 + cuDNN 9 runtime for GPU AI (gpu task). ────
+; DLLs land next to the server binary in {app} so the ONNX CUDA provider can
+; load them. Failure is non-fatal — the server falls back to CPU inference.
+Filename: "powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-cuda-runtime.ps1"" -InstallDir ""{app}"""; \
+    StatusMsg: "Downloading NVIDIA CUDA + cuDNN runtime for GPU acceleration (~0.6-1 GB) ..."; \
+    Tasks: gpu
 
 ; ── Open the browser when finished ───────────────────────────────────────
 Filename: "http://localhost:8080"; \

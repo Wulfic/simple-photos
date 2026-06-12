@@ -35,7 +35,9 @@ export default function TagPanel({ show, onClose, photoId }: TagPanelProps) {
       await tagsApi.add(photoId, cleaned);
       if (!tags.includes(cleaned)) setTags(prev => [...prev, cleaned].sort());
       setInput("");
-    } catch {}
+    } catch (e) {
+      console.error("[TagPanel] failed to add tag:", e);
+    }
   };
 
   const handleRemove = async (tag: string) => {
@@ -43,7 +45,9 @@ export default function TagPanel({ show, onClose, photoId }: TagPanelProps) {
     try {
       await tagsApi.remove(photoId, tag);
       setTags(prev => prev.filter(t => t !== tag));
-    } catch {}
+    } catch (e) {
+      console.error("[TagPanel] failed to remove tag:", e);
+    }
   };
 
   return (

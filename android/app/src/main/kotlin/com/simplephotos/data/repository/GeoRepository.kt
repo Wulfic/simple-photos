@@ -15,39 +15,38 @@ class GeoRepository @Inject constructor(private val api: ApiService) {
     suspend fun getSettings(): GeoSettings = api.getGeoSettings()
 
     suspend fun updateSettings(
-        geoEnabled: Boolean? = null,
-        reverseGeocodeEnabled: Boolean? = null,
-        stripOnExport: Boolean? = null,
-    ): GeoSettings = api.updateGeoSettings(
-        UpdateGeoSettingsRequest(geoEnabled, reverseGeocodeEnabled, stripOnExport)
-    )
+        enabled: Boolean? = null,
+        scrubOnUpload: Boolean? = null,
+    ) {
+        api.updateGeoSettings(UpdateGeoSettingsRequest(enabled, scrubOnUpload))
+    }
 
-    suspend fun scrub(): GeoScrubResponse = api.scrubGeoData()
+    suspend fun scrub(): GeoScrubResponse = api.scrubGeoData(GeoScrubRequest(confirm = true))
 
-    suspend fun listCountries(): List<GeoCountry> = api.listGeoCountries().countries
+    suspend fun listCountries(): List<GeoCountry> = api.listGeoCountries()
 
-    suspend fun listLocations(): List<GeoLocation> = api.listGeoLocations().locations
+    suspend fun listLocations(): List<GeoLocation> = api.listGeoLocations()
 
-    suspend fun listLocationPhotos(country: String, city: String): List<PhotoRecord> =
-        api.listGeoLocationPhotos(country, city).photos
+    suspend fun listLocationPhotos(country: String, city: String): List<GeoPhotoSummary> =
+        api.listGeoLocationPhotos(country, city)
 
-    suspend fun listMapPhotos(): List<GeoMapPhoto> = api.listGeoMapPhotos().photos
+    suspend fun listMapPhotos(): List<GeoMapPhoto> = api.listGeoMapPhotos()
 
-    suspend fun listTimeline(): List<GeoTimelineEntry> = api.listGeoTimeline().entries
+    suspend fun listTimeline(): List<GeoTimelineEntry> = api.listGeoTimeline()
 
     suspend fun listTimelineYear(year: Int): List<GeoTimelineEntry> =
-        api.listGeoTimelineYear(year).entries
+        api.listGeoTimelineYear(year)
 
-    suspend fun listTimelineMonthPhotos(year: Int, month: Int): List<PhotoRecord> =
-        api.listGeoTimelineMonthPhotos(year, month).photos
+    suspend fun listTimelineMonthPhotos(year: Int, month: Int): List<GeoPhotoSummary> =
+        api.listGeoTimelineMonthPhotos(year, month)
 
     suspend fun listMemories(): List<GeoMemory> = api.listGeoMemories()
 
-    suspend fun listMemoryPhotos(memoryId: String): List<PhotoRecord> =
-        api.listGeoMemoryPhotos(memoryId).photos
+    suspend fun listMemoryPhotos(memoryId: String): List<GeoPhotoSummary> =
+        api.listGeoMemoryPhotos(memoryId)
 
     suspend fun listTrips(): List<GeoTrip> = api.listGeoTrips()
 
-    suspend fun listTripPhotos(tripId: String): List<PhotoRecord> =
-        api.listGeoTripPhotos(tripId).photos
+    suspend fun listTripPhotos(tripId: String): List<GeoPhotoSummary> =
+        api.listGeoTripPhotos(tripId)
 }

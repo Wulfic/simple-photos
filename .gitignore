@@ -141,6 +141,14 @@ env/
 tests/test_data/downloaded_*/
 tests/.cache/
 
+
+
+.claude/
 .mcp.json
 CLAUDE.md
-.claude/
+# NOTE: do NOT ignore .github/ — the entire CI pipeline (workflows, CodeQL
+# config, skills) is version-controlled there. A blanket ".github/" ignore
+# silently drops any NEW file under it from commits, so it never reaches the
+# release checkout (this is exactly how .github/codeql/codeql-config.yml went
+# missing on the v1.3.4 release run).
+.vscode/

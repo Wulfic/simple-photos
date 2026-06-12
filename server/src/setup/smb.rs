@@ -752,7 +752,8 @@ mod tests {
     fn encrypt_roundtrip() {
         // Test-only fixture; not a real credential.
         // nosemgrep: generic.secrets.security.detected-generic-secret.detected-generic-secret
-        let secret = "0123456789abcdef0123456789abcdef"; // codeql[rust/hard-coded-cryptographic-value]
+        let secret = "0123456789abcdef0123456789abcdef";
+        // codeql[rust/hard-coded-cryptographic-value] -- test-only fixture, not a real credential
         let ct = encrypt_password("hunter2", secret).unwrap();
         let pt = decrypt_password(&ct, secret).unwrap();
         assert_eq!(pt, "hunter2");

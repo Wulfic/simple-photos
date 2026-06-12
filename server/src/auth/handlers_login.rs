@@ -36,6 +36,22 @@ pub async fn register(
         return Err(AppError::Forbidden("Registration is disabled".into()));
     }
 
+    // Registration must wait for the first-run wizard.  A non-admin user
+    // created before `setup/init` runs permanently deadlocks setup: init
+    // refuses because a user exists, finalize requires an admin that can
+    // then never be created, and every gated endpoint 403s forever.  Anyone
+    // on the LAN could brick a fresh install this way.
+    if !crate::setup::handlers::is_wizard_completed(&state).await? {
+        tracing::warn!(
+            username = %req.username,
+            "Registration rejected: first-run wizard not completed yet"
+        );
+        return Err(AppError::Forbidden(
+            "Server setup is not complete. The administrator must finish the setup wizard first."
+                .into(),
+        ));
+    }
+
     validate_username(&req.username)?;
     validate_password(&req.password)?;
 

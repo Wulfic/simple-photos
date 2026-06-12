@@ -108,9 +108,11 @@ pub async fn get_geo_settings(
     .fetch_one(&state.pool)
     .await?;
 
+    // `geo_city = ''` is the "attempted but unresolved" sentinel written by
+    // the backfill — it must never count as (or render as) a real place.
     let cities: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT geo_city || ',' || geo_country_code) FROM photos \
-         WHERE user_id = ?1 AND geo_city IS NOT NULL",
+         WHERE user_id = ?1 AND geo_city IS NOT NULL AND geo_city != ''",
     )
     .bind(&auth.user_id)
     .fetch_one(&state.pool)
@@ -162,7 +164,7 @@ pub async fn list_locations(
 ) -> Result<Json<Vec<LocationEntry>>, AppError> {
     let rows: Vec<(String, Option<String>, String, String, i64)> = sqlx::query_as(
         "SELECT geo_city, geo_state, geo_country, geo_country_code, COUNT(*) as cnt \
-         FROM photos WHERE user_id = ?1 AND geo_city IS NOT NULL \
+         FROM photos WHERE user_id = ?1 AND geo_city IS NOT NULL AND geo_city != '' \
          GROUP BY geo_city, geo_state, geo_country, geo_country_code \
          ORDER BY cnt DESC",
     )
@@ -421,7 +423,8 @@ pub async fn list_memories(
                  AND p2.geo_city = photos.geo_city AND DATE(p2.taken_at) = DATE(photos.taken_at) \
                  AND p2.thumb_path IS NOT NULL LIMIT 1) as thumb \
          FROM photos \
-         WHERE user_id = ?1 AND geo_city IS NOT NULL AND taken_at IS NOT NULL \
+         WHERE user_id = ?1 AND geo_city IS NOT NULL AND geo_city != '' \
+         AND taken_at IS NOT NULL \
          GROUP BY geo_city, geo_country, DATE(taken_at) \
          HAVING cnt >= 3 \
          ORDER BY photo_date DESC \
@@ -599,7 +602,7 @@ pub async fn list_trips(
                 geo_state AS state, geo_country AS country, geo_country_code AS country_code \
          FROM photos \
          WHERE user_id = ?1 \
-           AND geo_city IS NOT NULL \
+           AND geo_city IS NOT NULL AND geo_city != '' \
            AND taken_at IS NOT NULL \
          ORDER BY geo_country_code, geo_city, taken_at ASC",
     )

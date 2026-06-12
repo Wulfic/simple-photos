@@ -81,7 +81,11 @@ fn apply_execution_provider(
         return builder;
     }
     let cuda_ep = CUDAExecutionProvider::default();
-    match builder.with_execution_providers([cuda_ep.build()]) {
+    // `error_on_failure()` makes ONNX Runtime return an error if the CUDA EP
+    // cannot be registered (e.g. the CUDA 12 runtime DLLs are missing) instead
+    // of silently falling back to CPU while we log a misleading "registered"
+    // message. We then perform an explicit, logged CPU fallback below.
+    match builder.with_execution_providers([cuda_ep.build().error_on_failure()]) {
         Ok(b) => {
             tracing::info!(
                 "ONNX session: registered CUDAExecutionProvider for {}",

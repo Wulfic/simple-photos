@@ -133,6 +133,8 @@ class AuthRepository @Inject constructor(
         // 6. Clear auth tokens and encryption key
         dataStore.edit { it.clear() }
         keyManager.clearKey()
+        // Drop the secure-album unlock token so a re-login must re-unlock.
+        com.simplephotos.data.remote.GalleryTokenHolder.token = null
     }
 
     suspend fun setup2fa(): TotpSetupResponse = api.setup2fa()

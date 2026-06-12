@@ -32,6 +32,11 @@ export default function BurstStrip({ burstId, currentPhotoId, onSelectFrame, vis
     setLoading(true);
     setFrames([]);
 
+    // Object URLs created for IDB-cached thumbnails — must be revoked when
+    // the strip unmounts or switches bursts, or every viewed burst leaks
+    // its decoded thumbnails for the lifetime of the tab.
+    const createdUrls: string[] = [];
+
     (async () => {
       try {
         const burstPhotos = await api.photos.burstFrames(burstId);
@@ -47,6 +52,7 @@ export default function BurstStrip({ burstId, currentPhotoId, onSelectFrame, vis
           if (cached?.thumbnailData) {
             const mime = cached.thumbnailMimeType || "image/jpeg";
             thumbUrl = URL.createObjectURL(new Blob([cached.thumbnailData], { type: mime }));
+            createdUrls.push(thumbUrl);
           } else if (bp.thumb_path) {
             // Use server thumbnail endpoint
             thumbUrl = api.photos.thumbUrl(bp.id);
@@ -56,11 +62,17 @@ export default function BurstStrip({ burstId, currentPhotoId, onSelectFrame, vis
         }
 
         if (!cancelled) setFrames(loadedFrames);
-      } catch { /* API error — hide strip */ }
+      } catch (e) {
+        console.error("[BurstStrip] failed to load burst frames:", e);
+        // Strip stays hidden (frames.length <= 1) — viewer remains usable.
+      }
       if (!cancelled) setLoading(false);
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      for (const url of createdUrls) URL.revokeObjectURL(url);
+    };
   }, [burstId]);
 
   // Scroll active frame into view

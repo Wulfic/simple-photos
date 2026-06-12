@@ -2,6 +2,8 @@
 
 A self-hosted photo & video library with end-to-end encryption, multi-server backup & restore, and web + Android access.
 
+![Simple Photos](simple-photos-mockup1.jpg)
+
 ### Authors Note
 Simple Photos was born out of a desire for a secure, private, and user-friendly photo management solution that I could host myself. But found that other solutions lacked one critical thing, backup servers! Forcing users to choose between only having one backup target, or use multiple solutions; So I decided to build something from the ground up that met all my needs — and hopefully yours too!
 
@@ -158,8 +160,9 @@ This repo uses two long-lived branches:
 
 - **`main`** — lean release branch. Only what's needed to build & ship.
 - **`dev`** — full development branch with tests, agent customisation, and
-  scratch artefacts. Open all pull requests against `dev`. A workflow auto-
-  syncs `dev` → `main` after stripping development-only paths
+  scratch artefacts. Open all pull requests against `dev`. Pushing a version
+  tag (`vX.Y.Z`) runs the full release pipeline, and on success mirrors
+  `dev` → `main` after stripping development-only paths
   (see `.github/sync-main-exclude.txt` on `dev`).
 
 ## License

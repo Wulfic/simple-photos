@@ -1,0 +1,14 @@
+# CodeQL configuration for the release pipeline (pipeline.yml).
+#
+# Scope: analyze SHIPPED code only (server/, web/, android/). The Python E2E
+# harness under tests/ is throwaway scaffolding that is never packaged or
+# shipped — analyzing it only produces noise that has to be hand-triaged in the
+# Security tab (intentionally weak JWT secrets, insecure temp files in fixtures,
+# incomplete-URL asserts, etc.). Excluding it keeps the alert set actionable.
+#
+# NOTE: web/patch_*.py keep the Python extractor fed, so excluding tests/ does
+# not leave the python analysis with zero source.
+name: "simple-photos CodeQL config"
+
+paths-ignore:
+  - tests

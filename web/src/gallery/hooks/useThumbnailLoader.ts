@@ -16,6 +16,7 @@ import { blobUrlManager } from "../cache/blobUrlManager";
 import { blobsApi } from "../../api/blobs";
 import { decrypt } from "../../crypto/crypto";
 import { useAuthStore } from "../../store/auth";
+import { appendGalleryTokenParam } from "../../utils/galleryToken";
 import type { ThumbnailSource, ThumbnailState, ThumbnailResult } from "../types";
 
 export function useThumbnailLoader(
@@ -72,7 +73,9 @@ export function useThumbnailLoader(
     // 3. Server-side photo — use server thumbnail API directly
     if (source.serverSide && source.serverPhotoId) {
       const token = useAuthStore.getState().accessToken;
-      const serverUrl = `/api/photos/${source.serverPhotoId}/thumbnail?token=${encodeURIComponent(token || "")}`;
+      const serverUrl = appendGalleryTokenParam(
+        `/api/photos/${source.serverPhotoId}/thumbnail?token=${encodeURIComponent(token || "")}`,
+      );
       resolve(serverUrl, "image/jpeg");
       return;
     }
@@ -117,7 +120,9 @@ export function useThumbnailLoader(
       // Last resort: try the server photos API directly
       const token = useAuthStore.getState().accessToken;
       if (token && blobId) {
-        const serverUrl = `/api/photos/${blobId}/thumbnail?token=${encodeURIComponent(token)}`;
+        const serverUrl = appendGalleryTokenParam(
+          `/api/photos/${blobId}/thumbnail?token=${encodeURIComponent(token)}`,
+        );
         resolve(serverUrl, "image/jpeg");
       } else {
         setState("error");

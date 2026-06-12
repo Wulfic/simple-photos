@@ -34,6 +34,10 @@ pub async fn generate_web_preview_bg(
     generate_web_preview(input_path, output_path, preview_ext).await
 }
 
+/// Ceiling for a single preview conversion.  Without it a hung FFmpeg
+/// (corrupt input, stuck GPU session) wedged the preview task forever.
+const PREVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// Generate a browser-compatible web preview file.
 /// Images → high-quality JPEG, ICO → PNG, Audio → MP3, Video → MP4 (H.264/AAC).
 async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext: &str) -> bool {
@@ -46,47 +50,39 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
 
     let ffmpeg_ok = match preview_ext {
         "jpg" => {
-            let status = tokio::process::Command::new("nice")
-                .args([
-                    "-n", "19", "ffmpeg", "-y", "-i", input_str, "-q:v", "2", output_str,
-                ])
+            let mut cmd = crate::process::background_command("ffmpeg");
+            cmd.args(["-y", "-i", input_str, "-q:v", "2", output_str])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await;
+                .stderr(std::process::Stdio::null());
+            let status = crate::process::status_with_timeout(&mut cmd, PREVIEW_TIMEOUT).await;
             matches!(status, Ok(s) if s.success())
         }
         "png" => {
-            let status = tokio::process::Command::new("nice")
-                .args(["-n", "19", "ffmpeg", "-y", "-i", input_str, output_str])
+            let mut cmd = crate::process::background_command("ffmpeg");
+            cmd.args(["-y", "-i", input_str, output_str])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await;
+                .stderr(std::process::Stdio::null());
+            let status = crate::process::status_with_timeout(&mut cmd, PREVIEW_TIMEOUT).await;
             matches!(status, Ok(s) if s.success())
         }
         "mp3" => {
-            let status = tokio::process::Command::new("nice")
-                .args([
-                    "-n",
-                    "19",
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    input_str,
-                    "-codec:a",
-                    "libmp3lame",
-                    "-b:a",
-                    "192k",
-                    output_str,
-                ])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await;
+            let mut cmd = crate::process::background_command("ffmpeg");
+            cmd.args([
+                "-y",
+                "-i",
+                input_str,
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                "192k",
+                output_str,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+            let status = crate::process::status_with_timeout(&mut cmd, PREVIEW_TIMEOUT).await;
             matches!(status, Ok(s) if s.success())
         }
         "mp4" => {
@@ -105,18 +101,30 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
         return true;
     }
 
-    // FFmpeg failed — try ImageMagick as fallback for image conversions
+    // FFmpeg failed — try ImageMagick as fallback for image conversions.
+    // `imagemagick_command` picks `magick` on Windows where bare `convert`
+    // is the NTFS filesystem tool.
     if preview_ext == "jpg" || preview_ext == "png" {
-        let magick_result = tokio::process::Command::new("convert")
-            .args([input_str, "-quality", "92", output_str])
+        let mut cmd = crate::conversion::imagemagick_command();
+        cmd.args([input_str, "-quality", "92", output_str])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
+            .stderr(std::process::Stdio::null());
+        let magick_result = crate::process::status_with_timeout(&mut cmd, PREVIEW_TIMEOUT).await;
         if matches!(magick_result, Ok(s) if s.success()) {
             return true;
         }
+        tracing::warn!(
+            input = %input_path.display(),
+            target = preview_ext,
+            "Web preview: both FFmpeg and ImageMagick failed"
+        );
+    } else {
+        tracing::warn!(
+            input = %input_path.display(),
+            target = preview_ext,
+            "Web preview: conversion failed"
+        );
     }
 
     false

@@ -207,14 +207,17 @@ export default function Gallery() {
         result.push(photo);
       }
     }
-    // For each burst group, pick the first frame as representative
+    // For each burst group, the newest frame represents the stack.  Copy
+    // instead of mutating: these objects are shared with the live query
+    // cache, and a stale `_burstCount` stamped onto a cached object kept
+    // showing a burst badge after the group shrank.
     for (const [, frames] of burstGroups) {
-      const representative = frames[0];
-      (representative as CachedPhoto & { _burstCount?: number })._burstCount = frames.length;
-      result.push(representative as CachedPhoto & { _burstCount?: number });
+      result.push({ ...frames[0], _burstCount: frames.length });
     }
-    // Re-sort by takenAt descending to maintain display order
-    result.sort((a, b) => b.takenAt - a.takenAt);
+    // Re-sort by takenAt descending to maintain display order.
+    // Photos without a timestamp sort to the end instead of poisoning the
+    // comparator with NaN.
+    result.sort((a, b) => (b.takenAt ?? 0) - (a.takenAt ?? 0));
     return result;
   })();
 

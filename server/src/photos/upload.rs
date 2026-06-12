@@ -15,7 +15,7 @@ use crate::state::AppState;
 
 use super::metadata::{
     apply_aspect_subtype_fallback, extract_media_metadata_async,
-    extract_media_metadata_from_bytes_async, extract_motion_video, extract_xmp_subtype,
+    extract_media_metadata_from_bytes_async, extract_xmp_subtype,
 };
 use super::thumbnail::generate_thumbnail_file;
 use super::utils::{
@@ -471,50 +471,15 @@ pub async fn upload_photo(
     // If the photo is a motion photo with an embedded MP4 trailer, extract it
     // and store it as a separate blob for efficient serving.
     if subtype_info.photo_subtype.as_deref() == Some("motion") {
-        if let Some(offset) = subtype_info.motion_video_offset {
-            if let Some(video_bytes) = extract_motion_video(&xmp_data, offset) {
-                let blob_id = Uuid::new_v4().to_string();
-                let blob_storage_dir = storage_root.join("blobs");
-                let _ = tokio::fs::create_dir_all(&blob_storage_dir).await;
-                let blob_rel = format!("blobs/{blob_id}.mp4");
-                let blob_abs = storage_root.join(&blob_rel);
-
-                if tokio::fs::write(&blob_abs, &video_bytes).await.is_ok() {
-                    let blob_size = video_bytes.len() as i64;
-                    let blob_now = Utc::now().to_rfc3339();
-
-                    let insert_ok = sqlx::query(
-                        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, upload_time, storage_path) \
-                         VALUES (?, ?, 'motion_video', ?, ?, ?)",
-                    )
-                    .bind(&blob_id)
-                    .bind(&auth.user_id)
-                    .bind(blob_size)
-                    .bind(&blob_now)
-                    .bind(&blob_rel)
-                    .execute(&state.pool)
-                    .await;
-
-                    if insert_ok.is_ok() {
-                        let _ =
-                            sqlx::query("UPDATE photos SET motion_video_blob_id = ? WHERE id = ?")
-                                .bind(&blob_id)
-                                .bind(&photo_id)
-                                .execute(&state.pool)
-                                .await;
-
-                        tracing::info!(
-                            photo_id = %photo_id,
-                            blob_id = %blob_id,
-                            size = blob_size,
-                            "Extracted and stored motion video blob"
-                        );
-                    } else {
-                        let _ = tokio::fs::remove_file(&blob_abs).await;
-                    }
-                }
-            }
-        }
+        super::motion::extract_and_store_motion_video(
+            &state.pool,
+            &storage_root,
+            &auth.user_id,
+            &photo_id,
+            &xmp_data,
+            subtype_info.motion_video_offset,
+        )
+        .await;
     }
 
     // ── Generate thumbnail SYNCHRONOUSLY (parity with autoscan) ─────────

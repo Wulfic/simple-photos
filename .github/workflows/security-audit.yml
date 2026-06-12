@@ -1,14 +1,15 @@
 name: Security Audit
 
+# Reusable component of the unified Release Pipeline (pipeline.yml).
+# Blocking security gate + full informational audit report.
+#
+# This workflow has NO triggers of its own — it only runs when the Release
+# Pipeline calls it via `workflow_call` after CodeQL is clean. The previous
+# weekly CVE cron and push/PR runs were removed: everything is now validated
+# at release (tag) time only.
+
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
-  schedule:
-    # Run weekly on Monday at 06:00 UTC to catch new CVEs
-    - cron: "0 6 * * 1"
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -19,6 +20,69 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # ─────────────────────────────────────────────
+  # BLOCKING Security Gate
+  #
+  # Every other job in this workflow is informational (continue-on-error)
+  # and only produces a report artifact — none of them can fail the run.
+  # This job is the single hard gate: it re-runs the deterministic,
+  # fixable, low-false-positive checks in fail-fast mode so the workflow
+  # conclusion is `failure` whenever a real, actionable security problem
+  # exists. The Gate & Sync orchestrator and the Release workflow depend on
+  # this workflow's success, so main and tagged releases cannot advance
+  # while any of these checks fail.
+  #
+  # Deliberately NOT gated here (kept informational to avoid blocking on
+  # noisy / non-actionable findings): Semgrep `--config auto`, Trivy CVE
+  # scans (transitive, often unfixed — see audit.toml ignores), pattern
+  # greps, and cargo-geiger unsafe counts.
+  # ─────────────────────────────────────────────
+  security-gate:
+    name: Security Gate (blocking)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-secgate-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-secgate-
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+
+      - name: cargo audit (blocking)
+        working-directory: server
+        # Ignored advisories are documented in server/audit.toml.
+        # Each is transitive-only with no applicable upstream fix. Any NEW advisory
+        # outside this allowlist fails the gate.
+        run: |
+          cargo audit --deny warnings \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2024-0436 \
+            --ignore RUSTSEC-2025-0134 \
+            --ignore RUSTSEC-2026-0097 \
+            --ignore RUSTSEC-2026-0105
+
+      - name: cargo deny — advisories, bans, sources (blocking)
+        working-directory: server
+        run: cargo deny check advisories bans sources
+
+      - name: Secret scan (Gitleaks, blocking)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ─────────────────────────────────────────────
   # Secret & Credential Scanning
   # ─────────────────────────────────────────────
@@ -123,7 +187,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep-results.sarif
         continue-on-error: true
@@ -160,8 +224,9 @@ jobs:
           key: ${{ runner.os }}-cargo-audit-${{ hashFiles('server/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-audit-
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
 
       - name: Run cargo audit
         id: cargo-audit
@@ -219,8 +284,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
 
       - name: Run cargo deny (all checks)
         run: |
@@ -332,8 +398,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-geiger
-        run: cargo install cargo-geiger --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-geiger
         continue-on-error: true
 
       - name: Scan for unsafe code
@@ -671,7 +738,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
         continue-on-error: true

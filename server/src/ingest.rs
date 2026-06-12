@@ -267,6 +267,30 @@ pub async fn run_conversion_pass(
                 let (img_w, img_h, conv_cam, conv_lat, conv_lon, conv_taken) =
                     extract_media_metadata_async(conv_abs.clone()).await;
 
+                // ── Subtype detection from the ORIGINAL file ─────────────
+                // Conversion strips XMP, so an iPhone/Samsung HEIC panorama,
+                // 360° sphere, burst frame, or motion photo would lose its
+                // nature forever if we only ever looked at the converted
+                // JPEG.  Scan the original's prefix instead.
+                let mut subtype_info =
+                    if candidate.target.category == conversion::MediaCategory::Image {
+                        let prefix = crate::photos::metadata::read_file_prefix(
+                            &candidate.abs_path,
+                            crate::photos::metadata::XMP_SCAN_PREFIX_BYTES,
+                        )
+                        .await;
+                        crate::photos::metadata::extract_xmp_subtype(&prefix)
+                    } else {
+                        Default::default()
+                    };
+                if candidate.target.category == conversion::MediaCategory::Image {
+                    crate::photos::metadata::apply_aspect_subtype_fallback(
+                        &mut subtype_info,
+                        img_w,
+                        img_h,
+                    );
+                }
+
                 // Prefer original file's metadata; fall back to converted, then mtime.
                 let cam_model = orig_cam.or(conv_cam);
                 let exif_lat = orig_lat.or(conv_lat);
@@ -312,8 +336,8 @@ pub async fn run_conversion_pass(
                 let insert_result = sqlx::query(
                     "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                      size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                     created_at, photo_hash, source_path) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     created_at, photo_hash, source_path, photo_subtype, burst_id) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&photo_id)
                 .bind(&admin_id)
@@ -332,6 +356,8 @@ pub async fn run_conversion_pass(
                 .bind(&now)
                 .bind(&photo_hash)
                 .bind(&source_path)
+                .bind(&subtype_info.photo_subtype)
+                .bind(&subtype_info.burst_id)
                 .execute(&pool)
                 .await;
 
@@ -352,6 +378,31 @@ pub async fn run_conversion_pass(
                         continue;
                     }
                     Ok(_) => {}
+                }
+
+                // Motion photos keep their MP4 trailer in the ORIGINAL file
+                // (conversion drops it) — extract and store it now so the
+                // viewer's LIVE playback works for converted HEICs too.
+                if subtype_info.photo_subtype.as_deref() == Some("motion") {
+                    let orig_bytes = tokio::fs::read(&candidate.abs_path)
+                        .await
+                        .unwrap_or_default();
+                    if !orig_bytes.is_empty() {
+                        crate::photos::motion::extract_and_store_motion_video(
+                            &pool,
+                            &storage_root,
+                            &admin_id,
+                            &photo_id,
+                            &orig_bytes,
+                            subtype_info.motion_video_offset,
+                        )
+                        .await;
+                    } else {
+                        tracing::warn!(
+                            file = %candidate.name,
+                            "[INGEST] Motion photo original unreadable — video trailer not extracted"
+                        );
+                    }
                 }
 
                 // Generate thumbnail for the converted file.
@@ -389,8 +440,19 @@ pub async fn run_conversion_pass(
             "[INGEST] Triggering encryption for {} newly converted files",
             registered
         );
-        crate::photos::server_migrate::auto_migrate_after_scan(pool, storage_root, jwt_secret)
-            .await;
+        crate::photos::server_migrate::auto_migrate_after_scan(
+            pool.clone(),
+            storage_root,
+            jwt_secret,
+        )
+        .await;
         tracing::info!("[INGEST] Encryption of converted files complete");
+
+        // Converted photos were registered AFTER the scan-time burst pass
+        // ran, so group them now — otherwise converted bursts never stack
+        // until the next manual scan.
+        if let Err(e) = crate::photos::burst::detect_bursts_for_user(&pool, &admin_id).await {
+            tracing::warn!(error = %e, "[INGEST] Post-conversion burst detection failed");
+        }
     }
 }

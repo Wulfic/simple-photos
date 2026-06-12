@@ -64,8 +64,25 @@ impl AiEngine {
         let provider = if config.gpu_preferred {
             let cuda_runtime = Self::detect_cuda();
             if cuda_runtime && cuda_built_in {
-                tracing::info!("AI engine: CUDA GPU detected, using GPU acceleration");
-                ExecutionProvider::Cuda
+                if Self::cuda_runtime_usable() {
+                    tracing::info!("AI engine: CUDA GPU detected, using GPU acceleration");
+                    ExecutionProvider::Cuda
+                } else {
+                    // GPU + driver present and the binary ships the CUDA EP, but
+                    // the CUDA 12 runtime libraries it depends on (cuBLAS /
+                    // cuDNN) are missing. The EP would silently fall back to CPU
+                    // inside ONNX Runtime, so report CPU honestly and tell the
+                    // operator how to enable GPU.
+                    tracing::warn!(
+                        "AI engine: CUDA GPU detected but the CUDA 12 runtime \
+                         libraries (cuBLAS/cuDNN) are not on the search path — \
+                         running AI on CPU. On Windows run \
+                         `bin\\fetch-cuda-runtime.ps1` (or re-run the installer \
+                         with the GPU component); otherwise install the CUDA 12 \
+                         + cuDNN 9 runtime to enable GPU acceleration."
+                    );
+                    ExecutionProvider::Cpu
+                }
             } else if cuda_runtime && !cuda_built_in {
                 tracing::warn!(
                     "AI engine: CUDA GPU detected on host but binary was built \
@@ -88,21 +105,30 @@ impl AiEngine {
             config.threads
         };
 
-        // Publish provider/threads BEFORE loading any models so the
-        // shared session builder picks them up.
+        // Publish provider/threads to the shared session builder.
+        // Models are loaded lazily: immediately only when ai.enabled=true,
+        // otherwise deferred to the first time ensure_models_loaded() is
+        // called (which the processor does when it finds photos to process).
         crate::ai::session::init(crate::ai::session::SessionConfig {
             provider,
             num_threads,
         });
 
-        // Initialise face models (downloads if needed, loads via onnxruntime)
-        crate::ai::face::init_face_model(&config.model_dir);
+        if config.enabled {
+            // Initialise face models (downloads if needed, loads via onnxruntime)
+            crate::ai::face::init_face_model(&config.model_dir);
 
-        // Initialise object classification model (MobileNetV2, downloads if needed)
-        crate::ai::object::init_classification_model(&config.model_dir);
+            // Initialise object classification model (MobileNetV2, downloads if needed)
+            crate::ai::object::init_classification_model(&config.model_dir);
 
-        // Initialise optional dedicated pet-embedding model (Phase 2, no download).
-        crate::ai::animal::init_pet_embedding_model(&config.model_dir);
+            // Initialise optional dedicated pet-embedding model (Phase 2, no download).
+            crate::ai::animal::init_pet_embedding_model(&config.model_dir);
+        } else {
+            tracing::info!(
+                "AI engine: ai.enabled=false — ONNX model loading deferred \
+                 until a user enables AI features at runtime."
+            );
+        }
 
         // Check for model files (SCRFD or legacy UltraFace for detection,
         // ArcFace w600k_r50 for recognition)
@@ -183,6 +209,23 @@ impl AiEngine {
         self.has_face_detection() || self.has_object_detection()
     }
 
+    /// Ensure ONNX model sessions are loaded, initialising them on first call.
+    ///
+    /// Safe to call multiple times — the underlying `OnceLock` singletons
+    /// guarantee each model is loaded at most once. Called by the background
+    /// processor before the first batch of a session, so models are only
+    /// brought into memory when at least one user has AI enabled.
+    pub fn ensure_models_loaded(&self) {
+        // session::init is idempotent (OnceLock — first write wins).
+        crate::ai::session::init(crate::ai::session::SessionConfig {
+            provider: self.inner.provider,
+            num_threads: self.inner.num_threads,
+        });
+        crate::ai::face::init_face_model(&self.inner.config.model_dir);
+        crate::ai::object::init_classification_model(&self.inner.config.model_dir);
+        crate::ai::animal::init_pet_embedding_model(&self.inner.config.model_dir);
+    }
+
     /// The AI config.
     #[allow(dead_code)] // Ready for ONNX integration
     pub fn config(&self) -> &AiConfig {
@@ -228,5 +271,40 @@ impl AiEngine {
         }
 
         false
+    }
+
+    /// Verify the CUDA *runtime* libraries the ONNX CUDA execution provider
+    /// depends on are actually resolvable. `onnxruntime_providers_cuda.dll`
+    /// dynamically loads `cublasLt64_12.dll` and `cudart64_12.dll` at first
+    /// inference; if they are missing the EP silently degrades to CPU. We
+    /// check up-front so the engine reports the provider it will really use.
+    #[cfg(target_os = "windows")]
+    fn cuda_runtime_usable() -> bool {
+        // Windows resolves a DLL's dependencies from the loading module's
+        // directory and the directories on PATH (plus CUDA_PATH\bin when set).
+        const REQUIRED: [&str; 2] = ["cublasLt64_12.dll", "cudart64_12.dll"];
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                dirs.push(dir.to_path_buf());
+            }
+        }
+        if let Ok(cuda) = std::env::var("CUDA_PATH") {
+            dirs.push(PathBuf::from(cuda).join("bin"));
+        }
+        if let Ok(path) = std::env::var("PATH") {
+            dirs.extend(std::env::split_paths(&path));
+        }
+        REQUIRED
+            .iter()
+            .all(|dll| dirs.iter().any(|d| d.join(dll).exists()))
+    }
+
+    /// On Linux the providers `.so` loads `libcublasLt.so.12` /
+    /// `libcudart.so.12` via the dynamic loader search path; `detect_cuda`
+    /// already gates on the driver/runtime being present, so trust that.
+    #[cfg(not(target_os = "windows"))]
+    fn cuda_runtime_usable() -> bool {
+        true
     }
 }

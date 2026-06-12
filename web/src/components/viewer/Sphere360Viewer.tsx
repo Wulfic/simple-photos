@@ -61,6 +61,8 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
+    setReady(false);
+    setError(null);
 
     // Guard against environments without WebGL (older browsers / privacy modes).
     let renderer: THREE.WebGLRenderer;
@@ -116,7 +118,7 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
     let cancelled = false;
     const loadTexture = async () => {
       try {
-        let source: ImageBitmap | HTMLImageElement;
+        let source: ImageBitmap | HTMLImageElement | HTMLCanvasElement;
         if (typeof createImageBitmap === "function") {
           const resp = await fetch(mediaUrl);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -136,6 +138,29 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
           if ("close" in source) (source as ImageBitmap).close();
           return;
         }
+
+        // Photo spheres are commonly 5–8K wide; many mobile GPUs cap
+        // MAX_TEXTURE_SIZE at 4096.  Uploading an oversized texture fails
+        // silently and renders a black sphere — downscale through a canvas
+        // when the source exceeds the device limit.
+        const maxTex = renderer.capabilities.maxTextureSize || 4096;
+        const srcW = source.width;
+        const srcH = source.height;
+        if (srcW > maxTex || srcH > maxTex) {
+          const scale = Math.min(maxTex / srcW, maxTex / srcH);
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.floor(srcW * scale));
+          canvas.height = Math.max(1, Math.floor(srcH * scale));
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(source as CanvasImageSource, 0, 0, canvas.width, canvas.height);
+            if ("close" in source) (source as ImageBitmap).close();
+            source = canvas;
+          } else {
+            console.warn("[Sphere360Viewer] 2D context unavailable; uploading full-size texture");
+          }
+        }
+
         const tex = new THREE.Texture(source as HTMLImageElement);
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.minFilter = THREE.LinearFilter;
@@ -190,10 +215,26 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
     const ro = new ResizeObserver(handleResize);
     ro.observe(mount);
 
+    // ── Wheel zoom ────────────────────────────────────────────────────────
+    // Registered natively with `passive: false`: React marks its root-level
+    // wheel listeners passive, so `preventDefault()` inside an `onWheel`
+    // prop is silently ignored and the page scrolls while zooming.
+    const handleWheel = (e: WheelEvent) => {
+      const s = stateRef.current;
+      if (!s.camera) return;
+      e.preventDefault();
+      // Positive deltaY = zoom out (wider FOV); negative = zoom in.
+      const next = s.camera.fov + e.deltaY * 0.05;
+      s.camera.fov = Math.max(MIN_FOV, Math.min(MAX_FOV, next));
+      s.camera.updateProjectionMatrix();
+    };
+    mount.addEventListener("wheel", handleWheel, { passive: false });
+
     // ── Cleanup ─────────────────────────────────────────────────────────
     return () => {
       cancelled = true;
       ro.disconnect();
+      mount.removeEventListener("wheel", handleWheel);
       const s = stateRef.current;
       if (s.raf) cancelAnimationFrame(s.raf);
       if (s.mesh) {
@@ -258,17 +299,10 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
     }
   }, []);
 
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    const s = stateRef.current;
-    if (!s.camera) return;
-    e.preventDefault();
-    // Positive deltaY = zoom out (wider FOV); negative = zoom in.
-    const next = s.camera.fov + e.deltaY * 0.05;
-    s.camera.fov = Math.max(MIN_FOV, Math.min(MAX_FOV, next));
-    s.camera.updateProjectionMatrix();
-  }, []);
-
-  // Pinch-to-zoom for touch.
+  // Pinch-to-zoom for touch.  No preventDefault here — React touch
+  // listeners are passive (the call would be a console error and a no-op);
+  // the container's `touch-action: none` is what suppresses the browser's
+  // own pinch/scroll gestures.
   const pinchRef = useRef<{ startDist: number; startFov: number } | null>(null);
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
@@ -284,7 +318,6 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
     if (e.touches.length === 2 && pinchRef.current && stateRef.current.camera) {
-      e.preventDefault();
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       const dist = Math.hypot(dx, dy);
@@ -306,7 +339,6 @@ export default function Sphere360Viewer({ mediaUrl, onExitToFull }: Sphere360Vie
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      onWheel={onWheel}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}

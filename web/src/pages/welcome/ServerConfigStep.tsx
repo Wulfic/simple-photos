@@ -97,8 +97,29 @@ export default function ServerConfigStep({
   }
 
   async function handleNativePick() {
-    // Prefer the native OS folder dialog (same as photo upload dialog).
-    // `showDirectoryPicker()` is available in Chrome/Edge/Opera on desktop.
+    setError("");
+
+    // 1. Preferred: a real native OS folder dialog spawned by the server on
+    //    the machine it runs on. For the common desktop/localhost install the
+    //    server and browser are the same computer, so this pops the normal
+    //    Windows/macOS/Linux folder chooser and returns an absolute path
+    //    directly — no in-browser file browser, no sentinel round-trip.
+    try {
+      const res = await api.admin.pickDirectory();
+      if (res?.path) {
+        setPathInput(res.path);
+        return;
+      }
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message ?? "";
+      // User closed the dialog → do nothing, leave the field as-is.
+      if (/cancel/i.test(msg)) return;
+      // "native_picker_unavailable" (headless server, service session, or a
+      // remote browser) → fall through to the browser-based pickers below.
+    }
+
+    // 2. Browser File System Access API (Chrome/Edge/Opera). Useful when the
+    //    UI is opened from a *different* machine than the server.
     if (
       typeof window !== "undefined" &&
       "showDirectoryPicker" in window

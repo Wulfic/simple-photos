@@ -251,17 +251,24 @@ pub async fn discover_info(
     })))
 }
 
-/// Returns `true` if the IP belongs to a Docker-internal network (172.16.0.0/12)
-/// or other common private bridge ranges used by container runtimes.
+/// Returns `true` if the IP belongs to the Docker default-bridge range
+/// (`172.16.0.0/12`), used by co-located backup containers reaching this
+/// server through Docker's NAT.
+///
+/// **Security:** this deliberately does **not** include `10.0.0.0/8`. That
+/// range covers the majority of ordinary home/corporate LANs and VPNs, so
+/// trusting it would expose the backup `api_key` (returned by
+/// [`discover_info`] in backup mode) to any host on such a network. Docker
+/// Swarm / Kubernetes overlay deployments that use `10.x` should pair via the
+/// authenticated `/api/setup/pair` flow instead of relying on this
+/// unauthenticated discovery shortcut.
 fn is_docker_internal(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
             let octets = v4.octets();
-            // 172.16.0.0/12 — Docker default bridge and custom networks
-            (octets[0] == 172 && (16..=31).contains(&octets[1]))
-            // 10.0.0.0/8 — some container runtimes use this range
-            || octets[0] == 10
+            // 172.16.0.0/12 — Docker default bridge and custom bridge networks.
+            octets[0] == 172 && (16..=31).contains(&octets[1])
         }
-        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+        std::net::IpAddr::V6(_) => false,
     }
 }
