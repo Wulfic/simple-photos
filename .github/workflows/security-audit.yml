@@ -63,7 +63,7 @@ jobs:
 
       - name: cargo audit (blocking)
         working-directory: server
-        # Ignored advisories are documented in server/audit.toml + server/deny.toml.
+        # Ignored advisories are documented in server/audit.toml.
         # Each is transitive-only with no applicable upstream fix. Any NEW advisory
         # outside this allowlist fails the gate.
         run: |
