@@ -414,8 +414,9 @@ jobs:
           name: web-dist
           path: web/dist
 
-      - name: Install cargo-deb
-        run: cargo install cargo-deb --version ^2 --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
 
       # Release builds drop the CUDA feature so the .deb runs on any host —
       # the ORT CUDA EP is loaded lazily, so users that want GPU support can

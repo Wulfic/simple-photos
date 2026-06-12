@@ -57,10 +57,9 @@ jobs:
           key: ${{ runner.os }}-cargo-secgate-${{ hashFiles('server/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-secgate-
 
-      - name: Install cargo-audit + cargo-deny
-        run: |
-          cargo install cargo-audit --locked
-          cargo install cargo-deny --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
 
       - name: cargo audit (blocking)
         working-directory: server
@@ -225,8 +224,9 @@ jobs:
           key: ${{ runner.os }}-cargo-audit-${{ hashFiles('server/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-audit-
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
 
       - name: Run cargo audit
         id: cargo-audit
@@ -284,8 +284,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
 
       - name: Run cargo deny (all checks)
         run: |
@@ -397,8 +398,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-geiger
-        run: cargo install cargo-geiger --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-geiger
         continue-on-error: true
 
       - name: Scan for unsafe code
