@@ -1,6 +1,6 @@
 [package]
 name = "simple-photos-server"
-version = "1.3.4"
+version = "1.3.41"
 edition = "2021"
 description = "Self-hosted, end-to-end encrypted photo & video library server"
 license = "AGPL-3.0-or-later"
