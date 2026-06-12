@@ -384,7 +384,9 @@ pub async fn run_conversion_pass(
                 // (conversion drops it) — extract and store it now so the
                 // viewer's LIVE playback works for converted HEICs too.
                 if subtype_info.photo_subtype.as_deref() == Some("motion") {
-                    let orig_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
+                    let orig_bytes = tokio::fs::read(&candidate.abs_path)
+                        .await
+                        .unwrap_or_default();
                     if !orig_bytes.is_empty() {
                         crate::photos::motion::extract_and_store_motion_video(
                             &pool,

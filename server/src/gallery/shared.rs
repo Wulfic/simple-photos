@@ -410,21 +410,21 @@ pub async fn add_photo(
     // Without this, any member could inject arbitrary photo/blob IDs into the
     // album manifest (the module contract is "photos they own").
     let owns_ref: bool = match req.ref_type.as_str() {
-        "photo" => sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM photos WHERE id = ? AND user_id = ?)",
-        )
-        .bind(&req.photo_ref)
-        .bind(&auth.user_id)
-        .fetch_one(&state.read_pool)
-        .await?,
+        "photo" => {
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM photos WHERE id = ? AND user_id = ?)")
+                .bind(&req.photo_ref)
+                .bind(&auth.user_id)
+                .fetch_one(&state.read_pool)
+                .await?
+        }
         // "blob"
-        _ => sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM blobs WHERE id = ? AND user_id = ?)",
-        )
-        .bind(&req.photo_ref)
-        .bind(&auth.user_id)
-        .fetch_one(&state.read_pool)
-        .await?,
+        _ => {
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM blobs WHERE id = ? AND user_id = ?)")
+                .bind(&req.photo_ref)
+                .bind(&auth.user_id)
+                .fetch_one(&state.read_pool)
+                .await?
+        }
     };
 
     if !owns_ref {

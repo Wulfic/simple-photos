@@ -665,13 +665,12 @@ pub async fn serve_motion_video(
     // layout, so the stored blob was never served.
     if let Some(ref blob_id) = motion_blob_id {
         let storage_root = (**state.storage_root.load()).clone();
-        let recorded: Option<(String,)> = sqlx::query_as(
-            "SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?",
-        )
-        .bind(blob_id)
-        .bind(&auth.user_id)
-        .fetch_optional(&state.read_pool)
-        .await?;
+        let recorded: Option<(String,)> =
+            sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
+                .bind(blob_id)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.read_pool)
+                .await?;
 
         if let Some((storage_path,)) = recorded {
             let blob_path = storage_root.join(&storage_path);

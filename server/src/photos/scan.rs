@@ -303,15 +303,14 @@ pub async fn scan_and_register(
     // display dimensions.  Without the one-time flag, every scan re-hashed
     // and re-probed every video in the library forever.
     let video_repair_key = format!("video_dim_repair_v1:{}", auth.user_id);
-    let video_repair_done: bool = sqlx::query_scalar(
-        "SELECT value = 'true' FROM server_settings WHERE key = ?",
-    )
-    .bind(&video_repair_key)
-    .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(false);
+    let video_repair_done: bool =
+        sqlx::query_scalar("SELECT value = 'true' FROM server_settings WHERE key = ?")
+            .bind(&video_repair_key)
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
 
     let fix_query = if video_repair_done {
         "SELECT id, file_path, media_type FROM photos WHERE user_id = ? AND \

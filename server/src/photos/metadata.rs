@@ -820,7 +820,10 @@ pub(crate) fn extract_xmp_subtype_from_file(path: &std::path::Path) -> SubtypeIn
         }
     };
     let mut buf = Vec::with_capacity(64 * 1024);
-    if let Err(e) = file.take(XMP_SCAN_PREFIX_BYTES as u64).read_to_end(&mut buf) {
+    if let Err(e) = file
+        .take(XMP_SCAN_PREFIX_BYTES as u64)
+        .read_to_end(&mut buf)
+    {
         tracing::warn!("[xmp] Failed to read file for XMP extraction: {}", e);
         return SubtypeInfo::default();
     }

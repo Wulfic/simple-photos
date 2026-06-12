@@ -54,14 +54,14 @@ struct City {
 /// significant places.
 fn feature_weight(code: &str) -> f32 {
     match code {
-        "PPLC" => 10.0,                          // national capital
-        "PPLA" => 6.0,                           // seat of first-order admin division
-        "PPLA2" => 3.0,                          // seat of second-order admin division
-        "PPLA3" | "PPLA4" | "PPLA5" => 1.5,      // lower-order admin seats
-        "PPL" | "PPLS" => 1.0,                   // ordinary populated places
-        "PPLX" => 0.05,                          // section of a populated place
+        "PPLC" => 10.0,                           // national capital
+        "PPLA" => 6.0,                            // seat of first-order admin division
+        "PPLA2" => 3.0,                           // seat of second-order admin division
+        "PPLA3" | "PPLA4" | "PPLA5" => 1.5,       // lower-order admin seats
+        "PPL" | "PPLS" => 1.0,                    // ordinary populated places
+        "PPLX" => 0.05,                           // section of a populated place
         "PPLQ" | "PPLH" | "PPLW" | "PPLR" => 0.1, // abandoned / historical / destroyed / religious
-        _ => 0.5,                                // PPLL, PPLF, PPLG, unknown
+        _ => 0.5,                                 // PPLL, PPLF, PPLG, unknown
     }
 }
 
@@ -608,7 +608,9 @@ mod tests {
         // City just west of the dateline; query just east of it.  The
         // 3×3 bucket scan must wrap -181 → 179.
         let gc = make_geocoder(vec![city("Dateline City", 51.9, -179.95, "PPL", 5_000)]);
-        let loc = gc.lookup(51.9, 179.95).expect("must resolve across the antimeridian");
+        let loc = gc
+            .lookup(51.9, 179.95)
+            .expect("must resolve across the antimeridian");
         assert_eq!(loc.city, "Dateline City");
     }
 

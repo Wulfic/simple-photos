@@ -114,7 +114,11 @@ mod tests {
     #[test]
     fn wrong_secret_is_rejected() {
         let (token, _) = generate("user-123", SECRET);
-        assert!(!verify(&token, "user-123", "a-different-secret-value-32chars-xx"));
+        assert!(!verify(
+            &token,
+            "user-123",
+            "a-different-secret-value-32chars-xx"
+        ));
     }
 
     #[test]

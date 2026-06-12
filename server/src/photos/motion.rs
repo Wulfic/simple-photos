@@ -77,16 +77,20 @@ pub(crate) async fn extract_and_store_motion_video(
     };
 
     let blob_id = Uuid::new_v4().to_string();
-    let rel_path =
-        match crate::blobs::storage::write_blob(storage_root, user_id, &blob_id, &video_bytes)
-            .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(photo_id = %photo_id, error = %e, "Failed to write motion video blob");
-                return None;
-            }
-        };
+    let rel_path = match crate::blobs::storage::write_blob(
+        storage_root,
+        user_id,
+        &blob_id,
+        &video_bytes,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(photo_id = %photo_id, error = %e, "Failed to write motion video blob");
+            return None;
+        }
+    };
 
     let blob_size = video_bytes.len() as i64;
     let now = chrono::Utc::now().to_rfc3339();
