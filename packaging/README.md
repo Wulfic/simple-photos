@@ -76,8 +76,8 @@ cd server; cargo build --release --locked; cd ..
 #       vc_redist.x64.exe (https://aka.ms/vs/17/release/vc_redist.x64.exe)
 
 # 4. Build with Inno Setup 6
-iscc /DSP_VERSION=1.3.45 packaging\windows\simple-photos.iss
-# → dist\simple-photos-1.3.45-windows-x64-setup.exe
+iscc /DSP_VERSION=1.3.46 packaging\windows\simple-photos.iss
+# → dist\simple-photos-1.3.46-windows-x64-setup.exe
 ```
 
 The installer first installs the **Microsoft Visual C++ Redistributable**
