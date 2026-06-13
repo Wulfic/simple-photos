@@ -27,7 +27,7 @@
 #define AppId          "{{B7A3F8C2-9D1E-4F2B-8E5A-1C2D3E4F5A6B}"
 ; SP_VERSION is supplied by CI via /DSP_VERSION=x.y.z. Falls back to 1.0.0.
 #ifndef SP_VERSION
-  #define SP_VERSION "1.3.45"
+  #define SP_VERSION "1.3.46"
 #endif
 
 [Setup]
@@ -72,6 +72,21 @@ Name: "gpu";        Description: "Enable NVIDIA GPU acceleration for AI (downloa
 [Files]
 ; ── Server binary ──────────────────────────────────────────────────────────
 Source: "..\..\server\target\release\simple-photos-server.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+; ── ONNX Runtime libraries (AI inference) ───────────────────────────────────
+; ort's `copy-dylibs` feature drops these next to the binary during the CUDA
+; build. They MUST be installed alongside the server.exe or the ONNX CUDA
+; execution provider cannot load and AI silently runs on CPU (issue #1 — the
+; Linux .deb bundles the .so equivalents; this was missing for Windows).
+;   onnxruntime.dll                  — core runtime
+;   onnxruntime_providers_shared.dll — EP bridge (required by the CUDA EP)
+;   onnxruntime_providers_cuda.dll   — CUDA execution provider (~90 MB)
+; The CUDA EP is dlopen'd lazily, so these are harmless on GPU-less hosts.
+; `skipifsourcedoesntexist` keeps a CPU-only (--no-default-features) build
+; packageable; CI verifies their presence after the default CUDA build.
+Source: "..\..\server\target\release\onnxruntime.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\..\server\target\release\onnxruntime_providers_shared.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\..\server\target\release\onnxruntime_providers_cuda.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 ; ── Web frontend ───────────────────────────────────────────────────────────
 Source: "..\..\web\dist\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -202,6 +217,19 @@ Filename: "powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-cuda-runtime.ps1"" -InstallDir ""{app}"""; \
     StatusMsg: "Downloading NVIDIA CUDA + cuDNN runtime for GPU acceleration (~0.6-1 GB) ..."; \
     Tasks: gpu
+
+; ── Restart the service so it re-detects GPU + ffmpeg (issue #1) ───────────
+; The service was started above BEFORE ffmpeg, the AI models, the CUDA runtime
+; and the ORT provider DLLs were in place. The transcode hw-accel probe and the
+; AI execution-provider choice are made ONCE at startup, so without a restart
+; the server stays on CPU even though everything it needs is now present. This
+; mirrors the .deb, whose setup oneshot try-restarts the server after fetching.
+; nssm restart cleanly stops and re-starts the wrapped process.
+Filename: "{app}\bin\nssm.exe"; \
+    Parameters: "restart SimplePhotos"; \
+    StatusMsg: "Restarting Simple Photos to apply GPU acceleration and ffmpeg..."; \
+    Flags: runhidden waituntilterminated; \
+    Tasks: service
 
 ; ── Open the browser when finished ───────────────────────────────────────
 Filename: "http://localhost:8080"; \

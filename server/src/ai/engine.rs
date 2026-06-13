@@ -275,14 +275,26 @@ impl AiEngine {
 
     /// Verify the CUDA *runtime* libraries the ONNX CUDA execution provider
     /// depends on are actually resolvable. `onnxruntime_providers_cuda.dll`
-    /// dynamically loads `cublasLt64_12.dll` and `cudart64_12.dll` at first
-    /// inference; if they are missing the EP silently degrades to CPU. We
-    /// check up-front so the engine reports the provider it will really use.
+    /// dynamically loads the CUDA 12 + cuDNN 9 runtime DLLs at first inference;
+    /// if any are missing the EP silently degrades to CPU. We check up-front so
+    /// the engine reports the provider it will really use.
+    ///
+    /// This list MUST stay in sync with `$RequiredDlls` in
+    /// `packaging/windows/fetch-cuda-runtime.ps1` — that script is what puts
+    /// these next to the binary. Previously this only checked cuBLAS + cudart
+    /// and omitted `cudnn64_9.dll`, so a box missing only cuDNN reported "GPU
+    /// enabled" and then silently ran on CPU inside ONNX Runtime.
     #[cfg(target_os = "windows")]
     fn cuda_runtime_usable() -> bool {
         // Windows resolves a DLL's dependencies from the loading module's
         // directory and the directories on PATH (plus CUDA_PATH\bin when set).
-        const REQUIRED: [&str; 2] = ["cublasLt64_12.dll", "cudart64_12.dll"];
+        const REQUIRED: [&str; 5] = [
+            "cudart64_12.dll",
+            "cublas64_12.dll",
+            "cublasLt64_12.dll",
+            "cufft64_11.dll",
+            "cudnn64_9.dll",
+        ];
         let mut dirs: Vec<PathBuf> = Vec::new();
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {

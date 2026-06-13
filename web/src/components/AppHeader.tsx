@@ -199,7 +199,13 @@ export default function AppHeader({
               </button>
 
               {dropdownOpen && (
-                <div className="fixed right-4 mt-2 w-44 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 py-1" style={{ top: '3.5rem', zIndex: 9999 }}>
+                // Anchor to the avatar button (the `relative` parent) with
+                // `absolute right-0 top-full` rather than `fixed right-4`.
+                // Fixed positioning pinned the menu to the viewport's right
+                // edge, so on wide / centered layouts (and at non-100% UI
+                // scale) it detached from the button and floated off to the
+                // side (issue #5). top-full drops it directly below the avatar.
+                <div className="absolute right-0 top-full mt-2 w-44 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 py-1" style={{ zIndex: 9999 }}>
                   <button
                     onClick={() => { navigate("/secure-gallery"); setDropdownOpen(false); }}
                     className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"

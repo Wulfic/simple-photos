@@ -43,15 +43,25 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     const RAW_EXTENSIONS =
       /\.(cr2|cr3|nef|arw|dng|raf|orf|rw2|rw1|pef|sr2|srf|raw|3fr|erf|kdc|mef|mrw|nrw|ptx|r3d|rwl|srw|x3f)$/i;
 
+    // Vector / unsupported image formats the server cannot decode (no SVG
+    // feature in the `image` crate, and we deliberately don't ship librsvg).
+    // These MUST be blocked explicitly because their MIME type is
+    // `image/svg+xml`, which slips past the `startsWith("image/")` accept
+    // check below and would otherwise upload → fail server-side → surface an
+    // "Unsupported file format" banner on the gallery. We drop them silently
+    // at the boundary instead (the server logs any that arrive anyway).
+    const UNSUPPORTED_EXTENSIONS = /\.(svgz?|eps|ai)$/i;
+
     // Browser-native + convertible extensions accepted by the server
     // (`is_supported_extension` ∪ `is_convertible`). Drop other files at
     // the boundary so unrecognised formats are silently skipped rather
     // than producing a server 400 shown to the user.
     const ACCEPTED_EXTENSIONS =
-      /\.(jpe?g|png|gif|webp|avif|bmp|ico|svg|mp4|webm|mp3|flac|ogg|wav|heic|heif|tiff?|mkv|avi|mov|wmv|wma|m4a|aiff?|3gp)$/i;
+      /\.(jpe?g|png|gif|webp|avif|bmp|ico|mp4|webm|mp3|flac|ogg|wav|heic|heif|tiff?|mkv|avi|mov|wmv|wma|m4a|aiff?|3gp)$/i;
     const fileArray = Array.from(files).filter(
       (f) =>
         !RAW_EXTENSIONS.test(f.name) &&
+        !UNSUPPORTED_EXTENSIONS.test(f.name) &&
         (f.type.startsWith("image/") ||
           f.type.startsWith("video/") ||
           f.type.startsWith("audio/") ||

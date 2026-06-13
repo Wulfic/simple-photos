@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 WulfNet Designs -->
+<component type="desktop-application">
+  <id>io.github.wulfic.SimplePhotos</id>
+
+  <!-- Populates "License" in GNOME Software / app stores. Matches LICENSE. -->
+  <project_license>MIT</project_license>
+  <metadata_license>CC0-1.0</metadata_license>
+
+  <name>Simple Photos</name>
+  <!-- The short, one-line "description" shown in store listings. Keep concise:
+       no install steps, no marketing paragraphs. -->
+  <summary>Self-hosted, end-to-end encrypted photo and video library</summary>
+
+  <!-- Populates "Publisher" / developer. Use the legacy element for the widest
+       compatibility (older appstream releases don't parse <developer><name>). -->
+  <developer_name>WulfNet Designs</developer_name>
+
+  <description>
+    <p>
+      Simple Photos is a private alternative to cloud photo services that you
+      run on your own hardware. Your library stays end-to-end encrypted and
+      never leaves your control.
+    </p>
+    <p>It includes:</p>
+    <ul>
+      <li>On-device AI face and object recognition</li>
+      <li>Offline reverse geocoding of photo locations</li>
+      <li>Multi-user accounts with shared and private albums</li>
+      <li>Automatic encrypted backup from the companion Android app</li>
+      <li>An installable Progressive Web App with optional HTTPS</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.wulfic.SimplePhotos.desktop</launchable>
+  <icon type="stock">simple-photos</icon>
+
+  <url type="homepage">https://github.com/Wulfic/simple-photos</url>
+  <url type="bugtracker">https://github.com/Wulfic/simple-photos/issues</url>
+
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+  </categories>
+
+  <content_rating type="oars-1.1" />
+</component>
