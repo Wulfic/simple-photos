@@ -28,26 +28,39 @@ packaging/
 # 1. Build the web frontend (output goes to web/dist/)
 cd web && npm ci && npm run build && cd ..
 
-# 2. Build the server in release mode (CPU only — keeps the .deb portable)
-cd server && cargo build --release --no-default-features --locked
+# 2. Build the server in release mode (default `cuda` feature → GPU-capable;
+#    ort's copy-dylibs drops libonnxruntime_providers_*.so into target/release,
+#    which cargo-deb bundles into /usr/lib/simple-photos)
+cd server && cargo build --release --locked
 
-# 3. Build the .deb via cargo-deb metadata in server/Cargo.toml
+# 3. (CI only) stamp the release version so the APK download URL resolves:
+#    sed -i "s/@SP_VERSION@/<version>/" ../packaging/debian/fetch-assets.sh
+
+# 4. Build the .deb via cargo-deb metadata in server/Cargo.toml
 cargo install cargo-deb --version ^2 --locked
 cargo deb --no-build --no-strip
 # → server/target/debian/simple-photos_<version>_amd64.deb
 
-# 4. Install + smoke test
+# 5. Install + smoke test
 sudo apt install ./server/target/debian/simple-photos_*_amd64.deb
 sudo systemctl status simple-photos
 ```
 
-The `.deb` does **not** bundle the ~225 MB of ONNX models or the GeoNames
-dataset.  Run this once after install:
+The `.deb` does **not** bundle the ~225 MB of ONNX models, the GeoNames
+dataset, or the Android APK. They are fetched **automatically** on first boot
+by the `simple-photos-setup.service` oneshot (which then restarts the server).
+To trigger the fetch immediately instead of waiting for a reboot:
 
 ```bash
+sudo systemctl start simple-photos-setup.service   # background, idempotent
+# or run the fetcher directly:
 sudo -u simple-photos /usr/share/simple-photos/fetch-assets.sh
 sudo systemctl restart simple-photos
 ```
+
+> A CPU-only build (`cargo build --release --no-default-features`) does **not**
+> produce the `libonnxruntime_providers_*.so` files — remove those two asset
+> lines from `server/Cargo.toml` if you build without the `cuda` feature.
 
 ### Windows `.exe`
 
@@ -58,18 +71,22 @@ cd web; npm ci; npm run build; cd ..
 # 2. Server release build
 cd server; cargo build --release --locked; cd ..
 
-# 3. Drop NSSM (https://nssm.cc/release/nssm-2.24.zip) into:
-#       packaging\windows\vendor\nssm.exe
+# 3. Drop the two bundled binaries into packaging\windows\vendor\ :
+#       nssm.exe          (https://nssm.cc/release/nssm-2.24.zip → win64\nssm.exe)
+#       vc_redist.x64.exe (https://aka.ms/vs/17/release/vc_redist.x64.exe)
 
 # 4. Build with Inno Setup 6
 iscc /DSP_VERSION=1.3.44 packaging\windows\simple-photos.iss
 # → dist\simple-photos-1.3.44-windows-x64-setup.exe
 ```
 
-The installer asks for an install location, registers the server as a
-Windows Service via NSSM, opens TCP 8080 in the firewall, and downloads
-the AI models + GeoNames dataset + ffmpeg.exe (~325 MB) -- all three are
-required for full functionality and have no working fallback.
+The installer first installs the **Microsoft Visual C++ Redistributable**
+(required — `server.exe` and `onnxruntime.dll` link `VCRUNTIME140.dll`;
+without it the service won't start), then asks for an install location,
+registers the server as a Windows Service via NSSM, opens TCP 8080 in the
+firewall, and downloads the AI models + GeoNames dataset + ffmpeg.exe +
+Android APK (~355 MB) — all required for full functionality with no working
+fallback.
 
 #### NVIDIA GPU acceleration (optional)
 

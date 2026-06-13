@@ -418,13 +418,38 @@ jobs:
         with:
           tool: cargo-deb
 
-      # Release builds drop the CUDA feature so the .deb runs on any host —
-      # the ORT CUDA EP is loaded lazily, so users that want GPU support can
-      # simply install nvidia-cuda-toolkit and pick up acceleration without
-      # rebuilding. (See server/Cargo.toml comment.)
-      - name: Build server (release, CPU)
+      # The .deb is GPU-capable: built with the default `cuda` feature so the
+      # ONNX Runtime CUDA EP is compiled in. The EP and its provider .so files
+      # are loaded lazily (dlopen) at first inference, so the SAME .deb still
+      # runs on GPU-less hosts (falls back to CPU). The provider .so files are
+      # bundled into /usr/lib/simple-photos via cargo-deb assets; the systemd
+      # unit puts that dir on LD_LIBRARY_PATH. The CUDA runtime itself comes
+      # from nvidia-cuda-toolkit (a Recommends, installed by apt by default).
+      - name: Build server (release, CUDA-enabled)
         working-directory: server
-        run: cargo build --release --no-default-features --locked
+        run: cargo build --release --locked
+
+      - name: Verify ONNX Runtime CUDA provider libs were produced
+        working-directory: server
+        run: |
+          set -euo pipefail
+          echo "Provider libs in target/release:"
+          ls -la target/release/libonnxruntime_providers_*.so || true
+          for lib in libonnxruntime_providers_shared.so libonnxruntime_providers_cuda.so; do
+            if [ ! -f "target/release/$lib" ]; then
+              echo "::error::Expected ORT provider lib target/release/$lib not found after the CUDA build."
+              echo "  ort's copy-dylibs feature should produce it. If the upstream filename changed,"
+              echo "  update the bundled-asset names in server/Cargo.toml to match."
+              exit 1
+            fi
+          done
+
+      - name: Stamp release version into the asset fetcher (APK download URL)
+        run: |
+          set -euo pipefail
+          sed -i "s/@SP_VERSION@/${{ needs.version.outputs.version }}/" \
+            packaging/debian/fetch-assets.sh
+          grep -n 'SP_APK_VERSION=' packaging/debian/fetch-assets.sh
 
       - name: Build .deb
         working-directory: server
@@ -445,7 +470,11 @@ jobs:
       - name: Smoke-test .deb install
         run: |
           set -x
-          sudo apt-get install -y ./dist/simple-photos_${{ needs.version.outputs.version }}_amd64.deb
+          # --no-install-recommends: skip the multi-GB nvidia-cuda-toolkit
+          # Recommends — the GPU runtime is not what this structural smoke test
+          # validates, and pulling it would massively slow CI. The package still
+          # installs all hard Depends (ffmpeg, curl, unzip, ...).
+          sudo apt-get install -y --no-install-recommends ./dist/simple-photos_${{ needs.version.outputs.version }}_amd64.deb
           # systemd-units enable=true, start=false: service is loaded but inactive.
           # `systemctl status` returns 3 for inactive units; absorb that with `:`.
           systemctl status simple-photos --no-pager || :
@@ -457,11 +486,21 @@ jobs:
           sudo test -x /usr/bin/simple-photos-server
           sudo test -f /etc/simple-photos/config.toml
           sudo test -d /var/lib/simple-photos/storage
+          # GPU: the CUDA EP provider libs must be bundled for GPU inference.
+          sudo test -f /usr/lib/simple-photos/libonnxruntime_providers_cuda.so
+          sudo test -f /usr/lib/simple-photos/libonnxruntime_providers_shared.so
+          # Icon + desktop entry (issue #3) and the first-run fetch oneshot.
+          sudo test -f /usr/share/applications/simple-photos.desktop
+          sudo test -f /usr/share/icons/hicolor/256x256/apps/simple-photos.png
+          sudo test -f /lib/systemd/system/simple-photos-setup.service
           # Postinst should have replaced CHANGE_ME_AT_INSTALL_TIME with a hex secret.
           if sudo grep -q "CHANGE_ME_AT_INSTALL_TIME" /etc/simple-photos/config.toml; then
             echo "::error::JWT placeholder was not replaced by postinst"
             exit 1
           fi
+          # Stop the background asset fetch before removal so it doesn't race the
+          # uninstall (prerm also stops it; this just keeps the test log clean).
+          sudo systemctl stop simple-photos-setup.service || :
           sudo apt-get remove -y simple-photos
 
       - uses: actions/upload-artifact@v4
@@ -525,6 +564,23 @@ jobs:
           New-Item -ItemType Directory -Path packaging\windows\vendor -Force | Out-Null
           Copy-Item $nssmSrc packaging\windows\vendor\nssm.exe -Force
           & packaging\windows\vendor\nssm.exe version
+
+      - name: Fetch Visual C++ Redistributable (x64)
+        shell: pwsh
+        run: |
+          # REQUIRED runtime — the MSVC-built server.exe and onnxruntime.dll
+          # both link VCRUNTIME140.dll / MSVCP140.dll. Bundled into the
+          # installer and run silently before the service starts so a clean
+          # Windows box can actually launch the server (and survive reboot).
+          New-Item -ItemType Directory -Path packaging\windows\vendor -Force | Out-Null
+          $dest = 'packaging\windows\vendor\vc_redist.x64.exe'
+          Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' `
+                            -OutFile $dest -UseBasicParsing
+          if (-not (Test-Path $dest) -or (Get-Item $dest).Length -lt 1MB) {
+            Write-Error "vc_redist.x64.exe download failed or is too small"
+            exit 1
+          }
+          Write-Host "Fetched vc_redist.x64.exe ($((Get-Item $dest).Length) bytes)"
 
       - name: Locate / install Inno Setup 6
         id: inno

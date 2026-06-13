@@ -1,0 +1,27 @@
+[Unit]
+Description=Simple Photos first-run asset fetch (AI models, GeoNames, Android APK)
+Documentation=https://github.com/Wulfic/simple-photos
+After=network-online.target simple-photos.service
+Wants=network-online.target
+# Runs until one fully-successful fetch writes the marker, then never again.
+# Until then it retries on every boot, so an offline first install self-heals
+# the moment the host gets network.
+ConditionPathExists=!/var/lib/simple-photos/.assets-fetched
+
+[Service]
+Type=oneshot
+# Runs as root so it can (a) restart the main service once the models land and
+# (b) fix ownership of the downloaded files. fetch-assets.sh only writes inside
+# /var/lib/simple-photos; the chown below hands everything back to the service
+# user before the server is restarted.
+ExecStart=/usr/share/simple-photos/fetch-assets.sh
+ExecStartPost=/bin/sh -c 'chown -R simple-photos:simple-photos /var/lib/simple-photos'
+ExecStartPost=/bin/sh -c 'touch /var/lib/simple-photos/.assets-fetched'
+# Pick up the freshly-downloaded models without waiting for a manual restart.
+ExecStartPost=-/bin/systemctl try-restart simple-photos.service
+# Multi-hundred-MB downloads on a slow link must not be killed by a timeout.
+TimeoutStartSec=0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -5,12 +5,17 @@ This package installs the Simple Photos server as a systemd service.
 
 Files
 -----
-  /usr/bin/simple-photos-server               Server binary
-  /usr/share/simple-photos/web/               Web frontend (static)
-  /usr/share/simple-photos/migrations/        SQLx schema migrations
-  /etc/simple-photos/config.toml              Configuration (conffile)
-  /lib/systemd/system/simple-photos.service   systemd unit
-  /var/lib/simple-photos/                     Data root (db, storage, models)
+  /usr/bin/simple-photos-server                    Server binary
+  /usr/lib/simple-photos/                          Bundled ONNX Runtime CUDA provider libs
+  /usr/share/simple-photos/web/                    Web frontend (static)
+  /usr/share/simple-photos/migrations/             SQLx schema migrations
+  /usr/share/simple-photos/fetch-assets.sh         First-run asset fetcher
+  /usr/share/applications/simple-photos.desktop    Desktop launcher (opens the web UI)
+  /usr/share/icons/hicolor/*/apps/simple-photos.png  App icon
+  /etc/simple-photos/config.toml                   Configuration (conffile)
+  /lib/systemd/system/simple-photos.service        systemd unit (server)
+  /lib/systemd/system/simple-photos-setup.service  systemd unit (first-run fetch)
+  /var/lib/simple-photos/                          Data root (db, storage, models, downloads)
 
 First-run
 ---------
@@ -22,15 +27,35 @@ system user, including SMB/NFS mounts).
   sudo systemctl start simple-photos
   sudo systemctl status simple-photos
 
-AI models & GeoNames dataset
-----------------------------
-The .deb does NOT bundle the ~225 MB of ONNX models or the GeoNames
-cities500 dataset. Download them after install with:
+AI models, GeoNames dataset & Android APK (automatic)
+-----------------------------------------------------
+These (~225 MB of ONNX models, the GeoNames cities500 dataset, and the
+Android APK served by the web UI "Download APK" button) are NOT bundled
+in the .deb — they download automatically on first boot via the
+simple-photos-setup.service oneshot, which then restarts the server so
+it picks them up. Track progress with:
 
+  journalctl -u simple-photos-setup -f
+
+If the host was offline at install time the oneshot retries on the next
+boot until one clean run completes. To force a fetch immediately:
+
+  sudo systemctl start simple-photos-setup.service
+  # or run the fetcher directly:
   sudo -u simple-photos /usr/share/simple-photos/fetch-assets.sh
 
-Without these the server runs in degraded mode: face/object recognition
-is disabled and reverse-geocoding leaves geo_city/geo_country empty.
+Until the models/dataset arrive the server runs in degraded mode:
+face/object recognition is disabled and reverse-geocoding leaves
+geo_city/geo_country empty.
+
+GPU acceleration (NVIDIA)
+-------------------------
+The .deb is built with the ONNX Runtime CUDA execution provider and
+bundles its provider libraries in /usr/lib/simple-photos. GPU inference
+engages automatically once the CUDA runtime is present — installed by
+default via the nvidia-cuda-toolkit Recommends (skipped only if you
+install with --no-install-recommends). On a host without an NVIDIA GPU
+the server runs unmodified on CPU.
 
 Logs
 ----

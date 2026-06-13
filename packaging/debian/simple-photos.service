@@ -11,6 +11,10 @@ Group=simple-photos
 WorkingDirectory=/var/lib/simple-photos
 Environment=SIMPLE_PHOTOS_CONFIG=/etc/simple-photos/config.toml
 Environment=RUST_LOG=info
+# Where the bundled ONNX Runtime CUDA execution-provider .so files live (see
+# the cargo-deb assets). ORT dlopen's libonnxruntime_providers_cuda.so from
+# here at first GPU inference; without this the EP silently falls back to CPU.
+Environment=LD_LIBRARY_PATH=/usr/lib/simple-photos
 ExecStart=/usr/bin/simple-photos-server
 Restart=on-failure
 RestartSec=5

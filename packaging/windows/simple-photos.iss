@@ -79,6 +79,15 @@ Source: "..\..\web\dist\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesu
 ; ── DB migrations ──────────────────────────────────────────────────────────
 Source: "..\..\server\migrations\*"; DestDir: "{app}\migrations"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; ── Microsoft Visual C++ 2015-2022 Redistributable (x64) — REQUIRED ────────
+; The server binary (built with the MSVC toolchain) AND onnxruntime.dll both
+; dynamically link the VC++ runtime (VCRUNTIME140.dll / MSVCP140.dll). On a
+; clean Windows install without this redistributable the service fails to
+; start with "VCRUNTIME140.dll was not found" — and therefore never comes up
+; on reboot. Bundled here and installed silently in [Run] before the service
+; is registered. CI fetches it into vendor\ (see pipeline.yml).
+Source: "vendor\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+
 ; ── NSSM (service wrapper) ─────────────────────────────────────────────────
 ; A tiny, BSD-licensed service shim — Simple Photos is a console app and
 ; Windows Services need a hosting wrapper. NSSM also gives us automatic
@@ -112,6 +121,16 @@ Name: "{group}\Open data folder";              Filename: "{commonappdata}\Simple
 Name: "{group}\Uninstall Simple Photos";       Filename: "{uninstallexe}"
 
 [Run]
+; ── Microsoft Visual C++ Runtime (REQUIRED — fixes VCRUNTIME140.dll) ───────
+; MUST run before the service is registered/started. Silent, never reboots.
+; Idempotent: returns 1638 when a newer runtime is already installed and 3010
+; when a reboot is advised — both are success; Inno does not abort [Run] on a
+; non-zero exit code, so no special handling is needed.
+Filename: "{tmp}\vc_redist.x64.exe"; \
+    Parameters: "/install /quiet /norestart"; \
+    StatusMsg: "Installing Microsoft Visual C++ Runtime (required)..."; \
+    Flags: waituntilterminated
+
 ; ── Generate config.toml on first install ─────────────────────────────────
 Filename: "powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-assets.ps1"" -GenerateConfig -InstallDir ""{app}"" -DataDir ""{commonappdata}\SimplePhotos"""; \
@@ -166,13 +185,15 @@ Filename: "powershell.exe"; \
     Flags: runhidden; \
     Tasks: firewall
 
-; ── Mandatory: download ffmpeg + AI models + GeoNames (≋ 325 MB total). ──
+; ── Mandatory: download ffmpeg + AI models + GeoNames + Android APK ───────
 ; ffmpeg is required for video thumbnails / transcoding; the ONNX models
 ; back face/object recognition; the GeoNames dataset powers reverse
-; geocoding. None of these have a working fallback so we always fetch.
+; geocoding; the APK (pulled from this version's GitHub release) powers the
+; web UI "Download APK" button. None have a working fallback so we always
+; fetch. -Version pins the APK to the release matching this installer.
 Filename: "powershell.exe"; \
-    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-assets.ps1"" -InstallDir ""{app}"" -DataDir ""{commonappdata}\SimplePhotos"""; \
-    StatusMsg: "Downloading ffmpeg + AI models + GeoNames (~325 MB) ..."
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\bin\fetch-assets.ps1"" -InstallDir ""{app}"" -DataDir ""{commonappdata}\SimplePhotos"" -Version ""{#SP_VERSION}"""; \
+    StatusMsg: "Downloading ffmpeg + AI models + GeoNames + Android app (~355 MB) ..."
 
 ; ── Optional: download CUDA 12 + cuDNN 9 runtime for GPU AI (gpu task). ────
 ; DLLs land next to the server binary in {app} so the ONNX CUDA provider can

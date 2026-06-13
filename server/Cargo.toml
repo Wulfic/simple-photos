@@ -3,7 +3,7 @@ name = "simple-photos-server"
 version = "1.3.44"
 edition = "2021"
 description = "Self-hosted, end-to-end encrypted photo & video library server"
-license = "AGPL-3.0-or-later"
+license = "MIT"
 homepage = "https://github.com/Wulfic/simple-photos"
 repository = "https://github.com/Wulfic/simple-photos"
 readme = "../README.md"
@@ -108,25 +108,47 @@ tensorrt = ["ort/tensorrt"]
 # first-run setup wizard (web UI on :8080) — the .deb only seeds defaults.
 [package.metadata.deb]
 name = "simple-photos"
-maintainer = "Wulfic <noreply@github.com>"
-copyright = "2026, Wulfic"
+maintainer = "WulfNet Designs <noreply@github.com>"
+copyright = "2026, WulfNet Designs"
 license-file = ["../LICENSE", "0"]
 extended-description = """\
-Self-hosted, end-to-end encrypted photo and video library with face/object \
-recognition, reverse geocoding, multi-user albums, and a Progressive Web App. \
-The first-run setup wizard configures the photo storage location."""
+Simple Photos is a self-hosted, end-to-end encrypted photo and video library \
+you run on your own hardware as a private alternative to cloud photo services. \
+It provides on-device AI face and object recognition (ONNX Runtime, with \
+optional NVIDIA GPU acceleration), offline reverse geocoding of GPS metadata \
+from the GeoNames dataset, multi-user accounts with shared and private albums, \
+automatic encrypted backup from the companion Android app, and an installable \
+Progressive Web App served on port 8080 with optional HTTPS via Let's Encrypt \
+or a self-signed local CA. The server runs as the simple-photos systemd \
+service; on first boot it downloads the AI models, GeoNames dataset and Android \
+APK in the background, then the web first-run wizard creates the admin account \
+and chooses the photo storage location."""
 section = "web"
 priority = "optional"
-depends = "$auto, ca-certificates, ffmpeg, adduser"
+depends = "$auto, ca-certificates, ffmpeg, adduser, curl, unzip"
 recommends = "nvidia-cuda-toolkit"
 suggests = "cifs-utils"
 assets = [
     ["target/release/simple-photos-server", "usr/bin/", "755"],
+    # ONNX Runtime CUDA execution-provider shared libs. ort's `copy-dylibs`
+    # feature (on by default) drops these next to the binary after a CUDA build
+    # (`cargo build --release` with default features). They are dlopen'd lazily
+    # at first GPU inference; the systemd unit puts /usr/lib/simple-photos on
+    # LD_LIBRARY_PATH so the runtime can find them. The actual CUDA runtime
+    # (libcudart/libcublas/libcudnn) comes from nvidia-cuda-toolkit (recommends).
+    # NOTE: a CPU-only build (--no-default-features) does NOT produce these —
+    # drop these two lines if you build without the cuda feature.
+    ["target/release/libonnxruntime_providers_shared.so", "usr/lib/simple-photos/", "644"],
+    ["target/release/libonnxruntime_providers_cuda.so", "usr/lib/simple-photos/", "644"],
     ["migrations/**/*", "usr/share/simple-photos/migrations/", "644"],
     ["../web/dist/**/*", "usr/share/simple-photos/web/", "644"],
     ["../packaging/debian/config.toml", "etc/simple-photos/config.toml", "640"],
     ["../packaging/debian/README.Debian", "usr/share/doc/simple-photos/", "644"],
     ["../packaging/debian/fetch-assets.sh", "usr/share/simple-photos/fetch-assets.sh", "755"],
+    ["../packaging/debian/simple-photos-setup.service", "lib/systemd/system/simple-photos-setup.service", "644"],
+    ["../packaging/debian/simple-photos.desktop", "usr/share/applications/simple-photos.desktop", "644"],
+    ["../packaging/debian/simple-photos-256.png", "usr/share/icons/hicolor/256x256/apps/simple-photos.png", "644"],
+    ["../packaging/debian/simple-photos-512.png", "usr/share/icons/hicolor/512x512/apps/simple-photos.png", "644"],
 ]
 conf-files = ["/etc/simple-photos/config.toml"]
 maintainer-scripts = "../packaging/debian/"

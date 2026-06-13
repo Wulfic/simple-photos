@@ -24,6 +24,11 @@ case "$1" in
         echo "simple-photos: remove it manually with: rm -rf /var/lib/simple-photos"
         ;;
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        # The simple-photos-setup.service unit file has been removed by dpkg by
+        # now; reload so systemd forgets the stale (disabled) unit.
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
         ;;
     *)
         echo "postrm called with unknown argument \`$1'" >&2
