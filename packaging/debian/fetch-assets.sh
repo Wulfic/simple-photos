@@ -14,8 +14,14 @@ DATA_DIR="${DATA_DIR:-/var/lib/simple-photos}"
 MODELS="$DATA_DIR/models"
 GEO="$DATA_DIR/cities500.txt"
 ADMIN1="$DATA_DIR/admin1CodesASCII.txt"
+DOWNLOADS="$DATA_DIR/downloads"
 
-mkdir -p "$MODELS" "$DATA_DIR"
+# Release version, stamped in by the CI .deb build (sed @SP_VERSION@ → x.y.z).
+# Used to fetch the matching Android APK. Falls back to env SP_VERSION for
+# local/manual runs; if neither is set the APK download is skipped (best-effort).
+SP_APK_VERSION="${SP_VERSION:-@SP_VERSION@}"
+
+mkdir -p "$MODELS" "$DATA_DIR" "$DOWNLOADS"
 
 dl() {
     local out="$1" url="$2"
@@ -46,7 +52,28 @@ fi
 dl "$ADMIN1" "https://download.geonames.org/export/dump/admin1CodesASCII.txt" || \
     echo "[warn] admin1 download failed — state names will fall back to 2-char codes"
 
-echo "[done] AI models and geo data installed under $DATA_DIR"
+# ── Android APK ───────────────────────────────────────────────────────────
+# Served by the web UI "Download APK" button from $DATA_DIR/downloads (the
+# server's working dir is $DATA_DIR, see simple-photos.service). Pulled from
+# the GitHub release matching this package. Best-effort: never abort install.
+APK="$DOWNLOADS/simple-photos.apk"
+if [ -s "$APK" ]; then
+    echo "[skip] simple-photos.apk already present"
+elif [ -z "$SP_APK_VERSION" ] || [ "$SP_APK_VERSION" = "@SP_VERSION@" ]; then
+    echo "[warn] no release version stamped — skipping APK download (set SP_VERSION to fetch)"
+else
+    APK_URL="https://github.com/Wulfic/simple-photos/releases/download/v${SP_APK_VERSION}/simple-photos-${SP_APK_VERSION}.apk"
+    echo "[get]  simple-photos.apk (release v${SP_APK_VERSION})"
+    if curl -fL --retry 3 --output "$APK.part" "$APK_URL"; then
+        mv "$APK.part" "$APK"
+        echo "[ok]   APK installed -> $APK"
+    else
+        rm -f "$APK.part"
+        echo "[warn] APK download failed — web UI 'Download APK' will be unavailable until $APK exists"
+    fi
+fi
+
+echo "[done] AI models, geo data and Android APK installed under $DATA_DIR"
 echo "[next] sudo systemctl restart simple-photos"
 
 # ── NVIDIA / CUDA runtime check ───────────────────────────────────────────────

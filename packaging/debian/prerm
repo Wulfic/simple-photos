@@ -4,6 +4,13 @@ set -e
 
 case "$1" in
     remove|upgrade|deconfigure)
+        # Stop + disable the first-run fetch oneshot (cargo-deb's #DEBHELPER#
+        # only manages the main simple-photos.service). The unit file is still
+        # on disk at prerm time, so disable resolves cleanly here.
+        if [ -d /run/systemd/system ]; then
+            systemctl stop simple-photos-setup.service >/dev/null 2>&1 || true
+            systemctl disable simple-photos-setup.service >/dev/null 2>&1 || true
+        fi
         ;;
     failed-upgrade)
         ;;

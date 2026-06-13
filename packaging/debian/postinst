@@ -70,6 +70,18 @@ case "$1" in
                 echo "simple-photos: NVIDIA GPU + CUDA runtime detected — GPU inference enabled."
             fi
         fi
+
+        # 5. First-run asset fetch (AI models + GeoNames + Android APK). A
+        #    oneshot service does the heavy network download out-of-band so
+        #    dpkg never blocks and offline installs still succeed (it retries
+        #    on the next boot until one clean run writes the marker file).
+        #    --no-block returns immediately; the fetch runs in the background.
+        if [ -d /run/systemd/system ]; then
+            systemctl enable simple-photos-setup.service >/dev/null 2>&1 || true
+            systemctl start --no-block simple-photos-setup.service >/dev/null 2>&1 || true
+            echo "simple-photos: fetching AI models, GeoNames dataset and Android APK in the background"
+            echo "  (track it with: journalctl -u simple-photos-setup -f)"
+        fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)
         ;;

@@ -16,7 +16,11 @@
 param(
     [switch]$GenerateConfig,
     [string]$InstallDir = "$env:ProgramFiles\SimplePhotos",
-    [string]$DataDir    = "$env:ProgramData\SimplePhotos"
+    [string]$DataDir    = "$env:ProgramData\SimplePhotos",
+    # Release version (e.g. "1.3.44"). Used to fetch the matching Android APK
+    # from the GitHub release so the web UI "Download APK" button works on a
+    # packaged install. Passed by the Inno Setup [Run] section as {#SP_VERSION}.
+    [string]$Version    = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -247,6 +251,34 @@ if (-not ((Test-Path $ffmpegExe) -and (Test-Path $ffprobeExe))) {
     }
 } else {
     Write-Info "skip ffmpeg.exe (already present)"
+}
+
+# -- Android APK (in-app "Download APK" button) ----------------------------
+# The server serves the APK from {InstallDir}\downloads\simple-photos.apk
+# (see server/src/downloads/handlers.rs). Pull the versioned APK published on
+# the GitHub release so the setup-wizard download works on a packaged install.
+# Best-effort: a failure here must never abort the install — the web UI shows a
+# helpful message if the APK is absent, and the user can re-run this script.
+$downloadsDir = Join-Path $InstallDir 'downloads'
+if (-not (Test-Path $downloadsDir)) { New-Item -ItemType Directory -Path $downloadsDir -Force | Out-Null }
+$apkOut = Join-Path $downloadsDir 'simple-photos.apk'
+if ((Test-Path $apkOut) -and (Get-Item $apkOut).Length -gt 0) {
+    Write-Info "skip simple-photos.apk (already present)"
+} elseif ([string]::IsNullOrWhiteSpace($Version)) {
+    Write-Warn2 "no -Version supplied; skipping APK download (web UI 'Download APK' will be unavailable until the APK is placed in $downloadsDir)."
+} else {
+    $apkUrl = "https://github.com/Wulfic/simple-photos/releases/download/v$Version/simple-photos-$Version.apk"
+    $part = "$apkOut.part"
+    Write-Info "get  simple-photos.apk (release v$Version)"
+    try {
+        Invoke-WebRequest -Uri $apkUrl -OutFile $part -UseBasicParsing
+        if ((Get-Item $part).Length -lt 1MB) { throw "downloaded APK is suspiciously small" }
+        Move-Item -Path $part -Destination $apkOut -Force
+        Write-Info "installed APK -> $apkOut"
+    } catch {
+        Remove-Item $part -ErrorAction SilentlyContinue
+        Write-Warn2 "APK download failed: $($_.Exception.Message)"
+    }
 }
 
 Write-Info "done."
