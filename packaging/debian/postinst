@@ -32,9 +32,24 @@ case "$1" in
         fi
 
         # 2. Data directories.
-        mkdir -p "$DATA/db" "$DATA/storage" "$DATA/models" "$DATA/certs"
+        mkdir -p "$DATA/db" "$DATA/storage" "$DATA/models" "$DATA/certs" "$DATA/downloads"
         chown -R "$USER:$GROUP" "$DATA"
         chmod 750 "$DATA"
+
+        # 2b. Seed the bundled Android APK into the writable downloads dir so
+        #     the in-app "Download APK" button works immediately and offline
+        #     (issue #4). The package ships a read-only copy under
+        #     /usr/share/simple-photos; the server serves it from
+        #     {working-dir}/downloads (= $DATA/downloads). The setup service's
+        #     fetch-assets.sh later refreshes it from the GitHub release.
+        #     Only seed if the downloads copy is missing/empty so we never
+        #     clobber a release-fetched (possibly newer) APK on upgrade.
+        BUNDLED_APK=/usr/share/simple-photos/simple-photos.apk
+        if [ -s "$BUNDLED_APK" ] && [ ! -s "$DATA/downloads/simple-photos.apk" ]; then
+            cp "$BUNDLED_APK" "$DATA/downloads/simple-photos.apk"
+            chown "$USER:$GROUP" "$DATA/downloads/simple-photos.apk"
+            echo "simple-photos: seeded bundled Android APK into $DATA/downloads"
+        fi
 
         # 3. Random JWT secret on first install (only if the placeholder is
         #    still present — we must not clobber an admin-rotated secret on

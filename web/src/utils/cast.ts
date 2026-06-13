@@ -169,3 +169,24 @@ export function castMedia(
     console.warn("[cast] send failed", e);
   }
 }
+
+/** Playback actions mirrored from the local controller to the receiver's video. */
+export type CastVideoAction = "play" | "pause" | "seek";
+
+/**
+ * Mirror a local video playback action (play / pause / scrub) to the active
+ * receiver so the cast device follows along. Previously the receiver only ever
+ * got LOAD_MEDIA and played independently, so scrubbing on the phone/computer
+ * never moved the casted video (issue #2). No-op when no session is connected.
+ *
+ * `position` is the local video's `currentTime` in seconds; the receiver seeks
+ * to it so play/pause/seek all keep the two in sync.
+ */
+export function castVideoControl(action: CastVideoAction, position: number): void {
+  if (_conn?.state !== "connected") return;
+  try {
+    _conn.send(JSON.stringify({ type: "VIDEO_CONTROL", action, position }));
+  } catch (e) {
+    console.warn("[cast] video control send failed", e);
+  }
+}

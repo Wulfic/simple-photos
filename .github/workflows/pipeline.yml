@@ -388,7 +388,9 @@ jobs:
   #  asserted, and removed (smoke test) before it is uploaded.
   # ───────────────────────────────────────────────────────────────────────
   deb:
-    needs: [version, web]
+    # Depends on `android` too: the APK is bundled into the .deb (issue #4),
+    # staged below from the android job's artifact before `cargo deb`.
+    needs: [version, web, android]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -413,6 +415,27 @@ jobs:
         with:
           name: web-dist
           path: web/dist
+
+      # Bundle the Android APK into the .deb (issue #4). The android job built
+      # and uploaded `simple-photos-<version>.apk` as the `simple-photos-android`
+      # artifact; cargo-deb expects it at packaging/debian/simple-photos.apk
+      # (referenced from server/Cargo.toml). This must run BEFORE `cargo deb`.
+      - name: Download Android APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: simple-photos-android
+          path: apk-artifact
+
+      - name: Stage APK for bundling
+        run: |
+          set -euo pipefail
+          src=$(ls apk-artifact/*.apk | head -1)
+          if [ -z "$src" ] || [ ! -s "$src" ]; then
+            echo "::error::No APK found in the simple-photos-android artifact"
+            exit 1
+          fi
+          cp "$src" packaging/debian/simple-photos.apk
+          ls -la packaging/debian/simple-photos.apk
 
       - uses: taiki-e/install-action@v2
         with:
@@ -467,6 +490,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends lintian
           lintian --no-tag-display-limit dist/*.deb || true
 
+      - name: Validate AppStream MetaInfo (best-effort)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends appstream
+          appstreamcli validate --no-net \
+            packaging/debian/io.github.wulfic.SimplePhotos.metainfo.xml || true
+
       - name: Smoke-test .deb install
         run: |
           set -x
@@ -489,10 +519,18 @@ jobs:
           # GPU: the CUDA EP provider libs must be bundled for GPU inference.
           sudo test -f /usr/lib/simple-photos/libonnxruntime_providers_cuda.so
           sudo test -f /usr/lib/simple-photos/libonnxruntime_providers_shared.so
-          # Icon + desktop entry (issue #3) and the first-run fetch oneshot.
-          sudo test -f /usr/share/applications/simple-photos.desktop
+          # Icon + desktop entry + AppStream MetaInfo (issue #3) and the
+          # first-run fetch oneshot. The .desktop / .metainfo.xml basenames
+          # must match the AppStream component id so GNOME Software shows the
+          # publisher/license/description instead of "unknown".
+          sudo test -f /usr/share/applications/io.github.wulfic.SimplePhotos.desktop
+          sudo test -f /usr/share/metainfo/io.github.wulfic.SimplePhotos.metainfo.xml
           sudo test -f /usr/share/icons/hicolor/256x256/apps/simple-photos.png
           sudo test -f /lib/systemd/system/simple-photos-setup.service
+          # APK (issue #4): bundled read-only copy + postinst-seeded copy in the
+          # writable downloads dir the server actually serves from.
+          sudo test -f /usr/share/simple-photos/simple-photos.apk
+          sudo test -s /var/lib/simple-photos/downloads/simple-photos.apk
           # Postinst should have replaced CHANGE_ME_AT_INSTALL_TIME with a hex secret.
           if sudo grep -q "CHANGE_ME_AT_INSTALL_TIME" /etc/simple-photos/config.toml; then
             echo "::error::JWT placeholder was not replaced by postinst"
@@ -543,6 +581,23 @@ jobs:
       - name: Build server (release, CUDA-enabled)
         working-directory: server
         run: cargo build --release --locked
+
+      - name: Verify ONNX Runtime CUDA provider DLLs were produced
+        working-directory: server
+        shell: pwsh
+        run: |
+          # ort's copy-dylibs drops these next to the binary after the CUDA
+          # build; the installer bundles them to {app} (issue #1). If the
+          # upstream filenames change, update packaging\windows\simple-photos.iss.
+          Get-ChildItem target\release\*.dll | Select-Object Name,Length | Format-Table -AutoSize
+          $required = @('onnxruntime_providers_shared.dll','onnxruntime_providers_cuda.dll')
+          foreach ($lib in $required) {
+            if (-not (Test-Path "target\release\$lib")) {
+              Write-Error "Expected ORT provider DLL target\release\$lib not found after the CUDA build. Update the [Files] names in packaging\windows\simple-photos.iss if ort renamed it."
+              exit 1
+            }
+          }
+          Write-Host "ORT provider DLLs present."
 
       - name: Fetch NSSM 2.24 (via Chocolatey for reliability)
         shell: pwsh
@@ -642,6 +697,10 @@ jobs:
             "$instDir\web\index.html",
             "$instDir\bin\nssm.exe",
             "$instDir\migrations",
+            # ORT CUDA provider DLLs must ship next to the exe or AI runs on CPU
+            # (issue #1). Installed regardless of selected tasks.
+            "$instDir\onnxruntime_providers_shared.dll",
+            "$instDir\onnxruntime_providers_cuda.dll",
             "$instDir\unins000.exe"
           )
           foreach ($p in $required) {

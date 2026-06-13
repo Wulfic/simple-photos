@@ -111,18 +111,15 @@ name = "simple-photos"
 maintainer = "WulfNet Designs <noreply@github.com>"
 copyright = "2026, WulfNet Designs"
 license-file = ["../LICENSE", "0"]
+# Keep this short and factual — it's what `apt show` / GDebi display, and it
+# mirrors the AppStream <summary>/<description>. No install steps or runtime
+# instructions (those belong in README.Debian / the first-run wizard).
 extended-description = """\
 Simple Photos is a self-hosted, end-to-end encrypted photo and video library \
 you run on your own hardware as a private alternative to cloud photo services. \
-It provides on-device AI face and object recognition (ONNX Runtime, with \
-optional NVIDIA GPU acceleration), offline reverse geocoding of GPS metadata \
-from the GeoNames dataset, multi-user accounts with shared and private albums, \
-automatic encrypted backup from the companion Android app, and an installable \
-Progressive Web App served on port 8080 with optional HTTPS via Let's Encrypt \
-or a self-signed local CA. The server runs as the simple-photos systemd \
-service; on first boot it downloads the AI models, GeoNames dataset and Android \
-APK in the background, then the web first-run wizard creates the admin account \
-and chooses the photo storage location."""
+It offers on-device AI face and object recognition, offline reverse geocoding, \
+multi-user shared and private albums, encrypted backup from the companion \
+Android app, and an installable Progressive Web App."""
 section = "web"
 priority = "optional"
 depends = "$auto, ca-certificates, ffmpeg, adduser, curl, unzip"
@@ -146,9 +143,23 @@ assets = [
     ["../packaging/debian/README.Debian", "usr/share/doc/simple-photos/", "644"],
     ["../packaging/debian/fetch-assets.sh", "usr/share/simple-photos/fetch-assets.sh", "755"],
     ["../packaging/debian/simple-photos-setup.service", "lib/systemd/system/simple-photos-setup.service", "644"],
-    ["../packaging/debian/simple-photos.desktop", "usr/share/applications/simple-photos.desktop", "644"],
+    # Desktop entry + AppStream MetaInfo. The .desktop and .metainfo.xml basenames
+    # MUST match the AppStream component id (io.github.wulfic.SimplePhotos) so
+    # GNOME Software associates the launcher, icon, publisher, license and
+    # description correctly. WITHOUT the metainfo file, GNOME Software shows
+    # "unknown" publisher/license and falls back to the verbose package
+    # description — that was issue #3.
+    ["../packaging/debian/io.github.wulfic.SimplePhotos.desktop", "usr/share/applications/io.github.wulfic.SimplePhotos.desktop", "644"],
+    ["../packaging/debian/io.github.wulfic.SimplePhotos.metainfo.xml", "usr/share/metainfo/io.github.wulfic.SimplePhotos.metainfo.xml", "644"],
     ["../packaging/debian/simple-photos-256.png", "usr/share/icons/hicolor/256x256/apps/simple-photos.png", "644"],
     ["../packaging/debian/simple-photos-512.png", "usr/share/icons/hicolor/512x512/apps/simple-photos.png", "644"],
+    # Android APK bundled read-only so the in-app "Download APK" button works
+    # offline immediately (issue #4). The postinst seeds it into the writable
+    # downloads dir; fetch-assets.sh later refreshes it from the GitHub release.
+    # CI's deb job stages this file from the android job artifact before
+    # `cargo deb`; local `cargo deb` builds must place an APK here too (it is
+    # .gitignored — see packaging/debian/.gitignore).
+    ["../packaging/debian/simple-photos.apk", "usr/share/simple-photos/simple-photos.apk", "644"],
 ]
 conf-files = ["/etc/simple-photos/config.toml"]
 maintainer-scripts = "../packaging/debian/"

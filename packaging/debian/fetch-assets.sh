@@ -54,23 +54,39 @@ dl "$ADMIN1" "https://download.geonames.org/export/dump/admin1CodesASCII.txt" ||
 
 # ── Android APK ───────────────────────────────────────────────────────────
 # Served by the web UI "Download APK" button from $DATA_DIR/downloads (the
-# server's working dir is $DATA_DIR, see simple-photos.service). Pulled from
-# the GitHub release matching this package. Best-effort: never abort install.
+# server's working dir is $DATA_DIR, see simple-photos.service).
+#
+# Strategy (issue #4): the APK is BUNDLED in the package and seeded into
+# $DOWNLOADS by the postinst, so the button works immediately and offline.
+# Here we try to REFRESH it from the matching GitHub release (in case the
+# release carries a rebuilt artifact), and on any failure fall back to the
+# bundled copy. Best-effort: never abort install.
 APK="$DOWNLOADS/simple-photos.apk"
-if [ -s "$APK" ]; then
-    echo "[skip] simple-photos.apk already present"
-elif [ -z "$SP_APK_VERSION" ] || [ "$SP_APK_VERSION" = "@SP_VERSION@" ]; then
-    echo "[warn] no release version stamped — skipping APK download (set SP_VERSION to fetch)"
+BUNDLED_APK="/usr/share/simple-photos/simple-photos.apk"
+
+if [ -z "$SP_APK_VERSION" ] || [ "$SP_APK_VERSION" = "@SP_VERSION@" ]; then
+    echo "[skip] no release version stamped — keeping bundled APK (no refresh)"
 else
     APK_URL="https://github.com/Wulfic/simple-photos/releases/download/v${SP_APK_VERSION}/simple-photos-${SP_APK_VERSION}.apk"
     echo "[get]  simple-photos.apk (release v${SP_APK_VERSION})"
     if curl -fL --retry 3 --output "$APK.part" "$APK_URL"; then
         mv "$APK.part" "$APK"
-        echo "[ok]   APK installed -> $APK"
+        echo "[ok]   APK refreshed from release -> $APK"
     else
         rm -f "$APK.part"
-        echo "[warn] APK download failed — web UI 'Download APK' will be unavailable until $APK exists"
+        echo "[warn] APK refresh from release failed — falling back to bundled APK"
     fi
+fi
+
+# First-boot / fallback guarantee: if no APK is present (refresh skipped or
+# failed and postinst seeding didn't run, e.g. a systemd-less container), use
+# the copy bundled in the package.
+if [ ! -s "$APK" ] && [ -s "$BUNDLED_APK" ]; then
+    cp "$BUNDLED_APK" "$APK"
+    echo "[ok]   APK provided from bundled package copy -> $APK"
+fi
+if [ ! -s "$APK" ]; then
+    echo "[warn] no APK available (no bundled copy, release refresh failed) — web UI 'Download APK' unavailable"
 fi
 
 echo "[done] AI models, geo data and Android APK installed under $DATA_DIR"

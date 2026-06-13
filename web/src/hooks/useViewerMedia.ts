@@ -56,6 +56,16 @@ export default function useViewerMedia(
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // Watchdog: a stalled download/decrypt would otherwise leave the viewer
+    // spinning on the blurred thumbnail forever (issue #7 — "full-res never
+    // loads"). Abort after a generous timeout and surface a real error so the
+    // user gets feedback instead of an eternal spinner.
+    let timedOut = false;
+    const watchdog = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 45000);
+
     setLoading(true);
     setError("");
     try {
@@ -157,11 +167,22 @@ export default function useViewerMedia(
       // Revoke the preview now that full media is ready
       setPreviewUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
     } catch (err: unknown) {
+      if (timedOut) {
+        // Distinct from a navigation abort: the load genuinely stalled.
+        diagnosticLogger.warn("VIEWER", `Full-res load timed out for blob ${blobId}`);
+        setError("Loading the full-resolution image timed out. Check the connection to the server and try again.");
+        return;
+      }
       // Silently ignore aborted downloads (user navigated away)
       if (err instanceof DOMException && err.name === "AbortError") return;
+      diagnosticLogger.error("VIEWER", `Full-res load failed for blob ${blobId}`, { error: err instanceof Error ? err.message : String(err) });
       setError(err instanceof Error ? err.message : "Failed to load media");
     } finally {
-      if (!controller.signal.aborted) {
+      window.clearTimeout(watchdog);
+      // Clear the spinner whenever this load reached a terminal state — i.e.
+      // it wasn't aborted by a *newer* load. A watchdog timeout also aborts the
+      // controller, so treat that as terminal too (otherwise the spinner sticks).
+      if (!controller.signal.aborted || timedOut) {
         setLoading(false);
       }
     }

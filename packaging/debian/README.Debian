@@ -10,7 +10,9 @@ Files
   /usr/share/simple-photos/web/                    Web frontend (static)
   /usr/share/simple-photos/migrations/             SQLx schema migrations
   /usr/share/simple-photos/fetch-assets.sh         First-run asset fetcher
-  /usr/share/applications/simple-photos.desktop    Desktop launcher (opens the web UI)
+  /usr/share/simple-photos/simple-photos.apk       Bundled Android APK (seeded to the data dir)
+  /usr/share/applications/io.github.wulfic.SimplePhotos.desktop    Desktop launcher (opens the web UI)
+  /usr/share/metainfo/io.github.wulfic.SimplePhotos.metainfo.xml   AppStream metadata (store listing)
   /usr/share/icons/hicolor/*/apps/simple-photos.png  App icon
   /etc/simple-photos/config.toml                   Configuration (conffile)
   /lib/systemd/system/simple-photos.service        systemd unit (server)
@@ -27,11 +29,18 @@ system user, including SMB/NFS mounts).
   sudo systemctl start simple-photos
   sudo systemctl status simple-photos
 
-AI models, GeoNames dataset & Android APK (automatic)
------------------------------------------------------
-These (~225 MB of ONNX models, the GeoNames cities500 dataset, and the
-Android APK served by the web UI "Download APK" button) are NOT bundled
-in the .deb — they download automatically on first boot via the
+Android APK (bundled)
+---------------------
+The Android APK served by the web UI "Download APK" button IS bundled in
+the .deb (/usr/share/simple-photos/simple-photos.apk) and seeded into
+/var/lib/simple-photos/downloads by the postinst, so the button works
+immediately and offline. The setup oneshot below also tries to refresh it
+from the matching GitHub release, falling back to the bundled copy.
+
+AI models & GeoNames dataset (automatic)
+----------------------------------------
+These (~225 MB of ONNX models and the GeoNames cities500 dataset) are NOT
+bundled in the .deb — they download automatically on first boot via the
 simple-photos-setup.service oneshot, which then restarts the server so
 it picks them up. Track progress with:
 

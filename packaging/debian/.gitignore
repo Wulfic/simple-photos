@@ -1,0 +1,5 @@
+# The Android APK is bundled into the .deb (issue #4) but is a build artifact,
+# not source. CI's deb job stages it here from the android job before
+# `cargo deb`; local .deb builds must drop a copy here too. Never commit it.
+simple-photos.apk
+*.apk

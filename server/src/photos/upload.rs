@@ -50,8 +50,18 @@ pub async fn upload_photo(
     // control characters, and bidi overrides before any path operations.
     let filename = sanitize::sanitize_filename(&filename);
 
-    // Reject unsupported file formats — accept native + convertible types
+    // Reject unsupported file formats — accept native + convertible types.
+    // This is expected for formats we deliberately don't support (e.g. SVG,
+    // which the `image` crate cannot decode). Log it rather than treating it
+    // as noteworthy — the web client already drops these at the boundary, so
+    // anything reaching here is a non-web client; a debug line is enough for
+    // diagnostics without spamming the default-level log.
     if !is_supported_extension(&filename) && !conversion::is_convertible(&filename) {
+        tracing::debug!(
+            user_id = %auth.user_id,
+            filename = %filename,
+            "Rejected upload of unsupported file format"
+        );
         return Err(AppError::BadRequest(format!(
             "Unsupported file format: '{}'. Accepted: browser-native formats \
              (JPEG, PNG, GIF, WebP, AVIF, BMP, ICO, MP4, WebM, MP3, FLAC, OGG, WAV) \

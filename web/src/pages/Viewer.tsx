@@ -30,7 +30,7 @@ import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import useSlideshow from "../hooks/useSlideshow";
 import Slideshow from "../components/viewer/Slideshow";
 import { diagnosticLogger } from "../utils/diagnosticLogger";
-import { castMedia, getCastState } from "../utils/cast";
+import { castMedia, getCastState, subscribeCastState } from "../utils/cast";
 import { useAuthStore } from "../store/auth";
 import { appendGalleryTokenParam } from "../utils/galleryToken";
 import type { PhotoInfoData } from "../hooks/useViewerMedia";
@@ -149,11 +149,23 @@ export default function Viewer() {
     loadEncryptedMedia,
   } = useViewerMedia(preloadCache);
 
+  // Track cast connectivity so the effect below re-sends the current photo the
+  // moment a session connects — previously it only ran on photo change, so
+  // starting a cast while already viewing a photo (or switching album/gallery
+  // context then connecting) showed nothing until the next navigation (#2b).
+  const [castConnected, setCastConnected] = useState(
+    () => getCastState().state === "connected",
+  );
+  useEffect(
+    () => subscribeCastState((s) => setCastConnected(s === "connected")),
+    [],
+  );
+
   // ── Cast: push current photo to Chromecast whenever the viewed photo changes
+  //    OR a cast session (re)connects.
   useEffect(() => {
     if (!id) return;
-    const { state } = getCastState();
-    if (state !== "connected") return;
+    if (!castConnected) return;
     let cancelled = false;
     (async () => {
       // The route param `id` is the IndexedDB blobId for encrypted galleries
@@ -176,7 +188,7 @@ export default function Viewer() {
       castMedia(castUrl, mimeType || "image/jpeg", kind);
     })();
     return () => { cancelled = true; };
-  }, [id, mediaUrl, mimeType]);
+  }, [id, mediaUrl, mimeType, castConnected]);
 
   // ── Actions (from hook) ────────────────────────────────────────────────
   const {
@@ -463,6 +475,12 @@ export default function Viewer() {
                 }
                 draggable={inEdit ? false : undefined}
                 onLoad={inEdit ? undefined : computeCropZoom}
+                onError={() => {
+                  // Surface a decode/render failure instead of silently showing
+                  // a broken image (or appearing stuck on the thumbnail) — #7.
+                  diagnosticLogger.error("VIEWER", `Full image failed to render: ${filename} (mime=${mimeType})`);
+                  setError(`This image could not be displayed (${mimeType || "unknown format"}).`);
+                }}
                 style={{
                   imageRendering: mediaType === "gif" ? "auto" : undefined,
                   ...(inEdit ? (() => {

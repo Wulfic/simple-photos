@@ -4,6 +4,7 @@
  * photo Viewer and hidden/shown with the viewer's toolbar toggle.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
+import { castVideoControl } from "../../utils/cast";
 
 interface VideoControlsProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -42,8 +43,16 @@ export default function VideoControls({ videoRef, visible }: VideoControlsProps)
     const video = videoRef.current;
     if (!video) return;
 
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
+    // Mirror playback state to the cast receiver so a casted video follows the
+    // controller (issue #2a). castVideoControl is a no-op when not casting.
+    const onPlay = () => {
+      setPlaying(true);
+      castVideoControl("play", video.currentTime);
+    };
+    const onPause = () => {
+      setPlaying(false);
+      castVideoControl("pause", video.currentTime);
+    };
     const onMeta = () => {
       if (video.duration && isFinite(video.duration)) setDuration(video.duration);
     };
@@ -105,8 +114,11 @@ export default function VideoControls({ videoRef, visible }: VideoControlsProps)
       if (!bar || !video || !duration) return;
       const rect = bar.getBoundingClientRect();
       const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      video.currentTime = fraction * duration;
-      setCurrentTime(fraction * duration);
+      const target = fraction * duration;
+      video.currentTime = target;
+      setCurrentTime(target);
+      // Keep the casted device's playhead in sync while scrubbing (issue #2a).
+      castVideoControl("seek", target);
     },
     [videoRef, duration],
   );
