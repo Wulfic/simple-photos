@@ -11,6 +11,7 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use super::geocoder::ReverseGeocoder;
+use super::precise::{self, PreciseGeocoder};
 use crate::config::GeoConfig;
 
 /// Spawn the background geo-processor task.
@@ -42,6 +43,8 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<Atom
 
         // Cached dataset — loaded once on first need.
         let mut geocoder: Option<Arc<ReverseGeocoder>> = None;
+        // Online precise geocoder — built once on first need (opt-in users only).
+        let mut precise_geocoder: Option<Arc<PreciseGeocoder>> = None;
 
         // Process loop — `tokio::time::interval` ticks immediately on the
         // first call so the initial backfill runs at startup.  Subsequent
@@ -80,6 +83,24 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<Atom
                         {
                             tracing::warn!(error = %e, "Geo backfill cycle failed");
                         }
+                    }
+                }
+            }
+
+            // ── Opt-in precise (street-level) enrichment ────────────────
+            // Runs only for users who explicitly enabled it, and only after
+            // coarse city resolution.  Network-bound and rate-limited, so it
+            // is deliberately the last thing each cycle.
+            if precise_resolution_needed(&pool).await {
+                if precise_geocoder.is_none() {
+                    match PreciseGeocoder::new(config.clone()) {
+                        Ok(pg) => precise_geocoder = Some(Arc::new(pg)),
+                        Err(e) => tracing::error!(error = %e, "failed to init precise geocoder"),
+                    }
+                }
+                if let Some(pg) = &precise_geocoder {
+                    if let Err(e) = backfill_precise_addresses(&pool, pg, &config).await {
+                        tracing::warn!(error = %e, "Precise geo backfill cycle failed");
                     }
                 }
             }
@@ -283,6 +304,110 @@ async fn backfill_geo_locations(
         }
     }
 
+    Ok(())
+}
+
+/// Cheap `EXISTS` probe: is there at least one coarse-resolved photo awaiting
+/// precise resolution that belongs to a user who opted into precise geocoding?
+async fn precise_resolution_needed(pool: &SqlitePool) -> bool {
+    sqlx::query_scalar::<_, i32>(
+        "SELECT EXISTS( \
+           SELECT 1 FROM photos p \
+           WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
+             AND p.geo_city IS NOT NULL AND p.geo_city != '' \
+             AND p.geo_precise_status IS NULL \
+             AND EXISTS (SELECT 1 FROM user_settings us \
+                         WHERE us.user_id = p.user_id \
+                           AND us.key = 'geo_precise_enabled' AND us.value = 'true') \
+           LIMIT 1)",
+    )
+    .fetch_one(pool)
+    .await
+    .map(|n| n != 0)
+    .unwrap_or(false)
+}
+
+/// Resolve street-level addresses for opt-in users via the online geocoder.
+///
+/// One bounded batch per cycle (network + rate-limited).  Each coordinate is
+/// served from the dedup cache when possible.  A transient failure (offline,
+/// rate-limited, daily cap) stops the batch early and leaves the remaining
+/// photos pending for the next cycle — they are never poisoned.
+async fn backfill_precise_addresses(
+    pool: &SqlitePool,
+    geocoder: &Arc<PreciseGeocoder>,
+    config: &GeoConfig,
+) -> Result<(), sqlx::Error> {
+    let rows: Vec<(String, f64, f64)> = sqlx::query_as(
+        "SELECT p.id, p.latitude, p.longitude FROM photos p \
+         WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
+           AND p.geo_city IS NOT NULL AND p.geo_city != '' \
+           AND p.geo_precise_status IS NULL \
+           AND EXISTS (SELECT 1 FROM user_settings us \
+                       WHERE us.user_id = p.user_id \
+                         AND us.key = 'geo_precise_enabled' AND us.value = 'true') \
+         LIMIT ?1",
+    )
+    .bind(config.batch_size as i64)
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut resolved = 0usize;
+    let mut empty = 0usize;
+    for (photo_id, lat, lon) in &rows {
+        // Dedup cache first — repeated locations never hit the network.
+        if let Some(addr) = precise::cache_get(pool, *lat, *lon).await {
+            write_precise(pool, photo_id, &addr).await?;
+            resolved += 1;
+            continue;
+        }
+        match geocoder.reverse(*lat, *lon).await {
+            Ok(addr) if !addr.is_empty() => {
+                let _ =
+                    precise::cache_put(pool, *lat, *lon, &addr, &config.precise_provider).await;
+                write_precise(pool, photo_id, &addr).await?;
+                resolved += 1;
+            }
+            Ok(_) => {
+                // Provider has no address for this spot — mark attempted so we
+                // don't retry forever (mirrors the geo_city '' sentinel).
+                sqlx::query("UPDATE photos SET geo_precise_status = '' WHERE id = ?1")
+                    .bind(photo_id)
+                    .execute(pool)
+                    .await?;
+                empty += 1;
+            }
+            Err(e) => {
+                tracing::info!(error = %e, "precise geo lookup deferred; retrying next cycle");
+                break;
+            }
+        }
+    }
+
+    tracing::info!(resolved, empty, "Backfilled precise addresses");
+    Ok(())
+}
+
+/// Persist a resolved precise address onto a photo row.
+async fn write_precise(
+    pool: &SqlitePool,
+    photo_id: &str,
+    addr: &precise::PreciseAddress,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE photos SET geo_street = ?1, geo_house_number = ?2, geo_address = ?3, \
+         geo_precise_status = 'ok' WHERE id = ?4",
+    )
+    .bind(&addr.street)
+    .bind(&addr.house_number)
+    .bind(addr.label())
+    .bind(photo_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

@@ -473,6 +473,39 @@ pub struct GeoConfig {
     /// asserted within a reasonable window.
     #[serde(default = "GeoConfig::default_poll_interval_secs")]
     pub poll_interval_secs: u64,
+
+    // ── Opt-in precise (street-level) reverse geocoding ──────────────────
+    // Disabled by default and, crucially, gated *again* per-user: the server
+    // never sends a user's coordinates to a third party unless that user has
+    // explicitly turned on `geo_precise_enabled`.  These settings only shape
+    // *how* enrichment happens once a user opts in.
+    /// Provider for street-level lookups: `"auto"` (Nominatim, falling back to
+    /// Photon on error), `"nominatim"`, or `"photon"`.  Both are keyless,
+    /// no-registration OSM reverse geocoders.  (The US Census geocoder is
+    /// intentionally *not* an option: its coordinate endpoint returns census
+    /// geographies, not street addresses.)
+    #[serde(default = "GeoConfig::default_precise_provider")]
+    pub precise_provider: String,
+    /// Nominatim reverse endpoint (override to point at a self-hosted mirror).
+    #[serde(default = "GeoConfig::default_nominatim_endpoint")]
+    pub nominatim_endpoint: String,
+    /// Photon reverse endpoint.
+    #[serde(default = "GeoConfig::default_photon_endpoint")]
+    pub photon_endpoint: String,
+    /// `User-Agent` sent with every geocoder request.  Nominatim's usage
+    /// policy *requires* an identifying UA; requests without one get banned.
+    #[serde(default = "GeoConfig::default_geo_user_agent")]
+    pub geo_user_agent: String,
+    /// Hard ceiling on outbound geocoder requests per second.  Nominatim's
+    /// public instance allows at most 1/s — keep this at 1 unless pointing at
+    /// your own mirror.
+    #[serde(default = "GeoConfig::default_precise_rate_per_sec")]
+    pub precise_rate_per_sec: u32,
+    /// Hard ceiling on outbound geocoder requests per UTC day.  Stops a large
+    /// first-time backfill from hammering a public instance; the remainder is
+    /// picked up on subsequent days.  0 disables the daily cap.
+    #[serde(default = "GeoConfig::default_precise_daily_cap")]
+    pub precise_daily_cap: u32,
 }
 
 impl GeoConfig {
@@ -489,6 +522,24 @@ impl GeoConfig {
     fn default_poll_interval_secs() -> u64 {
         300
     }
+    fn default_precise_provider() -> String {
+        "auto".into()
+    }
+    fn default_nominatim_endpoint() -> String {
+        "https://nominatim.openstreetmap.org/reverse".into()
+    }
+    fn default_photon_endpoint() -> String {
+        "https://photon.komoot.io/reverse".into()
+    }
+    fn default_geo_user_agent() -> String {
+        concat!("simple-photos/", env!("CARGO_PKG_VERSION"), " (self-hosted)").into()
+    }
+    fn default_precise_rate_per_sec() -> u32 {
+        1
+    }
+    fn default_precise_daily_cap() -> u32 {
+        10_000
+    }
 }
 
 impl Default for GeoConfig {
@@ -498,6 +549,12 @@ impl Default for GeoConfig {
             dataset_path: Self::default_dataset_path(),
             batch_size: 100,
             poll_interval_secs: 300,
+            precise_provider: Self::default_precise_provider(),
+            nominatim_endpoint: Self::default_nominatim_endpoint(),
+            photon_endpoint: Self::default_photon_endpoint(),
+            geo_user_agent: Self::default_geo_user_agent(),
+            precise_rate_per_sec: Self::default_precise_rate_per_sec(),
+            precise_daily_cap: Self::default_precise_daily_cap(),
         }
     }
 }

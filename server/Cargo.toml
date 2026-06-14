@@ -13,6 +13,12 @@ axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "limit", "fs", "compression-gzip", "compression-br"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "tls-rustls"] }
+# SQLCipher: encrypt the entire database at rest.  sqlx's SQLite driver links
+# `libsqlite3-sys`; pinning the exact version sqlx 0.8 resolves to (0.30) and
+# enabling `bundled-sqlcipher-vendored-openssl` makes that linked library a
+# full SQLCipher build (OpenSSL compiled from source — we already vendor it).
+# The database is then unlocked per-connection with `PRAGMA key` in db.rs.
+libsqlite3-sys = { version = "0.30", features = ["bundled-sqlcipher-vendored-openssl"] }
 jsonwebtoken = "9"
 bcrypt = "0.15"
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }

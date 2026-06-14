@@ -158,6 +158,20 @@ enabled = false
 enabled = false
 # dataset_path = "data/cities500.txt"           # GeoNames cities file (downloaded by install.sh / install.ps1)
 # batch_size = 100                               # photos per geocoding batch
+#
+# GPS coordinates and reverse-geocoded addresses are always encrypted at rest
+# (keyed from the JWT secret) — no setup required.
+#
+# Opt-in precise (street-level) reverse geocoding.  This is the ONLY part of
+# geolocation that contacts a third party, and only for users who explicitly
+# enable "precise addresses" in their settings (off by default).  Coordinates
+# are deduplicated + cached so a public instance is not hammered.
+# precise_provider = "auto"                      # auto | nominatim | photon  (auto: Nominatim, fallback Photon on error)
+# nominatim_endpoint = "https://nominatim.openstreetmap.org/reverse"
+# photon_endpoint = "https://photon.komoot.io/reverse"
+# geo_user_agent = "simple-photos/<version> (self-hosted)"   # Nominatim policy REQUIRES an identifying UA
+# precise_rate_per_sec = 1                       # public Nominatim allows at most 1/s — keep at 1 unless self-hosting
+# precise_daily_cap = 10000                      # max outbound geocoder calls per UTC day (0 = unlimited)
 
 [transcode]
 # GPU-accelerated video transcoding. Auto-detects NVIDIA NVENC, Intel QSV,

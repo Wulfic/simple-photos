@@ -19,6 +19,7 @@ export default function GeolocationSection({
   const [loaded, setLoaded] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [togglingScrub, setTogglingScrub] = useState(false);
+  const [togglingPrecise, setTogglingPrecise] = useState(false);
   const [scrubbing, setScrubbing] = useState(false);
 
   useEffect(() => {
@@ -70,6 +71,38 @@ export default function GeolocationSection({
       setError(getErrorMessage(err));
     } finally {
       setTogglingScrub(false);
+    }
+  }
+
+  async function handlePreciseToggle() {
+    if (!status) return;
+    // Confirm before the first opt-in, since this changes the privacy posture.
+    if (
+      !status.precise_enabled &&
+      !confirm(
+        "Enable precise (street-level) addresses?\n\n" +
+          "To resolve house-number/street addresses, your photos' GPS " +
+          "coordinates will be sent to a free external geocoder " +
+          "(OpenStreetMap/Photon). City-level resolution stays fully offline. " +
+          "This is off by default. Continue?"
+      )
+    ) {
+      return;
+    }
+    setTogglingPrecise(true);
+    setError("");
+    try {
+      await api.geo.updateSettings({ precise_enabled: !status.precise_enabled });
+      setStatus({ ...status, precise_enabled: !status.precise_enabled });
+      setSuccess(
+        status.precise_enabled
+          ? "Precise addresses disabled. Coordinates stay on your server."
+          : "Precise addresses enabled. Street addresses will resolve in the background."
+      );
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
+    } finally {
+      setTogglingPrecise(false);
     }
   }
 
@@ -162,6 +195,41 @@ export default function GeolocationSection({
       <p className="text-xs text-gray-400 dark:text-gray-500 mb-4 ml-1">
         This only affects future uploads — photos already in your library are not changed.
         Use &quot;Scrub All&quot; below to remove GPS from existing photos.
+      </p>
+
+      {/* Precise (street-level) addresses — opt-in, contacts a third party */}
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            Precise Street Addresses
+          </h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {status?.precise_enabled
+              ? "Resolving house-number/street addresses (e.g. memories like “86 Nelson Blvd”)."
+              : "City-level only. Turn on to resolve full street addresses."}
+          </p>
+        </div>
+        <button
+          onClick={handlePreciseToggle}
+          disabled={togglingPrecise || !status?.enabled}
+          title={!status?.enabled ? "Enable Geolocation first" : undefined}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-40 ${
+            status?.precise_enabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
+          }`}
+          role="switch"
+          aria-checked={status?.precise_enabled ?? false}
+        >
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              status?.precise_enabled ? "translate-x-6" : "translate-x-1"
+            }`}
+          />
+        </button>
+      </div>
+      <p className="text-xs text-amber-600 dark:text-amber-500 mb-4 ml-1">
+        ⚠ Privacy: when on, your photos&apos; GPS coordinates are sent to a free
+        external geocoder (OpenStreetMap/Photon) to look up street addresses.
+        City-level resolution always stays fully offline. Off by default.
       </p>
 
       {/* Status info */}

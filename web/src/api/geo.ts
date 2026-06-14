@@ -9,6 +9,12 @@ import { request } from "./core";
 export interface GeoStatus {
   enabled: boolean;
   scrub_on_upload: boolean;
+  /**
+   * Opt-in street-level reverse geocoding. When on, this user's photo
+   * coordinates are sent to an external geocoder (OpenStreetMap/Photon).
+   * Off by default.
+   */
+  precise_enabled: boolean;
   photos_with_location: number;
   photos_without_location: number;
   unique_countries: number;
@@ -81,7 +87,11 @@ export const geoApi = {
   getSettings: () => request<GeoStatus>("/settings/geo"),
 
   /** Update geo settings */
-  updateSettings: (settings: { enabled?: boolean; scrub_on_upload?: boolean }) =>
+  updateSettings: (settings: {
+    enabled?: boolean;
+    scrub_on_upload?: boolean;
+    precise_enabled?: boolean;
+  }) =>
     request<void>("/settings/geo", {
       method: "POST",
       body: JSON.stringify(settings),
