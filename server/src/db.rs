@@ -186,11 +186,10 @@ async fn ensure_encrypted(path: &Path, db_key: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     anyhow::bail!(
-        "Database at {:?} cannot be opened with or without the configured key. \
+        "Database at {path:?} cannot be opened with or without the configured key. \
          This usually means auth.jwt_secret changed since the database was encrypted \
          (the key is derived from it), or the file is corrupt. Restore the original \
-         jwt_secret or the *.pre-sqlcipher.bak backup.",
-        path
+         jwt_secret or the *.pre-sqlcipher.bak backup."
     );
 }
 
@@ -400,7 +399,7 @@ mod tests {
             conn.close().await.unwrap();
         }
         // Reopening with the digit-first key succeeds.
-        let mut conn = open(&path, Some(&key)).await.unwrap();
+        let conn = open(&path, Some(&key)).await.unwrap();
         conn.close().await.unwrap();
         let _ = std::fs::remove_file(&path);
     }
