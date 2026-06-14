@@ -18,7 +18,7 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **Google Cast Support** — cast photos and videos to compatible devices
 - **Face and object recognition** — optional local AI module for face clustering and object tagging.  
 - **Metadata editing** — view and edit photo metadata (EXIF, IPTC, XMP) with support for custom metadata fields
-- **Geolocation support** — optional reverse geocoding to country/city.  
+- **Geolocation support** — optional reverse geocoding to country/city. With OPT-IN 3rd party precise location via Nominatim & Photon
 - **Geolocation Stripping** — option to remove geolocation metadata during import for privacy
 - **GPU acceleration** — optional GPU-accelerated media processing and AI inference for faster performance on supported hardware(AMD/INTEL GPUs have not been tested but should work, I only own nvidia)
 - **PWA** -  Progessive Web App to install on devices for easier access. 

@@ -9,7 +9,8 @@
 //!
 //! ```text
 //! GET /  →  { "service": "simple-photos", "name": "…", "version": "…",
-//!              "port": 8080, "mode": "primary", "api_key_required": false }
+//!              "port": 8080, "mode": "primary", "api_key_required": false,
+//!              "tls": false }
 //! ```
 //!
 //! Clients read the `port` field to learn the server's actual HTTP port,
@@ -58,6 +59,11 @@ struct DiscoveryResponse {
     mode: String,
     /// Whether an API key is required to access backup endpoints.
     api_key_required: bool,
+    /// Whether the API port speaks TLS. Clients MUST use `https://` when true
+    /// (the dedicated discovery port itself is always plain HTTP). This lets
+    /// mobile/web clients pick the right scheme instead of assuming http and
+    /// silently failing against an https port.
+    tls: bool,
 }
 
 /// Start the discovery listener on the configured port.
@@ -187,5 +193,6 @@ async fn discovery_handler(State(state): State<DiscoveryState>) -> Json<Discover
         address,
         mode,
         api_key_required,
+        tls: state.config.tls.enabled,
     })
 }

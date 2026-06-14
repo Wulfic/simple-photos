@@ -12,6 +12,9 @@ import com.google.gson.annotations.SerializedName
 data class GeoSettings(
     val enabled: Boolean = false,
     @SerializedName("scrub_on_upload") val scrubOnUpload: Boolean = false,
+    // Opt-in street-level reverse geocoding (off by default). When on, this
+    // user's coordinates are sent to an external geocoder for full addresses.
+    @SerializedName("precise_enabled") val preciseEnabled: Boolean = false,
     @SerializedName("photos_with_location") val photosWithLocation: Int = 0,
     @SerializedName("photos_without_location") val photosWithoutLocation: Int = 0,
     @SerializedName("unique_countries") val uniqueCountries: Int = 0,
@@ -22,6 +25,7 @@ data class GeoSettings(
 data class UpdateGeoSettingsRequest(
     val enabled: Boolean? = null,
     @SerializedName("scrub_on_upload") val scrubOnUpload: Boolean? = null,
+    @SerializedName("precise_enabled") val preciseEnabled: Boolean? = null,
 )
 
 // Server `ScrubConfirmRequest` (POST /api/geo/scrub) — must confirm.

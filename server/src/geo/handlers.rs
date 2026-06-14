@@ -16,6 +16,10 @@ use crate::state::AppState;
 pub struct GeoStatusResponse {
     pub enabled: bool,
     pub scrub_on_upload: bool,
+    /// Opt-in: resolve street-level addresses via an external geocoder.
+    /// Off by default — when on, this user's coordinates are sent to a third
+    /// party (Nominatim/Photon).  See `geo::precise`.
+    pub precise_enabled: bool,
     pub photos_with_location: i64,
     pub photos_without_location: i64,
     pub unique_countries: i64,
@@ -65,6 +69,7 @@ pub struct PhotoSummary {
 pub struct GeoSettingsRequest {
     pub enabled: Option<bool>,
     pub scrub_on_upload: Option<bool>,
+    pub precise_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +90,14 @@ pub async fn get_geo_settings(
         .unwrap_or(state.config.geo.enabled);
 
     let scrub = get_user_setting(&state.pool, &auth.user_id, "geo_scrub_on_upload")
+        .await
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
+    // Precise (street-level) geocoding is strictly opt-in and never inherits a
+    // config default — coordinates must not leave the server without an
+    // explicit per-user 'true'.
+    let precise_enabled = get_user_setting(&state.pool, &auth.user_id, "geo_precise_enabled")
         .await
         .map(|v| v == "true")
         .unwrap_or(false);
@@ -121,6 +134,7 @@ pub async fn get_geo_settings(
     Ok(Json(GeoStatusResponse {
         enabled,
         scrub_on_upload: scrub,
+        precise_enabled,
         photos_with_location: with_loc.0,
         photos_without_location: without_loc.0,
         unique_countries: countries.0,
@@ -149,6 +163,15 @@ pub async fn update_geo_settings(
             &auth.user_id,
             "geo_scrub_on_upload",
             if scrub { "true" } else { "false" },
+        )
+        .await?;
+    }
+    if let Some(precise) = body.precise_enabled {
+        upsert_user_setting(
+            &state.pool,
+            &auth.user_id,
+            "geo_precise_enabled",
+            if precise { "true" } else { "false" },
         )
         .await?;
     }
@@ -415,13 +438,18 @@ pub async fn list_memories(
         i64,
         Option<String>,
         Option<String>,
+        Option<String>,
     )> = sqlx::query_as(
         "SELECT geo_city, geo_country, geo_country_code, DATE(taken_at) as photo_date, \
                 COUNT(*) as cnt, \
                 MIN(id) as first_id, \
                 (SELECT thumb_path FROM photos p2 WHERE p2.user_id = photos.user_id \
                  AND p2.geo_city = photos.geo_city AND DATE(p2.taken_at) = DATE(photos.taken_at) \
-                 AND p2.thumb_path IS NOT NULL LIMIT 1) as thumb \
+                 AND p2.thumb_path IS NOT NULL LIMIT 1) as thumb, \
+                (SELECT p3.geo_address FROM photos p3 WHERE p3.user_id = photos.user_id \
+                 AND p3.geo_city = photos.geo_city AND DATE(p3.taken_at) = DATE(photos.taken_at) \
+                 AND p3.geo_address IS NOT NULL AND p3.geo_address != '' \
+                 GROUP BY p3.geo_address ORDER BY COUNT(*) DESC LIMIT 1) as rep_address \
          FROM photos \
          WHERE user_id = ?1 AND geo_city IS NOT NULL AND geo_city != '' \
          AND taken_at IS NOT NULL \
@@ -436,23 +464,32 @@ pub async fn list_memories(
 
     let memories = rows
         .into_iter()
-        .map(|(city, country, _code, date_str, count, first_id, thumb)| {
-            // Format a human-readable date label
-            let date_label = format_memory_date(&date_str);
-            let name = format!("{city} on {date_label}");
-            let id = format!("{}_{}", city.to_lowercase().replace(' ', "-"), date_str);
+        .map(
+            |(city, country, _code, date_str, count, first_id, thumb, rep_address)| {
+                // Format a human-readable date label
+                let date_label = format_memory_date(&date_str);
+                // Prefer the dominant street address for the day (e.g. "86 Nelson
+                // Blvd on Mar 12, 2026") when precise geocoding has resolved one;
+                // otherwise fall back to the city name.
+                let place = rep_address
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&city);
+                let name = format!("{place} on {date_label}");
+                let id = format!("{}_{}", city.to_lowercase().replace(' ', "-"), date_str);
 
-            Memory {
-                id,
-                name,
-                city,
-                country,
-                date_label,
-                photo_count: count,
-                first_photo_id: first_id,
-                first_thumb_path: thumb,
-            }
-        })
+                Memory {
+                    id,
+                    name,
+                    city,
+                    country,
+                    date_label,
+                    photo_count: count,
+                    first_photo_id: first_id,
+                    first_thumb_path: thumb,
+                }
+            },
+        )
         .collect();
 
     Ok(Json(memories))

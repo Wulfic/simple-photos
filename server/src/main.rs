@@ -156,7 +156,7 @@ async fn main() -> anyhow::Result<()> {
         "Storage subdirectories initialized: blobs/, metadata/, logs/server/, logs/app/"
     );
 
-    let (pool, read_pool) = db::init_pools(&config.database).await?;
+    let (pool, read_pool) = db::init_pools(&config.database, &config.auth.jwt_secret).await?;
 
     // Initialize in-memory per-IP rate limiters for auth endpoints,
     // and start a background task that evicts stale entries every 5 min.
