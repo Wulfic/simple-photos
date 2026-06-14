@@ -1,6 +1,9 @@
 [server]
 host = "0.0.0.0"
 port = 3000
+# Public URL clients use to reach this server. For remote / VPS access, set
+# this to your domain, e.g. "https://photos.example.com" (with [tls] enabled).
+# Used for absolute links, backup broadcast, and the discovery beacon address.
 base_url = "http://localhost:3000"
 # Set to true ONLY when behind a reverse proxy (nginx, Caddy) that sets
 # X-Forwarded-For. When false, proxy headers are ignored for rate limiting.
@@ -103,11 +106,33 @@ static_root = "./web/dist"
 auto_scan_interval_secs = 300
 
 [tls]
-# Enable HTTPS with a TLS certificate.
-# Set enabled = true and provide paths to your certificate and private key.
+# ── HTTPS ─────────────────────────────────────────────────────────────────────
+# When enabled, the API/web port serves HTTPS and a plain-HTTP listener
+# (http_redirect_port) 301-redirects to it. Clients learn the scheme from the
+# LAN discovery beacon's `tls` field and connect with the matching protocol.
+#
+# Two ways to get a certificate:
+#
+#   1. PUBLIC DOMAIN  (recommended for VPS / remote access — and required for
+#      Chromecast casting). Point a DNS record at this host, set
+#      base_url = "https://photos.example.com" above, then provision a real
+#      Let's Encrypt cert via the setup wizard (Settings → SSL), which writes
+#      cert_path / key_path here. Phones trust it via system CAs and the
+#      Chromecast can load the cast receiver page directly — no manual trust.
+#
+#   2. LOCAL CA  (LAN-only, self-signed). The wizard can mint a private CA, but
+#      a self-signed cert is NOT trusted by phones or Chromecasts: it breaks the
+#      Android app's auto-discovery and direct casting (browser "tab casting"
+#      still works). For a plain LAN with no domain, prefer enabled = false
+#      (HTTP) — the Android app and LAN auto-discovery work over HTTP and photo
+#      data is still protected by the app's end-to-end encryption layer.
 enabled = false
 # cert_path = "/path/to/fullchain.pem"
 # key_path = "/path/to/privkey.pem"
+# Plain-HTTP port that 301-redirects to HTTPS while TLS is on. Default: 80.
+# Set redirect_http = false when a reverse proxy already handles the upgrade.
+# http_redirect_port = 80
+# redirect_http = true
 
 [ai]
 # AI face & object recognition. Without ONNX models, uses advanced

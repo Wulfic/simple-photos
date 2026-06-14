@@ -138,29 +138,63 @@ object ServerDiscovery {
     }
 
     /**
-     * Check /api/setup/status on a discovered server to determine if it's configured.
-     * Returns a copy with setupComplete populated.
+     * Check /api/setup/status on a discovered server to determine if it's
+     * configured. Returns a copy with `setupComplete` (and a possibly
+     * scheme-corrected `url`) populated.
+     *
+     * The discovery beacon advertises whether the API speaks TLS, but older
+     * servers — or one reconfigured after the beacon guessed — may report it
+     * wrong. So if the advertised scheme fails we retry the opposite scheme
+     * before giving up. A reachable server is never dropped without a trace:
+     * every failed probe is logged. (A silently-swallowed http-vs-https
+     * mismatch here is exactly what made discovery report "no servers".)
      */
     private fun checkSetupStatus(server: DiscoveredServer): DiscoveredServer {
-        return try {
-            val conn = URL("${server.url}/api/setup/status").openConnection() as HttpURLConnection
-            conn.connectTimeout = CONNECT_TIMEOUT_MS
-            conn.readTimeout = READ_TIMEOUT_MS
-            conn.requestMethod = "GET"
-            if (conn.responseCode == 200) {
-                val body = conn.inputStream.bufferedReader().readText()
-                conn.disconnect()
-                val json = JSONObject(body)
-                server.copy(
+        val candidates = schemeCandidates(server.url)
+        for (url in candidates) {
+            try {
+                val json = fetchJson("$url/api/setup/status") ?: continue
+                return server.copy(
+                    url = url,
                     setupComplete = json.optBoolean("setup_complete", false),
                     mode = json.optString("mode", server.mode)
                 )
-            } else {
-                conn.disconnect()
-                server
+            } catch (e: Exception) {
+                Log.w(TAG, "setup/status probe failed for $url: ${e.message}")
             }
-        } catch (_: Exception) {
-            server
+        }
+        Log.w(TAG, "setup/status unreachable for ${server.host} via ${candidates.joinToString()} — left unenriched")
+        return server
+    }
+
+    /**
+     * Candidate base URLs to try, advertised scheme first then the opposite,
+     * so a beacon that mis-reports (or omits) its TLS flag still resolves.
+     */
+    private fun schemeCandidates(url: String): List<String> = when {
+        url.startsWith("https://") -> listOf(url, "http://" + url.removePrefix("https://"))
+        url.startsWith("http://") -> listOf(url, "https://" + url.removePrefix("http://"))
+        else -> listOf(url)
+    }
+
+    /**
+     * GET [fullUrl] and parse the JSON body, or return null on a non-200
+     * response. Transport failures (connection refused, a TLS handshake against
+     * a plaintext port, timeouts) propagate so the caller can try another scheme.
+     */
+    private fun fetchJson(fullUrl: String): JSONObject? {
+        val conn = URL(fullUrl).openConnection() as HttpURLConnection
+        conn.connectTimeout = CONNECT_TIMEOUT_MS
+        conn.readTimeout = READ_TIMEOUT_MS
+        conn.requestMethod = "GET"
+        return try {
+            if (conn.responseCode == 200) {
+                JSONObject(conn.inputStream.bufferedReader().readText())
+            } else {
+                null
+            }
+        } finally {
+            conn.disconnect()
         }
     }
 
@@ -196,7 +230,12 @@ object ServerDiscovery {
                     val actualPort = json.optInt("port", DISCOVERY_PORT)
                     val version = json.optString("version", "unknown")
                     val mode = json.optString("mode", "primary")
-                    val serverUrl = "http://$host:$actualPort"
+                    // The beacon tells us whether the API speaks TLS so we build
+                    // the right scheme. Older servers omit `tls` → default to
+                    // http (the historic behaviour); checkSetupStatus() retries
+                    // the opposite scheme if this guess turns out wrong.
+                    val scheme = if (json.optBoolean("tls", false)) "https" else "http"
+                    val serverUrl = "$scheme://$host:$actualPort"
                     Log.d(TAG, "Found server at $serverUrl via discovery port (v$version, mode=$mode)")
                     return DiscoveredServer(
                         url = serverUrl,
