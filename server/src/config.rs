@@ -532,7 +532,12 @@ impl GeoConfig {
         "https://photon.komoot.io/reverse".into()
     }
     fn default_geo_user_agent() -> String {
-        concat!("simple-photos/", env!("CARGO_PKG_VERSION"), " (self-hosted)").into()
+        concat!(
+            "simple-photos/",
+            env!("CARGO_PKG_VERSION"),
+            " (self-hosted)"
+        )
+        .into()
     }
     fn default_precise_rate_per_sec() -> u32 {
         1

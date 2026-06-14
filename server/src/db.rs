@@ -197,8 +197,8 @@ async fn ensure_encrypted(path: &Path, db_key: &str) -> anyhow::Result<()> {
 /// Try to open `path` (optionally keyed) and read its schema.  Returns `Ok`
 /// only when the database is genuinely readable with the given key state.
 async fn probe_open(path: &Path, key: Option<&str>) -> anyhow::Result<()> {
-    let mut opts = SqliteConnectOptions::from_str(path.to_str().unwrap_or_default())?
-        .create_if_missing(false);
+    let mut opts =
+        SqliteConnectOptions::from_str(path.to_str().unwrap_or_default())?.create_if_missing(false);
     if let Some(k) = key {
         opts = opts.pragma("key", key_pragma(k));
     }
@@ -314,8 +314,8 @@ mod tests {
     }
 
     async fn open(path: &Path, key: Option<&str>) -> Result<sqlx::SqliteConnection, sqlx::Error> {
-        let mut opts = SqliteConnectOptions::from_str(path.to_str().unwrap())?
-            .create_if_missing(true);
+        let mut opts =
+            SqliteConnectOptions::from_str(path.to_str().unwrap())?.create_if_missing(true);
         if let Some(k) = key {
             opts = opts.pragma("key", key_pragma(k));
         }

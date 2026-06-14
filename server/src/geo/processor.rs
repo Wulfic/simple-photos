@@ -367,8 +367,7 @@ async fn backfill_precise_addresses(
         }
         match geocoder.reverse(*lat, *lon).await {
             Ok(addr) if !addr.is_empty() => {
-                let _ =
-                    precise::cache_put(pool, *lat, *lon, &addr, &config.precise_provider).await;
+                let _ = precise::cache_put(pool, *lat, *lon, &addr, &config.precise_provider).await;
                 write_precise(pool, photo_id, &addr).await?;
                 resolved += 1;
             }

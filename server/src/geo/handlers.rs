@@ -464,30 +464,32 @@ pub async fn list_memories(
 
     let memories = rows
         .into_iter()
-        .map(|(city, country, _code, date_str, count, first_id, thumb, rep_address)| {
-            // Format a human-readable date label
-            let date_label = format_memory_date(&date_str);
-            // Prefer the dominant street address for the day (e.g. "86 Nelson
-            // Blvd on Mar 12, 2026") when precise geocoding has resolved one;
-            // otherwise fall back to the city name.
-            let place = rep_address
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(&city);
-            let name = format!("{place} on {date_label}");
-            let id = format!("{}_{}", city.to_lowercase().replace(' ', "-"), date_str);
+        .map(
+            |(city, country, _code, date_str, count, first_id, thumb, rep_address)| {
+                // Format a human-readable date label
+                let date_label = format_memory_date(&date_str);
+                // Prefer the dominant street address for the day (e.g. "86 Nelson
+                // Blvd on Mar 12, 2026") when precise geocoding has resolved one;
+                // otherwise fall back to the city name.
+                let place = rep_address
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(&city);
+                let name = format!("{place} on {date_label}");
+                let id = format!("{}_{}", city.to_lowercase().replace(' ', "-"), date_str);
 
-            Memory {
-                id,
-                name,
-                city,
-                country,
-                date_label,
-                photo_count: count,
-                first_photo_id: first_id,
-                first_thumb_path: thumb,
-            }
-        })
+                Memory {
+                    id,
+                    name,
+                    city,
+                    country,
+                    date_label,
+                    photo_count: count,
+                    first_photo_id: first_id,
+                    first_thumb_path: thumb,
+                }
+            },
+        )
         .collect();
 
     Ok(Json(memories))

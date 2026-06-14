@@ -389,7 +389,8 @@ pub async fn cache_put(
     source: &str,
 ) -> Result<(), String> {
     let key = coord_key(lat, lon);
-    let payload = serde_json::to_string(addr).map_err(|e| format!("geo cache encode failed: {e}"))?;
+    let payload =
+        serde_json::to_string(addr).map_err(|e| format!("geo cache encode failed: {e}"))?;
     sqlx::query(
         "INSERT INTO geo_address_cache (coord_key, payload, source, fetched_at) \
          VALUES (?1, ?2, ?3, datetime('now')) \
@@ -418,7 +419,10 @@ mod tests {
             state: Some("Ohio".into()),
             ..Default::default()
         };
-        assert_eq!(a.label().as_deref(), Some("86 Nelson Blvd, Springfield, Ohio"));
+        assert_eq!(
+            a.label().as_deref(),
+            Some("86 Nelson Blvd, Springfield, Ohio")
+        );
     }
 
     #[test]
