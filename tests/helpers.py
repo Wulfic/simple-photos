@@ -139,8 +139,12 @@ class APIClient:
     # ── Photo helpers ────────────────────────────────────────────────
 
     def upload_photo(self, filename: str = "test.jpg", content: bytes = None,
-                     mime_type: str = "image/jpeg") -> dict:
-        """Upload a photo file via /api/photos/upload."""
+                     mime_type: str = "image/jpeg", extra_headers: dict = None) -> dict:
+        """Upload a photo file via /api/photos/upload.
+
+        `extra_headers` lets callers exercise optional upload headers such as
+        `X-Defer-Conversion` or the sidecar metadata overrides.
+        """
         if content is None:
             import random
             content = generate_test_jpeg(
@@ -152,6 +156,7 @@ class APIClient:
             "X-Filename": filename,
             "X-Mime-Type": mime_type,
             "Content-Type": "application/octet-stream",
+            **(extra_headers or {}),
         }
         r = self.session.post(self._url("/api/photos/upload"), data=content, headers=h)
         r.raise_for_status()

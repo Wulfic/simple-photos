@@ -237,8 +237,8 @@ pub fn media_type_str(cat: MediaCategory) -> &'static str {
 /// - **Videos** → MP4 H.264 at `-crf 20 -preset medium`, AAC 192 kbps
 /// - **Audio**  → MP3 at 192 kbps via libmp3lame
 ///
-/// Falls back to ImageMagick for images if FFmpeg fails (e.g. RAW formats
-/// that require specific decoders).
+/// Image conversion is FFmpeg-only (no ImageMagick). HEIC/HEIF decodes natively
+/// via FFmpeg's mov demuxer + HEVC decoder; RAW camera formats are unsupported.
 ///
 /// For video conversions, uses GPU-accelerated encoding when available
 /// (configured via `init_gpu_config()` at startup).
@@ -321,19 +321,14 @@ pub async fn convert_file(
 
 // ── Format-specific converters ───────────────────────────────────────────────
 
-/// ImageMagick invocation.  IM7 on Windows installs `magick.exe`; plain
-/// `convert` there resolves to the Windows filesystem utility
-/// (System32\convert.exe), which made this fallback silently dead on
-/// every Windows host.  Unix distros still ship IM6-style `convert`.
-pub(crate) fn imagemagick_command() -> tokio::process::Command {
-    if cfg!(windows) {
-        tokio::process::Command::new("magick")
-    } else {
-        tokio::process::Command::new("convert")
-    }
-}
-
-/// Image → JPEG.  Tries FFmpeg first, falls back to ImageMagick.
+/// Image → JPEG via FFmpeg.
+///
+/// FFmpeg is the *only* image converter we depend on — no ImageMagick — to keep
+/// the install to a single media tool. HEIC/HEIF (Apple's default camera format)
+/// decodes natively here: FFmpeg reads the ISOBMFF/HEIF container via its `mov`
+/// demuxer and decodes the still image with the built-in HEVC decoder, so no
+/// libheif build flag is needed. (RAW camera formats are intentionally
+/// unsupported — they'd require per-vendor decoders we don't ship.)
 async fn convert_image(input: &str, output: &str) -> bool {
     tracing::debug!(input = %input, output = %output, "Image conversion: starting JPEG conversion");
     // FFmpeg: high-quality JPEG output (-q:v 2 ≈ 92% quality).
@@ -344,33 +339,13 @@ async fn convert_image(input: &str, output: &str) -> bool {
     let ffmpeg =
         crate::process::status_with_timeout(&mut cmd, std::time::Duration::from_secs(600)).await;
 
-    if matches!(ffmpeg, Ok(s) if s.success()) {
+    let ok = matches!(ffmpeg, Ok(s) if s.success());
+    if ok {
         tracing::debug!(input = %input, "Image conversion: FFmpeg JPEG conversion succeeded");
-        return true;
-    }
-
-    // Fallback: ImageMagick (handles RAW, PSD, SVG, etc.)
-    tracing::debug!(input = %input, "Image conversion: FFmpeg failed, trying ImageMagick");
-    let mut cmd = imagemagick_command();
-    cmd.args([
-        &format!("{input}[0]"), // [0] = first frame/page
-        "-quality",
-        "92",
-        "-auto-orient",
-        output,
-    ])
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null());
-    let magick =
-        crate::process::status_with_timeout(&mut cmd, std::time::Duration::from_secs(600)).await;
-
-    let magick_ok = matches!(magick, Ok(s) if s.success());
-    if magick_ok {
-        tracing::debug!(input = %input, "Image conversion: ImageMagick conversion succeeded");
     } else {
-        tracing::warn!(input = %input, "Image conversion: both FFmpeg and ImageMagick failed");
+        tracing::warn!(input = %input, "Image conversion failed");
     }
-    magick_ok
+    ok
 }
 
 /// Video → MP4 (H.264 + AAC).  Quality-tuned for clarity at reasonable sizes.

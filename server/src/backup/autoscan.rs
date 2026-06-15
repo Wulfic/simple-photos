@@ -302,13 +302,36 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
         );
     }
 
+    // Probe the storage root up front. A failure here is the difference
+    // between "no photos to import" and "the service account can't read the
+    // chosen storage path" — the latter is a common Windows footgun (the
+    // service runs as LocalSystem, which can't see mapped/SMB/OneDrive paths
+    // under a user profile). Without this log the scan silently registers 0
+    // files and users assume import is broken. See run_conversion_pass for the
+    // matching probe on the conversion side.
+    if let Err(e) = tokio::fs::read_dir(storage_root).await {
+        tracing::error!(
+            path = ?storage_root,
+            error = %e,
+            "[DIAG:AUTOSCAN] Cannot read storage root — no files will be \
+             imported. On Windows the service runs as LocalSystem and cannot \
+             read network drives or per-user (OneDrive) folders; point storage \
+             at a path the service account can access, or run the service as a \
+             user with access."
+        );
+        return 0;
+    }
+
     let mut new_count = 0i64;
     let mut queue = vec![storage_root.to_path_buf()];
 
     while let Some(dir) = queue.pop() {
         let mut entries = match tokio::fs::read_dir(&dir).await {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::warn!(dir = ?dir, error = %e, "[DIAG:AUTOSCAN] Skipping unreadable directory");
+                continue;
+            }
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {

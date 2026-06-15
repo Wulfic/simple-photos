@@ -49,6 +49,7 @@ pub async fn activity_status(
 
     let ai_running = state.ai_active.load(Ordering::Relaxed);
     let geo_running = state.geo_active.load(Ordering::Relaxed);
+    let geo_dataset_available = state.geo_dataset_available.load(Ordering::Relaxed);
 
     let ai_config_default = if state.config.ai.enabled { 1i64 } else { 0i64 };
 
@@ -133,7 +134,10 @@ pub async fn activity_status(
     let ai_done = (ai_total - ai_pending_count).max(0);
     let geo_done = (geo_total - geo_pending_count).max(0);
     let ai_active = ai_running || ai_pending_count > 0;
-    let geo_active = geo_running || geo_pending_count > 0;
+    // When the dataset can't load, pending coordinates can never resolve, so
+    // don't report geo as "active" — that would spin the client banner
+    // forever.  `geo_progress.available` carries the reason to the UI.
+    let geo_active = geo_running || (geo_pending_count > 0 && geo_dataset_available);
 
     Json(json!({
         // Back-compat top-level booleans (used by older clients).
@@ -154,6 +158,9 @@ pub async fn activity_status(
             "total": geo_total,
             "done": geo_done,
             "pending": geo_pending_count,
+            // `false` ⇒ photos are waiting but the GeoNames dataset isn't
+            // loadable, so they will never resolve until it's installed.
+            "available": geo_dataset_available,
         },
     }))
 }

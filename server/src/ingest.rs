@@ -147,7 +147,10 @@ pub async fn run_conversion_pass(
     while let Some(dir) = queue.pop() {
         let mut entries = match tokio::fs::read_dir(&dir).await {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::warn!(dir = ?dir, error = %e, "[INGEST] Skipping unreadable directory");
+                continue;
+            }
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {

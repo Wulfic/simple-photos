@@ -280,11 +280,17 @@ export default function Import() {
     // of where their mtime would place them — diverging from the autoscan
     // pipeline.
     const fileModifiedAt = item.file?.lastModified;
+    // Defer conversion to the server's background pass so a slow per-file
+    // FFmpeg run can't freeze this sequential import loop. The server only
+    // acts on this for convertible (non-native) files with no metadata
+    // overrides — native files and Takeout-sidecar items still convert inline,
+    // so behaviour is unchanged for them.
     await api.photos.upload(rawData, filename, mimeType, {
       takenAt,
       latitude,
       longitude,
       fileModifiedAt,
+      deferConversion: true,
     });
   }
 
