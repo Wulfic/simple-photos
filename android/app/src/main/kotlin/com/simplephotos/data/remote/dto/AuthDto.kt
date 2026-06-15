@@ -27,6 +27,11 @@ data class TotpLoginRequest(
 data class RefreshRequest(@SerializedName("refresh_token") val refreshToken: String)
 data class RefreshResponse(
     @SerializedName("access_token") val accessToken: String,
+    // The server rotates refresh tokens: each /auth/refresh revokes the
+    // presented token and returns a NEW one. This MUST be persisted, or the
+    // next refresh replays a revoked token and the server revokes every
+    // session for the user. Nullable for resilience against older servers.
+    @SerializedName("refresh_token") val refreshToken: String? = null,
     @SerializedName("expires_in") val expiresIn: Long
 )
 

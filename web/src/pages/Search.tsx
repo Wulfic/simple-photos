@@ -182,6 +182,14 @@ export default function Search() {
 
       // Merge and deduplicate (server results take priority)
       const serverIds = new Set(serverRes.results.map((r) => r.id));
+      // Local matches that are shadowed by a server result get dropped from the
+      // merged list — revoke their thumbnail object URLs now, since they'll
+      // never make it into `results` (and thus never hit the cleanup effect).
+      for (const r of localResults) {
+        if (serverIds.has(r.id) && r._localThumbUrl) {
+          URL.revokeObjectURL(r._localThumbUrl);
+        }
+      }
       const combined = [
         ...serverRes.results,
         ...localResults.filter((r) => !serverIds.has(r.id)),
@@ -203,6 +211,19 @@ export default function Search() {
     const timer = setTimeout(() => doSearch(query), 300);
     return () => clearTimeout(timer);
   }, [query, doSearch]);
+
+  // Free the thumbnail object URLs of the current result batch when results
+  // are replaced (new search / clear) or on unmount. Each search creates a
+  // fresh set of `_localThumbUrl`s, so revoking the prior batch is safe.
+  // The cleanup runs before the next effect, after the new results render.
+  useEffect(() => {
+    const urls = results
+      .map((r) => r._localThumbUrl)
+      .filter((u): u is string => !!u);
+    return () => {
+      for (const u of urls) URL.revokeObjectURL(u);
+    };
+  }, [results]);
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
@@ -341,6 +362,11 @@ function SearchResultTile({
       return;
     }
     let cancelled = false;
+    // Object URL this tile creates for the fetched server thumbnail, so the
+    // cleanup can revoke it (otherwise it leaks every time the tile unmounts
+    // or re-fetches). Note: _localThumbUrl is owned by the parent results and
+    // is revoked there, not here.
+    let objectUrl: string | null = null;
     (async () => {
       try {
         const { accessToken } = useAuthStore.getState();
@@ -352,14 +378,15 @@ function SearchResultTile({
         if (!res.ok || cancelled) return;
         const blob = await res.blob();
         if (cancelled) return;
-        const url = URL.createObjectURL(blob);
-        if (!cancelled) setThumbSrc(url);
+        objectUrl = URL.createObjectURL(blob);
+        setThumbSrc(objectUrl);
       } catch {
         // Thumbnail load failed
       }
     })();
     return () => {
       cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [visible, result.id, result._localThumbUrl]);
 

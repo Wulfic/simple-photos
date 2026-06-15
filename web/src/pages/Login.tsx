@@ -51,10 +51,9 @@ export default function Login() {
         setTokens(res.access_token, res.refresh_token);
         storeSetUsername(username);
         // Derive encryption key from the login password
-        await deriveKey(password, username);
+        const keyHex = await deriveKey(password, username);
         // Persist the key server-side so autoscan/migration work autonomously
-        const k = sessionStorage.getItem("sp_key");
-        if (k) api.encryption.storeKey(k).catch((e) => console.error("Failed to store encryption key:", e));
+        if (keyHex) api.encryption.storeKey(keyHex).catch((e) => console.error("Failed to store encryption key:", e));
         navigate("/gallery");
       } else {
         const res = await api.auth.login(username, password);
@@ -69,10 +68,9 @@ export default function Login() {
           setTokens(res.access_token, res.refresh_token);
           storeSetUsername(username);
           // Derive encryption key from the login password
-          await deriveKey(password, username);
+          const keyHex = await deriveKey(password, username);
           // Persist the key server-side so autoscan/migration work autonomously
-          const k2 = sessionStorage.getItem("sp_key");
-          if (k2) api.encryption.storeKey(k2).catch((e) => console.error("Failed to store encryption key:", e));
+          if (keyHex) api.encryption.storeKey(keyHex).catch((e) => console.error("Failed to store encryption key:", e));
           navigate("/gallery");
         }
       }

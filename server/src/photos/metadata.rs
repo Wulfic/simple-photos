@@ -30,6 +30,27 @@ pub(crate) struct SubtypeInfo {
     pub motion_video_offset: Option<u64>,
 }
 
+/// Convert an EXIF `DateTimeOriginal` string (`"YYYY:MM:DD HH:MM:SS"`) to an
+/// ISO-8601 instant (`"YYYY-MM-DDTHH:MM:SSZ"`). Returns `None` for anything
+/// that doesn't match the canonical EXIF layout.
+///
+/// The input is derived from attacker-controlled file bytes, so slicing must
+/// be char-boundary safe: we require a pure-ASCII string of at least 19 bytes
+/// (where 1 byte == 1 char) and use checked `get(..)` slicing. The previous
+/// implementation sliced by byte index after a *byte*-length check, which
+/// panicked when a crafted EXIF field placed a multi-byte UTF-8 char on a
+/// slice boundary.
+fn exif_datetime_to_iso(dt_str: &str) -> Option<String> {
+    if !dt_str.is_ascii() || dt_str.len() < 19 {
+        return None;
+    }
+    let year = dt_str.get(0..4)?;
+    let month = dt_str.get(5..7)?;
+    let day = dt_str.get(8..10)?;
+    let time = dt_str.get(11..19)?;
+    Some(format!("{year}-{month}-{day}T{time}Z"))
+}
+
 /// Extract image dimensions, camera model, and GPS coordinates from a file.
 /// Returns (width, height, camera_model, latitude, longitude, taken_at).
 ///
@@ -118,14 +139,7 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                     .trim_matches('"')
                     .to_string();
                 // EXIF format: "2024:01:15 14:30:00" → convert to ISO 8601
-                if dt_str.len() >= 19 {
-                    let iso = format!(
-                        "{}-{}-{}T{}Z",
-                        &dt_str[0..4],
-                        &dt_str[5..7],
-                        &dt_str[8..10],
-                        &dt_str[11..19]
-                    );
+                if let Some(iso) = exif_datetime_to_iso(&dt_str) {
                     taken_at = Some(iso);
                 }
             }
@@ -281,14 +295,7 @@ pub(crate) fn extract_media_metadata_from_bytes(
                 .to_string()
                 .trim_matches('"')
                 .to_string();
-            if dt_str.len() >= 19 {
-                let iso = format!(
-                    "{}-{}-{}T{}Z",
-                    &dt_str[0..4],
-                    &dt_str[5..7],
-                    &dt_str[8..10],
-                    &dt_str[11..19]
-                );
+            if let Some(iso) = exif_datetime_to_iso(&dt_str) {
                 taken_at = Some(iso);
             }
         }
