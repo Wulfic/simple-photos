@@ -99,36 +99,19 @@ export default function ServerConfigStep({
   async function handleNativePick() {
     setError("");
 
-    // 1. Preferred: a real native OS folder dialog spawned by the server on
-    //    the machine it runs on. For the common desktop/localhost install the
-    //    server and browser are the same computer, so this pops the normal
-    //    Windows/macOS/Linux folder chooser and returns an absolute path
-    //    directly — no in-browser file browser, no sentinel round-trip.
-    try {
-      const res = await api.admin.pickDirectory();
-      if (res?.path) {
-        setPathInput(res.path);
-        return;
-      }
-    } catch (err: unknown) {
-      const msg = (err as { message?: string })?.message ?? "";
-      // User closed the dialog → do nothing, leave the field as-is.
-      if (/cancel/i.test(msg)) return;
-      // "native_picker_unavailable" (headless server, service session, or a
-      // remote browser) → fall through to the browser-based pickers below.
-    }
-
-    // 2. Browser File System Access API (Chrome/Edge/Opera). Useful when the
-    //    UI is opened from a *different* machine than the server.
-    if (
-      typeof window !== "undefined" &&
-      "showDirectoryPicker" in window
-    ) {
-      setError("");
+    // 1. Preferred: the browser's native OS folder dialog (File System Access
+    //    API — Chrome/Edge/Opera). This is the *same* native OS chooser the
+    //    "+" upload button opens via <input type="file">, so the storage-root
+    //    picker feels identical to picking files to upload. We try it first
+    //    because, unlike the server-spawned dialog below, it works whether the
+    //    UI is on the server machine or a remote one, and it doesn't silently
+    //    no-op when the server runs as a background service (no desktop
+    //    session). A tiny sentinel file lets the server map the chosen folder
+    //    back to an absolute path.
+    if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
       let dirHandle: FileSystemDirectoryHandle | null = null;
       const sentinelName = `sp-picker-${crypto.randomUUID()}.tmp`;
       try {
-        // This opens the exact same native OS dialog as <input type="file">
         dirHandle = await (
           window as Window &
             typeof globalThis & {
@@ -149,23 +132,39 @@ export default function ServerConfigStep({
         // Ask the server to resolve the absolute path.
         const res = await api.admin.resolveStorageSentinel(sentinelName);
         setPathInput(res.path);
+        return;
       } catch (err: unknown) {
         const e = err as { name?: string };
         if (e?.name === "AbortError") return; // user pressed Cancel
-        // Any other failure (write permissions, server unreachable, etc.)
-        // → fall back to the in-browser directory browser.
-        handleOpenBrowser();
+        // Any other failure (chosen folder not on the server, write
+        // permissions, server unreachable) → fall through to the
+        // server-spawned dialog, then the in-browser browser.
       } finally {
         // Best-effort cleanup — ignore errors (e.g. handle already released).
         if (dirHandle) {
           dirHandle.removeEntry(sentinelName).catch(() => {});
         }
       }
-      return;
     }
 
-    // Browser doesn't support showDirectoryPicker — fall back to the
-    // in-browser FolderBrowserModal (Firefox, Safari, older browsers).
+    // 2. Fallback: a native OS folder dialog spawned by the server itself.
+    //    Only works for a desktop/localhost install where the server has a
+    //    visible session; returns "native_picker_unavailable" on a headless
+    //    or service install.
+    try {
+      const res = await api.admin.pickDirectory();
+      if (res?.path) {
+        setPathInput(res.path);
+        return;
+      }
+    } catch (err: unknown) {
+      const msg = (err as { message?: string })?.message ?? "";
+      if (/cancel/i.test(msg)) return; // user closed the dialog
+      // "native_picker_unavailable" → fall through to the in-browser browser.
+    }
+
+    // 3. Last resort: the in-browser FolderBrowserModal (Firefox/Safari, or
+    //    when neither native dialog is usable).
     handleOpenBrowser();
   }
 

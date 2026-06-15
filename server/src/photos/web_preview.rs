@@ -1,8 +1,10 @@
 //! Web preview generation for non-browser-native media formats.
 //!
 //! Some formats (HEIC, MKV, WMA, etc.) can't be displayed natively in a
-//! browser. This module converts them into web-friendly formats via FFmpeg
-//! or ImageMagick, with fallback chains.
+//! browser. This module converts them into web-friendly formats via FFmpeg.
+//! (FFmpeg only — no ImageMagick — to keep the install to a single media tool.
+//! HEIC/HEIF decodes natively via FFmpeg's mov demuxer + built-in HEVC decoder,
+//! so no libheif build is required.)
 
 use std::path::Path;
 
@@ -11,9 +13,10 @@ use std::path::Path;
 pub fn needs_web_preview(filename: &str) -> Option<&'static str> {
     let ext = filename.rsplit('.').next()?.to_ascii_lowercase();
     match ext.as_str() {
-        // Images that browsers cannot display natively
-        "heic" | "heif" | "tiff" | "tif" | "hdr" | "cr2" | "cur" | "cursor" | "dng" | "nef"
-        | "arw" | "raw" => Some("jpg"),
+        // Images that browsers cannot display natively. (RAW formats — cr2,
+        // dng, nef, arw, raw — are intentionally omitted: FFmpeg can't decode
+        // them and we no longer ship ImageMagick, so they are unsupported.)
+        "heic" | "heif" | "tiff" | "tif" | "hdr" | "cur" | "cursor" => Some("jpg"),
         "ico" => Some("png"),
         // Audio that browsers cannot play natively
         "wma" | "aiff" | "aif" => Some("mp3"),
@@ -101,31 +104,10 @@ async fn generate_web_preview(input_path: &Path, output_path: &Path, preview_ext
         return true;
     }
 
-    // FFmpeg failed — try ImageMagick as fallback for image conversions.
-    // `imagemagick_command` picks `magick` on Windows where bare `convert`
-    // is the NTFS filesystem tool.
-    if preview_ext == "jpg" || preview_ext == "png" {
-        let mut cmd = crate::conversion::imagemagick_command();
-        cmd.args([input_str, "-quality", "92", output_str])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let magick_result = crate::process::status_with_timeout(&mut cmd, PREVIEW_TIMEOUT).await;
-        if matches!(magick_result, Ok(s) if s.success()) {
-            return true;
-        }
-        tracing::warn!(
-            input = %input_path.display(),
-            target = preview_ext,
-            "Web preview: both FFmpeg and ImageMagick failed"
-        );
-    } else {
-        tracing::warn!(
-            input = %input_path.display(),
-            target = preview_ext,
-            "Web preview: conversion failed"
-        );
-    }
-
+    tracing::warn!(
+        input = %input_path.display(),
+        target = preview_ext,
+        "Web preview: FFmpeg conversion failed"
+    );
     false
 }

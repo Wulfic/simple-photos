@@ -12,7 +12,15 @@ import { useAuthStore } from "../store/auth";
 import { useProcessingStore } from "../store/processing";
 
 interface ActivityResponse {
-  geo_progress?: { active: boolean; total: number; done: number; pending: number };
+  geo_progress?: {
+    active: boolean;
+    total: number;
+    done: number;
+    pending: number;
+    /** `false` ⇒ photos are waiting but the GeoNames dataset isn't loadable,
+     *  so they can never resolve. Omitted by older servers (treat as `true`). */
+    available?: boolean;
+  };
 }
 
 /** Format seconds as HH:MM:SS, clamped to 0. */
@@ -29,6 +37,10 @@ export default function GeoBanner() {
   const [dismissed, setDismissed] = useState(false);
   const [counts, setCounts] = useState<{ total: number; done: number } | null>(null);
   const [eta, setEta] = useState<string | null>(null);
+  // True when photos are awaiting geocoding but the server reports the
+  // GeoNames dataset is missing/unloadable — they will never resolve, so we
+  // show a static notice instead of a spinner that runs forever.
+  const [unavailable, setUnavailable] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { startTask, endTask } = useProcessingStore();
 
@@ -52,9 +64,25 @@ export default function GeoBanner() {
         batchStartRef.current = 0;
         setCounts(null);
         setEta(null);
+        setUnavailable(false);
         endTask("geo");
         return;
       }
+
+      // Dataset can't load (default `true` keeps old servers working): photos
+      // are stuck, not progressing. Stop the spinner and surface why.
+      if (geo.available === false) {
+        batchSizeRef.current = 0;
+        prevPendingRef.current = 0;
+        batchStartRef.current = 0;
+        setCounts(null);
+        setEta(null);
+        setUnavailable(true);
+        endTask("geo");
+        return;
+      }
+
+      setUnavailable(false);
 
       if (prevPendingRef.current === 0) {
         batchSizeRef.current = pending;
@@ -100,7 +128,40 @@ export default function GeoBanner() {
     };
   }, [isAuthenticated, poll, endTask]);
 
-  if (dismissed || !counts || counts.total === 0) return null;
+  if (dismissed) return null;
+
+  // Dataset unavailable: static, dismissible warning (no spinner, no progress).
+  if (unavailable) {
+    return (
+      <div className="fixed bottom-44 left-4 right-4 z-50 pointer-events-none">
+        <div className="pointer-events-auto max-w-md mx-auto flex items-center gap-3 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg px-4 py-3 shadow-lg">
+          <svg className="w-5 h-5 text-amber-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              Location data unavailable
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              Reverse geocoding is paused — the GeoNames dataset isn't installed
+              on the server. Photos with GPS will resolve once it's available.
+            </p>
+          </div>
+          <button
+            onClick={() => setDismissed(true)}
+            className="p-1 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+            aria-label="Dismiss"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!counts || counts.total === 0) return null;
 
   const pct = counts.total > 0 ? (counts.done / counts.total) * 100 : 0;
 

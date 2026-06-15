@@ -36,7 +36,12 @@ use crate::config::GeoConfig;
 /// 3. Backfills geo columns for photos with lat/lon but no geo_city
 /// 4. Backfills photo_year/photo_month for photos with taken_at but no year
 /// 5. Sleeps and re-checks periodically for newly uploaded photos
-pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<AtomicBool>) {
+pub fn spawn_geo_processor(
+    pool: SqlitePool,
+    config: GeoConfig,
+    active: Arc<AtomicBool>,
+    dataset_available: Arc<AtomicBool>,
+) {
     tokio::spawn(async move {
         let batch_size = config.batch_size as i64;
         let poll_secs = config.poll_interval_secs.max(1);
@@ -77,6 +82,14 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<Atom
                     geocoder = load_geocoder(&config).await;
                 }
 
+                // Surface dataset availability so the client can distinguish
+                // "still resolving" from "cannot resolve — dataset missing".
+                // Without this, photos with GPS coordinates stay pending
+                // forever (no geocoder ⇒ no sentinel written) and the
+                // GeoBanner spins indefinitely.
+                let loaded = geocoder.as_ref().map(|gc| gc.is_loaded()).unwrap_or(false);
+                dataset_available.store(loaded, Ordering::Relaxed);
+
                 if let Some(gc) = &geocoder {
                     if gc.is_loaded() {
                         if let Err(e) = backfill_geo_locations(&pool, gc, batch_size, &config).await
@@ -85,6 +98,11 @@ pub fn spawn_geo_processor(pool: SqlitePool, config: GeoConfig, active: Arc<Atom
                         }
                     }
                 }
+            } else {
+                // Nothing pending resolution ⇒ no availability problem to
+                // report.  Reset so a transient earlier failure doesn't latch
+                // a stale "unavailable" once the queue has drained.
+                dataset_available.store(true, Ordering::Relaxed);
             }
 
             // ── Opt-in precise (street-level) enrichment ────────────────

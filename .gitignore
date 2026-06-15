@@ -13,6 +13,7 @@
 *.p12
 *.jks
 *.keystore
+.mcp.json
 
 # ── Server (Rust / Cargo) ────────────────────────────────────────────────────
 server/target/
@@ -152,3 +153,6 @@ CLAUDE.md
 # release checkout (this is exactly how .github/codeql/codeql-config.yml went
 # missing on the v1.3.4 release run).
 .vscode/
+# NOTE: .vscode/mcp.json was previously force-added past this rule and leaked
+# internal LAN topology (IPs/ports/host paths). Never `git add -f` files in
+# here — keep local-only editor/MCP config out of the repo.

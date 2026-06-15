@@ -97,6 +97,16 @@ case "$1" in
             echo "simple-photos: fetching AI models, GeoNames dataset and Android APK in the background"
             echo "  (track it with: journalctl -u simple-photos-setup -f)"
         fi
+
+        # 6. Refresh the desktop / icon caches so the launcher entry and icon
+        #    appear immediately instead of after the next login. Best-effort:
+        #    these tools may be absent on a headless/server install.
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+        fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)
         ;;

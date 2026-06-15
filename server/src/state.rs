@@ -75,6 +75,14 @@ pub struct AppState {
     /// reverse-geocoded city/state/country or year/month data.  Read by
     /// `GET /api/status/activity`.
     pub geo_active: Arc<AtomicBool>,
+    /// Whether the offline GeoNames reverse-geocoding dataset is loadable.
+    /// Starts `true` (optimistic — don't alarm before the first poll) and is
+    /// set by the geo processor: `false` when geocoding is wanted but the
+    /// dataset file is missing / unparseable, `true` once it loads.  Read by
+    /// `GET /api/status/activity` so the client can show "location data
+    /// unavailable" instead of a spinner that never resolves when the
+    /// dataset isn't installed.
+    pub geo_dataset_available: Arc<AtomicBool>,
 }
 
 impl AppState {

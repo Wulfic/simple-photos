@@ -70,6 +70,38 @@ pub async fn upload_photo(
         )));
     }
 
+    // ── Deferred conversion for bulk import (two-phase, like autoscan) ───
+    // The admin Import page sets `X-Defer-Conversion` so importing a folder
+    // of HEIC / MKV / etc. doesn't stall the sequential upload loop on a slow
+    // per-file FFmpeg run. Converting inline blocks the HTTP response, and one
+    // hung/slow file freezes the whole import — exactly the Windows-vs-Ubuntu
+    // divergence we traced (the automated autoscan path is two-phase, the
+    // manual Import path was inline). Instead, drop the raw original into the
+    // storage tree and let the SAME background pass the autoscan uses
+    // (`run_conversion_pass`) convert + register + encrypt it. Result:
+    // import-all-first, convert-later on every platform and entry point.
+    //
+    // Guards:
+    //   • convertible only — native files upload fast and never block.
+    //   • admin only — the conversion pass attributes new photos to the admin
+    //     user, so deferring a non-admin upload would misattribute it; they
+    //     fall through to the inline path below.
+    //   • no metadata OVERRIDES (X-Taken-At / GPS) — the background pass reads
+    //     metadata from the file and can't replay sidecar values, so Google
+    //     Photos Takeout uploads stay on the inline path. X-File-Modified-At
+    //     is preserved by stamping the written file's mtime.
+    if conversion::conversion_target(&filename).is_some()
+        && header_truthy(&headers, "X-Defer-Conversion")
+        && headers.get("X-Taken-At").is_none()
+        && headers.get("X-Latitude").is_none()
+        && headers.get("X-Longitude").is_none()
+        && crate::setup::admin::require_admin(&state, &auth)
+            .await
+            .is_ok()
+    {
+        return defer_convertible_upload(&state, &filename, &headers, body).await;
+    }
+
     // ── Convert non-native formats to browser-native equivalents ────
     // Save original upload bytes so we can extract EXIF metadata from them
     // BEFORE conversion (FFmpeg/ImageMagick strips EXIF from the output).
@@ -550,6 +582,123 @@ pub async fn upload_photo(
             "file_path": rel_path,
             "size_bytes": size_bytes,
             "photo_hash": photo_hash,
+        })),
+    ))
+}
+
+/// Truthy check for a boolean-ish request header (`1`, `true`, `yes`).
+fn header_truthy(headers: &HeaderMap, name: &str) -> bool {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| {
+            let s = s.trim().to_ascii_lowercase();
+            s == "1" || s == "true" || s == "yes"
+        })
+        .unwrap_or(false)
+}
+
+/// Drop a convertible upload's raw bytes into the storage tree and hand off to
+/// the background conversion pass (shared with autoscan) for conversion,
+/// registration, and encryption. Returns `202 Accepted` immediately so a bulk
+/// import never blocks on FFmpeg. See the caller for the guard conditions.
+async fn defer_convertible_upload(
+    state: &AppState,
+    filename: &str,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    // Honor the audio-backup toggle up front so a disabled-audio server doesn't
+    // leave an orphan raw audio file the conversion pass will refuse to touch.
+    if let Some(target) = conversion::conversion_target(filename) {
+        if target.category == conversion::MediaCategory::Audio
+            && !audio_backup_enabled(&state.pool).await
+        {
+            return Err(AppError::Forbidden(
+                "Audio backup is disabled by server policy".to_string(),
+            ));
+        }
+    }
+
+    let storage_root = (**state.storage_root.load()).clone();
+    let uploads_dir = storage_root.join("uploads");
+    tokio::fs::create_dir_all(&uploads_dir)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to create uploads directory: {e}")))?;
+
+    // Unique on-disk name (different content, same name → keep both). Mirrors
+    // the inline path's collision handling.
+    let safe_filename = sanitize::sanitize_filename(filename);
+    let mut final_filename = safe_filename.clone();
+    let mut counter = 1u32;
+    while tokio::fs::try_exists(uploads_dir.join(&final_filename))
+        .await
+        .unwrap_or(false)
+    {
+        let stem = std::path::Path::new(&safe_filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file");
+        let ext = std::path::Path::new(&safe_filename)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("bin");
+        final_filename = format!("{stem}-{counter}.{ext}");
+        counter += 1;
+    }
+
+    let raw_path = uploads_dir.join(&final_filename);
+    tokio::fs::write(&raw_path, &body)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to write import file: {e}")))?;
+
+    // Preserve the browser File's lastModified so EXIF-less files land in the
+    // right timeline slot — the conversion pass falls back to on-disk mtime,
+    // mirroring autoscan. Without this the file would be stamped with the
+    // write time (≈ now) and float to the top of the timeline.
+    if let Some(ms) = headers
+        .get("X-File-Modified-At")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .filter(|ms| *ms > 0)
+    {
+        let mtime = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+        let raw_path_clone = raw_path.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(f) = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&raw_path_clone)
+            {
+                let _ = f.set_modified(mtime);
+            }
+        })
+        .await;
+    }
+
+    // Kick the same two-phase pipeline the autoscan uses. `run_conversion_pass`
+    // serializes on a global lock, so a burst of deferred uploads coalesces
+    // into batched passes rather than racing — identical to the inline path's
+    // post-upload hand-off.
+    {
+        let pool = state.pool.clone();
+        let root = storage_root.clone();
+        let jwt_secret = state.config.auth.jwt_secret.clone();
+        tokio::spawn(async move {
+            crate::ingest::run_conversion_pass(pool, root, jwt_secret).await;
+        });
+    }
+
+    tracing::info!(
+        filename = %final_filename,
+        "Queued convertible upload for background conversion (deferred)"
+    );
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "queued",
+            "filename": final_filename,
+            "deferred": true,
         })),
     ))
 }

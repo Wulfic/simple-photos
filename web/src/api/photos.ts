@@ -178,18 +178,32 @@ export const photosApi = {
        * so uploads land in the correct timeline slot rather than at the top.
        */
       fileModifiedAt?: number;
+      /**
+       * Ask the server to defer conversion of non-native formats (HEIC, MKV,
+       * …) to its background pass instead of converting inline. Used by the
+       * bulk Import page so one slow FFmpeg run can't freeze the sequential
+       * upload loop. The server only honors this for convertible files from
+       * an admin with no metadata overrides; everything else converts inline
+       * as before. A deferred upload returns `{ status: "queued" }` (202)
+       * instead of a photo record.
+       */
+      deferConversion?: boolean;
     },
-  ): Promise<{
-    photo_id: string;
-    filename: string;
-    file_path: string;
-    size_bytes: number;
-    photo_hash: string | null;
-  }> => {
+  ): Promise<
+    | {
+        photo_id: string;
+        filename: string;
+        file_path: string;
+        size_bytes: number;
+        photo_hash: string | null;
+      }
+    | { status: "queued"; filename: string; deferred: true }
+  > => {
     const headers: Record<string, string> = {
       "X-Filename": filename,
       "X-Mime-Type": mimeType,
     };
+    if (overrides?.deferConversion) headers["X-Defer-Conversion"] = "1";
     if (overrides?.takenAt) headers["X-Taken-At"] = overrides.takenAt;
     if (typeof overrides?.latitude === "number") {
       headers["X-Latitude"] = overrides.latitude.toString();

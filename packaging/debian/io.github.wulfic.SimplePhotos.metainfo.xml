@@ -7,13 +7,24 @@
   <project_license>MIT</project_license>
   <metadata_license>CC0-1.0</metadata_license>
 
+  <!-- Associates this AppStream component with the binary package. Without it
+       the installer (Ubuntu App Center / GNOME Software) can't link the local
+       .deb to this metadata and falls back to bare dpkg control fields, which
+       have no license and no rich icon -> "unknown" publisher/license, no icon.
+       MUST match the .deb package name (Cargo.toml [package.metadata.deb].name). -->
+  <pkgname>simple-photos</pkgname>
+
   <name>Simple Photos</name>
   <!-- The short, one-line "description" shown in store listings. Keep concise:
        no install steps, no marketing paragraphs. -->
   <summary>Self-hosted, end-to-end encrypted photo and video library</summary>
 
-  <!-- Populates "Publisher" / developer. Use the legacy element for the widest
-       compatibility (older appstream releases don't parse <developer><name>). -->
+  <!-- Populates "Publisher" / developer. The modern <developer><name> block is
+       what AppStream >= 0.16 / libappstream 1.0 (Ubuntu 24.04+) reads; the
+       legacy <developer_name> below is kept for older appstream releases. -->
+  <developer id="io.github.wulfic">
+    <name>WulfNet Designs</name>
+  </developer>
   <developer_name>WulfNet Designs</developer_name>
 
   <description>
@@ -33,7 +44,12 @@
   </description>
 
   <launchable type="desktop-id">io.github.wulfic.SimplePhotos.desktop</launchable>
+  <!-- stock: resolved from the installed hicolor theme (post-install app menu).
+       remote: a URL the installer can fetch so the icon renders in the store /
+       .deb preview *before* the local icon theme cache is updated. Both point
+       at the same simple-photos icon asset. -->
   <icon type="stock">simple-photos</icon>
+  <icon type="remote" width="256" height="256">https://raw.githubusercontent.com/Wulfic/simple-photos/main/packaging/debian/simple-photos-256.png</icon>
 
   <url type="homepage">https://github.com/Wulfic/simple-photos</url>
   <url type="bugtracker">https://github.com/Wulfic/simple-photos/issues</url>
@@ -42,6 +58,13 @@
     <category>Graphics</category>
     <category>Photography</category>
   </categories>
+
+  <!-- GNOME Software treats a component with no <releases> as low quality and
+       may suppress its rich metadata. Keep the latest release listed here;
+       bump-version tooling can append new entries. -->
+  <releases>
+    <release version="1.3.49" date="2026-06-15"/>
+  </releases>
 
   <content_rating type="oars-1.1" />
 </component>

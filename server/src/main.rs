@@ -176,6 +176,10 @@ async fn main() -> anyhow::Result<()> {
     let storage_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let ai_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let geo_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Optimistic default: assume the dataset is fine until the geo processor
+    // actually tries (and possibly fails) to load it.  Avoids a spurious
+    // "unavailable" flash on boot before the first poll cycle.
+    let geo_dataset_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
     tasks::spawn_all(
         &pool,
         &config,
@@ -185,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
         &storage_available,
         &ai_active,
         &geo_active,
+        &geo_dataset_available,
     );
 
     // Probe GPU hardware acceleration for video transcoding.
@@ -222,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
         hw_accel,
         ai_active,
         geo_active,
+        geo_dataset_available,
     };
 
     let mut app = Router::new()
