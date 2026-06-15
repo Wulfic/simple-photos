@@ -665,7 +665,10 @@ async fn defer_convertible_upload(
         let mtime = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
         let raw_path_clone = raw_path.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&raw_path_clone) {
+            if let Ok(f) = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&raw_path_clone)
+            {
                 let _ = f.set_modified(mtime);
             }
         })
