@@ -41,7 +41,7 @@ jobs:
     name: Security Gate (blocking)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -49,7 +49,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -79,7 +79,7 @@ jobs:
         run: cargo deny check advisories bans sources
 
       - name: Secret scan (Gitleaks, blocking)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -90,13 +90,13 @@ jobs:
     name: Secret Scanning (Gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Run Gitleaks
         id: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
@@ -122,7 +122,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-secret-scanning
           path: /tmp/report-parts/
@@ -136,7 +136,7 @@ jobs:
     container:
       image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run Semgrep
         id: semgrep-scan
@@ -194,7 +194,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-semgrep
           path: /tmp/report-parts/
@@ -209,13 +209,13 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -267,7 +267,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-rust-audit
           path: /tmp/report-parts/
@@ -279,7 +279,7 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -318,7 +318,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-rust-deny
           path: /tmp/report-parts/
@@ -330,7 +330,7 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -338,7 +338,7 @@ jobs:
           components: clippy
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -381,7 +381,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-rust-clippy
           path: /tmp/report-parts/
@@ -393,7 +393,7 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -423,7 +423,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-rust-unsafe
           path: /tmp/report-parts/
@@ -438,10 +438,10 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -476,7 +476,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-web-audit
           path: /tmp/report-parts/
@@ -488,10 +488,10 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -558,7 +558,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-web-lint
           path: /tmp/report-parts/
@@ -573,16 +573,16 @@ jobs:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: 17
           distribution: temurin
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Run Android Lint (security checks)
         id: android-lint
@@ -650,7 +650,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-android-audit
           path: /tmp/report-parts/
@@ -662,7 +662,7 @@ jobs:
     name: Docker Security Scan (Trivy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run Trivy on Dockerfile (config scan)
         uses: aquasecurity/trivy-action@master
@@ -745,7 +745,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-docker-scan
           path: /tmp/report-parts/
@@ -757,7 +757,7 @@ jobs:
     name: Dockerfile Lint (Hadolint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run Hadolint
         id: hadolint
@@ -790,7 +790,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-dockerfile-lint
           path: /tmp/report-parts/
@@ -802,7 +802,7 @@ jobs:
     name: SQL Migration Security Review
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check SQL migrations for injection risks
         run: |
@@ -850,7 +850,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-sql-audit
           path: /tmp/report-parts/
@@ -862,7 +862,7 @@ jobs:
     name: Cryptographic Implementation Review
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check for weak cryptographic patterns
         run: |
@@ -937,7 +937,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-crypto-audit
           path: /tmp/report-parts/
@@ -949,7 +949,7 @@ jobs:
     name: Configuration Security Review
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Review security-relevant configuration
         run: |
@@ -998,7 +998,7 @@ jobs:
 
       - name: Upload report section
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: report-config-audit
           path: /tmp/report-parts/
@@ -1027,7 +1027,7 @@ jobs:
       - config-audit
     steps:
       - name: Download all report sections
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: report-*
           path: /tmp/all-reports
@@ -1123,7 +1123,7 @@ jobs:
 
       - name: Upload consolidated report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: security-audit-report
           path: security-audit-report.txt
