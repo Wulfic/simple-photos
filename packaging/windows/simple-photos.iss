@@ -27,7 +27,7 @@
 #define AppId          "{{B7A3F8C2-9D1E-4F2B-8E5A-1C2D3E4F5A6B}"
 ; SP_VERSION is supplied by CI via /DSP_VERSION=x.y.z. Falls back to 1.0.0.
 #ifndef SP_VERSION
-  #define SP_VERSION "1.3.49"
+  #define SP_VERSION "1.3.5"
 #endif
 
 [Setup]
