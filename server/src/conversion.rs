@@ -228,6 +228,22 @@ pub fn media_type_str(cat: MediaCategory) -> &'static str {
     }
 }
 
+/// Conversion ordering priority (lower runs first).
+///
+/// Image and audio conversions finish in well under a second; a single video
+/// transcode can take minutes (GPU attempt + CPU fallback, each capped at the
+/// 600 s ffmpeg timeout). The ingest pass is sequential, so enumerating videos
+/// first makes a mixed import look frozen on the first big file (#10). Ordering
+/// fast formats ahead of videos keeps progress visibly moving and pushes the
+/// slow transcodes to the end of the batch.
+pub fn conversion_priority(cat: MediaCategory) -> u8 {
+    match cat {
+        MediaCategory::Image => 0,
+        MediaCategory::Audio => 1,
+        MediaCategory::Video => 2,
+    }
+}
+
 // ── FFmpeg conversion ────────────────────────────────────────────────────────
 
 /// Convert a media file to its browser-native target format.
@@ -540,4 +556,43 @@ pub async fn conversion_status(
         total,
         done,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversion_priority_orders_videos_last() {
+        // Fast formats first, slow video transcodes last (#10).
+        assert!(
+            conversion_priority(MediaCategory::Image) < conversion_priority(MediaCategory::Video)
+        );
+        assert!(
+            conversion_priority(MediaCategory::Audio) < conversion_priority(MediaCategory::Video)
+        );
+    }
+
+    #[test]
+    fn conversion_priority_sorts_a_mixed_batch_fast_first() {
+        let mut cats = vec![
+            MediaCategory::Video,
+            MediaCategory::Image,
+            MediaCategory::Video,
+            MediaCategory::Audio,
+            MediaCategory::Image,
+        ];
+        // Stable sort preserves discovery order within each tier.
+        cats.sort_by_key(|c| conversion_priority(*c));
+        assert_eq!(
+            cats,
+            vec![
+                MediaCategory::Image,
+                MediaCategory::Image,
+                MediaCategory::Audio,
+                MediaCategory::Video,
+                MediaCategory::Video,
+            ]
+        );
+    }
 }

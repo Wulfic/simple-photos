@@ -80,7 +80,32 @@ trash; restore brings back exactly one; purge removes the original.
 
 ---
 
-## 🔴 #10 — Windows stops converting media mid-import (starts with video)
+## 🔴 #10 — Windows stops converting media mid-import (starts with video)  🟡 PARTIAL (2026-06-16)
+
+**Shipped this pass (safe, tested):**
+- Ruled out the batch-abort theory: the ingest loop already `continue`s past
+  failures and ticks progress on both arms; `process.rs` spawns with
+  `stdin(null)` + `kill_on_drop` + timeout, so a hung ffmpeg is killed.
+- **Mitigation:** conversion now orders **image → audio → video** (videos last)
+  via `conversion::conversion_priority` so a mixed import shows steady progress
+  instead of appearing frozen on the first big video ("always starts with
+  video"). Unit tests in `conversion.rs`.
+- **Observability:** per-file `[INGEST] converting` (before) + `converted in`
+  (after, with `elapsed_ms`) and a category breakdown line. A real hang now
+  leaves a dangling `converting` line naming the exact file.
+- Verified: conversion unit tests + image/TIFF/video/scan/deferred-import E2E
+  all green (the 6 audio E2E failures are the audio-backup-disabled 403 = #12,
+  pre-existing/environmental).
+
+**Still open (needs Windows device repro with the new logs):** whether there is
+a true hard stall beyond slow-serial-video. Likely suspects to confirm from the
+new logs: the encryption-wait gate (ingest.rs:64-113) deferring conversion while
+natives keep encrypting during an active import, or a specific file whose
+`converting` line never gets a `converted in` partner. **Do not** rewrite the
+sequencing/parallelism without that repro — it guards the encryption/conversion
+race.
+
+<details><summary>original analysis</summary>
 
 **Symptom:** On Windows, conversion halts during import; it "always starts with
 video conversions" then stops.
@@ -109,6 +134,7 @@ image/audio/video instead of all-videos-first.
 **Acceptance:** import a mixed batch (images + multiple videos + a deliberately
 broken video) on Windows → all convertible items finish; the broken one logs
 and is skipped; banner reaches `done == total`.
+</details>
 
 ---
 
