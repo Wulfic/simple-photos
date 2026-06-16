@@ -15,7 +15,7 @@ criteria**. Do not "done" anything without unit + manual verification.
 
 ## Suggested session grouping
 
-- **Session A — Data integrity:** #3 (trash re-add) 🔴, #10 (Windows convert stall) 🔴
+- **Session A — Data integrity:** #3 (trash re-add) ✅, #10 (Windows convert stall) 🟡 mitigated+instrumented — *complete 2026-06-16*
 - **Session B — Editing:** #4 (crop apply/thumb) 🔴, #13 (crop UI overlap) 🟠
 - **Session C — Navigation & panels:** #7 (back context audit) 🟠, #15 (overlapping menus) 🟠
 - **Session D — Notifications/UX correctness:** #8 (toast system) 🟠, #12 (audio-policy error) 🟠, #11 (convert counter) 🟡, #2 (upload button) 🟠
