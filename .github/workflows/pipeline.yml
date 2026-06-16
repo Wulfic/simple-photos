@@ -875,10 +875,28 @@ jobs:
           name: simple-photos-android
           path: dist
 
+      # Mirror the two large face-recognition models onto the release so the
+      # installers fetch them from github.com instead of HuggingFace. HF now
+      # serves large files via the Xet CDN (cas-bridge.xethub.co), which some
+      # client networks can't resolve — that broke model downloads at install
+      # time (and the Windows fetch had no retry). CI runners resolve HF fine,
+      # so we pull once here and re-attach to every release. The cleanup job
+      # wipes old releases, so the assets must ride along on each build; the
+      # installers fetch them by these exact names (det_10g.onnx, w600k_r50.onnx)
+      # and fall back to HuggingFace if a given release lacks them.
+      - name: Mirror AI face models onto the release
+        working-directory: dist
+        run: |
+          curl -fL --retry 5 --retry-all-errors -o det_10g.onnx \
+            "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx"
+          curl -fL --retry 5 --retry-all-errors -o w600k_r50.onnx \
+            "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx"
+          ls -la *.onnx
+
       - name: Compute checksums
         working-directory: dist
         run: |
-          sha256sum *.deb *.exe *.apk > SHA256SUMS.txt
+          sha256sum *.deb *.exe *.apk *.onnx > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Create GitHub Release
@@ -895,6 +913,7 @@ jobs:
             dist/*.deb
             dist/*.exe
             dist/*.apk
+            dist/*.onnx
             dist/SHA256SUMS.txt
 
   # ───────────────────────────────────────────────────────────────────────

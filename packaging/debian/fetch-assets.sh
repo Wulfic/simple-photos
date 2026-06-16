@@ -34,8 +34,34 @@ dl() {
     mv "$out.part" "$out"
 }
 
-dl "$MODELS/det_10g.onnx"            "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx"
-dl "$MODELS/w600k_r50.onnx"          "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx"
+# Face models are mirrored on the GitHub release (github.com) so the install
+# does NOT depend on HuggingFace's Xet CDN (cas-bridge.xethub.co), which some
+# networks can't resolve. Try the release asset first (by exact name), then
+# fall back to the original HuggingFace source when no release version is
+# stamped (local build) or the release lacks the asset.
+dl_model() {
+    local out="$1" name="$2" fallback="$3"
+    if [ -s "$out" ]; then
+        echo "[skip] $name already present"
+        return 0
+    fi
+    if [ -n "$SP_APK_VERSION" ] && [ "$SP_APK_VERSION" != "@SP_VERSION@" ]; then
+        local rel="https://github.com/Wulfic/simple-photos/releases/download/v${SP_APK_VERSION}/${name}"
+        echo "[get]  $name (release mirror)"
+        if curl -fL --retry 3 --output "$out.part" "$rel"; then
+            mv "$out.part" "$out"
+            return 0
+        fi
+        rm -f "$out.part"
+        echo "[warn] release mirror for $name unavailable — falling back to HuggingFace"
+    fi
+    echo "[get]  $name (source)"
+    curl -fL --retry 3 --output "$out.part" "$fallback"
+    mv "$out.part" "$out"
+}
+
+dl_model "$MODELS/det_10g.onnx"   "det_10g.onnx"   "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx"
+dl_model "$MODELS/w600k_r50.onnx" "w600k_r50.onnx" "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx"
 dl "$MODELS/ultraface-RFB-320.onnx"  "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-RFB-320.onnx"
 dl "$MODELS/mobilenetv2-12.onnx"     "https://github.com/onnx/models/raw/refs/heads/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx"
 

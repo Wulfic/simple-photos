@@ -30,6 +30,41 @@ interface SearchResult {
   _localThumbUrl?: string;
 }
 
+/**
+ * True when two strings are within Levenshtein edit distance 1 (a single
+ * substitution, insertion, or deletion). O(n) single pass — no DP matrix.
+ *
+ * Used to gate typo tolerance in search. The previous inline check only
+ * compared index-aligned characters (a Hamming distance), which both
+ * mis-handled insert/delete typos AND fired on any same-length single
+ * substitution regardless of word length — that is what made "house" match
+ * "horse" and "mouse".
+ */
+function withinEditDistance1(a: string, b: string): boolean {
+  if (a === b) return true;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < la && j < lb) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (la > lb) i++; // deletion from a
+    else if (lb > la) j++; // insertion into a
+    else { i++; j++; } // substitution
+  }
+  // A leftover trailing character in either string is one more edit.
+  if (i < la || j < lb) edits++;
+  return edits <= 1;
+}
+
 // ── Search Page ──────────────────────────────────────────────────────────────
 
 export default function Search() {
@@ -78,22 +113,21 @@ export default function Search() {
       // Check variants
       if (variants.some((v) => lower.includes(v))) return true;
 
-      // Levenshtein-like: check if any word in the text is within edit distance 1
+      // Per-word matching against the searchable text.
       const words = lower.split(/[\s_\-./]+/).filter(Boolean);
       return words.some((word) => {
         if (word.length === 0 || token.length === 0) return false;
-        // Allow partial prefix match (at least 3 chars)
+        // Prefix match (e.g. "house" → "household").
         if (token.length >= 3 && word.startsWith(token)) return true;
-        if (token.length >= 3 && word.includes(token)) return true;
-        // Simple edit distance 1 check for short words
-        if (Math.abs(word.length - token.length) > 1) return false;
-        let diffs = 0;
-        const maxLen = Math.max(word.length, token.length);
-        for (let i = 0; i < maxLen; i++) {
-          if (word[i] !== token[i]) diffs++;
-          if (diffs > 1) return false;
-        }
-        return diffs <= 1;
+        // Typo tolerance (edit distance ≤ 1) — deliberately gated hard.
+        // The old code allowed a single substitution on words of ANY length,
+        // so 5-letter queries matched all their neighbours: "house" pulled in
+        // "horse" and "mouse". Now we only fuzzy-match when the token is long
+        // enough that a 1-char change is unlikely to be a different real word
+        // (≥ 7 chars) AND the first character matches (kills "house"→"mouse").
+        if (token.length < 7) return false;
+        if (word[0] !== token[0]) return false;
+        return withinEditDistance1(word, token);
       });
     });
   }, []);

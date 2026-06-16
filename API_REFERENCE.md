@@ -222,7 +222,7 @@ All endpoints are prefixed with `/api` unless noted. Auth = `Authorization: Bear
 
 | Method | Path | Auth | Request Body | Response |
 |--------|------|------|-------------|----------|
-| `GET` | `/api/status/activity` | Bearer | — | `{ ai, geo, active, ai_progress: { running, active, total, done, pending }, geo_progress: { running, active, total, done, pending } }` |
+| `GET` | `/api/status/activity` | Bearer | — | `{ ai, geo, active, ai_progress: { running, active, total, done, pending }, geo_progress: { running, active, total, done, pending, available, downloading } }` |
 | `GET` | `/api/admin/conversion-status` | Bearer | — | `{ active, total, done }` |
 | `GET` | `/api/transcode/status` | Bearer | — | `{ gpu_available, accel_type, video_encoder, device, gpu_enabled, fallback_to_cpu }` |
 

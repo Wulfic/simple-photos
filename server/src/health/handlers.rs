@@ -50,6 +50,7 @@ pub async fn activity_status(
     let ai_running = state.ai_active.load(Ordering::Relaxed);
     let geo_running = state.geo_active.load(Ordering::Relaxed);
     let geo_dataset_available = state.geo_dataset_available.load(Ordering::Relaxed);
+    let geo_dataset_downloading = state.geo_dataset_downloading.load(Ordering::Relaxed);
 
     let ai_config_default = if state.config.ai.enabled { 1i64 } else { 0i64 };
 
@@ -161,6 +162,10 @@ pub async fn activity_status(
             // `false` ⇒ photos are waiting but the GeoNames dataset isn't
             // loadable, so they will never resolve until it's installed.
             "available": geo_dataset_available,
+            // `true` ⇒ the server is currently downloading the dataset at
+            // runtime (self-healing a failed install); the client shows a
+            // "downloading location data…" notice rather than "unavailable".
+            "downloading": geo_dataset_downloading,
         },
     }))
 }

@@ -41,6 +41,7 @@ pub fn spawn_geo_processor(
     config: GeoConfig,
     active: Arc<AtomicBool>,
     dataset_available: Arc<AtomicBool>,
+    dataset_downloading: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
         let batch_size = config.batch_size as i64;
@@ -48,6 +49,11 @@ pub fn spawn_geo_processor(
 
         // Cached dataset — loaded once on first need.
         let mut geocoder: Option<Arc<ReverseGeocoder>> = None;
+        // Last time we tried to self-fetch a missing dataset, so we don't
+        // hammer GeoNames every poll cycle (or every few seconds under the
+        // short test poll interval) while a download keeps failing.
+        let mut last_fetch_attempt: Option<std::time::Instant> = None;
+        const DATASET_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
         // Online precise geocoder — built once on first need (opt-in users only).
         let mut precise_geocoder: Option<Arc<PreciseGeocoder>> = None;
 
@@ -77,8 +83,37 @@ pub fn spawn_geo_processor(
             let needs_geo = geo_resolution_needed(&pool, config.enabled).await;
 
             if needs_geo {
-                // Lazy-load on first need
+                // Lazy-load on first need.  If the dataset file is missing,
+                // try to fetch it ourselves (self-heal a failed install)
+                // before loading — rate-limited so a persistent failure
+                // doesn't hammer GeoNames.
                 if geocoder.is_none() {
+                    if config.auto_download_dataset
+                        && !std::path::Path::new(&config.dataset_path).exists()
+                    {
+                        let retry_ok = last_fetch_attempt
+                            .map(|t| t.elapsed() >= DATASET_RETRY_INTERVAL)
+                            .unwrap_or(true);
+                        if retry_ok {
+                            last_fetch_attempt = Some(std::time::Instant::now());
+                            dataset_downloading.store(true, Ordering::Relaxed);
+                            match super::dataset::ensure_dataset(
+                                &config.dataset_path,
+                                &config.geo_user_agent,
+                            )
+                            .await
+                            {
+                                super::dataset::FetchOutcome::Present => {
+                                    tracing::info!("GeoNames dataset acquired at runtime")
+                                }
+                                super::dataset::FetchOutcome::Failed(e) => tracing::warn!(
+                                    error = %e,
+                                    "GeoNames dataset download failed — retrying next cycle"
+                                ),
+                            }
+                            dataset_downloading.store(false, Ordering::Relaxed);
+                        }
+                    }
                     geocoder = load_geocoder(&config).await;
                 }
 

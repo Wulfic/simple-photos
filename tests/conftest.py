@@ -104,6 +104,9 @@ def _write_config(path: str, port: int, db_path: str, storage_root: str,
     #   - shorten `poll_interval_secs` to 2 s so the background backfill
     #     cycle can pick up newly uploaded photos within a test's wait
     #     window (production default 300 s is too slow for E2E).
+    # `auto_download_dataset = false` keeps the test suite offline: the runtime
+    # self-heal fetch (geo/dataset.rs) would otherwise pull ~25 MB from GeoNames
+    # the moment a test opts geo in and uploads a geotagged photo.
     geo_dataset = os.path.join(SERVER_DIR, "data", "cities500.txt")
     if os.path.isfile(geo_dataset):
         geo_section = (
@@ -111,9 +114,12 @@ def _write_config(path: str, port: int, db_path: str, storage_root: str,
             "enabled = false\n"
             f'dataset_path = "{geo_dataset.replace(chr(92), chr(92) * 2)}"\n'
             "poll_interval_secs = 2\n"
+            "auto_download_dataset = false\n"
         )
     else:
-        geo_section = "[geo]\nenabled = false\npoll_interval_secs = 2\n"
+        geo_section = (
+            "[geo]\nenabled = false\npoll_interval_secs = 2\nauto_download_dataset = false\n"
+        )
 
     # AI: keep `enabled = false` (matches production privacy default; tests
     # that need AI opt in via `POST /api/settings/ai`).  Point `model_dir`

@@ -178,26 +178,55 @@ $binDir = Join-Path $InstallDir 'bin'
 if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir -Force | Out-Null }
 
 function Get-File {
-    param([string]$Url, [string]$OutPath)
+    param([string]$Url, [string]$OutPath, [int]$Retries = 3)
     if ((Test-Path $OutPath) -and (Get-Item $OutPath).Length -gt 0) {
         Write-Info "skip $($OutPath | Split-Path -Leaf) (already present)"
         return
     }
     $part = "$OutPath.part"
     Write-Info "get  $($OutPath | Split-Path -Leaf)"
-    try {
-        Invoke-WebRequest -Uri $Url -OutFile $part -UseBasicParsing
-        Move-Item -Path $part -Destination $OutPath -Force
-    } catch {
-        Remove-Item $part -ErrorAction SilentlyContinue
-        Write-Warn2 "download failed: $($_.Exception.Message)"
+    for ($attempt = 1; $attempt -le $Retries; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Url -OutFile $part -UseBasicParsing
+            Move-Item -Path $part -Destination $OutPath -Force
+            return
+        } catch {
+            Remove-Item $part -ErrorAction SilentlyContinue
+            if ($attempt -lt $Retries) {
+                Write-Warn2 "download failed (attempt $attempt/$Retries), retrying: $($_.Exception.Message)"
+                Start-Sleep -Seconds ([Math]::Min(10, $attempt * 3))
+            } else {
+                Write-Warn2 "download failed after $Retries attempts: $($_.Exception.Message)"
+            }
+        }
     }
 }
 
-Get-File "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx" `
-         (Join-Path $models 'det_10g.onnx')
-Get-File "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx" `
-         (Join-Path $models 'w600k_r50.onnx')
+# Face models are mirrored on the GitHub release (github.com) so the install
+# does NOT depend on HuggingFace's Xet CDN (cas-bridge.xethub.co), which some
+# networks can't resolve -- that was the "remote name could not be resolved"
+# failure. Try the release asset first (by exact name), then fall back to the
+# original HuggingFace source when no -Version was passed or the release lacks
+# the asset (e.g. a locally-built installer).
+function Get-Model {
+    param([string]$Name, [string]$FallbackUrl)
+    $out = Join-Path $models $Name
+    if ((Test-Path $out) -and (Get-Item $out).Length -gt 0) {
+        Write-Info "skip $Name (already present)"
+        return
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Version)) {
+        Get-File "https://github.com/Wulfic/simple-photos/releases/download/v$Version/$Name" $out
+        if ((Test-Path $out) -and (Get-Item $out).Length -gt 0) { return }
+        Write-Warn2 "release mirror for $Name unavailable - falling back to HuggingFace"
+    }
+    Get-File $FallbackUrl $out
+}
+
+Get-Model 'det_10g.onnx' `
+          "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx"
+Get-Model 'w600k_r50.onnx' `
+          "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx"
 Get-File "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-RFB-320.onnx" `
          (Join-Path $models 'ultraface-RFB-320.onnx')
 Get-File "https://github.com/onnx/models/raw/refs/heads/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx" `

@@ -21,14 +21,25 @@ pub fn build_video_transcode_args(
 
     match hwaccel.accel_type {
         HwAccelType::Nvenc => {
+            // Decode on the CPU and encode on the GPU (NVENC). We deliberately
+            // do NOT use `-hwaccel cuda -hwaccel_output_format cuda`: that full
+            // GPU pipeline keeps frames in VRAM and *requires* NVDEC to decode
+            // the source, so it hard-fails on any codec NVDEC can't handle
+            // (older MPEG-4/DivX, VP9, some 10-bit HEVC, etc.) instead of
+            // falling back — which is exactly the "GPU conversion is failing"
+            // report even though CUDA (AI) works fine. CPU decode + NVENC encode
+            // keeps the expensive H.264 encode on the GPU while accepting any
+            // input ffmpeg can read.
+            //
+            // The scale filter forces even dimensions (NVENC rejects odd
+            // width/height) and `format=yuv420p` normalises exotic pixel formats
+            // (yuv444/10-bit) that h264_nvenc would otherwise refuse.
             args.extend([
                 "-y".into(),
-                "-hwaccel".into(),
-                "cuda".into(),
-                "-hwaccel_output_format".into(),
-                "cuda".into(),
                 "-i".into(),
                 input.into(),
+                "-vf".into(),
+                "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1,format=yuv420p".into(),
                 "-c:v".into(),
                 "h264_nvenc".into(),
                 "-preset".into(),
