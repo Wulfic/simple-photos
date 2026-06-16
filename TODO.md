@@ -16,7 +16,7 @@ criteria**. Do not "done" anything without unit + manual verification.
 ## Suggested session grouping
 
 - **Session A — Data integrity:** #3 (trash re-add) ✅, #10 (Windows convert stall) 🟡 mitigated+instrumented — *complete 2026-06-16*
-- **Session B — Editing:** #4 (crop apply/thumb) 🔴, #13 (crop UI overlap) 🟠
+- **Session B — Editing:** #4 (crop apply/thumb) ✅, #13 (crop UI overlap) ✅ — *complete 2026-06-16 (FE unit-test runner is a follow-up)*
 - **Session C — Navigation & panels:** #7 (back context audit) 🟠, #15 (overlapping menus) 🟠
 - **Session D — Notifications/UX correctness:** #8 (toast system) 🟠, #12 (audio-policy error) 🟠, #11 (convert counter) 🟡, #2 (upload button) 🟠
 - **Session E — Albums:** #6 (create-album in popup) 🟠
@@ -138,7 +138,25 @@ and is skipped; banner reaches `done == total`.
 
 ---
 
-## 🔴 #4 — Cropping doesn't cut/resize to fit; thumbnail doesn't match
+## 🔴 #4 — Cropping doesn't cut/resize to fit; thumbnail doesn't match  ✅ DONE (2026-06-16)
+
+**Fix shipped (crop is non-destructive metadata, rendered consistently):**
+- **Viewer fit (#4a):** `computeCropZoom` dropped the `* 0.85` shrink it applied
+  in normal (saved) view, so a cropped photo now fills the screen instead of
+  sitting in a gutter (`useViewerEdit.ts`).
+- **Thumbnail match (#4b):** `getThumbnailStyle` used `scale = max(1/cw,1/ch)`,
+  which over-zooms every non-square crop. Corrected to `scale = 1/max(cw,ch)`
+  with a letterbox-axis-corrected translate (`fx/fy`) so the crop rect exactly
+  fills the object-cover tile. Geometry derived + validated against the Viewer
+  for centred / wide / off-centre / strip crops (Node check, 4/4).
+- **Caveat:** the frontend has **no unit-test runner** (no vitest/jest), so this
+  is covered by the derivation + a standalone Node validation, not a committed
+  test. `tsc -b` clean. *Follow-up:* add vitest + a `thumbnailCss.test.ts`, and
+  eyeball a real crop in the running app to confirm pixel-match. Rotated+crop is
+  an edge case left at prior behavior.
+
+<details><summary>original analysis</summary>
+
 
 **Symptom:** After cropping, the image isn't actually cut out and refit to
 screen, and the gallery thumbnail still shows the uncropped image.
@@ -166,10 +184,21 @@ display dims so the viewer fits the cropped region exactly. Audit
 **Acceptance:** crop + Save → viewer shows the cropped image fit to frame; the
 gallery tile thumbnail matches; Android/other clients see the same via the
 server-synced crop.
+</details>
 
 ---
 
-## 🟠 #13 — Crop edit bar covers the photo; crop outline has top dead space
+## 🟠 #13 — Crop edit bar covers the photo; crop outline has top dead space  ✅ DONE (2026-06-16)
+
+**Fix shipped:** in edit mode the content/crop area is inset below the top bar
+(56px) and above the edit panel (live-measured via `ResizeObserver`, since the
+panel height changes per tab) instead of filling the whole viewport. The photo
++ crop handles now sit fully in the visible gap — no panel overlap, no top dead
+space — and the crop math reads the same element box so it adapts automatically.
+`ViewerEditPanel` forwards a `rootRef` for the measurement. `tsc -b` clean.
+
+<details><summary>original analysis</summary>
+
 
 **Symptom (see screenshot 1):** the Crop/Brightness/Rotate + Save bar overlaps
 the lower part of the media, making the bottom hard to edit; the crop outline
@@ -195,6 +224,7 @@ unobstructed. Re-check crop overlay top alignment after the inset change.
 
 **Acceptance:** in crop mode the full photo is visible above the bar; corner
 handles reachable at all four corners; crop outline flush to the media edges.
+</details>
 
 ---
 

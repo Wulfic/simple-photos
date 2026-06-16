@@ -35,34 +35,47 @@ export function getThumbnailStyle(cropJson?: string | null): CSSProperties {
   try {
     const c = JSON.parse(cropJson);
     const styles: CSSProperties = {};
-    let transform = "";
+    const parts: string[] = [];
 
     const rot = ((c.rotate || 0) % 360 + 360) % 360;
-    
-    // Scale and translate
-    if (c.width && c.width < 1 && c.height && c.height < 1) {
-      const zoom = Math.max(1 / c.width, 1 / c.height);
-      transform += `scale(${zoom}) `;
-      
-      const cx = (c.x || 0) + c.width / 2;
-      const cy = (c.y || 0) + c.height / 2;
-      
-      const tx = (0.5 - cx) * 100;
-      const ty = (0.5 - cy) * 100;
-      transform += `translate(${tx}%, ${ty}%) `;
+    const cw = typeof c.width === "number" ? c.width : 1;
+    const ch = typeof c.height === "number" ? c.height : 1;
+
+    // The gallery tile is sized to the *cropped* aspect ratio
+    // (getEffectiveAspectRatio) and the <img> uses object-cover, so the image
+    // is pre-scaled by object-cover's `s = max(tileW/W, tileH/H)`. To make the
+    // crop rectangle exactly fill the tile:
+    //
+    //   scale = 1 / max(cw, ch)
+    //
+    // — NOT max(1/cw, 1/ch), which over-zooms every non-square crop (the bug
+    // behind "the thumbnail doesn't match the editor", #4). The crop centre is
+    // then translated to the tile centre. Because object-cover only letterboxes
+    // along the *minor* axis, the translate on that axis is amplified by the
+    // cw:ch ratio (factor `fx`/`fy` below). Derivation verified against the
+    // Viewer's computeCropZoom for centred, wide, and off-centre strips.
+    const cropped = cw < 0.999 || ch < 0.999;
+    if (cropped) {
+      const scale = 1 / Math.max(cw, ch);
+      const cx = (c.x || 0) + cw / 2;
+      const cy = (c.y || 0) + ch / 2;
+      const fx = Math.max(1, ch / cw);
+      const fy = Math.max(1, cw / ch);
+      const tx = (0.5 - cx) * fx * 100;
+      const ty = (0.5 - cy) * fy * 100;
+      parts.push(`scale(${scale})`, `translate(${tx}%, ${ty}%)`);
     }
 
     if (rot) {
-      transform += `rotate(${rot}deg) `;
       // 90°/270° rotations swap the visual width/height but the layout box
-      // stays unchanged.  This is fine because tile wrappers use
-      // overflow-hidden + object-cover which clip and fill correctly.
+      // stays unchanged. object-cover + overflow-hidden clip and fill correctly.
+      parts.push(`rotate(${rot}deg)`);
     }
 
-    if (transform) {
-      styles.transform = transform.trim();
+    if (parts.length) {
+      styles.transform = parts.join(" ");
     }
-    
+
     if (c.brightness) {
       styles.filter = `brightness(${1 + c.brightness / 100})`;
     }

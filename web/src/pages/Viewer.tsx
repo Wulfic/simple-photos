@@ -79,6 +79,11 @@ export default function Viewer() {
   // ── Full-screen overlay state ──────────────────────────────────────────
   const [showOverlay, setShowOverlay] = useState(true);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
+  // Height of the bottom edit panel, measured live so the media/crop area can
+  // be inset above it in edit mode — otherwise the panel overlaps the lower
+  // part of the photo and the crop region drifts under the bar (#13).
+  const editPanelRef = useRef<HTMLDivElement>(null);
+  const [editPanelHeight, setEditPanelHeight] = useState(0);
 
   // ── Photo subtype state (burst, motion, panorama) ─────────────────────
   const [photoSubtype, setPhotoSubtype] = useState<string | undefined>();
@@ -344,6 +349,21 @@ export default function Viewer() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [goPrev, goNext, navigate, editMode, showLeavePrompt]);
 
+  // ── Measure the edit panel so the media area can sit above it (#13) ─────
+  // The panel height changes with the active tab (crop is short, trim is
+  // tall), so a ResizeObserver keeps the inset accurate without a magic
+  // constant. Reset to 0 when leaving edit mode so normal viewing is full-bleed.
+  useEffect(() => {
+    if (!editMode) { setEditPanelHeight(0); return; }
+    const el = editPanelRef.current;
+    if (!el) return;
+    const update = () => setEditPanelHeight(el.offsetHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [editMode, editTab]);
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div
@@ -389,10 +409,14 @@ export default function Viewer() {
         </div>
       )}
 
-      {/* Content area — fills entire viewport for true full-screen */}
+      {/* Content area — fills the viewport for true full-screen viewing. In
+          edit mode it is inset below the top bar and above the edit panel so
+          the whole photo (and its crop handles) stays visible and unobstructed
+          (#13); the crop math reads this element's box, so it adapts for free. */}
       <div
         ref={viewerContainerRef}
-        className="absolute inset-0 flex items-center justify-center overflow-hidden"
+        className="absolute left-0 right-0 flex items-center justify-center overflow-hidden"
+        style={editMode ? { top: 56, bottom: editPanelHeight } : { top: 0, bottom: 0 }}
         onClick={(e) => {
           if (swiped.current) return;
           if ((e.target as HTMLElement).closest("button")) return;
@@ -775,6 +799,7 @@ export default function Viewer() {
           setTrimStart={setTrimStart} setTrimEnd={setTrimEnd} duration={mediaDuration}
           onSave={handleSaveEdit} onSaveCopy={handleSaveCopy}
           onClear={handleClearCrop} onCancel={() => setEditMode(false)}
+          rootRef={editPanelRef}
         />
       )}
 

@@ -52,6 +52,9 @@ interface ViewerEditPanelProps {
   onClear: () => void;
   /** Cancel exits edit mode without saving */
   onCancel: () => void;
+  /** Ref to the panel root so the Viewer can measure its height and keep the
+   *  media area clear of the panel (the panel is an absolute bottom overlay). */
+  rootRef?: React.Ref<HTMLDivElement>;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -86,6 +89,7 @@ export default function ViewerEditPanel({
   onSaveCopy,
   onClear,
   onCancel,
+  rootRef,
 }: ViewerEditPanelProps) {
   // Determine which tabs are available for this media type
   const isPhoto = mediaType === "photo";
@@ -159,7 +163,7 @@ export default function ViewerEditPanel({
   }, [isAudio, editTab, setEditTab]);
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 py-3 space-y-3">
+    <div ref={rootRef} className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 py-3 space-y-3">
       {/* Tab switcher */}
       <div className="flex items-center justify-center gap-2">
         {showCrop && (

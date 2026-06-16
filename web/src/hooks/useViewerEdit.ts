@@ -143,7 +143,11 @@ export default function useViewerEdit(
     const visH = isSwapped ? cropPixW : cropPixH;
     const scaleW = containerW / visW;
     const scaleH = containerH / visH;
-    const scale = Math.min(scaleW, scaleH) * 0.85;
+    // Fit the cropped region to the viewport (object-contain semantics). This
+    // is the *saved* view, not edit mode, so there are no corner handles to
+    // leave room for — a shrink factor here just left dead space and the crop
+    // never filled the screen (#4).
+    const scale = Math.min(scaleW, scaleH);
     const cx = cropData.x + cropData.width / 2;
     const cy = cropData.y + cropData.height / 2;
 
