@@ -33,13 +33,97 @@ const hasSubtle = typeof crypto !== "undefined" && !!crypto.subtle;
 let cachedNativeKey: CryptoKey | null = null;
 /** Raw 32-byte key – used as fallback when Web Crypto is unavailable */
 let cachedRawKey: Uint8Array | null = null;
+/**
+ * Most recently derived key as hex, held ONLY in memory (never persisted to
+ * any web storage). It exists so login/setup can hand the raw key to the
+ * server — which legitimately needs it to wrap for autonomous autoscan /
+ * migration — without ever writing the raw bytes to sessionStorage. Lost on
+ * page refresh and cleared on logout.
+ */
+let lastDerivedHex: string | null = null;
+
+/** sessionStorage entry. Holds the literal "present" when the real key lives
+ *  in IndexedDB (preferred), or raw hex only in no-SubtleCrypto fallback. */
+const KEY_FLAG = "sp_key";
 
 export function hasCryptoKey(): boolean {
   return (
     cachedNativeKey !== null ||
     cachedRawKey !== null ||
-    sessionStorage.getItem("sp_key") !== null
+    sessionStorage.getItem(KEY_FLAG) !== null
   );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Non-extractable key persistence (IndexedDB)                        */
+/* ------------------------------------------------------------------ */
+//
+// The imported AES key is `extractable: false`. We persist the CryptoKey
+// *object* (not its bytes) to IndexedDB so a page refresh can reload it
+// without re-running Argon2 — and crucially without ever writing the raw key
+// to storage. An XSS attacker can still *use* the key via the handle, but
+// cannot exfiltrate the raw material, which the old sessionStorage-hex design
+// allowed.
+
+const KEYSTORE_DB = "sp-keystore";
+const KEYSTORE_STORE = "keys";
+const KEYSTORE_ID = "current";
+
+function openKeystore(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(KEYSTORE_DB, 1);
+    req.onupgradeneeded = () => {
+      const idb = req.result;
+      if (!idb.objectStoreNames.contains(KEYSTORE_STORE)) {
+        idb.createObjectStore(KEYSTORE_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbPutKey(key: CryptoKey): Promise<void> {
+  const idb = await openKeystore();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = idb.transaction(KEYSTORE_STORE, "readwrite");
+      tx.objectStore(KEYSTORE_STORE).put(key, KEYSTORE_ID);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    idb.close();
+  }
+}
+
+async function idbGetKey(): Promise<CryptoKey | null> {
+  const idb = await openKeystore();
+  try {
+    return await new Promise<CryptoKey | null>((resolve, reject) => {
+      const tx = idb.transaction(KEYSTORE_STORE, "readonly");
+      const req = tx.objectStore(KEYSTORE_STORE).get(KEYSTORE_ID);
+      req.onsuccess = () => resolve((req.result as CryptoKey) ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  } finally {
+    idb.close();
+  }
+}
+
+async function idbClearKey(): Promise<void> {
+  const idb = await openKeystore();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = idb.transaction(KEYSTORE_STORE, "readwrite");
+      tx.objectStore(KEYSTORE_STORE).delete(KEYSTORE_ID);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    idb.close();
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -66,8 +150,13 @@ async function sha256Digest(data: Uint8Array): Promise<Uint8Array> {
  * so the same username + password always produces the same key — no separate
  * passphrase step needed. The password never leaves the browser in raw form for
  * this purpose; Argon2id makes brute-force infeasible.
+ *
+ * Returns the derived key as hex. This is the ONLY place the raw key bytes are
+ * exposed — callers that must hand the key to the server (so it can wrap it for
+ * autonomous autoscan/migration) should use this return value rather than
+ * reading it back from storage, which no longer holds the raw key.
  */
-export async function deriveKey(password: string, username: string): Promise<void> {
+export async function deriveKey(password: string, username: string): Promise<string> {
   // Deterministic 16-byte salt = first 16 bytes of SHA-256("simple-photos:" + username)
   const saltInput = new TextEncoder().encode("simple-photos:" + username);
   const saltHash = await sha256Digest(saltInput);
@@ -94,32 +183,89 @@ export async function deriveKey(password: string, username: string): Promise<voi
       ["encrypt", "decrypt"]
     );
     cachedRawKey = null;
+    // Persist the non-extractable CryptoKey to IndexedDB; only a presence flag
+    // (never the key bytes) goes to sessionStorage.
+    try {
+      await idbPutKey(cachedNativeKey);
+      sessionStorage.setItem(KEY_FLAG, "present");
+    } catch {
+      // IndexedDB unavailable (e.g. private browsing) — degrade to the legacy
+      // raw-hex sessionStorage path so a refresh still works.
+      sessionStorage.setItem(KEY_FLAG, arrayToHex(rawKey));
+    }
   } else {
+    // No SubtleCrypto (insecure context): the raw key in sessionStorage is the
+    // only way to survive a refresh; these contexts can't do better.
     cachedRawKey = rawKey;
     cachedNativeKey = null;
+    sessionStorage.setItem(KEY_FLAG, arrayToHex(rawKey));
   }
 
-  // Store raw key in sessionStorage (cleared on tab close)
-  sessionStorage.setItem("sp_key", arrayToHex(rawKey));
+  const hex = arrayToHex(rawKey);
+  lastDerivedHex = hex;
+  return hex;
+}
+
+/**
+ * The most recently derived key as hex, held only in memory (never persisted).
+ * Used by login/setup to hand the key to the server for autonomous
+ * autoscan/migration. Returns null after logout ([`clearKey`]) or a refresh —
+ * callers that have the hex directly (from [`deriveKey`]'s return) should
+ * prefer that.
+ */
+export function getDerivedKeyHex(): string | null {
+  return lastDerivedHex;
 }
 
 export async function loadKeyFromSession(): Promise<boolean> {
-  const hexKey = sessionStorage.getItem("sp_key");
-  if (!hexKey) return false;
+  if (cachedNativeKey || cachedRawKey) return true;
 
-  const keyBytes = hexToArray(hexKey);
+  const stored = sessionStorage.getItem(KEY_FLAG);
+  if (!stored) return false;
 
   if (hasSubtle) {
-    cachedNativeKey = await crypto.subtle.importKey(
-      "raw",
-      keyBytes.buffer as ArrayBuffer,
-      { name: "AES-GCM" },
-      false,
-      ["encrypt", "decrypt"]
-    );
-  } else {
-    cachedRawKey = keyBytes;
+    // Preferred path: non-extractable CryptoKey from IndexedDB.
+    if (stored === "present") {
+      try {
+        const k = await idbGetKey();
+        if (k) {
+          cachedNativeKey = k;
+          return true;
+        }
+      } catch {
+        /* fall through — treat as no key */
+      }
+      // Flag claimed a key but IndexedDB has none — force re-auth.
+      return false;
+    }
+
+    // Legacy / fallback path: `stored` is raw hex (pre-upgrade session or an
+    // IndexedDB-write failure). Import it, migrate into IndexedDB, and drop the
+    // raw bytes from sessionStorage so they're never persisted again.
+    try {
+      const keyBytes = hexToArray(stored);
+      cachedNativeKey = await crypto.subtle.importKey(
+        "raw",
+        keyBytes.buffer as ArrayBuffer,
+        { name: "AES-GCM" },
+        false,
+        ["encrypt", "decrypt"]
+      );
+      try {
+        await idbPutKey(cachedNativeKey);
+        sessionStorage.setItem(KEY_FLAG, "present");
+      } catch {
+        /* keep the hex fallback if IndexedDB still won't take it */
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
+
+  // No SubtleCrypto: the only persisted form is raw hex.
+  if (stored === "present") return false; // can't reconstruct without subtle
+  cachedRawKey = hexToArray(stored);
   return true;
 }
 
@@ -194,7 +340,11 @@ export async function sha256Hex(data: Uint8Array): Promise<string> {
 export function clearKey(): void {
   cachedNativeKey = null;
   cachedRawKey = null;
-  sessionStorage.removeItem("sp_key");
+  lastDerivedHex = null;
+  sessionStorage.removeItem(KEY_FLAG);
+  // Best-effort wipe of the persisted CryptoKey (fire-and-forget so callers
+  // can stay synchronous).
+  void idbClearKey().catch(() => {});
 }
 
 function arrayToHex(arr: Uint8Array): string {

@@ -83,6 +83,11 @@ pub struct AppState {
     /// unavailable" instead of a spinner that never resolves when the
     /// dataset isn't installed.
     pub geo_dataset_available: Arc<AtomicBool>,
+    /// Set to `true` while the geo processor is actively downloading the
+    /// GeoNames dataset at runtime (self-healing a failed install). Read by
+    /// `GET /api/status/activity` so the client shows "downloading location
+    /// data…" instead of the static "unavailable" notice.
+    pub geo_dataset_downloading: Arc<AtomicBool>,
 }
 
 impl AppState {

@@ -16,6 +16,8 @@
  * Chromecast without any direct certificate checks.
  */
 
+import type { SlideshowTransition } from "../hooks/useSlideshow";
+
 export type CastState = "no_devices" | "available" | "connecting" | "connected" | "unsupported";
 
 type Listener = (state: CastState, deviceName?: string) => void;
@@ -153,6 +155,7 @@ export function castMedia(
   url: string,
   contentType = "image/jpeg",
   mediaKind: "photo" | "video" = "photo",
+  transition?: SlideshowTransition,
 ): void {
   if (_conn?.state !== "connected") return;
   if (!/^https?:/i.test(url)) return; // blob:/data: not reachable by Chromecast
@@ -163,6 +166,10 @@ export function castMedia(
         url,
         contentType,
         mediaKind,
+        // When casting from the slideshow, carry the active transition so the
+        // receiver can replay the same fade/slide/zoom/dissolve effect. Bare
+        // photo casts (the single-photo Viewer) omit it and swap instantly.
+        ...(transition ? { transition } : {}),
       }),
     );
   } catch (e) {

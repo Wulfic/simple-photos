@@ -117,6 +117,7 @@ export default function Albums() {
   useEffect(() => {
     if (peopleClusters.length === 0) return;
     let cancelled = false;
+    const created: string[] = [];
     (async () => {
       const urls: Record<number, string> = {};
       for (const c of peopleClusters) {
@@ -125,7 +126,9 @@ export default function Albums() {
         if (cancelled) return;
         if (photo?.thumbnailData) {
           const mime = photo.thumbnailMimeType || "image/jpeg";
-          urls[c.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+          const u = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+          created.push(u);
+          urls[c.id] = u;
         } else {
           // Fallback: serve thumbnail directly from the server
           urls[c.id] = accessToken
@@ -135,13 +138,16 @@ export default function Albums() {
       }
       if (!cancelled) setPeopleThumbUrls(urls);
     })();
-    return () => { cancelled = true; };
+    // Revoke object URLs this run created on dep-change / unmount (prevents a
+    // leak that otherwise compounds every time accessToken rotates).
+    return () => { cancelled = true; created.forEach((u) => URL.revokeObjectURL(u)); };
   }, [peopleClusters, accessToken]);
 
   // Load thumbnails for pet clusters
   useEffect(() => {
     if (petClusters.length === 0) return;
     let cancelled = false;
+    const created: string[] = [];
     (async () => {
       const urls: Record<number, string> = {};
       for (const c of petClusters) {
@@ -150,7 +156,9 @@ export default function Albums() {
         if (cancelled) return;
         if (photo?.thumbnailData) {
           const mime = photo.thumbnailMimeType || "image/jpeg";
-          urls[c.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+          const u = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+          created.push(u);
+          urls[c.id] = u;
         } else {
           urls[c.id] = accessToken
             ? `${api.photos.thumbUrl(c.representative)}?token=${accessToken}`
@@ -159,13 +167,14 @@ export default function Albums() {
       }
       if (!cancelled) setPetThumbUrls(urls);
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; created.forEach((u) => URL.revokeObjectURL(u)); };
   }, [petClusters, accessToken]);
 
   // Load thumbnails for memories
   useEffect(() => {
     if (memories.length === 0) return;
     let cancelled = false;
+    const created: string[] = [];
     (async () => {
       const urls: Record<string, string> = {};
       for (const m of memories) {
@@ -174,7 +183,9 @@ export default function Albums() {
         if (cancelled) return;
         if (photo?.thumbnailData) {
           const mime = photo.thumbnailMimeType || "image/jpeg";
-          urls[m.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+          const u = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+          created.push(u);
+          urls[m.id] = u;
         } else if (m.first_photo_id) {
           urls[m.id] = accessToken
             ? `${api.photos.thumbUrl(m.first_photo_id)}?token=${accessToken}`
@@ -183,13 +194,14 @@ export default function Albums() {
       }
       if (!cancelled) setMemoryThumbUrls(urls);
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; created.forEach((u) => URL.revokeObjectURL(u)); };
   }, [memories, accessToken]);
 
   // Load thumbnails for trips
   useEffect(() => {
     if (trips.length === 0) return;
     let cancelled = false;
+    const created: string[] = [];
     (async () => {
       const urls: Record<string, string> = {};
       for (const t of trips) {
@@ -198,7 +210,9 @@ export default function Albums() {
         if (cancelled) return;
         if (photo?.thumbnailData) {
           const mime = photo.thumbnailMimeType || "image/jpeg";
-          urls[t.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+          const u = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
+          created.push(u);
+          urls[t.id] = u;
         } else {
           urls[t.id] = accessToken
             ? `${api.photos.thumbUrl(t.first_photo_id)}?token=${accessToken}`
@@ -207,7 +221,7 @@ export default function Albums() {
       }
       if (!cancelled) setTripThumbUrls(urls);
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; created.forEach((u) => URL.revokeObjectURL(u)); };
   }, [trips, accessToken]);
 
   // Compute encrypted smart album counts + first thumbnails from IndexedDB

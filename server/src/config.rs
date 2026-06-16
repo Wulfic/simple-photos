@@ -473,6 +473,12 @@ pub struct GeoConfig {
     /// asserted within a reasonable window.
     #[serde(default = "GeoConfig::default_poll_interval_secs")]
     pub poll_interval_secs: u64,
+    /// Download the offline GeoNames dataset at runtime if it is missing when
+    /// geo is enabled (self-heals a failed install — see `geo/dataset.rs`).
+    /// Defaults to `true`; set `false` on a fully air-gapped server that must
+    /// never make outbound requests for assets.
+    #[serde(default = "GeoConfig::default_auto_download_dataset")]
+    pub auto_download_dataset: bool,
 
     // ── Opt-in precise (street-level) reverse geocoding ──────────────────
     // Disabled by default and, crucially, gated *again* per-user: the server
@@ -522,6 +528,9 @@ impl GeoConfig {
     fn default_poll_interval_secs() -> u64 {
         300
     }
+    fn default_auto_download_dataset() -> bool {
+        true
+    }
     fn default_precise_provider() -> String {
         "auto".into()
     }
@@ -554,6 +563,7 @@ impl Default for GeoConfig {
             dataset_path: Self::default_dataset_path(),
             batch_size: 100,
             poll_interval_secs: 300,
+            auto_download_dataset: true,
             precise_provider: Self::default_precise_provider(),
             nominatim_endpoint: Self::default_nominatim_endpoint(),
             photon_endpoint: Self::default_photon_endpoint(),

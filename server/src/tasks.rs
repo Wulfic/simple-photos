@@ -29,6 +29,7 @@ pub fn spawn_all(
     ai_active: &Arc<AtomicBool>,
     geo_active: &Arc<AtomicBool>,
     geo_dataset_available: &Arc<AtomicBool>,
+    geo_dataset_downloading: &Arc<AtomicBool>,
 ) {
     spawn_housekeeping(pool.clone());
     spawn_trash_purge(pool.clone(), config.storage.root.clone());
@@ -79,6 +80,7 @@ pub fn spawn_all(
         config.geo.clone(),
         geo_active.clone(),
         geo_dataset_available.clone(),
+        geo_dataset_downloading.clone(),
     );
 }
 

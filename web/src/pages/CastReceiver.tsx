@@ -13,11 +13,17 @@
  * Chromecast fetches it independently.
  */
 import { useEffect, useRef, useState } from "react";
+import SlideshowTransitions from "../components/viewer/SlideshowTransitions";
+import type { SlideshowTransition } from "../hooks/useSlideshow";
 
 interface CastMedia {
   url: string;
   kind: "photo" | "video";
+  /** Slideshow transition to replay on entry (absent for plain photo casts). */
+  transition?: SlideshowTransition;
 }
+
+const TRANSITIONS: readonly SlideshowTransition[] = ["fade", "slide", "zoom", "dissolve"];
 
 export default function CastReceiver() {
   const [media, setMedia] = useState<CastMedia | null>(null);
@@ -52,6 +58,7 @@ export default function CastReceiver() {
             url?: string;
             contentType?: string;
             mediaKind?: "photo" | "video";
+            transition?: string;
             action?: "play" | "pause" | "seek";
             position?: number;
           };
@@ -64,7 +71,10 @@ export default function CastReceiver() {
               (msg.contentType?.startsWith("video/") ?? false)
                 ? "video"
                 : "photo";
-            setMedia({ url: msg.url, kind });
+            // Only honour a transition we recognise — anything else (or a
+            // bare photo cast) renders with an instant swap.
+            const transition = TRANSITIONS.find((t) => t === msg.transition);
+            setMedia({ url: msg.url, kind, transition });
           } else if (msg.type === "VIDEO_CONTROL") {
             // Mirror the controller's play / pause / scrub onto our <video>
             // so the casted device follows along (issue #2a).
@@ -175,7 +185,7 @@ export default function CastReceiver() {
 
   // ── Media display ───────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center">
+    <div className="relative min-h-screen bg-black flex items-center justify-center overflow-hidden">
       {media.kind === "video" ? (
         <video
           // `key` forces a fresh element when the URL changes, otherwise the
@@ -189,6 +199,21 @@ export default function CastReceiver() {
           className="max-w-full max-h-screen"
           style={{ width: "100vw", height: "100vh", objectFit: "contain" }}
         />
+      ) : media.transition ? (
+        // Slideshow cast — replay the same enter animation the local screen
+        // uses so fade/slide/zoom/dissolve effects appear on the TV too.
+        <SlideshowTransitions
+          slideKey={media.url}
+          transition={media.transition}
+          direction={1}
+        >
+          <img
+            src={media.url}
+            alt=""
+            className="max-w-full max-h-full object-contain"
+            style={{ width: "100vw", height: "100vh" }}
+          />
+        </SlideshowTransitions>
       ) : (
         <img
           src={media.url}

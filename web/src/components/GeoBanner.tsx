@@ -20,6 +20,9 @@ interface ActivityResponse {
     /** `false` ⇒ photos are waiting but the GeoNames dataset isn't loadable,
      *  so they can never resolve. Omitted by older servers (treat as `true`). */
     available?: boolean;
+    /** `true` ⇒ the server is downloading the dataset right now (self-healing
+     *  a failed install). Omitted by older servers (treat as `false`). */
+    downloading?: boolean;
   };
 }
 
@@ -41,6 +44,9 @@ export default function GeoBanner() {
   // GeoNames dataset is missing/unloadable — they will never resolve, so we
   // show a static notice instead of a spinner that runs forever.
   const [unavailable, setUnavailable] = useState(false);
+  // True while the server is actively downloading the GeoNames dataset to
+  // self-heal a failed install — shown as a transient progress notice.
+  const [downloading, setDownloading] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { startTask, endTask } = useProcessingStore();
 
@@ -65,9 +71,26 @@ export default function GeoBanner() {
         setCounts(null);
         setEta(null);
         setUnavailable(false);
+        setDownloading(false);
         endTask("geo");
         return;
       }
+
+      // Server is fetching the dataset right now (self-healing a failed
+      // install). Transient — show a "downloading" notice and keep the avatar
+      // spinning; resolution kicks in automatically once it lands.
+      if (geo.downloading === true) {
+        batchSizeRef.current = 0;
+        prevPendingRef.current = 0;
+        batchStartRef.current = 0;
+        setCounts(null);
+        setEta(null);
+        setUnavailable(false);
+        setDownloading(true);
+        startTask("geo");
+        return;
+      }
+      setDownloading(false);
 
       // Dataset can't load (default `true` keeps old servers working): photos
       // are stuck, not progressing. Stop the spinner and surface why.
@@ -129,6 +152,27 @@ export default function GeoBanner() {
   }, [isAuthenticated, poll, endTask]);
 
   if (dismissed) return null;
+
+  // Dataset is being downloaded right now: transient progress notice (spinner,
+  // no percentage — the fetch is a single ~25 MB archive).
+  if (downloading) {
+    return (
+      <div className="fixed bottom-44 left-4 right-4 z-50 pointer-events-none">
+        <div className="pointer-events-auto max-w-md mx-auto flex items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 shadow-lg">
+          <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-emerald-500 dark:border-t-emerald-400 rounded-full animate-spin flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              Downloading location data…
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              Fetching the GeoNames dataset. Photos with GPS will resolve once
+              it finishes.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Dataset unavailable: static, dismissible warning (no spinner, no progress).
   if (unavailable) {

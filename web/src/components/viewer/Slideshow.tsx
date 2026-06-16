@@ -235,10 +235,12 @@ export default function Slideshow({
       const mime = cached?.mimeType ?? "image/jpeg";
       const kind: "photo" | "video" =
         cached?.mediaType === "video" || mime.startsWith("video/") ? "video" : "photo";
-      castMedia(castUrl, mime, kind);
+      // Carry the active transition so the TV replays the same effect the
+      // local screen shows (videos play straight through — no transition).
+      castMedia(castUrl, mime, kind, kind === "photo" ? transition : undefined);
     })();
     return () => { cancelled = true; };
-  }, [currentBlobId]);
+  }, [currentBlobId, transition]);
 
   // ── Auto-hide controls ─────────────────────────────────────────────────
 

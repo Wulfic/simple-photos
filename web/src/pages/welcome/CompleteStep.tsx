@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { useAuthStore } from "../../store/auth";
-import { deriveKey } from "../../crypto/crypto";
+import { deriveKey, getDerivedKeyHex } from "../../crypto/crypto";
 import type { WizardStep, CreatedUser, ServerRole, InstallType, RestoreSource } from "./types";
 
 export interface CompleteStepProps {
@@ -238,10 +238,12 @@ export default function CompleteStep({
 
               // ── Normal setup tasks ────────────────────────────────────
               // Store the encryption key on the server so it can run
-              // auto-migration autonomously.
-              const keyHex = sessionStorage.getItem("sp_key") ?? undefined;
+              // auto-migration autonomously. The hex comes from the in-memory
+              // key derived earlier in the wizard (or by the restore branch
+              // above) — it is never read back from web storage.
+              const keyHex = getDerivedKeyHex() ?? undefined;
               if (!keyHex) {
-                console.error("[Setup] Encryption key missing from sessionStorage! Key derivation may have failed.");
+                console.error("[Setup] Encryption key missing in memory! Key derivation may have failed or the page was refreshed mid-wizard.");
               }
               if (keyHex) {
                 await api.encryption.storeKey(keyHex);

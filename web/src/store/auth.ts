@@ -7,6 +7,7 @@
  */
 import { create } from "zustand";
 import { clearGalleryToken } from "../utils/galleryToken";
+import { clearKey } from "../crypto/crypto";
 
 interface AuthState {
   accessToken: string | null;
@@ -42,6 +43,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.removeItem("sp_username");
     // Drop the secure-album unlock token so a re-login must re-unlock.
     clearGalleryToken();
+    // Always wipe the in-memory + sessionStorage AES key on logout. Doing it
+    // here (rather than relying on each caller) guarantees no logout path —
+    // e.g. an admin-triggered forced logout — leaves the key recoverable.
+    clearKey();
     set({
       accessToken: null,
       refreshToken: null,
