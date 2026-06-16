@@ -17,7 +17,7 @@ criteria**. Do not "done" anything without unit + manual verification.
 
 - **Session A — Data integrity:** #3 (trash re-add) ✅, #10 (Windows convert stall) 🟡 mitigated+instrumented — *complete 2026-06-16*
 - **Session B — Editing:** #4 (crop apply/thumb) ✅, #13 (crop UI overlap) ✅ — *complete 2026-06-16 (FE unit-test runner is a follow-up)*
-- **Session C — Navigation & panels:** #7 (back context audit) 🟠, #15 (overlapping menus) 🟠
+- **Session C — Navigation & panels:** #7 (back context audit) ✅, #15 (overlapping menus) ✅ — *complete 2026-06-16*
 - **Session D — Notifications/UX correctness:** #8 (toast system) 🟠, #12 (audio-policy error) 🟠, #11 (convert counter) 🟡, #2 (upload button) 🟠
 - **Session E — Albums:** #6 (create-album in popup) 🟠
 - **Session F — Visual polish:** #9 (light-mode contrast) 🟠, #14 (button/card facelift) 🟡
@@ -228,7 +228,23 @@ handles reachable at all four corners; crop outline flush to the media edges.
 
 ---
 
-## 🟠 #7 — Back button loses album context (recurring; audit needed)
+## 🟠 #7 — Back button loses album context (recurring; audit needed)  ✅ DONE (2026-06-16)
+
+**Fix shipped:** the Viewer now computes a single origin-aware `backTo`
+target — `/secure-gallery?album=<id>` (secure album) → `/secure-gallery`
+(secure root) → `/albums/<albumId>` (album, incl. smart sub-views like
+`smart-pets/<clusterId>`) → `/gallery` (default). Back button, Escape, and the
+leave-prompt save/discard (`useViewerActions`) all route through `backTo`, as
+does post-delete navigation. Fixed the dead singular `/album/<id>` route in
+`handleRemoveFromAlbum` → `/albums/<id>`. SecureGallery now passes
+`secureAlbumId` when opening the viewer, and the viewer propagates it through
+prev/next + burst navigation so a swipe doesn't drop the secure-album origin.
+`tsc -b` clean. **Audit result:** the remaining `navigate("/gallery"|
+"/albums")` calls (Login/Register/Setup/Import-done/AppHeader logo, AlbumDetail
+& SharedAlbumDetail "back to list") are correct. *Known gap (not in scope):*
+Search-opened photos still return to `/gallery` (no search-state restoration).
+
+<details><summary>original analysis</summary>
 
 **Symptom:** viewing a photo opened from an album, the top-left back button
 returns to the gallery instead of the album.
@@ -254,10 +270,20 @@ audit `web/src/pages/*.tsx`.
 **Acceptance:** open photo from album → back returns to that album (scroll
 position ideally preserved); remove-from-album returns to the album; gallery
 origin still returns to gallery.
+</details>
 
 ---
 
-## 🟠 #15 — Photo action panels draw over each other
+## 🟠 #15 — Photo action panels draw over each other  ✅ DONE (2026-06-16)
+
+**Fix shipped:** Info / Tags / Edit are now mutually exclusive. The Viewer
+wraps the panel setters handed to `ViewerTopBar` (`openInfoPanel`/`openTagPanel`)
+so opening one closes the other and exits edit mode; `handleToggleEdit` closes
+both panels before entering edit. The underlying booleans are unchanged (raw
+setters still used for swipe-to-close and panel `onClose`), so only the
+*open* paths gained exclusivity. `tsc -b` clean.
+
+<details><summary>original analysis</summary>
 
 **Symptom:** opening edit/tags/info (and download/delete) at the top of a photo
 stacks panels on top of each other instead of closing the previous one.
@@ -276,6 +302,7 @@ the others). Entering edit mode should close info/tags.
 `web/src/components/viewer/TagPanel.tsx`.
 
 **Acceptance:** opening any one panel closes the others; never two overlapping.
+</details>
 
 ---
 
@@ -506,8 +533,10 @@ resolves precise locations.
 
 ## Cross-cutting follow-ups
 
-- [ ] Audit all hardcoded `navigate("/gallery")` / `navigate("/albums")` for
-      lost context (#7) and the singular `/album/` route typo.
+- [x] Audit all hardcoded `navigate("/gallery")` / `navigate("/albums")` for
+      lost context (#7) and the singular `/album/` route typo. *(done 2026-06-16
+      — viewer now origin-aware; remaining hardcoded navigates verified correct;
+      Search→gallery left as a known non-scope gap.)*
 - [ ] Establish the toast system (#8) before migrating per-page error bars.
 - [ ] Per AGENTS.md: unit + manual/E2E verification and error-path logging on
       every fix; no `as any` / `@ts-ignore` / empty catches introduced.

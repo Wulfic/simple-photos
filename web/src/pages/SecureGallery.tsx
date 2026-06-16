@@ -602,6 +602,7 @@ export default function SecureGallery() {
                           photoIds: items.map((i) => i.blob_id),
                           currentIndex: idx,
                           secureGallery: true,
+                          secureAlbumId: selectedGallery?.id,
                         },
                       })
                     }

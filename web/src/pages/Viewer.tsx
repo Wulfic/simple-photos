@@ -45,6 +45,8 @@ interface ViewerLocationState {
   albumId?: string;
   /** When true, the photo was opened from a secure gallery — hide all mutating UI */
   secureGallery?: boolean;
+  /** When opened from inside a secure gallery, the gallery id so back returns to it */
+  secureAlbumId?: string;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -61,8 +63,20 @@ export default function Viewer() {
   const currentIndex = navState.currentIndex ?? 0;
   const albumId = navState.albumId;
   const secureGallery = navState.secureGallery ?? false;
+  const secureAlbumId = navState.secureAlbumId;
   const hasPrev = !!photoIds && currentIndex > 0;
   const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
+
+  // Origin-aware back target so leaving the viewer returns to where the photo
+  // was opened from — the album, the specific secure gallery, or the main
+  // gallery — instead of always dumping the user on /gallery (#7).
+  const backTo = secureGallery
+    ? secureAlbumId
+      ? `/secure-gallery?album=${secureAlbumId}`
+      : "/secure-gallery"
+    : albumId
+      ? `/albums/${albumId}`
+      : "/gallery";
 
   // ── Favorite state ────────────────────────────────────────────────────────
   const [isFavorite, setIsFavorite] = useState(false);
@@ -209,12 +223,31 @@ export default function Viewer() {
     showDownloadChoice, setShowDownloadChoice,
   } = useViewerActions({
     id, mediaUrl, filename, mediaType, mimeType,
-    albumId, photoIds, currentIndex,
+    albumId, backTo, photoIds, currentIndex,
     cropCorners, brightness, rotateValue, trimStart, trimEnd, mediaDuration,
     cropData, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd,
     setEditMode, setError,
     preloadCache,
   });
+
+  // ── Mutually-exclusive top-bar panels (#15) ────────────────────────────────
+  // Info, Tags, and Edit were independent booleans, so opening one stacked it
+  // over the others. Each opener now closes the rest; entering edit closes both
+  // panels. (Toggling a panel off just closes it.)
+  const openInfoPanel = useCallback((next: boolean) => {
+    setShowInfoPanel(next);
+    if (next) { setShowTagPanel(false); setEditMode(false); }
+  }, [setEditMode]);
+  const openTagPanel = useCallback((next: boolean) => {
+    setShowTagPanel(next);
+    if (next) { setShowInfoPanel(false); setEditMode(false); }
+  }, [setEditMode]);
+  const handleToggleEdit = useCallback(() => {
+    if (editMode) { setEditMode(false); return; }
+    setShowInfoPanel(false);
+    setShowTagPanel(false);
+    enterEditMode(mediaType);
+  }, [editMode, setEditMode, enterEditMode, mediaType]);
 
   // ── Load favorite state + info for current photo ──────────────────────────
   useEffect(() => {
@@ -265,7 +298,7 @@ export default function Viewer() {
     setSlideKey((k) => k + 1);
     navigate(`/photo/${nextId}`, {
       replace: true,
-      state: { photoIds, currentIndex: index, albumId, secureGallery } satisfies ViewerLocationState,
+      state: { photoIds, currentIndex: index, albumId, secureGallery, secureAlbumId } satisfies ViewerLocationState,
     });
   }, [photoIds, navigate, currentIndex]);
 
@@ -338,7 +371,7 @@ export default function Viewer() {
       if (e.key === "Escape") {
         if (showLeavePrompt) setShowLeavePrompt(false);
         else if (editMode) setShowLeavePrompt(true);
-        else navigate("/gallery");
+        else navigate(backTo);
         return;
       }
       if (editMode) return;
@@ -347,7 +380,7 @@ export default function Viewer() {
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [goPrev, goNext, navigate, editMode, showLeavePrompt]);
+  }, [goPrev, goNext, navigate, backTo, editMode, showLeavePrompt]);
 
   // ── Measure the edit panel so the media area can sit above it (#13) ─────
   // The panel height changes with the active tab (crop is short, trim is
@@ -377,17 +410,17 @@ export default function Viewer() {
         editMode={editMode}
         showOverlay={showOverlay}
         showInfoPanel={showInfoPanel}
-        setShowInfoPanel={setShowInfoPanel}
+        setShowInfoPanel={openInfoPanel}
         showTagPanel={showTagPanel}
-        setShowTagPanel={setShowTagPanel}
+        setShowTagPanel={openTagPanel}
         mediaType={mediaType}
         mediaUrl={mediaUrl}
         isFavorite={isFavorite}
         isBackupServer={isBackupServer || secureGallery}
         isRenderingVideo={isRenderingVideo}
         albumId={albumId}
-        onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate(secureGallery ? "/secure-gallery" : "/gallery"); }}
-        onToggleEdit={() => { if (editMode) setEditMode(false); else enterEditMode(mediaType); }}
+        onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate(backTo); }}
+        onToggleEdit={handleToggleEdit}
         onToggleFavorite={onToggleFavorite}
         onDownload={handleDownload}
         onDelete={handleDelete}
@@ -782,7 +815,7 @@ export default function Viewer() {
               if (frameId === id) return;
               navigate(`/photo/${frameId}`, {
                 replace: true,
-                state: { photoIds, currentIndex, albumId, secureGallery } satisfies ViewerLocationState,
+                state: { photoIds, currentIndex, albumId, secureGallery, secureAlbumId } satisfies ViewerLocationState,
               });
             }}
           />
