@@ -53,10 +53,7 @@ async fn download_and_extract(dataset_path: &str, user_agent: &str) -> Result<()
     let dest = Path::new(dataset_path).to_path_buf();
     // `Path::parent()` is `Some("")` for a bare filename (cwd-relative
     // dataset_path) — creating "" errors, so only mkdir a non-empty parent.
-    let parent = dest
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_default();
+    let parent = dest.parent().map(|p| p.to_path_buf()).unwrap_or_default();
     if !parent.as_os_str().is_empty() {
         tokio::fs::create_dir_all(&parent)
             .await
@@ -70,7 +67,10 @@ async fn download_and_extract(dataset_path: &str, user_agent: &str) -> Result<()
         .map_err(|e| format!("build geo dataset http client: {e}"))?;
 
     // ── 1. cities500.zip → extract cities500.txt ────────────────────────────
-    tracing::info!(url = CITIES_ZIP_URL, "Downloading GeoNames cities500 dataset (runtime fallback)");
+    tracing::info!(
+        url = CITIES_ZIP_URL,
+        "Downloading GeoNames cities500 dataset (runtime fallback)"
+    );
     let resp = client
         .get(CITIES_ZIP_URL)
         .send()
@@ -117,7 +117,8 @@ async fn download_and_extract(dataset_path: &str, user_agent: &str) -> Result<()
 /// `.part` temp file + rename so a partial extraction never looks complete.
 fn extract_cities_txt(zip_bytes: Vec<u8>, dest: &Path) -> Result<(), String> {
     let reader = std::io::Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("open cities500.zip: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|e| format!("open cities500.zip: {e}"))?;
     let mut entry = archive
         .by_name("cities500.txt")
         .map_err(|e| format!("cities500.txt not found in archive: {e}"))?;
