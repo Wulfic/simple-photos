@@ -57,6 +57,9 @@ pub async fn scan_and_register(
     // never hold the full Vec<String> + HashSet simultaneously in memory.
     // Include trash_items so that files deleted on the primary (which are
     // physically still on disk) are not re-imported into the gallery.
+    // `original_file_path` covers encrypted-blob deletions, where file_path is
+    // the blob storage_path and the deleted photo's plaintext original (kept on
+    // disk by the encryption step) would otherwise be re-imported (#3).
     // Include source_path so that already-converted originals are not
     // re-converted on subsequent scans.
     let mut existing_set = std::collections::HashSet::new();
@@ -64,7 +67,8 @@ pub async fn scan_and_register(
         let mut rows = sqlx::query_scalar::<_, String>(
             "SELECT file_path FROM photos WHERE file_path != '' \
              UNION SELECT source_path FROM photos WHERE source_path IS NOT NULL AND source_path != '' \
-             UNION SELECT file_path FROM trash_items WHERE file_path != ''"
+             UNION SELECT file_path FROM trash_items WHERE file_path != '' \
+             UNION SELECT original_file_path FROM trash_items WHERE original_file_path IS NOT NULL AND original_file_path != ''"
         )
         .fetch(&state.pool);
 

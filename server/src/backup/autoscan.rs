@@ -267,7 +267,8 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
         let mut rows = sqlx::query_scalar::<_, String>(
             "SELECT file_path FROM photos WHERE file_path != '' \
              UNION SELECT source_path FROM photos WHERE source_path IS NOT NULL AND source_path != '' \
-             UNION SELECT file_path FROM trash_items WHERE file_path != ''"
+             UNION SELECT file_path FROM trash_items WHERE file_path != '' \
+             UNION SELECT original_file_path FROM trash_items WHERE original_file_path IS NOT NULL AND original_file_path != ''"
         ).fetch(pool);
 
         while let Some(path) = rows.try_next().await.unwrap_or(None) {

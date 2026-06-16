@@ -10,6 +10,7 @@ from helpers import (
     APIClient,
     generate_random_bytes,
     unique_filename,
+    wait_for_encryption,
 )
 
 
@@ -167,6 +168,70 @@ class TestTrashPermanentDelete:
 
         data = user_client.empty_trash()
         assert "deleted" in data
+
+
+class TestTrashScanReadd:
+    """Regression (#3): the filesystem autoscan must NOT re-import a photo that
+    is sitting in trash.
+
+    Server-side encryption leaves the plaintext original on disk (photos.file_path
+    stays set, the file is never removed). The encrypted-blob soft-delete deletes
+    the photos row and recorded only the *blob* storage_path, so the scan's
+    exclusion set missed the orphaned plaintext original and re-registered it on
+    the next scan — the photo reappeared in the gallery while still in trash.
+    """
+
+    def test_scan_does_not_readd_trashed_photo(self, admin_client):
+        fn = unique_filename("jpg")
+
+        # Upload a photo: writes uploads/<fn>, registers a photos row, and
+        # (per upload.rs) spawns server-side encryption.
+        up = admin_client.upload_photo(filename=fn)
+        photo_id = up["photo_id"]
+        file_path = up["file_path"]
+
+        # Wait for encryption so the photo has an encrypted blob to trash.
+        blob_id = wait_for_encryption(admin_client, photo_id)
+        assert blob_id, "photo was never encrypted — cannot exercise blob trash path"
+
+        def count_with_path() -> int:
+            photos = admin_client.list_photos(limit=500).get("photos", [])
+            return sum(1 for p in photos if p.get("file_path") == file_path)
+
+        assert count_with_path() == 1, "uploaded photo not registered"
+
+        # Soft-delete the encrypted blob → trash (deletes the photos row).
+        trash = admin_client.soft_delete_blob(blob_id, filename=fn)
+        trash_id = trash["trash_id"]
+        assert count_with_path() == 0, "photos row not removed by soft-delete"
+
+        # Trigger the filesystem autoscan. The plaintext original is still on
+        # disk; before the fix this re-registered it synchronously.
+        admin_client.admin_trigger_scan()
+
+        # Must NOT come back, and must still be in trash.
+        assert count_with_path() == 0, "autoscan re-imported a trashed photo (#3 regression)"
+        trash_ids = {t["id"] for t in admin_client.list_trash().get("items", [])}
+        assert trash_id in trash_ids, "item disappeared from trash after scan"
+
+    def test_permanent_delete_removes_original_so_scan_skips_it(self, admin_client):
+        """After permanent delete, the plaintext original must be gone so a
+        later scan cannot re-import it (dropping the trash row removes the
+        exclusion, so the file itself must be removed)."""
+        fn = unique_filename("jpg")
+        up = admin_client.upload_photo(filename=fn)
+        file_path = up["file_path"]
+        blob_id = wait_for_encryption(admin_client, up["photo_id"])
+        assert blob_id
+
+        trash = admin_client.soft_delete_blob(blob_id, filename=fn)
+        r = admin_client.permanent_delete_trash(trash["trash_id"])
+        assert r.status_code == 204
+
+        admin_client.admin_trigger_scan()
+        photos = admin_client.list_photos(limit=500).get("photos", [])
+        assert not any(p.get("file_path") == file_path for p in photos), \
+            "scan re-imported a permanently-deleted photo (#3 regression)"
 
 
 class TestTrashThumbnail:
