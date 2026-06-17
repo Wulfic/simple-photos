@@ -433,7 +433,7 @@ export default function Albums() {
 
       {/* Errors surface via the global toast host (#8) */}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
         {/* ── Smart albums pinned at top ────────────────────────────────── */}
         <SmartAlbumCard
           label="Favorites"
@@ -765,7 +765,7 @@ export default function Albums() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
           {sharedLoading && sharedAlbums.length === 0 && (
             <p className="col-span-full text-gray-700 dark:text-gray-400 text-center py-8">
               Loading shared albums...
@@ -779,16 +779,16 @@ export default function Albums() {
           {sharedAlbums.map((sa) => (
             <div
               key={sa.id}
-              className="card card-interactive p-4 cursor-pointer relative group"
+              className="card card-interactive p-2 cursor-pointer relative group"
             >
               <div
                 onClick={() => navigate(`/shared/${sa.id}`)}
-                className="aspect-square bg-gradient-to-br from-green-50 to-accent-50 dark:from-green-900/20 dark:to-accent-900/20 rounded mb-2 flex flex-col items-center justify-center"
+                className="aspect-square bg-gradient-to-br from-green-50 to-accent-50 dark:from-green-900/20 dark:to-accent-900/20 rounded mb-1.5 flex flex-col items-center justify-center"
               >
-                <span className="text-2xl font-semibold text-green-600 dark:text-green-400">{sa.photo_count}</span>
+                <span className="text-xl font-semibold text-green-600 dark:text-green-400">{sa.photo_count}</span>
                 <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">{sa.member_count} member{sa.member_count !== 1 ? "s" : ""}</span>
               </div>
-              <p className="font-medium truncate">{sa.name}</p>
+              <p className="font-medium text-sm truncate">{sa.name}</p>
               <p className="text-xs text-gray-700 dark:text-gray-400">
                 {sa.is_owner ? "You" : sa.owner_username}
               </p>
@@ -868,19 +868,19 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
   return (
     <div
       onClick={onClick}
-      className="card card-interactive p-4 cursor-pointer"
+      className="card card-interactive p-2 cursor-pointer"
     >
-      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-2 flex items-center justify-center overflow-hidden">
+      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-1.5 flex items-center justify-center overflow-hidden">
         {thumbUrl ? (
           <img src={thumbUrl} alt={album.name} className="w-full h-full object-cover" />
         ) : (
-          <span className="text-gray-600 dark:text-gray-400 text-3xl">
+          <span className="text-gray-600 dark:text-gray-400 text-2xl">
             {album.photoBlobIds.length}
           </span>
         )}
       </div>
-      <p className="font-medium truncate">{album.name}</p>
-      <p className="text-sm text-gray-700 dark:text-gray-400">
+      <p className="font-medium text-sm truncate">{album.name}</p>
+      <p className="text-xs text-gray-700 dark:text-gray-400">
         {album.photoBlobIds.length} items
       </p>
     </div>
@@ -930,17 +930,17 @@ function SmartAlbumCard({
   return (
     <div
       onClick={onClick}
-      className="card card-interactive p-4 cursor-pointer"
+      className="card card-interactive p-2 cursor-pointer"
     >
-      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-2 flex items-center justify-center overflow-hidden">
+      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-1.5 flex items-center justify-center overflow-hidden">
         {thumbUrl ? (
           <img src={thumbUrl} alt={label} className="w-full h-full object-cover" />
         ) : (
-          <span className="text-gray-600 dark:text-gray-400 text-3xl">{count}</span>
+          <span className="text-gray-600 dark:text-gray-400 text-2xl">{count}</span>
         )}
       </div>
-      <p className="font-medium truncate">{label}</p>
-      <p className="text-sm text-gray-700 dark:text-gray-400">
+      <p className="font-medium text-sm truncate">{label}</p>
+      <p className="text-xs text-gray-700 dark:text-gray-400">
         {count} items
       </p>
     </div>

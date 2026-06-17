@@ -16,7 +16,9 @@ export interface ViewerTopBarProps {
   isFavorite: boolean;
   isBackupServer: boolean;
   isRenderingVideo: boolean;
-  albumId?: string;
+  /** True only for real user-created albums — smart albums (Photos, Videos,
+   *  GIFs, Audio, People, …) can't have items "removed" so they show Delete. */
+  canRemoveFromAlbum?: boolean;
   onBack: () => void;
   onToggleEdit: () => void;
   onToggleFavorite: () => void;
@@ -39,7 +41,7 @@ export default function ViewerTopBar({
   isFavorite,
   isBackupServer,
   isRenderingVideo,
-  albumId,
+  canRemoveFromAlbum,
   onBack,
   onToggleEdit,
   onToggleFavorite,
@@ -129,7 +131,7 @@ export default function ViewerTopBar({
         </button>
         {!isBackupServer && (
         <>
-        {albumId ? (
+        {canRemoveFromAlbum ? (
           <button
             onClick={onRemoveFromAlbum}
             className="text-orange-400 hover:text-orange-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"

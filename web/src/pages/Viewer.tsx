@@ -66,6 +66,10 @@ export default function Viewer() {
   const secureAlbumId = navState.secureAlbumId;
   const hasPrev = !!photoIds && currentIndex > 0;
   const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
+  // Only real user-created albums support "remove from album". Smart/special
+  // albums (Photos, Videos, GIFs, Audio, People, Pets, Memories, Trips) all use
+  // a `smart-` id prefix — there the action makes no sense, so show Delete (#1).
+  const canRemoveFromAlbum = !!albumId && !albumId.startsWith("smart-");
 
   // Origin-aware back target so leaving the viewer returns to where the photo
   // was opened from — the album, the specific secure gallery, or the main
@@ -418,7 +422,7 @@ export default function Viewer() {
         isFavorite={isFavorite}
         isBackupServer={isBackupServer || secureGallery}
         isRenderingVideo={isRenderingVideo}
-        albumId={albumId}
+        canRemoveFromAlbum={canRemoveFromAlbum}
         onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate(backTo); }}
         onToggleEdit={handleToggleEdit}
         onToggleFavorite={onToggleFavorite}

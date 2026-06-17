@@ -273,7 +273,7 @@ class BackupWorker @AssistedInject constructor(
                     // scanImages() already swaps dimensions for 90°/270° EXIF
                     // rotation, so only swap here if they still appear to be raw
                     // sensor dimensions (width > height for a portrait-EXIF photo).
-                    val correctedPhoto = if (photo.mediaType == "photo" || photo.mediaType == null) {
+                    val correctedPhoto = if (photo.mediaType == "photo") {
                         try {
                             val exif = androidx.exifinterface.media.ExifInterface(photoData.inputStream())
                             val orient = exif.getAttributeInt(
@@ -483,7 +483,7 @@ class BackupWorker @AssistedInject constructor(
         val synced = db.photoDao().getByStatus(SyncStatus.SYNCED)
         val photosToFix = synced.filter {
             it.localPath != null && it.serverBlobId != null
-                    && (it.mediaType == "photo" || it.mediaType == null)
+                    && it.mediaType == "photo"
                     && it.width > 0 && it.height > 0
         }
 

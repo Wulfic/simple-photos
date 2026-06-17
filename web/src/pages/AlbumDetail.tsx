@@ -16,6 +16,7 @@ import AppIcon from "../components/AppIcon";
 import AlbumTile from "../components/AlbumTile";
 import AddPhotosPanel from "../components/AddPhotosPanel";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
+import SelectablePhotoGrid from "../components/gallery/SelectablePhotoGrid";
 import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
 import { getErrorMessage } from "../utils/formatters";
 import { toast } from "../store/toast";
@@ -187,28 +188,9 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
             <p className="text-gray-700 dark:text-gray-400">No {def.label.toLowerCase()} found</p>
           </div>
         ) : (
-          <JustifiedGrid
-            items={filteredEncrypted}
-            getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
-            getKey={(p) => p.blobId}
-            renderItem={(photo, idx) => (
-              <AlbumTile
-                photo={photo}
-                isSelectionMode={false}
-                isSelected={false}
-                onClick={() => {
-                  navigate(`/photo/${photo.blobId}`, {
-                    state: {
-                      photoIds: filteredEncrypted.map((p) => p.blobId),
-                      currentIndex: idx,
-                      albumId,
-                    },
-                  });
-                }}
-                onLongPress={() => {}}
-                onRemove={() => {}}
-              />
-            )}
+          <SelectablePhotoGrid
+            photos={filteredEncrypted}
+            viewerAlbumId={albumId}
           />
         )}
       </main>
@@ -1017,28 +999,10 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
             <p className="text-gray-700 dark:text-gray-400">No photos found for this pet</p>
           </div>
         ) : (
-          <JustifiedGrid
-            items={photos}
-            getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
-            getKey={(p) => p.blobId}
-            renderItem={(photo, idx) => (
-              <AlbumTile
-                photo={photo}
-                isSelectionMode={false}
-                isSelected={false}
-                onClick={() => {
-                  navigate(`/photo/${photo.blobId}`, {
-                    state: {
-                      photoIds: photos.map(p => p.blobId),
-                      currentIndex: idx,
-                      albumId: `smart-pets/${clusterId}`,
-                    },
-                  });
-                }}
-                onLongPress={() => {}}
-                onRemove={() => {}}
-              />
-            )}
+          <SelectablePhotoGrid
+            photos={photos}
+            viewerAlbumId={`smart-pets/${clusterId}`}
+            onDeleted={(ids) => setPhotos((prev) => prev.filter((p) => !ids.includes(p.blobId)))}
           />
         )}
       </main>
@@ -1298,28 +1262,10 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
             <p className="text-gray-700 dark:text-gray-400">No photos found for this person</p>
           </div>
         ) : (
-          <JustifiedGrid
-            items={photos}
-            getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
-            getKey={(p) => p.blobId}
-            renderItem={(photo, idx) => (
-              <AlbumTile
-                photo={photo}
-                isSelectionMode={false}
-                isSelected={false}
-                onClick={() => {
-                  navigate(`/photo/${photo.blobId}`, {
-                    state: {
-                      photoIds: photos.map(p => p.blobId),
-                      currentIndex: idx,
-                      albumId: `smart-people/${clusterId}`,
-                    },
-                  });
-                }}
-                onLongPress={() => {}}
-                onRemove={() => {}}
-              />
-            )}
+          <SelectablePhotoGrid
+            photos={photos}
+            viewerAlbumId={`smart-people/${clusterId}`}
+            onDeleted={(ids) => setPhotos((prev) => prev.filter((p) => !ids.includes(p.blobId)))}
           />
         )}
       </main>
@@ -1590,28 +1536,10 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
             <p className="text-gray-700 dark:text-gray-400">No photos found for this memory</p>
           </div>
         ) : (
-          <JustifiedGrid
-            items={photos}
-            getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
-            getKey={(p) => p.blobId}
-            renderItem={(photo, idx) => (
-              <AlbumTile
-                photo={photo}
-                isSelectionMode={false}
-                isSelected={false}
-                onClick={() => {
-                  navigate(`/photo/${photo.blobId}`, {
-                    state: {
-                      photoIds: photos.map(p => p.blobId),
-                      currentIndex: idx,
-                      albumId: `smart-memories/${memoryId}`,
-                    },
-                  });
-                }}
-                onLongPress={() => {}}
-                onRemove={() => {}}
-              />
-            )}
+          <SelectablePhotoGrid
+            photos={photos}
+            viewerAlbumId={`smart-memories/${memoryId}`}
+            onDeleted={(ids) => setPhotos((prev) => prev.filter((p) => !ids.includes(p.blobId)))}
           />
         )}
       </main>
@@ -1716,28 +1644,10 @@ function TripDetailView({ tripId }: { tripId: string }) {
             <p className="text-gray-700 dark:text-gray-400">No photos found for this trip</p>
           </div>
         ) : (
-          <JustifiedGrid
-            items={photos}
-            getAspectRatio={(p) => getEffectiveAspectRatio(p.width, p.height, p.cropData)}
-            getKey={(p) => p.blobId}
-            renderItem={(photo, idx) => (
-              <AlbumTile
-                photo={photo}
-                isSelectionMode={false}
-                isSelected={false}
-                onClick={() => {
-                  navigate(`/photo/${photo.blobId}`, {
-                    state: {
-                      photoIds: photos.map(p => p.blobId),
-                      currentIndex: idx,
-                      albumId: `smart-trips/${tripId}`,
-                    },
-                  });
-                }}
-                onLongPress={() => {}}
-                onRemove={() => {}}
-              />
-            )}
+          <SelectablePhotoGrid
+            photos={photos}
+            viewerAlbumId={`smart-trips/${tripId}`}
+            onDeleted={(ids) => setPhotos((prev) => prev.filter((p) => !ids.includes(p.blobId)))}
           />
         )}
       </main>

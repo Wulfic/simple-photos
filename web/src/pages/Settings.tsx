@@ -222,7 +222,7 @@ export default function Settings() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <AppHeader />
 
-      <main className="max-w-2xl mx-auto p-4">
+      <main className="max-w-5xl mx-auto p-4">
 
       {error && (
         <p className="text-red-600 dark:text-red-400 text-sm mb-4 p-3 bg-red-50 dark:bg-red-900/30 rounded">{error}</p>
@@ -232,6 +232,11 @@ export default function Settings() {
           {success}
         </p>
       )}
+
+      {/* Masonry card layout: two columns when there's room, single column
+          (the original look) on narrow screens. break-inside-avoid keeps each
+          card whole; the cards' own mb-4 provides vertical rhythm. */}
+      <div className="lg:columns-2 gap-4 [&>*]:break-inside-avoid">
 
       {!isBackupMode ? (
         <AccountSection username={username ?? ""} error={error} setError={setError} success={success} setSuccess={setSuccess} loading={loading} setLoading={setLoading} />
@@ -762,6 +767,7 @@ export default function Settings() {
           </div>
         </div>
       </section>
+      </div>{/* end masonry card layout */}
       </main>
     </div>
   );

@@ -1,5 +1,5 @@
 /** Wizard step — configure storage path, photo directory, and server URL. */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { api } from "../../api/client";
 import FolderBrowserModal from "../../components/FolderBrowserModal";
 import type { WizardStep, ServerRole } from "./types";
@@ -51,6 +51,10 @@ export default function ServerConfigStep({
 }: ServerConfigStepProps) {
   const [pathInput, setPathInput] = useState(storagePath || "");
   const [saving, setSaving] = useState(false);
+  // Single-flight guard for the folder picker. Without this, rapid clicks on
+  // "Browse…" can spawn multiple OS dialogs stacked on top of each other.
+  const [picking, setPicking] = useState(false);
+  const pickingRef = useRef(false);
 
   // ── SMB / network-share state ───────────────────────────────────────────
   // When the user types an SMB-style address into the storage path field
@@ -97,20 +101,33 @@ export default function ServerConfigStep({
   }
 
   async function handleNativePick() {
+    // Single-flight: ignore re-clicks while a picker is already open. This is
+    // what stops multiple OS dialogs from stacking up if the button is mashed.
+    if (pickingRef.current) return;
+    pickingRef.current = true;
+    setPicking(true);
     setError("");
+    try {
+      await runNativePick();
+    } finally {
+      pickingRef.current = false;
+      setPicking(false);
+    }
+  }
 
-    // 1. Preferred: the browser's native OS folder dialog (File System Access
-    //    API — Chrome/Edge/Opera). This is the *same* native OS chooser the
-    //    "+" upload button opens via <input type="file">, so the storage-root
-    //    picker feels identical to picking files to upload. We try it first
-    //    because, unlike the server-spawned dialog below, it works whether the
-    //    UI is on the server machine or a remote one, and it doesn't silently
-    //    no-op when the server runs as a background service (no desktop
-    //    session). A tiny sentinel file lets the server map the chosen folder
-    //    back to an absolute path.
+  async function runNativePick() {
+    // 1. Preferred: the browser's own native OS folder dialog (File System
+    //    Access API — Chrome/Edge/Brave/Opera). This is the *same* modern OS
+    //    chooser the "+" upload button opens, so the storage-root picker looks
+    //    and feels identical to picking files to upload. Crucially, the browser
+    //    owns the foreground, so this dialog always appears *in front* — unlike
+    //    the server-spawned Win32 dialog (step 2) which loses the foreground
+    //    race and pops up behind the window. A tiny sentinel file lets the
+    //    server map the chosen folder back to an absolute path.
     if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
       let dirHandle: FileSystemDirectoryHandle | null = null;
       const sentinelName = `sp-picker-${crypto.randomUUID()}.tmp`;
+
       try {
         dirHandle = await (
           window as Window &
@@ -120,37 +137,52 @@ export default function ServerConfigStep({
               ) => Promise<FileSystemDirectoryHandle>;
             }
         ).showDirectoryPicker({ mode: "readwrite" });
-
-        // Write a tiny sentinel file so the server can locate the directory.
-        const fileHandle = await dirHandle.getFileHandle(sentinelName, {
-          create: true,
-        });
-        const writable = await fileHandle.createWritable();
-        await writable.write("x");
-        await writable.close();
-
-        // Ask the server to resolve the absolute path.
-        const res = await api.admin.resolveStorageSentinel(sentinelName);
-        setPathInput(res.path);
-        return;
       } catch (err: unknown) {
         const e = err as { name?: string };
         if (e?.name === "AbortError") return; // user pressed Cancel
-        // Any other failure (chosen folder not on the server, write
-        // permissions, server unreachable) → fall through to the
-        // server-spawned dialog, then the in-browser browser.
-      } finally {
-        // Best-effort cleanup — ignore errors (e.g. handle already released).
-        if (dirHandle) {
+        // Picker unavailable/blocked (e.g. insecure context) — fall through to
+        // the server-spawned dialog / in-browser browser below.
+        dirHandle = null;
+      }
+
+      if (dirHandle) {
+        try {
+          // Write a tiny sentinel file so the server can locate the directory.
+          const fileHandle = await dirHandle.getFileHandle(sentinelName, {
+            create: true,
+          });
+          const writable = await fileHandle.createWritable();
+          await writable.write("x");
+          await writable.close();
+
+          // Ask the server to resolve the absolute path.
+          const res = await api.admin.resolveStorageSentinel(sentinelName);
+          setPathInput(res.path);
+          return;
+        } catch {
+          // The user *did* pick a folder, but the server couldn't resolve it to
+          // an absolute path (folder not on the server, not readable, etc.).
+          // Do NOT fall back to the server-spawned native dialog here — on a
+          // desktop install it pops up *behind* the browser with no taskbar
+          // entry, which is exactly the confusing behaviour we're avoiding.
+          // Surface the problem and drop straight to the in-browser browser.
+          setError(
+            "Couldn't resolve the selected folder to a server path. Pick it from the list below, or type the path manually."
+          );
+          handleOpenBrowser();
+          return;
+        } finally {
+          // Best-effort cleanup — ignore errors (e.g. handle already released).
           dirHandle.removeEntry(sentinelName).catch(() => {});
         }
       }
     }
 
-    // 2. Fallback: a native OS folder dialog spawned by the server itself.
-    //    Only works for a desktop/localhost install where the server has a
-    //    visible session; returns "native_picker_unavailable" on a headless
-    //    or service install.
+    // 2. Fallback for browsers without the File System Access API (Firefox/
+    //    Safari): a native OS folder dialog spawned by the server itself. Only
+    //    works for a desktop/localhost install where the server has a visible
+    //    session; returns "native_picker_unavailable" on a headless or service
+    //    install.
     try {
       const res = await api.admin.pickDirectory();
       if (res?.path) {
@@ -163,8 +195,8 @@ export default function ServerConfigStep({
       // "native_picker_unavailable" → fall through to the in-browser browser.
     }
 
-    // 3. Last resort: the in-browser FolderBrowserModal (Firefox/Safari, or
-    //    when neither native dialog is usable).
+    // 3. Last resort: the in-browser FolderBrowserModal (when neither native
+    //    dialog is usable).
     handleOpenBrowser();
   }
 
@@ -344,13 +376,14 @@ export default function ServerConfigStep({
         <button
           type="button"
           onClick={handleNativePick}
-          className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors flex items-center gap-1.5"
+          disabled={picking}
+          className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
           title="Open system folder picker"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
           </svg>
-          Browse…
+          {picking ? "Opening…" : "Browse…"}
         </button>
         <button
           type="button"
