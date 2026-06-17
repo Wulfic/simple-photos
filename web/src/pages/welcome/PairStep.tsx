@@ -467,7 +467,7 @@ export default function PairStep({
           <button
             type="submit"
             disabled={loading || !serverAddress.trim() || !username.trim() || !password || !backupPublicUrl.trim() || (requiresTotp && totpCode.length !== 6)}
-            className="flex-[2] bg-green-600 text-white py-2.5 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium transition-colors"
+            className="btn btn-success btn-md flex-[2]"
           >
             {loading ? (
               <span className="flex items-center justify-center gap-2">

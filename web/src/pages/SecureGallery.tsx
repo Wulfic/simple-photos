@@ -381,7 +381,7 @@ export default function SecureGallery() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  className="input"
                   required
                   autoFocus
                   autoComplete="current-password"
@@ -686,7 +686,7 @@ export default function SecureGallery() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="e.g. Private Photos"
-                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                className="input"
                 required
                 maxLength={100}
                 autoFocus

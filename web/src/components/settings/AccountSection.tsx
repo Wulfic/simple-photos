@@ -158,7 +158,7 @@ export default function AccountSection({
                   type="password"
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  className="input"
                   required
                   autoComplete="current-password"
                   autoFocus
@@ -173,7 +173,7 @@ export default function AccountSection({
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  className="input"
                   required
                   minLength={8}
                   maxLength={128}
@@ -211,7 +211,7 @@ export default function AccountSection({
                   type="password"
                   value={confirmNewPassword}
                   onChange={(e) => setConfirmNewPassword(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  className="input"
                   required
                   autoComplete="new-password"
                 />
@@ -301,7 +301,7 @@ export default function AccountSection({
                   value={totpCode}
                   onChange={(e) => setTotpCode(e.target.value)}
                   placeholder="Enter 6-digit code"
-                  className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  className="input flex-1"
                   autoFocus
                 />
                 <button
@@ -326,7 +326,7 @@ export default function AccountSection({
                   value={disableCode}
                   onChange={(e) => setDisableCode(e.target.value)}
                   placeholder="6-digit code"
-                  className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  className="input flex-1"
                   autoFocus
                 />
                 <button

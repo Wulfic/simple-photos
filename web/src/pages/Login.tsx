@@ -100,7 +100,7 @@ export default function Login() {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  className="input"
                   required
                   autoFocus
                   autoComplete="username"
@@ -118,7 +118,7 @@ export default function Login() {
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full border rounded-md px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                    className="input pr-10"
                     required
                     autoComplete="current-password"
                     autoCorrect="off"
@@ -157,7 +157,7 @@ export default function Login() {
                 type="text"
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value)}
-                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+                className="input"
                 placeholder="6-digit code or backup code"
                 required
                 autoFocus

@@ -12,7 +12,12 @@
 import { forwardRef } from "react";
 import { cn } from "./cn";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+export type ButtonVariant =
+  | "primary"
+  | "secondary"
+  | "ghost"
+  | "danger"
+  | "success";
 export type ButtonSize = "sm" | "md" | "lg";
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
@@ -20,6 +25,7 @@ const VARIANT_CLASS: Record<ButtonVariant, string> = {
   secondary: "btn-secondary",
   ghost: "btn-ghost",
   danger: "btn-danger",
+  success: "btn-success",
 };
 
 const SIZE_CLASS: Record<ButtonSize, string> = {

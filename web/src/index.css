@@ -116,68 +116,120 @@
  * use a semantic class (`btn btn-primary btn-md`) instead of hand-rolled flat
  * Tailwind soup. The <Button>/<IconButton>/<Card> primitives compose these. */
 @layer components {
-  /* Buttons — base + size + variant are additive (`btn btn-primary btn-md`). */
+  /* Buttons — base + size + variant are additive (`btn btn-primary btn-md`).
+   * Depth comes from a vertical gradient (lighter top → darker bottom), a lit
+   * top edge + grounding drop shadow (shadow-btn), and a tactile press that
+   * pushes the button down (translate-y) while the shadow recesses inward. */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 font-medium rounded-lg
-           whitespace-nowrap select-none transition-all duration-150 ease-out
+    @apply inline-flex items-center justify-center gap-2 font-semibold rounded-lg
+           whitespace-nowrap select-none bg-gradient-to-b
+           transition-all duration-150 ease-out
            focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
            focus-visible:ring-accent-500/60 focus-visible:ring-offset-white
            dark:focus-visible:ring-offset-gray-900
-           active:scale-[0.98]
-           disabled:opacity-50 disabled:pointer-events-none disabled:active:scale-100;
+           active:translate-y-px
+           disabled:opacity-50 disabled:pointer-events-none
+           disabled:shadow-none disabled:active:translate-y-0;
   }
   .btn-sm { @apply text-xs px-2.5 py-1.5 gap-1.5 rounded-md; }
   .btn-md { @apply text-sm px-4 py-2; }
   .btn-lg { @apply text-base px-5 py-2.5; }
 
   .btn-primary {
-    @apply bg-accent-600 text-white shadow-xs ring-1 ring-inset ring-white/10
-           hover:bg-accent-500 hover:shadow-card
-           active:bg-accent-700;
+    @apply from-accent-500 to-accent-600 text-white
+           ring-1 ring-inset ring-accent-700/50 shadow-btn
+           hover:from-accent-400 hover:to-accent-500 hover:shadow-btn-hover
+           active:from-accent-600 active:to-accent-700 active:shadow-btn-inset;
   }
   .btn-secondary {
-    @apply bg-white text-gray-800 shadow-xs ring-1 ring-inset ring-gray-300
-           hover:bg-gray-50 active:bg-gray-100
-           dark:bg-gray-700 dark:text-gray-100 dark:ring-white/10
-           dark:hover:bg-gray-600 dark:active:bg-gray-600/70;
+    @apply from-white to-gray-50 text-gray-800
+           ring-1 ring-inset ring-gray-300/90 shadow-btn
+           hover:from-gray-50 hover:to-gray-100 hover:shadow-btn-hover
+           active:from-gray-100 active:to-gray-100 active:shadow-btn-inset
+           dark:from-gray-700 dark:to-gray-800 dark:text-gray-100 dark:ring-white/10
+           dark:hover:from-gray-600 dark:hover:to-gray-700
+           dark:active:from-gray-800 dark:active:to-gray-800;
   }
   .btn-ghost {
     @apply text-gray-700 hover:bg-gray-100 active:bg-gray-200
            dark:text-gray-200 dark:hover:bg-white/10 dark:active:bg-white/15;
   }
   .btn-danger {
-    @apply bg-red-600 text-white shadow-xs ring-1 ring-inset ring-white/10
-           hover:bg-red-500 hover:shadow-card active:bg-red-700;
+    @apply from-red-500 to-red-600 text-white
+           ring-1 ring-inset ring-red-700/50 shadow-btn
+           hover:from-red-400 hover:to-red-500 hover:shadow-btn-hover
+           active:from-red-600 active:to-red-700 active:shadow-btn-inset;
+  }
+  /* Success / confirm — green semantic action (create, import, download). */
+  .btn-success {
+    @apply from-green-500 to-green-600 text-white
+           ring-1 ring-inset ring-green-700/50 shadow-btn
+           hover:from-green-400 hover:to-green-500 hover:shadow-btn-hover
+           active:from-green-600 active:to-green-700 active:shadow-btn-inset;
   }
 
-  /* Square icon button — neutral, ghost-style hover, keyboard ring. */
+  /* Square icon button — neutral, ghost-style hover, tactile press, keyboard
+   * ring. Stays low-emphasis (toolbars) but presses like the others. */
   .icon-btn {
     @apply inline-flex items-center justify-center rounded-lg p-2 leading-none
-           text-gray-600 transition-colors
-           hover:bg-gray-100 hover:text-gray-900
+           text-gray-600 transition-all duration-150 ease-out
+           hover:bg-gray-100 hover:text-gray-900 active:bg-gray-200 active:scale-95
            dark:text-gray-300 dark:hover:bg-white/10 dark:hover:text-white
+           dark:active:bg-white/15
            focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60
            disabled:opacity-50 disabled:pointer-events-none;
   }
 
   /* Surfaces — `card` is the resting surface; add `card-interactive` for
-   * clickable cards that should lift on hover. */
+   * clickable cards that should lift on hover. Stronger layered shadow gives
+   * real separation from the page. */
   .card {
     @apply bg-white dark:bg-gray-800 rounded-xl
            border border-gray-200/80 dark:border-white/10 shadow-card;
   }
   .card-interactive {
     @apply transition-all duration-150 hover:shadow-card-hover
-           hover:-translate-y-0.5 hover:border-gray-300 dark:hover:border-white/20;
+           hover:-translate-y-0.5 hover:border-gray-300 dark:hover:border-white/20
+           active:translate-y-0 active:shadow-card;
   }
 
-  /* Text input / select / textarea opt-in class. */
+  /* Toggle switch — recessed track (inset shadow groove) with a raised knob
+   * (drop shadow). On-state uses the accent gradient like primary buttons. */
+  .toggle {
+    @apply relative inline-flex h-6 w-11 shrink-0 items-center rounded-full
+           bg-gray-300 dark:bg-gray-600 transition-colors duration-200
+           shadow-[inset_0_1px_2px_0_rgb(0_0_0_/_0.25)]
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60
+           focus-visible:ring-offset-2 focus-visible:ring-offset-white
+           dark:focus-visible:ring-offset-gray-900
+           disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .toggle-on {
+    @apply bg-gradient-to-b from-accent-500 to-accent-600;
+  }
+  .toggle-knob {
+    @apply inline-block h-4 w-4 transform rounded-full bg-white
+           shadow-[0_1px_2px_0_rgb(0_0_0_/_0.45)] ring-1 ring-black/5
+           transition-transform duration-200;
+  }
+
+  /* Stat tile — small metric card. Raised gradient surface + hairline + soft
+   * shadow so figures sit on a panel rather than a flat gray block. */
+  .stat-tile {
+    @apply rounded-lg p-3 text-center
+           bg-gradient-to-b from-white to-gray-50
+           dark:from-gray-700 dark:to-gray-800
+           border border-gray-200/70 dark:border-white/5 shadow-card;
+  }
+
+  /* Text input / select / textarea opt-in class. Recessed (inset shadow) so
+   * fields read as carved into the surface rather than floating on it. */
   .input {
     @apply w-full rounded-lg border border-gray-300 dark:border-gray-600
            bg-white dark:bg-gray-700 px-3 py-2 text-sm
            text-gray-900 dark:text-gray-100
            placeholder-gray-400 dark:placeholder-gray-500
-           shadow-xs transition
+           shadow-input transition
            focus:outline-none focus:ring-2 focus:ring-accent-500/50
            focus:border-accent-500;
   }

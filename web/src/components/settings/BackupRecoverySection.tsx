@@ -340,7 +340,7 @@ export default function BackupRecoverySection({
                 onChange={(e) => setBackupServerName(e.target.value)}
                 placeholder="My Backup Server"
                 maxLength={200}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
+                className="input"
               />
             </div>
             <div>
@@ -351,7 +351,7 @@ export default function BackupRecoverySection({
                 onChange={(e) => setBackupServerAddress(e.target.value)}
                 placeholder="https://backup.example.com:8443"
                 maxLength={500}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
+                className="input"
               />
             </div>
             <div>
@@ -362,7 +362,7 @@ export default function BackupRecoverySection({
                 onChange={(e) => setBackupServerApiKey(e.target.value)}
                 placeholder="Backup server API key"
                 maxLength={256}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
+                className="input"
               />
             </div>
             <div>
@@ -372,7 +372,7 @@ export default function BackupRecoverySection({
                 min={1}
                 value={backupServerFrequency}
                 onChange={(e) => setBackupServerFrequency(e.target.value)}
-                className="w-28 border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
+                className="input w-28"
               />
             </div>
             <div className="flex gap-2">

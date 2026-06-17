@@ -121,7 +121,7 @@ export default function Register() {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               required
               minLength={3}
               maxLength={50}
@@ -152,7 +152,7 @@ export default function Register() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               required
               minLength={8}
               maxLength={128}
@@ -211,7 +211,7 @@ export default function Register() {
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               required
               autoComplete="new-password"
               autoCorrect="off"

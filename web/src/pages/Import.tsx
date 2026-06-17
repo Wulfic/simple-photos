@@ -480,7 +480,7 @@ export default function Import() {
                 </button>
               )}
               {!importing && pendingCount > 0 && (
-                <button onClick={handleImport} className="bg-green-600 text-white px-5 py-2 rounded-md hover:bg-green-700 text-sm font-medium">
+                <button onClick={handleImport} className="btn btn-success btn-md">
                   Import {pendingCount} Files
                 </button>
               )}
@@ -526,7 +526,7 @@ export default function Import() {
             </p>
             <button
               onClick={() => navigate("/gallery")}
-              className="mt-3 bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700 text-sm font-medium"
+              className="mt-3 btn btn-success btn-md"
             >
               View Gallery →
             </button>

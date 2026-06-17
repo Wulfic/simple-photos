@@ -15,6 +15,7 @@ import { useState, useEffect, type ReactNode } from "react";
 import { api } from "../../api/client";
 import { downloadRaw } from "../../api/core";
 import { getErrorMessage } from "../../utils/formatters";
+import { Toggle } from "../ui";
 
 interface SslSettingsProps {
   error: string;
@@ -262,21 +263,12 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             {sslEnabled ? "HTTPS is enabled." : "Running on plain HTTP."}
           </p>
         </div>
-        <button
-          onClick={() => void handleToggleEnabled(!sslEnabled)}
+        <Toggle
+          label="Enable TLS"
+          checked={sslEnabled}
           disabled={togglePending}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:opacity-50 ${
-            sslEnabled ? "bg-accent-600" : "bg-gray-300 dark:bg-gray-600"
-          }`}
-          role="switch"
-          aria-checked={sslEnabled}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              sslEnabled ? "translate-x-6" : "translate-x-1"
-            }`}
-          />
-        </button>
+          onClick={() => void handleToggleEnabled(!sslEnabled)}
+        />
       </div>
 
       {/* ── TLS status card ───────────────────────────────────────── */}
@@ -357,7 +349,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 onChange={(e) => setLeDomain(e.target.value)}
                 placeholder="photos.example.com"
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                className="input"
                 disabled={leProvisioning}
               />
             </div>
@@ -371,7 +363,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 onChange={(e) => setLeEmail(e.target.value)}
                 placeholder="admin@example.com"
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                className="input"
                 disabled={leProvisioning}
               />
             </div>
@@ -386,7 +378,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                   max={65535}
                   value={leChallengePort}
                   onChange={(e) => setLeChallengePort(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                  className="input"
                   disabled={leProvisioning}
                 />
               </div>
@@ -482,7 +474,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
               <button
                 onClick={handleDownloadLocalCaBundle}
                 disabled={lcDownloading}
-                className="mt-3 bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm"
+                className="mt-3 btn btn-success btn-md"
               >
                 {lcDownloading ? "Preparing download…" : "⬇ Download CA install bundle (.zip)"}
               </button>
@@ -508,7 +500,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 placeholder="Simple Photos Local CA — kitchen-NAS"
                 maxLength={128}
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="input"
                 disabled={lcGenerating}
               />
             </div>
@@ -522,7 +514,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 onChange={(e) => setLcExtraHosts(e.target.value)}
                 placeholder="photos.local 192.168.1.50"
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="input"
                 disabled={lcGenerating}
               />
               <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -533,7 +525,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             <button
               onClick={handleGenerateLocalCa}
               disabled={lcGenerating}
-              className="bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm"
+              className="btn btn-success btn-md"
             >
               {lcGenerating
                 ? "Generating CA…"
@@ -573,7 +565,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 value={manualCert}
                 onChange={(e) => setManualCert(e.target.value)}
                 placeholder="/etc/ssl/certs/my-cert.pem"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                className="input"
                 disabled={manualSaving}
               />
             </div>
@@ -586,7 +578,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 value={manualKey}
                 onChange={(e) => setManualKey(e.target.value)}
                 placeholder="/etc/ssl/private/my-key.pem"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                className="input"
                 disabled={manualSaving}
               />
             </div>

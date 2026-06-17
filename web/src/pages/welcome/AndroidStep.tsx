@@ -57,7 +57,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
         <button
           onClick={handleDownload}
           disabled={downloading}
-          className="flex items-center justify-center gap-3 w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium transition-colors"
+          className="btn btn-success btn-lg w-full gap-3"
         >
           <AppIcon name="download" size="w-6 h-6" />
           {downloading ? "Downloading…" : "Download APK"}

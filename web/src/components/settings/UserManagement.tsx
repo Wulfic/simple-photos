@@ -188,7 +188,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
               type="text"
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               required
               minLength={3}
               autoFocus
@@ -200,7 +200,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
               type="password"
               value={newUserPassword}
               onChange={(e) => setNewUserPassword(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               required
               minLength={8}
             />

@@ -262,7 +262,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               value={certPath}
               onChange={(e) => setCertPath(e.target.value)}
               placeholder="/etc/ssl/certs/my-cert.pem"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
             />
           </div>
           <div>
@@ -274,7 +274,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               value={keyPath}
               onChange={(e) => setKeyPath(e.target.value)}
               placeholder="/etc/ssl/private/my-key.pem"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
             />
           </div>
           <button
@@ -312,7 +312,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLeDomain(e.target.value)}
               placeholder="photos.example.com"
               autoComplete="off"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               disabled={leProvisioning}
             />
             <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -329,7 +329,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLeEmail(e.target.value)}
               placeholder="admin@example.com"
               autoComplete="off"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               disabled={leProvisioning}
             />
             <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -347,7 +347,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 max={65535}
                 value={leChallengePort}
                 onChange={(e) => setLeChallengePort(e.target.value)}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+                className="input"
                 disabled={leProvisioning}
               />
               <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -439,7 +439,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLcLabel(e.target.value)}
               placeholder="Simple Photos — home NAS"
               maxLength={128}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               disabled={lcGenerating}
             />
             <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -455,7 +455,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               value={lcExtraHosts}
               onChange={(e) => setLcExtraHosts(e.target.value)}
               placeholder="photos.lan, 192.168.1.50, nas.local"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
+              className="input"
               disabled={lcGenerating}
             />
             <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -499,7 +499,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           <button
             onClick={handleDownloadLocalCaBundle}
             disabled={lcDownloading}
-            className="w-full bg-emerald-600 text-white py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm font-medium"
+            className="btn btn-success btn-md w-full"
           >
             {lcDownloading
               ? "Preparing download…"

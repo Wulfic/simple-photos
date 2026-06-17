@@ -13,6 +13,7 @@ import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import { Toggle } from "../components/ui";
 import { useIsAdmin } from "../hooks/useIsAdmin";
 import StorageStatsSection from "../components/StorageStatsSection";
 import UserManagement from "../components/settings/UserManagement";
@@ -278,11 +279,7 @@ export default function Settings() {
             <button
               onClick={() => navigate("/export-downloads")}
               disabled={exportFiles.length === 0}
-              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm transition-colors ${
-                exportFiles.length > 0
-                  ? "bg-green-600 text-white hover:bg-green-700"
-                  : "bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-400 cursor-not-allowed"
-              }`}
+              className="btn btn-success btn-md gap-1.5"
             >
               Downloads{exportFiles.length > 0 ? ` (${exportFiles.length})` : ""}
             </button>
@@ -346,7 +343,7 @@ export default function Settings() {
                 setViewMode("backup");
               }
             }}
-            className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
+            className="input"
           >
             <option value="__main__">Main Server (local)</option>
             {backupServers.map((s) => (
@@ -383,24 +380,11 @@ export default function Settings() {
                 ? "text-accent-600 dark:text-accent-400"
                 : "text-gray-600 dark:text-gray-500"
             }`}>Normal</span>
-            <button
+            <Toggle
+              label="Use large thumbnails"
+              checked={thumbnailSize === "large"}
               onClick={toggleThumbnailSize}
-              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 ${
-                thumbnailSize === "large"
-                  ? "bg-accent-600"
-                  : "bg-gray-300 dark:bg-gray-600"
-              }`}
-              role="switch"
-              aria-checked={thumbnailSize === "large"}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  thumbnailSize === "large"
-                    ? "translate-x-6"
-                    : "translate-x-1"
-                }`}
-              />
-            </button>
+            />
             <span className={`text-xs font-medium ${
               thumbnailSize === "large"
                 ? "text-accent-600 dark:text-accent-400"
@@ -505,7 +489,7 @@ export default function Settings() {
                     setError("Could not check APK availability.");
                   }
                 }}
-                className="inline-flex items-center gap-1.5 bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 text-sm"
+                className="btn btn-success btn-md gap-1.5"
                 title="Download the native Android APK for automatic phone-photo backup"
               >
                 📱 Android App (.apk)
@@ -590,7 +574,10 @@ export default function Settings() {
                   : "Audio files are excluded from backup sync. Only photos and videos will be backed up."}
               </p>
             </div>
-            <button
+            <Toggle
+              label="Include Audio in Backups"
+              checked={audioBackupEnabled}
+              disabled={togglingAudioBackup}
               onClick={async () => {
                 setTogglingAudioBackup(true);
                 setError("");
@@ -605,19 +592,7 @@ export default function Settings() {
                   setTogglingAudioBackup(false);
                 }
               }}
-              disabled={togglingAudioBackup}
-              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:opacity-50 ${
-                audioBackupEnabled ? "bg-accent-600" : "bg-gray-300 dark:bg-gray-600"
-              }`}
-              role="switch"
-              aria-checked={audioBackupEnabled}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  audioBackupEnabled ? "translate-x-6" : "translate-x-1"
-                }`}
-              />
-            </button>
+            />
           </div>
         </section>
       )}
