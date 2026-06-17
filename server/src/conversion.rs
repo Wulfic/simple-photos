@@ -689,7 +689,11 @@ mod tests {
 
         // A background pass firing mid-batch must not reset the denominator.
         progress_start(99);
-        assert_eq!(progress_snapshot().1, 4, "progress_start ignored while pinned");
+        assert_eq!(
+            progress_snapshot().1,
+            4,
+            "progress_start ignored while pinned"
+        );
 
         batch_end();
         let (active, _, _) = progress_snapshot();

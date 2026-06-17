@@ -219,14 +219,13 @@ pub async fn run_conversion_pass(
     // preserved within each tier.
     candidates.sort_by_key(|c| conversion::conversion_priority(c.target.category));
 
-    let (n_img, n_aud, n_vid) =
-        candidates
-            .iter()
-            .fold((0i64, 0i64, 0i64), |(i, a, v), c| match c.target.category {
-                conversion::MediaCategory::Image => (i + 1, a, v),
-                conversion::MediaCategory::Audio => (i, a + 1, v),
-                conversion::MediaCategory::Video => (i, a, v + 1),
-            });
+    let (n_img, n_aud, n_vid) = candidates
+        .iter()
+        .fold((0i64, 0i64, 0i64), |(i, a, v), c| match c.target.category {
+            conversion::MediaCategory::Image => (i + 1, a, v),
+            conversion::MediaCategory::Audio => (i, a + 1, v),
+            conversion::MediaCategory::Video => (i, a, v + 1),
+        });
     tracing::info!(
         "[INGEST] Found {} convertible files ({} image, {} audio, {} video) — \
          converting fast formats first",
