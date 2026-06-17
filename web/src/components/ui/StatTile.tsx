@@ -22,7 +22,7 @@ const TONE_CLASS: Record<StatTone, string> = {
   purple: "text-purple-600 dark:text-purple-400",
   orange: "text-orange-600 dark:text-orange-400",
   red: "text-red-600 dark:text-red-400",
-  neutral: "text-gray-900 dark:text-gray-100",
+  neutral: "text-fg",
 };
 
 export interface StatTileProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -41,7 +41,7 @@ export function StatTile({
   return (
     <div className={cn("stat-tile", className)} {...rest}>
       <p className={cn("text-xl font-bold", TONE_CLASS[tone])}>{value}</p>
-      <p className="text-xs text-gray-700 dark:text-gray-400">{label}</p>
+      <p className="text-xs text-fg-muted">{label}</p>
     </div>
   );
 }

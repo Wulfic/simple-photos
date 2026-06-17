@@ -329,25 +329,25 @@ export default function Import() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       <main className="max-w-4xl mx-auto p-4">
         <div className="mb-6">
           <h2 className="text-xl font-semibold dark:text-white">Import Photos</h2>
-          <p className="text-gray-700 dark:text-gray-400 text-sm mt-1">
+          <p className="text-fg-muted text-sm mt-1">
             Import from server directory or local files
           </p>
         </div>
 
         {/* Mode tabs */}
-        <div className="flex gap-1 bg-gray-200 dark:bg-gray-700 rounded-lg p-1 mb-6 w-fit">
+        <div className="flex gap-1 bg-edge rounded-lg p-1 mb-6 w-fit">
           <button
             onClick={() => setMode("server")}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               mode === "server"
-                ? "bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow"
-                : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                ? "bg-surface text-fg shadow"
+                : "text-fg-muted hover:text-fg"
             }`}
           >
             📁 Server Directory
@@ -356,8 +356,8 @@ export default function Import() {
             onClick={() => setMode("local")}
             className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               mode === "local"
-                ? "bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow"
-                : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+                ? "bg-surface text-fg shadow"
+                : "text-fg-muted hover:text-fg"
             }`}
           >
             💻 Local Upload
@@ -367,8 +367,8 @@ export default function Import() {
         {/* Server Directory Mode */}
         {mode === "server" && (
           <div className="card p-6 mb-6">
-            <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-3">Scan Server Directory</h3>
-            <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
+            <h3 className="font-semibold text-fg mb-3">Scan Server Directory</h3>
+            <p className="text-sm text-fg-muted mb-4">
               Scan a directory on the server for photos and videos to import. Files are encrypted locally before being stored.
             </p>
             <div className="flex gap-2">
@@ -377,7 +377,7 @@ export default function Import() {
                 value={scanPath}
                 onChange={(e) => setScanPath(e.target.value)}
                 placeholder="Server directory path (defaults to storage root)"
-                className="flex-1 border dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 text-sm"
+                className="input flex-1"
                 onKeyDown={(e) => { if (e.key === "Enter") handleServerScan(); }}
               />
               <button
@@ -418,7 +418,7 @@ export default function Import() {
               className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors mb-6 ${
                 dragOver
                   ? "border-accent-500 dark:border-accent-400 bg-accent-50 dark:bg-accent-900/30"
-                  : "border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
+                  : "border-edge-strong hover:border-edge-strong"
               }`}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
@@ -429,10 +429,10 @@ export default function Import() {
               }}
             >
               <div className="text-4xl mb-3">📂</div>
-              <p className="text-gray-700 dark:text-gray-300 font-medium mb-1">
+              <p className="text-fg-muted font-medium mb-1">
                 Drag & drop photos, videos, and JSON metadata files here
               </p>
-              <p className="text-gray-700 dark:text-gray-400 text-sm mb-4">or click to browse</p>
+              <p className="text-fg-muted text-sm mb-4">or click to browse</p>
               <label className="btn btn-primary btn-md inline-block cursor-pointer">
                 Select Files
                 <input
@@ -461,8 +461,8 @@ export default function Import() {
         {items.length > 0 && (
           <div className="card flex flex-wrap items-center justify-between p-4 mb-4 gap-3">
             <div className="flex flex-wrap gap-4 text-sm">
-              <span className="text-gray-700 dark:text-gray-300"><strong>{items.length}</strong> files</span>
-              <span className="text-gray-700 dark:text-gray-400">{formatBytes(items.reduce((sum, i) => sum + i.size, 0))}</span>
+              <span className="text-fg-muted"><strong>{items.length}</strong> files</span>
+              <span className="text-fg-muted">{formatBytes(items.reduce((sum, i) => sum + i.size, 0))}</span>
               {withMetadata > 0 && (
                 <span className="text-green-700 dark:text-green-400"><strong>{withMetadata}</strong> with metadata</span>
               )}
@@ -501,11 +501,11 @@ export default function Import() {
         {/* Progress bar */}
         {importing && (
           <div className="mb-4">
-            <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400 mb-1">
+            <div className="flex items-center justify-between text-sm text-fg-muted mb-1">
               <span>Importing… {progress.done}/{progress.total}</span>
               <span>{progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0}%</span>
             </div>
-            <div className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+            <div className="w-full h-2 bg-edge-strong rounded-full overflow-hidden">
               <div
                 className="h-full bg-accent-600 rounded-full transition-all duration-300"
                 style={{ width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%` }}

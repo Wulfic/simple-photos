@@ -5,8 +5,9 @@
  * photo preloading, crop/brightness/rotation editing, favorites,
  * and prev/next navigation via photoIds passed through location.state.
  */
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useParams, useLocation } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { db } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
@@ -54,7 +55,7 @@ interface ViewerLocationState {
 export default function Viewer() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const isBackupServer = useIsBackupServer();
 
   // Destructure navigation context from location.state (passed by Gallery)
@@ -102,6 +103,16 @@ export default function Viewer() {
   // part of the photo and the crop region drifts under the bar (#13).
   const editPanelRef = useRef<HTMLDivElement>(null);
   const [editPanelHeight, setEditPanelHeight] = useState(0);
+  // Coordinate frame for the crop overlay (border lines + corner handles),
+  // measured AFTER layout settles. Reading getBoundingClientRect()/getMediaRect()
+  // during render returned the pre-commit box — one step behind the
+  // editPanelHeight inset (which lands asynchronously via ResizeObserver after
+  // each tab switch) — so the overlay was permanently offset from where the
+  // photo actually rendered. Measuring in a layout effect keeps the handles
+  // locked to the real photo edges. Bump editLayoutTick to force a re-measure
+  // (e.g. when the full-res image finishes decoding in edit mode).
+  const [cropOverlayRects, setCropOverlayRects] = useState<{ media: DOMRect; container: DOMRect } | null>(null);
+  const [editLayoutTick, setEditLayoutTick] = useState(0);
 
   // ── Photo subtype state (burst, motion, panorama) ─────────────────────
   const [photoSubtype, setPhotoSubtype] = useState<string | undefined>();
@@ -300,8 +311,12 @@ export default function Viewer() {
     const nextId = photoIds[index];
     setSlideDirection(index > currentIndex ? "right" : "left");
     setSlideKey((k) => k + 1);
+    // Intra-viewer photo switch: keep the bespoke slide-in animation and opt
+    // OUT of the route crossfade so the two don't fight each other. (Entering
+    // and leaving the viewer still crossfades via the page view-transition.)
     navigate(`/photo/${nextId}`, {
       replace: true,
+      viewTransition: false,
       state: { photoIds, currentIndex: index, albumId, secureGallery, secureAlbumId } satisfies ViewerLocationState,
     });
   }, [photoIds, navigate, currentIndex]);
@@ -400,6 +415,32 @@ export default function Viewer() {
     ro.observe(el);
     return () => ro.disconnect();
   }, [editMode, editTab]);
+
+  // ── Measure the crop overlay's coordinate frame AFTER layout settles ───────
+  // Runs in a layout effect (post-commit, pre-paint) so the photo box reflects
+  // the just-applied editPanelHeight inset and EDIT_CROP_PADDING_SCALE rather
+  // than the stale pre-commit layout a render-time getBoundingClientRect would
+  // see. Re-measures whenever anything that moves the photo changes: the inset
+  // height, the active tab (padding kicks in for crop), rotation, the source,
+  // or a fresh decode (editLayoutTick). A window resize listener keeps it
+  // pinned during viewport changes. Without this the corner handles drifted off
+  // the photo edges and stayed there (#4/#13 follow-up).
+  useLayoutEffect(() => {
+    if (!editMode || editTab !== "crop") {
+      setCropOverlayRects(null);
+      return;
+    }
+    const measure = () => {
+      const container = cropContainerRef.current;
+      if (!container) return;
+      const media = getMediaRect(mediaType);
+      if (!media) return;
+      setCropOverlayRects({ media, container: container.getBoundingClientRect() });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [editMode, editTab, editPanelHeight, rotateValue, mediaType, mediaUrl, slideKey, editLayoutTick, getMediaRect, cropContainerRef]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -535,7 +576,7 @@ export default function Viewer() {
                   : "w-full h-full object-contain transition-transform duration-150"
                 }
                 draggable={inEdit ? false : undefined}
-                onLoad={inEdit ? undefined : computeCropZoom}
+                onLoad={inEdit ? () => setEditLayoutTick((t) => t + 1) : computeCropZoom}
                 onError={() => {
                   // Surface a decode/render failure instead of silently showing
                   // a broken image (or appearing stuck on the thumbnail) — #7.
@@ -580,23 +621,18 @@ export default function Viewer() {
                   visible={!editMode}
                 />
               )}
-              {inEdit && editTab === "crop" && cropImageRef.current && cropContainerRef.current && (() => {
-                // Use the hook's letterbox-aware visible content rect so
-                // the crop circles, drawn lines, and pointer-event
-                // handlers all share a single coordinate frame.  Falling
-                // back to the IMG element's raw bounding rect (the old
-                // behavior) put the corners on top of the letterbox
-                // padding instead of the photo itself.
-                const mediaRect = getMediaRect(mediaType) ?? cropImageRef.current.getBoundingClientRect();
-                return (
-                  <CropOverlay
-                    mediaRect={mediaRect}
-                    containerRect={cropContainerRef.current.getBoundingClientRect()}
-                    cropCorners={cropCorners}
-                    onCornerPointerDown={handleCornerPointerDown}
-                  />
-                );
-              })()}
+              {inEdit && editTab === "crop" && cropOverlayRects && (
+                // Coordinate frame is measured in a layout effect (see
+                // cropOverlayRects) so the border + handles stay locked to the
+                // photo's settled box instead of the stale pre-commit layout a
+                // render-time getBoundingClientRect would read.
+                <CropOverlay
+                  mediaRect={cropOverlayRects.media}
+                  containerRect={cropOverlayRects.container}
+                  cropCorners={cropCorners}
+                  onCornerPointerDown={handleCornerPointerDown}
+                />
+              )}
             </div>
           );
         })()}
@@ -700,6 +736,8 @@ export default function Viewer() {
                   setMediaDuration(dur);
                   if (trimEnd <= 0 || trimEnd > dur) setTrimEnd(dur);
                   if (trimStart > 0) v.currentTime = trimStart;
+                  // Video dimensions are now known — re-measure the crop frame.
+                  setEditLayoutTick((t) => t + 1);
                 }}
                 onTimeUpdate={(e) => {
                   if (editTab === "trim" && trimEnd > 0 && e.currentTarget.currentTime >= trimEnd) {
@@ -711,17 +749,14 @@ export default function Viewer() {
             </div>
             {/* Custom controls — NOT rotated (sits outside rotation wrapper) */}
             <VideoControls videoRef={videoRef} visible={true} />
-            {editTab === "crop" && videoRef.current && cropContainerRef.current && (() => {
-              const mediaRect = getMediaRect(mediaType) ?? videoRef.current!.getBoundingClientRect();
-              return (
-                <CropOverlay
-                  mediaRect={mediaRect}
-                  containerRect={cropContainerRef.current!.getBoundingClientRect()}
-                  cropCorners={cropCorners}
-                  onCornerPointerDown={handleCornerPointerDown}
-                />
-              );
-            })()}
+            {editTab === "crop" && cropOverlayRects && (
+              <CropOverlay
+                mediaRect={cropOverlayRects.media}
+                containerRect={cropOverlayRects.container}
+                cropCorners={cropCorners}
+                onCornerPointerDown={handleCornerPointerDown}
+              />
+            )}
           </div>
           );
         })()}
@@ -817,8 +852,10 @@ export default function Viewer() {
             onSelectFrame={(frameId) => {
               // Navigate to the selected burst frame
               if (frameId === id) return;
+              // Burst-frame switch is intra-viewer too — skip the crossfade.
               navigate(`/photo/${frameId}`, {
                 replace: true,
+                viewTransition: false,
                 state: { photoIds, currentIndex, albumId, secureGallery, secureAlbumId } satisfies ViewerLocationState,
               });
             }}

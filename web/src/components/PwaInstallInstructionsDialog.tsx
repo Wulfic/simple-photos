@@ -191,13 +191,13 @@ export default function PwaInstallInstructionsDialog({
         <div className="flex items-start justify-between mb-3">
           <h3
             id="pwa-install-title"
-            className="text-base font-semibold text-gray-900 dark:text-white"
+            className="text-base font-semibold text-fg"
           >
             {title}
           </h3>
           <button
             onClick={onClose}
-            className="text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            className="text-fg-muted hover:text-fg"
             aria-label="Close"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -206,14 +206,14 @@ export default function PwaInstallInstructionsDialog({
           </button>
         </div>
 
-        <ol className="list-decimal pl-5 space-y-1.5 text-sm text-gray-700 dark:text-gray-300">
+        <ol className="list-decimal pl-5 space-y-1.5 text-sm text-fg-muted">
           {steps.map((s, i) => (
             <li key={i}>{s}</li>
           ))}
         </ol>
 
         {note && (
-          <p className="mt-3 text-xs text-gray-700 dark:text-gray-400 italic">{note}</p>
+          <p className="mt-3 text-xs text-fg-muted italic">{note}</p>
         )}
 
         <div className="mt-5 flex justify-end">

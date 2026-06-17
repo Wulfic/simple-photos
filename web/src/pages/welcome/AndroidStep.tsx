@@ -44,10 +44,10 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
+      <h2 className="text-2xl font-bold text-fg mb-1">
         Set Up Android App
       </h2>
-      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
+      <p className="text-fg-muted text-sm mb-6">
         Install the Simple Photos app on your Android device for
         automatic photo backup.
       </p>
@@ -64,20 +64,20 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
         </button>
 
         {/* Sideloading instructions */}
-        <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-          <h3 className="font-medium text-gray-800 dark:text-gray-200 text-sm mb-3">
+        <div className="bg-canvas rounded-lg p-4">
+          <h3 className="font-medium text-fg text-sm mb-3">
             How to install (sideload):
           </h3>
-          <ol className="text-sm text-gray-600 dark:text-gray-400 space-y-3">
+          <ol className="text-sm text-fg-muted space-y-3">
             <li className="flex gap-3">
               <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">
                 1
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Download the APK
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Click the button above or transfer the APK to your
                   phone via USB/email.
                 </p>
@@ -88,10 +88,10 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 2
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Enable "Install unknown apps"
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Go to{" "}
                   <strong>
                     Settings → Apps → Special access → Install unknown
@@ -106,10 +106,10 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 3
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Open the APK
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Tap the downloaded APK file and confirm the
                   installation prompt.
                 </p>
@@ -120,13 +120,13 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 4
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Connect to your server
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Open the app, enter your server URL:
                 </p>
-                <code className="block mt-1 bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded text-xs text-gray-800 dark:text-gray-200 break-all">
+                <code className="block mt-1 bg-edge-strong px-2 py-1 rounded text-xs text-fg break-all">
                   {window.location.origin}
                 </code>
               </div>
@@ -136,10 +136,10 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 5
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Sign in & grant permissions
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Log in with your account and allow the app to access
                   your photos and videos for automatic encrypted backup.
                 </p>

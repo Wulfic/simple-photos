@@ -10,6 +10,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "../api/client";
 import { useProcessingStore } from "../store/processing";
+import { ProgressBanner } from "./ProgressBanner";
 
 /** Format seconds as HH:MM:SS, clamped to 0. */
 function formatEta(seconds: number): string {
@@ -85,37 +86,13 @@ export default function ConversionBanner() {
   const pct = counts.total > 0 ? (counts.done / counts.total) * 100 : 0;
 
   return (
-    <div className="fixed bottom-20 left-4 right-4 z-50 pointer-events-none">
-      <div className="card shadow-card-hover pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
-        <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-orange-500 dark:border-t-orange-400 rounded-full animate-spin flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
-              Converting media… {counts.done}/{counts.total}
-            </p>
-            {eta && (
-              <span className="text-xs tabular-nums text-gray-700 dark:text-gray-400 ml-2 flex-shrink-0">
-                {eta} remaining
-              </span>
-            )}
-          </div>
-          <div className="mt-1.5 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-orange-500 dark:bg-orange-400 rounded-full transition-all duration-500"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-        </div>
-        <button
-          onClick={() => setDismissed(true)}
-          className="icon-btn p-1 flex-shrink-0"
-          aria-label="Dismiss"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-    </div>
+    <ProgressBanner
+      position="bottom-20"
+      tone="orange"
+      label={`Converting media… ${counts.done}/${counts.total}`}
+      eta={eta}
+      pct={pct}
+      onDismiss={() => setDismissed(true)}
+    />
   );
 }

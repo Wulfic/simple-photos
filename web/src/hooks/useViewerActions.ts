@@ -5,7 +5,7 @@
  * Keeps the Viewer component focused on rendering and state management.
  */
 import { useState, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "./useAppNavigate";
 import { api } from "../api/client";
 import { db, type MediaType } from "../db";
 import { useAuthStore } from "../store/auth";
@@ -76,7 +76,7 @@ export default function useViewerActions({
   setError,
   preloadCache,
 }: UseViewerActionsParams) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
 
   const [showLeavePrompt, setShowLeavePrompt] = useState(false);
   const [saveCopySuccess, setSaveCopySuccess] = useState(false);

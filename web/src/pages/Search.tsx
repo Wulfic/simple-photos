@@ -3,7 +3,7 @@
  * (local IndexedDB) and server, with unified results.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db } from "../db";
@@ -15,6 +15,7 @@ import { usePhotoSelection } from "../hooks/usePhotoSelection";
 import { trashPhotos } from "../utils/trashPhotos";
 import { getErrorMessage } from "../utils/formatters";
 import { toast } from "../store/toast";
+import { GallerySkeleton } from "../components/skeletons";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,7 +74,7 @@ function withinEditDistance1(a: string, b: string): boolean {
 // ── Search Page ──────────────────────────────────────────────────────────────
 
 export default function Search() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -291,7 +292,7 @@ export default function Search() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+    <div className="min-h-screen bg-canvas text-fg">
       <AppHeader />
 
       <main className="max-w-screen-2xl mx-auto px-4 py-6">
@@ -307,12 +308,12 @@ export default function Search() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search tags, filenames, dates, media types…"
             maxLength={500}
-            className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent text-base"
+            className="w-full pl-10 pr-4 py-3 rounded-xl border border-edge-strong bg-surface text-fg placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent text-base"
           />
           {query && (
             <button
               onClick={() => { setQuery(""); setResults([]); setSearched(false); inputRef.current?.focus(); }}
-              className="absolute inset-y-0 right-3 flex items-center text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              className="absolute inset-y-0 right-3 flex items-center text-fg-muted hover:text-fg"
             >
               ✕
             </button>
@@ -327,17 +328,13 @@ export default function Search() {
         )}
 
         {/* Loading */}
-        {loading && (
-          <div className="flex justify-center py-12">
-            <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
+        {loading && <GallerySkeleton />}
 
         {/* No results */}
         {searched && !loading && results.length === 0 && (
           <div className="text-center py-12">
-            <p className="text-gray-700 dark:text-gray-400">No results found for "{query}"</p>
-            <p className="text-sm text-gray-600 dark:text-gray-500 mt-1">
+            <p className="text-fg-muted">No results found for "{query}"</p>
+            <p className="text-sm text-fg-muted mt-1">
               Try a tag, filename, date (e.g. "2024"), or type (e.g. "video")
             </p>
           </div>
@@ -351,7 +348,7 @@ export default function Search() {
                 <div className="flex items-center gap-3">
                   <button
                     onClick={clearSelection}
-                    className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                    className="text-fg-muted hover:text-fg"
                     aria-label="Cancel selection"
                   >
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -388,7 +385,7 @@ export default function Search() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-gray-700 dark:text-gray-400 mb-3">
+              <p className="text-sm text-fg-muted mb-3">
                 {results.length} result{results.length !== 1 ? "s" : ""}
               </p>
             )}
@@ -438,8 +435,8 @@ export default function Search() {
         {!query && (
           <div className="text-center py-16">
             <AppIcon name="magnify-glass" size="w-12 h-12" className="mx-auto mb-4 opacity-30" />
-            <p className="text-gray-700 dark:text-gray-400 mb-1">Search your library</p>
-            <p className="text-sm text-gray-600 dark:text-gray-500">
+            <p className="text-fg-muted mb-1">Search your library</p>
+            <p className="text-sm text-fg-muted">
               Search by tags, filenames, dates, or media types
             </p>
           </div>
@@ -554,7 +551,7 @@ function SearchResultTile({
   return (
     <div
       ref={tileRef}
-      className={`relative w-full h-full bg-gray-100 dark:bg-gray-700 overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${
+      className={`relative w-full h-full bg-surface-raised overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${
         isSelected ? "ring-2 ring-accent-500" : ""
       }`}
       onPointerDown={handlePointerDown}
@@ -595,7 +592,7 @@ function SearchResultTile({
           loading="lazy"
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-400 text-xs px-1 text-center">
+        <div className="w-full h-full flex items-center justify-center text-fg-muted text-xs px-1 text-center">
           {result.filename}
         </div>
       )}

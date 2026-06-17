@@ -34,18 +34,23 @@ Set-StrictMode -Version Latest
 # preference for the duration of the call and rely on the real exit code
 # ($LASTEXITCODE) instead.
 #
-# IMPORTANT: the command's own stdout/stderr is sent straight to the host (and
-# `2>&1` folds stderr into the success stream so progress text is not rendered
-# as red error records under an outer `2>&1` redirection). Only the integer
-# exit code is returned — otherwise the caller's `$code = Invoke-Native {...}`
-# would capture every output line as well, turning `if ($code -ne 0)` into a
-# false failure.
+# IMPORTANT: the command's own stdout/stderr is sent straight to the host, but
+# every pipeline item is flattened to a plain string first. This matters because
+# `2>&1` does NOT actually tame native stderr in PS 5.1: each stderr line a
+# native program writes is wrapped in a `NativeCommandError` ErrorRecord, and the
+# default formatter renders those as a red "<exe> : ... CategoryInfo ...
+# NativeCommandError" banner — so an innocuous tool warning (e.g. Vite's
+# chunk-size notice) looks like a hard failure even on exit 0. Stringifying each
+# item (ErrorRecord.ToString() yields just the original message) makes stderr
+# show as ordinary text. Only the integer exit code is returned — otherwise the
+# caller's `$code = Invoke-Native {...}` would capture every output line as well,
+# turning `if ($code -ne 0)` into a false failure.
 function Invoke-Native {
     param([Parameter(Mandatory)] [scriptblock]$Command)
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $Command 2>&1 | Out-Host
+        & $Command 2>&1 | ForEach-Object { Write-Host ($_.ToString()) }
     } finally {
         $ErrorActionPreference = $prev
     }

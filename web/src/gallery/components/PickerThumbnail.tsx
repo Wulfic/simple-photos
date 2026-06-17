@@ -26,7 +26,7 @@ export default function PickerThumbnail({ source, filename }: {
   }
 
   return (
-    <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-400 text-xs px-1 text-center bg-gray-100 dark:bg-gray-700">
+    <div className="w-full h-full flex items-center justify-center text-fg-muted text-xs px-1 text-center bg-surface-raised">
       {state === "loading" ? (
         <div className="w-4 h-4 border-2 border-gray-300 border-t-accent-500 rounded-full animate-spin" />
       ) : (

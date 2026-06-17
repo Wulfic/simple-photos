@@ -7,7 +7,7 @@
  * memories, trips), so the select circle now actually works there (#2).
  */
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "../../hooks/useAppNavigate";
 import type { CachedPhoto } from "../../db";
 import JustifiedGrid from "./JustifiedGrid";
 import AlbumTile from "../AlbumTile";
@@ -35,7 +35,7 @@ export default function SelectablePhotoGrid({
   onDeleted,
   allowDelete = true,
 }: SelectablePhotoGridProps) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const { selectionMode, selectedIds, enter, toggle, setAll, clear: clearSelection } = usePhotoSelection();
   const [showAddToAlbum, setShowAddToAlbum] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -67,7 +67,7 @@ export default function SelectablePhotoGrid({
           <div className="flex items-center gap-3">
             <button
               onClick={clearSelection}
-              className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+              className="text-fg-muted hover:text-fg"
               aria-label="Cancel selection"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

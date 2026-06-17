@@ -24,8 +24,8 @@ const EVENT_COLORS: Record<string, string> = {
   totp_enabled: "text-indigo-600 dark:text-indigo-400",
   totp_disabled: "text-indigo-600 dark:text-indigo-400",
   backup_code_used: "text-yellow-600 dark:text-yellow-400",
-  token_refresh: "text-gray-700 dark:text-gray-400",
-  logout: "text-gray-700 dark:text-gray-400",
+  token_refresh: "text-fg-muted",
+  logout: "text-fg-muted",
   // Blobs
   blob_upload: "text-cyan-600 dark:text-cyan-400",
   blob_delete: "text-red-500 dark:text-red-400",
@@ -61,7 +61,7 @@ const EVENT_COLORS: Record<string, string> = {
   // Background tasks
   auto_scan_complete: "text-teal-600 dark:text-teal-400",
   trash_purge_complete: "text-orange-600 dark:text-orange-400",
-  housekeeping_complete: "text-gray-700 dark:text-gray-400",
+  housekeeping_complete: "text-fg-muted",
   encryption_migration_complete: "text-emerald-600 dark:text-emerald-400",
   backup_sync_cycle_complete: "text-sky-600 dark:text-sky-400",
   // Admin
@@ -69,7 +69,7 @@ const EVENT_COLORS: Record<string, string> = {
 };
 
 const LEVEL_COLORS: Record<string, string> = {
-  debug: "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
+  debug: "bg-edge text-fg-muted",
   info: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
   warn: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
   error: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
@@ -80,8 +80,8 @@ const SYNC_STATUS_COLORS: Record<string, string> = {
   running: "text-blue-600 dark:text-blue-400",
   error: "text-red-600 dark:text-red-400",
   partial: "text-yellow-600 dark:text-yellow-400",
-  "": "text-gray-600 dark:text-gray-400",
-  never: "text-gray-600 dark:text-gray-400",
+  "": "text-fg-muted",
+  never: "text-fg-muted",
 };
 
 function TimingBar({ label, ms, maxMs }: { label: string; ms: number; maxMs: number }) {
@@ -90,16 +90,16 @@ function TimingBar({ label, ms, maxMs }: { label: string; ms: number; maxMs: num
     ms > 500 ? "bg-red-500" : ms > 100 ? "bg-yellow-500" : "bg-green-500";
   return (
     <div className="flex items-center gap-3 text-xs">
-      <span className="w-24 text-right text-gray-700 dark:text-gray-400 shrink-0 font-medium">
+      <span className="w-24 text-right text-fg-muted shrink-0 font-medium">
         {label}
       </span>
-      <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+      <div className="flex-1 bg-edge rounded-full h-2">
         <div
           className={`h-2 rounded-full transition-all ${color}`}
           style={{ width: `${Math.max(pct, 1)}%` }}
         />
       </div>
-      <span className="w-20 text-right font-mono text-gray-700 dark:text-gray-300 shrink-0">
+      <span className="w-20 text-right font-mono text-fg-muted shrink-0">
         {ms < 1 ? `${(ms * 1000).toFixed(0)} \u00B5s` : ms < 1000 ? `${ms.toFixed(1)} ms` : `${(ms / 1000).toFixed(2)} s`}
       </span>
     </div>
@@ -117,7 +117,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
       {/* ── Collection Timings ── */}
       <Section title="Collection Timings">
         <div className="mb-3 flex items-center gap-2">
-          <span className="text-xs text-gray-700 dark:text-gray-400">
+          <span className="text-xs text-fg-muted">
             Total collection time:
           </span>
           <span className={`text-sm font-bold ${
@@ -163,8 +163,8 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         </div>
         {/* Load averages */}
         {(server.load_average[0] > 0 || server.load_average[1] > 0) && (
-          <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-            <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
+          <div className="mt-3 p-3 bg-surface-raised/50 rounded-lg">
+            <p className="text-xs font-medium text-fg-muted mb-2">
               System Load Average
             </p>
             <div className="flex gap-6">
@@ -177,22 +177,22 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                   }`}>
                     {server.load_average[i].toFixed(2)}
                   </p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">{label}</p>
+                  <p className="text-xs text-fg-muted">{label}</p>
                 </div>
               ))}
             </div>
           </div>
         )}
-        <div className="mt-3 text-xs text-gray-700 dark:text-gray-400 space-y-0.5">
+        <div className="mt-3 text-xs text-fg-muted space-y-0.5">
           <p>
             <span className="font-medium">Storage root:</span>{" "}
-            <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">
+            <code className="bg-surface-raised px-1 rounded">
               {server.storage_root}
             </code>
           </p>
           <p>
             <span className="font-medium">Database:</span>{" "}
-            <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">
+            <code className="bg-surface-raised px-1 rounded">
               {server.db_path}
             </code>
           </p>
@@ -231,25 +231,25 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         </div>
         {/* WAL Checkpoint info */}
         {performance.wal_checkpoint && (
-          <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-            <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
+          <div className="mt-3 p-3 bg-surface-raised/50 rounded-lg">
+            <p className="text-xs font-medium text-fg-muted mb-2">
               WAL Checkpoint Status
             </p>
             <div className="flex gap-6 text-xs">
               <div>
-                <span className="text-gray-700 dark:text-gray-400">Log pages: </span>
-                <span className="font-bold text-gray-900 dark:text-white">
+                <span className="text-fg-muted">Log pages: </span>
+                <span className="font-bold text-fg">
                   {performance.wal_checkpoint.log_pages.toLocaleString()}
                 </span>
               </div>
               <div>
-                <span className="text-gray-700 dark:text-gray-400">Checkpointed: </span>
-                <span className="font-bold text-gray-900 dark:text-white">
+                <span className="text-fg-muted">Checkpointed: </span>
+                <span className="font-bold text-fg">
                   {performance.wal_checkpoint.checkpointed_pages.toLocaleString()}
                 </span>
               </div>
               <div>
-                <span className="text-gray-700 dark:text-gray-400">Blocked: </span>
+                <span className="text-fg-muted">Blocked: </span>
                 <span className={`font-bold ${
                   performance.wal_checkpoint.busy > 0 ? "text-yellow-600 dark:text-yellow-400" : "text-green-600 dark:text-green-400"
                 }`}>
@@ -262,14 +262,14 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* SQLite compile options */}
         {performance.compile_options.length > 0 && (
           <details className="mt-3">
-            <summary className="text-xs font-medium text-gray-700 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200">
+            <summary className="text-xs font-medium text-fg-muted cursor-pointer hover:text-fg">
               SQLite Compile Options ({performance.compile_options.length})
             </summary>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {performance.compile_options.map((opt) => (
                 <span
                   key={opt}
-                  className="inline-block px-2 py-0.5 bg-gray-100 dark:bg-gray-700 rounded text-[10px] font-mono text-gray-600 dark:text-gray-300"
+                  className="inline-block px-2 py-0.5 bg-surface-raised rounded text-[10px] font-mono text-fg-muted"
                 >
                   {opt}
                 </span>
@@ -300,11 +300,11 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Disk usage bar */}
         {storage.disk_total_bytes > 0 && (
           <div className="mt-3">
-            <div className="flex justify-between text-xs text-gray-700 dark:text-gray-400 mb-1">
+            <div className="flex justify-between text-xs text-fg-muted mb-1">
               <span>Disk Usage</span>
               <span>{storage.disk_used_percent.toFixed(1)}%</span>
             </div>
-            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+            <div className="w-full bg-edge rounded-full h-2.5">
               <div
                 className={`h-2.5 rounded-full transition-all ${
                   storage.disk_used_percent > 90
@@ -343,7 +343,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Media type breakdown */}
         {Object.keys(photos.photos_by_media_type).length > 0 && (
           <div className="mt-3">
-            <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
+            <p className="text-xs font-medium text-fg-muted mb-2">
               By Media Type
             </p>
             <div className="flex flex-wrap gap-2">
@@ -352,17 +352,17 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                 .map(([type, count]) => (
                   <span
                     key={type}
-                    className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-xs text-gray-700 dark:text-gray-300"
+                    className="inline-flex items-center gap-1 px-2 py-1 bg-surface-raised rounded text-xs text-fg-muted"
                   >
                     <span className="font-medium">{type}</span>
-                    <span className="text-gray-600 dark:text-gray-400">{count.toLocaleString()}</span>
+                    <span className="text-fg-muted">{count.toLocaleString()}</span>
                   </span>
                 ))}
             </div>
           </div>
         )}
         {/* Date range */}
-        <div className="mt-3 text-xs text-gray-700 dark:text-gray-400 space-y-0.5">
+        <div className="mt-3 text-xs text-fg-muted space-y-0.5">
           {photos.oldest_photo && (
             <p>
               <span className="font-medium">Oldest:</span> {formatDate(photos.oldest_photo)}
@@ -386,7 +386,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Event type breakdown */}
         {Object.keys(audit.events_by_type).length > 0 && (
           <div className="mt-3">
-            <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
+            <p className="text-xs font-medium text-fg-muted mb-2">
               Events by Type
             </p>
             <div className="flex flex-wrap gap-2">
@@ -396,8 +396,8 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                   <span
                     key={type}
                     className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${
-                      EVENT_COLORS[type] || "text-gray-700 dark:text-gray-300"
-                    } bg-gray-100 dark:bg-gray-700`}
+                      EVENT_COLORS[type] || "text-fg-muted"
+                    } bg-surface-raised`}
                   >
                     <span className="font-medium">{type.replace(/_/g, " ")}</span>
                     <span className="opacity-60">{count.toLocaleString()}</span>
@@ -412,23 +412,23 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
             <p className="text-xs font-medium text-red-600 dark:text-red-400 mb-2">
               Recent Security Events ({audit.recent_failures.length})
             </p>
-            <div className="max-h-48 overflow-y-auto rounded border border-gray-200 dark:border-gray-700">
+            <div className="max-h-48 overflow-y-auto rounded border border-edge">
               <table className="w-full text-xs">
-                <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                <thead className="bg-surface sticky top-0">
                   <tr>
                     <th className="text-left px-2 py-1 font-medium">Event</th>
                     <th className="text-left px-2 py-1 font-medium">IP</th>
                     <th className="text-left px-2 py-1 font-medium">Time</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                <tbody className="divide-y divide-edge">
                   {audit.recent_failures.slice(0, 20).map((f, i) => (
-                    <tr key={i} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                    <tr key={i} className="hover:bg-surface-sunken dark:hover:bg-white/5">
                       <td className="px-2 py-1 text-red-600 dark:text-red-400 font-mono">
                         {f.event_type.replace(/_/g, " ")}
                       </td>
                       <td className="px-2 py-1 font-mono">{f.ip_address}</td>
-                      <td className="px-2 py-1 text-gray-700 dark:text-gray-500" title={formatDate(f.created_at)}>
+                      <td className="px-2 py-1 text-fg-muted" title={formatDate(f.created_at)}>
                         {relativeTime(f.created_at)}
                       </td>
                     </tr>
@@ -456,7 +456,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                 <span
                   key={level}
                   className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${
-                    LEVEL_COLORS[level] || "bg-gray-100 dark:bg-gray-700"
+                    LEVEL_COLORS[level] || "bg-surface-raised"
                   }`}
                 >
                   {level.toUpperCase()} {count.toLocaleString()}
@@ -480,23 +480,23 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Per-server detail cards */}
         {backup.servers.length > 0 && (
           <div className="space-y-3">
-            <p className="text-xs font-medium text-gray-700 dark:text-gray-400">
+            <p className="text-xs font-medium text-fg-muted">
               Backup Servers ({backup.servers.length})
             </p>
             {backup.servers.map((srv) => {
               const isExpanded = expandedBackupServer === srv.id;
-              const statusColor = SYNC_STATUS_COLORS[srv.last_sync_status] || "text-gray-700 dark:text-gray-500";
+              const statusColor = SYNC_STATUS_COLORS[srv.last_sync_status] || "text-fg-muted";
               const hasRecentDiag = srv.last_diagnostics !== null;
 
               return (
                 <div
                   key={srv.id}
-                  className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+                  className="border border-edge rounded-lg overflow-hidden"
                 >
                   {/* Server header row */}
                   <button
                     onClick={() => setExpandedBackupServer(isExpanded ? null : srv.id)}
-                    className="w-full flex items-center justify-between p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                    className="w-full flex items-center justify-between p-3 text-left hover:bg-surface-sunken dark:hover:bg-white/10/50 transition-colors"
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <div className={`w-2 h-2 rounded-full shrink-0 ${
@@ -508,10 +508,10 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                           : "bg-gray-400"
                       }`} />
                       <div className="min-w-0">
-                        <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                        <p className="text-sm font-semibold text-fg truncate">
                           {srv.name}
                         </p>
-                        <p className="text-xs text-gray-700 dark:text-gray-400 font-mono truncate">
+                        <p className="text-xs text-fg-muted font-mono truncate">
                           {srv.address}
                         </p>
                       </div>
@@ -521,12 +521,12 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                         <p className={`text-xs font-medium ${statusColor}`}>
                           {srv.last_sync_status || "never synced"}
                         </p>
-                        <p className="text-[10px] text-gray-600 dark:text-gray-400">
+                        <p className="text-[10px] text-fg-muted">
                           {srv.last_sync_at ? relativeTime(srv.last_sync_at) : "no sync yet"}
                         </p>
                       </div>
                       {!srv.enabled && (
-                        <span className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded">
+                        <span className="px-1.5 py-0.5 text-[10px] font-bold bg-edge-strong text-fg-muted rounded">
                           DISABLED
                         </span>
                       )}
@@ -536,7 +536,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                         </span>
                       )}
                       <svg
-                        className={`w-4 h-4 text-gray-600 dark:text-gray-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                        className={`w-4 h-4 text-fg-muted transition-transform ${isExpanded ? "rotate-180" : ""}`}
                         fill="none" stroke="currentColor" viewBox="0 0 24 24"
                       >
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -546,30 +546,30 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
 
                   {/* Expanded details */}
                   {isExpanded && (
-                    <div className="border-t border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-800/50 space-y-3">
+                    <div className="border-t border-edge p-3 bg-surface/50 space-y-3">
                       {/* Server config */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                         <div>
-                          <p className="text-gray-700 dark:text-gray-400">Sync Frequency</p>
-                          <p className="font-medium text-gray-900 dark:text-white">
+                          <p className="text-fg-muted">Sync Frequency</p>
+                          <p className="font-medium text-fg">
                             Every {srv.sync_frequency_hours}h
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-700 dark:text-gray-400">Status</p>
+                          <p className="text-fg-muted">Status</p>
                           <p className={`font-medium ${statusColor}`}>
                             {srv.last_sync_status || "Never synced"}
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-700 dark:text-gray-400">Last Sync</p>
-                          <p className="font-medium text-gray-900 dark:text-white">
+                          <p className="text-fg-muted">Last Sync</p>
+                          <p className="font-medium text-fg">
                             {srv.last_sync_at ? relativeTime(srv.last_sync_at) : "Never"}
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-700 dark:text-gray-400">Last Report</p>
-                          <p className="font-medium text-gray-900 dark:text-white">
+                          <p className="text-fg-muted">Last Report</p>
+                          <p className="font-medium text-fg">
                             {srv.last_diagnostics_at ? relativeTime(srv.last_diagnostics_at) : "None"}
                           </p>
                         </div>
@@ -588,7 +588,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                       {/* Backup server diagnostics (pushed by the backup) */}
                       {srv.last_diagnostics && (
                         <div>
-                          <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
+                          <p className="text-xs font-medium text-fg-muted mb-2">
                             Server Health (reported {srv.last_diagnostics_at ? relativeTime(srv.last_diagnostics_at) : "unknown"})
                           </p>
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -627,12 +627,12 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                       {/* Recent sync logs */}
                       {srv.recent_sync_logs.length > 0 && (
                         <div>
-                          <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
+                          <p className="text-xs font-medium text-fg-muted mb-2">
                             Recent Sync History ({srv.recent_sync_logs.length})
                           </p>
-                          <div className="max-h-48 overflow-y-auto rounded border border-gray-200 dark:border-gray-700">
+                          <div className="max-h-48 overflow-y-auto rounded border border-edge">
                             <table className="w-full text-xs">
-                              <thead className="bg-gray-100 dark:bg-gray-800 sticky top-0">
+                              <thead className="bg-surface-sunken dark:bg-surface sticky top-0">
                                 <tr>
                                   <th className="text-left px-2 py-1 font-medium">Status</th>
                                   <th className="text-left px-2 py-1 font-medium">Started</th>
@@ -642,29 +642,29 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                                   <th className="text-left px-2 py-1 font-medium">Error</th>
                                 </tr>
                               </thead>
-                              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                              <tbody className="divide-y divide-edge">
                                 {srv.recent_sync_logs.map((log) => {
-                                  const logStatusColor = SYNC_STATUS_COLORS[log.status] || "text-gray-700 dark:text-gray-500";
+                                  const logStatusColor = SYNC_STATUS_COLORS[log.status] || "text-fg-muted";
                                   let duration = "";
                                   if (log.completed_at && log.started_at) {
                                     const ms = new Date(log.completed_at).getTime() - new Date(log.started_at).getTime();
                                     duration = ms < 1000 ? `${ms}ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms / 60000)}m`;
                                   }
                                   return (
-                                    <tr key={log.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                                    <tr key={log.id} className="hover:bg-surface-sunken dark:hover:bg-white/5">
                                       <td className={`px-2 py-1 font-medium ${logStatusColor}`}>
                                         {log.status}
                                       </td>
-                                      <td className="px-2 py-1 text-gray-700 dark:text-gray-500" title={formatDate(log.started_at)}>
+                                      <td className="px-2 py-1 text-fg-muted" title={formatDate(log.started_at)}>
                                         {relativeTime(log.started_at)}
                                       </td>
-                                      <td className="px-2 py-1 font-mono text-gray-700 dark:text-gray-500 hidden sm:table-cell">
+                                      <td className="px-2 py-1 font-mono text-fg-muted hidden sm:table-cell">
                                         {duration || (log.status === "running" ? "in progress" : "-")}
                                       </td>
-                                      <td className="px-2 py-1 text-right font-mono text-gray-900 dark:text-white">
+                                      <td className="px-2 py-1 text-right font-mono text-fg">
                                         {log.photos_synced.toLocaleString()}
                                       </td>
-                                      <td className="px-2 py-1 text-right font-mono text-gray-700 dark:text-gray-500 hidden sm:table-cell">
+                                      <td className="px-2 py-1 text-right font-mono text-fg-muted hidden sm:table-cell">
                                         {log.bytes_synced > 0 ? formatBytes(log.bytes_synced) : "-"}
                                       </td>
                                       <td className="px-2 py-1 text-red-600 dark:text-red-400 max-w-[200px] truncate" title={log.error || ""}>
@@ -681,7 +681,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
 
                       {/* No data state */}
                       {!srv.last_diagnostics && srv.recent_sync_logs.length === 0 && (
-                        <p className="text-xs text-gray-600 dark:text-gray-500 italic">
+                        <p className="text-xs text-fg-muted italic">
                           No diagnostics reports or sync logs received from this server yet.
                         </p>
                       )}
@@ -694,7 +694,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         )}
 
         {backup.servers.length === 0 && (
-          <p className="text-xs text-gray-600 dark:text-gray-500 italic">
+          <p className="text-xs text-fg-muted italic">
             No backup servers configured.
           </p>
         )}
@@ -708,12 +708,12 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
             .map(([table, count]) => (
               <div
                 key={table}
-                className="flex items-center justify-between bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2 text-xs"
+                className="flex items-center justify-between bg-surface-raised/50 rounded px-3 py-2 text-xs"
               >
-                <span className="font-mono text-gray-600 dark:text-gray-300">
+                <span className="font-mono text-fg-muted">
                   {table}
                 </span>
-                <span className="font-bold text-gray-900 dark:text-white">
+                <span className="font-bold text-fg">
                   {count.toLocaleString()}
                 </span>
               </div>

@@ -46,10 +46,10 @@ export default function UsersStep({
 }: UsersStepProps) {
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
+      <h2 className="text-2xl font-bold text-fg mb-1">
         Additional Users
       </h2>
-      <p className="text-gray-700 dark:text-gray-400 text-sm mb-4">
+      <p className="text-fg-muted text-sm mb-4">
         Create accounts for family members or other users. You can always
         add more later in Settings.
       </p>
@@ -63,7 +63,7 @@ export default function UsersStep({
               className="flex items-center justify-between bg-green-50 dark:bg-green-900/30 rounded-lg px-4 py-2.5"
             >
               <div>
-                <span className="font-medium text-gray-800 dark:text-gray-200">
+                <span className="font-medium text-fg">
                   {u.username}
                 </span>
                 <span
@@ -91,14 +91,14 @@ export default function UsersStep({
           className="space-y-4 border rounded-lg p-4"
         >
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Username
             </label>
             <input
               type="text"
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
+              className="input"
               required
               minLength={3}
               maxLength={50}
@@ -131,7 +131,7 @@ export default function UsersStep({
           />
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Role
             </label>
             <div className="flex gap-3">
@@ -146,7 +146,7 @@ export default function UsersStep({
                 />
                 <span className="text-sm">
                   <span className="font-medium">User</span>
-                  <span className="text-gray-700 dark:text-gray-400">
+                  <span className="text-fg-muted">
                     {" "}
                     — Upload & view own photos
                   </span>
@@ -163,7 +163,7 @@ export default function UsersStep({
                 />
                 <span className="text-sm">
                   <span className="font-medium">Admin</span>
-                  <span className="text-gray-700 dark:text-gray-400">
+                  <span className="text-fg-muted">
                     {" "}
                     — Full control
                   </span>
@@ -209,7 +209,7 @@ export default function UsersStep({
             setShowUserForm(true);
             setError("");
           }}
-          className="w-full border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg py-3 text-gray-700 dark:text-gray-400 hover:border-accent-400 dark:hover:border-accent-500 hover:text-accent-600 dark:hover:text-accent-400 transition-colors text-sm font-medium"
+          className="w-full border-2 border-dashed border-edge-strong rounded-lg py-3 text-fg-muted hover:border-accent-400 dark:hover:border-accent-500 hover:text-accent-600 dark:hover:text-accent-400 transition-colors text-sm font-medium"
         >
           + Add a user
         </button>

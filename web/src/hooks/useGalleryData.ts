@@ -6,7 +6,7 @@
  *  - usePhotoSync        — synchronises server→IDB + periodic re-sync
  */
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "./useAppNavigate";
 import { hasCryptoKey } from "../crypto/crypto";
 import type { CachedPhoto } from "../db";
 import { useSecureBlobFilter } from "../gallery/hooks/useSecureBlobFilter";
@@ -32,7 +32,7 @@ export interface GalleryDataResult {
  * Always operates in encrypted mode. Loads encrypted photos from IndexedDB.
  */
 export function useGalleryData(): GalleryDataResult {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [error, setError] = useState("");
   const { secureBlobIds, refreshSecureBlobIds, startPolling } = useSecureBlobFilter();
   const { encryptedPhotos, loading, loadEncryptedPhotos } = usePhotoSync();

@@ -129,12 +129,12 @@ export default function AccountSection({
   return (
       <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Account</h2>
-        <p className="text-gray-600 dark:text-gray-400 mb-4">
+        <p className="text-fg-muted mb-4">
           Signed in as <span className="font-medium">{username}</span>
         </p>
 
         {/* ── Change Password ──────────────────────────────────────── */}
-        <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+        <div className="border-t border-edge pt-4 mt-4">
           <h3 className="text-base font-semibold mb-3">Password</h3>
 
           {!showChangePassword ? (
@@ -151,7 +151,7 @@ export default function AccountSection({
           ) : (
             <form onSubmit={handleChangePassword} className="space-y-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-fg-muted mb-1">
                   Current Password
                 </label>
                 <input
@@ -166,7 +166,7 @@ export default function AccountSection({
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-fg-muted mb-1">
                   New Password
                 </label>
                 <input
@@ -183,13 +183,13 @@ export default function AccountSection({
                 {newPassword.length > 0 && (
                   <div className="mt-2">
                     <div className="flex items-center gap-2 mb-1">
-                      <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                      <div className="flex-1 h-1.5 bg-edge-strong rounded-full overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all duration-300 ${pw.color}`}
                           style={{ width: `${(pw.score / pw.max) * 100}%` }}
                         />
                       </div>
-                      <span className="text-xs font-medium text-gray-600 dark:text-gray-400 w-12 text-right">
+                      <span className="text-xs font-medium text-fg-muted w-12 text-right">
                         {pw.label}
                       </span>
                     </div>
@@ -204,7 +204,7 @@ export default function AccountSection({
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-fg-muted mb-1">
                   Confirm New Password
                 </label>
                 <input
@@ -244,7 +244,7 @@ export default function AccountSection({
                   Cancel
                 </button>
               </div>
-              <p className="text-xs text-gray-700 dark:text-gray-400">
+              <p className="text-xs text-fg-muted">
                 Changing your password will sign you out of all other sessions.
               </p>
             </form>
@@ -252,7 +252,7 @@ export default function AccountSection({
         </div>
 
         {/* ── Two-Factor Authentication ─────────────────────────────── */}
-        <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+        <div className="border-t border-edge pt-4 mt-4">
           <h3 className="text-base font-semibold mb-3">Two-Factor Authentication</h3>
 
           {!totpUri && !showDisable2fa && (
@@ -275,7 +275,7 @@ export default function AccountSection({
 
           {totpUri && (
             <div className="space-y-4">
-              <p className="text-sm text-gray-600 dark:text-gray-400">
+              <p className="text-sm text-fg-muted">
                 Scan this QR code with your authenticator app:
               </p>
               <div className="flex justify-center">
@@ -284,10 +284,10 @@ export default function AccountSection({
 
               {backupCodes.length > 0 && (
                 <div>
-                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <p className="text-sm font-medium text-fg-muted mb-2">
                     Backup codes (save these somewhere safe):
                   </p>
-                  <div className="bg-gray-100 dark:bg-gray-700 rounded p-3 font-mono text-sm grid grid-cols-2 gap-1">
+                  <div className="bg-surface-raised rounded p-3 font-mono text-sm grid grid-cols-2 gap-1">
                     {backupCodes.map((code, i) => (
                       <span key={i}>{code}</span>
                     ))}
@@ -317,7 +317,7 @@ export default function AccountSection({
 
           {showDisable2fa && (
             <form onSubmit={handleDisable2fa} className="space-y-3">
-              <p className="text-sm text-gray-600 dark:text-gray-400">
+              <p className="text-sm text-fg-muted">
                 Enter a TOTP code to disable two-factor authentication:
               </p>
               <div className="flex gap-2">

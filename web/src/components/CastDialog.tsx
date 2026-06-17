@@ -117,7 +117,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
     case "unsupported":
       body = (
         <div className="space-y-2">
-          <p className="text-sm text-gray-600 dark:text-gray-300">
+          <p className="text-sm text-fg-muted">
             Your browser doesn't expose the Presentation API needed for
             automatic device discovery.  Casting requires a Chromium-based
             browser (Brave, Chrome, Edge) with media casting enabled.
@@ -136,7 +136,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
     case "no_devices":
       body = (
         <div className="space-y-3">
-          <p className="text-sm text-gray-600 dark:text-gray-300">
+          <p className="text-sm text-fg-muted">
             Scanning for Chromecast devices on your network…  Make sure your
             computer and Chromecast are on the same Wi-Fi network.
           </p>
@@ -150,7 +150,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
           </button>
           <button
             onClick={() => setShowTabCastHelp((v) => !v)}
-            className="w-full text-xs text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 underline"
+            className="w-full text-xs text-fg-muted hover:text-fg underline"
           >
             {showTabCastHelp ? "Hide" : "No devices found? Try tab casting"}
           </button>
@@ -162,7 +162,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
     case "available":
       body = (
         <div className="space-y-3">
-          <p className="text-sm text-gray-600 dark:text-gray-300">
+          <p className="text-sm text-fg-muted">
             Cast devices are available on your network.  Click below to choose
             one and begin casting.
           </p>
@@ -174,7 +174,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
             <CastIcon className="w-4 h-4" />
             {busy ? "Opening picker…" : "Choose a device"}
           </button>
-          <p className="text-xs text-gray-700 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             Note: the Chromecast loads the receiver page directly from this
             server.  If your TLS certificate is only trusted in the browser
             (not the system trust store), use{" "}
@@ -195,7 +195,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
       body = (
         <div className="flex items-center gap-3 py-2">
           <div className="w-4 h-4 border-2 border-accent-500 border-t-transparent rounded-full animate-spin shrink-0" />
-          <p className="text-sm text-gray-600 dark:text-gray-300">
+          <p className="text-sm text-fg-muted">
             Connecting{device ? ` to ${device}` : ""}…
           </p>
         </div>
@@ -208,10 +208,10 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
           <div className="flex items-center gap-3 p-3 rounded-md bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
             <span className="w-2.5 h-2.5 rounded-full bg-green-500 shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+              <p className="text-sm font-medium text-fg truncate">
                 Casting{device ? ` to ${device}` : ""}
               </p>
-              <p className="text-xs text-gray-700 dark:text-gray-400">
+              <p className="text-xs text-fg-muted">
                 Open a photo in the viewer — it will appear on your TV.
               </p>
             </div>
@@ -240,11 +240,11 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
         aria-modal="true"
         aria-labelledby="cast-dialog-title"
       >
-        <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
-          <CastIcon className="w-5 h-5 text-gray-700 dark:text-gray-200" />
+        <div className="px-5 py-4 border-b border-edge flex items-center gap-2">
+          <CastIcon className="w-5 h-5 text-fg-muted" />
           <h2
             id="cast-dialog-title"
-            className="text-base font-semibold text-gray-900 dark:text-white flex-1"
+            className="text-base font-semibold text-fg flex-1"
           >
             Cast to TV
           </h2>

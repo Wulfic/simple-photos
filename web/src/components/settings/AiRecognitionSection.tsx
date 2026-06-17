@@ -73,7 +73,7 @@ export default function AiRecognitionSection({
   return (
     <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">AI Recognition</h2>
-      <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
+      <p className="text-sm text-fg-muted mb-4">
         Automatically detect faces and objects in your photos. Detected people
         are grouped into clusters and objects are tagged for easy searching.
       </p>
@@ -81,10 +81,10 @@ export default function AiRecognitionSection({
       {/* Enable toggle */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-medium text-fg-muted">
             Enable AI Processing
           </h3>
-          <p className="text-xs text-gray-700 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             {status?.enabled
               ? "AI is analysing your photos in the background."
               : "AI processing is disabled."}
@@ -111,7 +111,7 @@ export default function AiRecognitionSection({
 
       {/* GPU indicator */}
       {status && (
-        <p className="text-xs text-gray-700 dark:text-gray-400 mb-4">
+        <p className="text-xs text-fg-muted mb-4">
           Execution: {status.gpu_available ? "GPU (CUDA)" : "CPU"} &middot;{" "}
           {status.face_detections} face detections &middot;{" "}
           {status.pet_detections ?? 0} pet detections

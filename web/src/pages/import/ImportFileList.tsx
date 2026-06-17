@@ -13,28 +13,28 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
   return (
     <div className="card overflow-hidden">
       <table className="w-full text-sm">
-        <thead className="bg-gray-50 dark:bg-gray-900 border-b dark:border-gray-700">
+        <thead className="bg-canvas border-b dark:border-gray-700">
           <tr>
-            <th className="text-left px-4 py-2 font-medium text-gray-600 dark:text-gray-400">
+            <th className="text-left px-4 py-2 font-medium text-fg-muted">
               File
             </th>
-            <th className="text-left px-4 py-2 font-medium text-gray-600 dark:text-gray-400">
+            <th className="text-left px-4 py-2 font-medium text-fg-muted">
               Size
             </th>
-            <th className="text-left px-4 py-2 font-medium text-gray-600 dark:text-gray-400">
+            <th className="text-left px-4 py-2 font-medium text-fg-muted">
               Type
             </th>
-            <th className="text-left px-4 py-2 font-medium text-gray-600 dark:text-gray-400">
+            <th className="text-left px-4 py-2 font-medium text-fg-muted">
               Status
             </th>
             <th className="px-4 py-2"></th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+        <tbody className="divide-y divide-edge">
           {items.map((item, i) => (
             <tr
               key={`${item.name}-${i}`}
-              className="hover:bg-gray-50 dark:hover:bg-gray-700/50"
+              className="hover:bg-surface-sunken dark:hover:bg-white/10/50"
             >
               <td className="px-4 py-2.5">
                 <div className="flex items-center gap-2">
@@ -49,15 +49,15 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
                   </span>
                 </div>
               </td>
-              <td className="px-4 py-2.5 text-gray-700 dark:text-gray-400">
+              <td className="px-4 py-2.5 text-fg-muted">
                 {formatBytes(item.size)}
               </td>
-              <td className="px-4 py-2.5 text-gray-700 dark:text-gray-400 text-xs">
+              <td className="px-4 py-2.5 text-fg-muted text-xs">
                 {item.mimeType?.split("/")[1]?.toUpperCase() || "\u2014"}
               </td>
               <td className="px-4 py-2.5">
                 {item.status === "pending" && (
-                  <span className="text-gray-700 dark:text-gray-400 text-xs">
+                  <span className="text-fg-muted text-xs">
                     Pending
                   </span>
                 )}
@@ -86,7 +86,7 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
                   item.status !== "done" && (
                     <button
                       onClick={() => removeItem(i)}
-                      className="text-gray-600 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 text-xs"
+                      className="text-fg-muted hover:text-red-500 dark:hover:text-red-400 text-xs"
                     >
                       {"\u2715"}
                     </button>

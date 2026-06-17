@@ -56,7 +56,7 @@ export default function StepIndicator({ step, serverRole, installType }: StepInd
                 ? "bg-green-500 text-white"
                 : i === currentIdx
                   ? "bg-accent-600 text-white"
-                  : "bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-400"
+                  : "bg-gray-300 ring-1 ring-gray-400/40 text-gray-600 dark:bg-gray-600 dark:ring-0 dark:text-gray-400"
             }`}
           >
             {i < currentIdx ? "\u2713" : i + 1}
@@ -65,7 +65,7 @@ export default function StepIndicator({ step, serverRole, installType }: StepInd
             className={`text-xs hidden sm:inline ${
               i === currentIdx
                 ? "text-accent-600 font-medium"
-                : "text-gray-600 dark:text-gray-400"
+                : "text-fg-muted"
             }`}
           >
             {s.label}
@@ -73,7 +73,7 @@ export default function StepIndicator({ step, serverRole, installType }: StepInd
           {i < steps.length - 1 && (
             <div
               className={`w-4 h-0.5 ${
-                i < currentIdx ? "bg-green-500" : "bg-gray-200 dark:bg-gray-600"
+                i < currentIdx ? "bg-green-500" : "bg-gray-300 dark:bg-gray-600"
               }`}
             />
           )}

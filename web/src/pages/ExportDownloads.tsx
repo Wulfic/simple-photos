@@ -4,7 +4,7 @@
  * Navigated to from the Settings > Library Export section.
  */
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import type { ExportFile, ExportJob } from "../api/export";
@@ -30,7 +30,7 @@ function timeRemaining(expiresAt: string): string {
 }
 
 export default function ExportDownloads() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [files, setFiles] = useState<ExportFile[]>([]);
   const [job, setJob] = useState<ExportJob | null>(null);
   const [loading, setLoading] = useState(true);
@@ -118,12 +118,12 @@ export default function ExportDownloads() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       <main className="max-w-2xl mx-auto p-4">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+          <h1 className="text-xl font-semibold text-fg">
             Export Downloads
           </h1>
           <button
@@ -146,10 +146,10 @@ export default function ExportDownloads() {
           </div>
         ) : files.length === 0 ? (
           <div className="card p-8 text-center">
-            <p className="text-gray-700 dark:text-gray-400 mb-2">
+            <p className="text-fg-muted mb-2">
               No export files available.
             </p>
-            <p className="text-sm text-gray-600 dark:text-gray-500">
+            <p className="text-sm text-fg-muted">
               Start an export from the Settings page to generate downloadable zip files.
             </p>
           </div>
@@ -160,10 +160,10 @@ export default function ExportDownloads() {
               <div className="card p-4 mb-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-gray-700 dark:text-gray-400">
+                    <p className="text-sm text-fg-muted">
                       Export from {new Date(job.created_at).toLocaleString()}
                     </p>
-                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    <p className="text-sm font-medium text-fg-muted">
                       {files.length} file{files.length !== 1 ? "s" : ""} —{" "}
                       {formatBytes(files.reduce((sum, f) => sum + f.size_bytes, 0))} total
                     </p>
@@ -186,10 +186,10 @@ export default function ExportDownloads() {
                   className="card p-4 flex items-center justify-between"
                 >
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                    <p className="text-sm font-medium text-fg truncate">
                       {file.filename}
                     </p>
-                    <p className="text-xs text-gray-700 dark:text-gray-400">
+                    <p className="text-xs text-fg-muted">
                       {formatBytes(file.size_bytes)} — {timeRemaining(file.expires_at)}
                     </p>
                   </div>

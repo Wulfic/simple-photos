@@ -4,7 +4,7 @@
  * integrations (Uptime Kuma, Grafana, etc.).
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import {
   api,
   type DiagnosticsResponse,
@@ -86,16 +86,16 @@ function ExternalApiSection() {
             </svg>
           </div>
           <div>
-            <h2 className="text-base font-semibold text-gray-900 dark:text-white">
+            <h2 className="text-base font-semibold text-fg">
               External API
             </h2>
-            <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5">
+            <p className="text-xs text-fg-muted mt-0.5">
               Integrate diagnostics into your monitoring or other servers via HTTP Basic Auth
             </p>
           </div>
         </div>
         <svg
-          className={`w-5 h-5 text-gray-600 dark:text-gray-400 transition-transform ${
+          className={`w-5 h-5 text-fg-muted transition-transform ${
             expanded ? "rotate-180" : ""
           }`}
           fill="none"
@@ -112,7 +112,7 @@ function ExternalApiSection() {
       </button>
 
       {expanded && (
-        <div className="px-5 pb-5 border-t border-gray-100 dark:border-gray-700 pt-4">
+        <div className="px-5 pb-5 border-t border-edge pt-4">
           {/* Auth note */}
           <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-md border border-amber-200 dark:border-amber-800">
             <p className="text-xs text-amber-700 dark:text-amber-400">
@@ -129,26 +129,26 @@ function ExternalApiSection() {
               return (
                 <div
                   key={ep.id}
-                  className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700"
+                  className="p-3 bg-canvas/50 rounded-lg border border-edge"
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <span className="px-1.5 py-0.5 text-[10px] font-bold bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded">
                       {ep.method}
                     </span>
-                    <code className="text-sm font-mono text-gray-900 dark:text-gray-100">
+                    <code className="text-sm font-mono text-fg">
                       {ep.path}
                     </code>
                   </div>
-                  <p className="text-xs text-gray-700 dark:text-gray-400 mb-2">
+                  <p className="text-xs text-fg-muted mb-2">
                     {ep.description}
                   </p>
                   <div className="flex items-center gap-2">
-                    <code className="flex-1 text-xs font-mono text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 px-2 py-1.5 rounded overflow-x-auto whitespace-nowrap">
+                    <code className="flex-1 text-xs font-mono text-fg-muted bg-surface-sunken dark:bg-surface px-2 py-1.5 rounded overflow-x-auto whitespace-nowrap">
                       {curlCmd}
                     </code>
                     <button
                       onClick={() => copyToClipboard(curlCmd, ep.id)}
-                      className="shrink-0 p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                      className="shrink-0 p-1.5 text-fg-muted hover:text-fg transition-colors"
                       title="Copy curl command"
                     >
                       {copied === ep.id ? (
@@ -197,7 +197,7 @@ function ExternalApiSection() {
 // ══════════════════════════════════════════════════════════════════════════
 
 export default function Diagnostics() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const isAdmin = useIsAdmin();
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [metrics, setMetrics] = useState<DiagnosticsResponse | null>(null);
@@ -351,7 +351,7 @@ export default function Diagnostics() {
   const diagnosticsEnabled = config?.diagnostics_enabled ?? false;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="max-w-6xl mx-auto p-4">
         {/* ── Page Title + Controls ── */}
@@ -359,19 +359,19 @@ export default function Diagnostics() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => navigate("/settings")}
-              className="p-1.5 rounded-md text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              className="p-1.5 rounded-md text-gray-700 hover:text-fg-muted dark:hover:text-gray-200 hover:bg-edge dark:hover:bg-white/10 transition-colors"
               title="Back to Settings"
             >
               <AppIcon name="back-arrow" />
             </button>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+            <h1 className="text-2xl font-bold text-fg">
               Diagnostics
             </h1>
           </div>
           <div className="flex items-center gap-3">
             {diagnosticsEnabled && (
               <>
-                <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                <label className="flex items-center gap-2 text-sm text-fg-muted cursor-pointer select-none">
                   <input
                     type="checkbox"
                     checked={autoRefresh}
@@ -411,11 +411,11 @@ export default function Diagnostics() {
                         : "bg-gray-400"
                     }`}
                   />
-                  <h2 className="text-base font-semibold text-gray-900 dark:text-white">
+                  <h2 className="text-base font-semibold text-fg">
                     Server Diagnostics
                   </h2>
                 </div>
-                <p className="text-sm text-gray-700 dark:text-gray-400 ml-5.5">
+                <p className="text-sm text-fg-muted ml-5.5">
                   {diagnosticsEnabled
                     ? "Collecting server metrics, database stats, storage analysis, and performance data."
                     : "Disabled to save server resources. Enable to view full system metrics and performance data."}
@@ -426,7 +426,7 @@ export default function Diagnostics() {
                 disabled={toggling}
                 className={`shrink-0 px-5 py-2 text-sm font-medium rounded-lg transition-all shadow-sm disabled:opacity-50 ${
                   diagnosticsEnabled
-                    ? "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
+                    ? "bg-edge text-fg-muted hover:bg-edge-strong"
                     : "bg-accent-600 text-white hover:bg-accent-700 shadow-accent-200 dark:shadow-accent-900/30"
                 }`}
               >
@@ -440,13 +440,13 @@ export default function Diagnostics() {
 
             {/* Client diagnostics sub-toggle (only show when server diagnostics enabled AND on primary server) */}
             {diagnosticsEnabled && !isBackupMode && (
-              <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+              <div className="mt-4 pt-4 border-t border-edge">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    <p className="text-sm font-medium text-fg-muted">
                       Client Diagnostics
                     </p>
-                    <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5">
+                    <p className="text-xs text-fg-muted mt-0.5">
                       Collect diagnostic logs from web and mobile clients (errors, performance, API timing)
                     </p>
                   </div>
@@ -471,9 +471,9 @@ export default function Diagnostics() {
         {/* ── Disabled State ── */}
         {!diagnosticsEnabled && !loading && (
           <div className="card p-12 text-center">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-700 mb-4">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-surface-raised mb-4">
               <svg
-                className="w-8 h-8 text-gray-600 dark:text-gray-400"
+                className="w-8 h-8 text-fg-muted"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -486,16 +486,16 @@ export default function Diagnostics() {
                 />
               </svg>
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+            <h3 className="text-lg font-semibold text-fg mb-2">
               Diagnostics Collection Disabled
             </h3>
-            <p className="text-sm text-gray-700 dark:text-gray-400 max-w-md mx-auto mb-1">
+            <p className="text-sm text-fg-muted max-w-md mx-auto mb-1">
               Server diagnostics are disabled by default to conserve resources.
               Enable above to view detailed system metrics, database statistics,
               storage analysis, and performance monitoring.
             </p>
             {disabledInfo && (
-              <p className="text-xs text-gray-600 dark:text-gray-500 mt-3">
+              <p className="text-xs text-fg-muted mt-3">
                 Server v{disabledInfo.version} &middot; Uptime{" "}
                 {formatUptime(disabledInfo.uptime_seconds)}
               </p>
@@ -515,7 +515,7 @@ export default function Diagnostics() {
                   className={`flex-1 py-2 px-4 text-sm font-medium rounded-md transition-colors ${
                     activeTab === tab.id
                       ? "bg-accent-600 text-white shadow"
-                      : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      : "text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10"
                   }`}
                 >
                   {tab.label}

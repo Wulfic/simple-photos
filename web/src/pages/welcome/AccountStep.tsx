@@ -36,23 +36,23 @@ export default function AccountStep({
 }: AccountStepProps) {
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
+      <h2 className="text-2xl font-bold text-fg mb-1">
         Create Admin Account
       </h2>
-      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
+      <p className="text-fg-muted text-sm mb-6">
         This will be the first account with full admin privileges.
       </p>
 
       <form onSubmit={handleCreateAccount} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-fg-muted mb-1">
             Username
           </label>
           <input
             type="text"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
+            className="input"
             required
             minLength={3}
             maxLength={50}

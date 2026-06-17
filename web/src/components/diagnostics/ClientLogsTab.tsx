@@ -3,9 +3,10 @@ import { useState, useEffect, useCallback } from "react";
 import { api, ClientLogEntry } from "../../api/client";
 import { Section, getDateCutoff, tryPrettyJson } from "./shared";
 import { formatDate, relativeTime } from "../../utils/formatters";
+import { Select } from "../ui";
 
 const LEVEL_COLORS: Record<string, string> = {
-  debug: "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
+  debug: "bg-edge text-fg-muted",
   info: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
   warn: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
   error: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
@@ -88,7 +89,7 @@ function ClientLogsTab() {
       <div className="card p-4">
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               Search
             </label>
             <input
@@ -96,33 +97,31 @@ function ClientLogsTab() {
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="Filter by message, tag, session..."
-              className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-accent-500 focus:border-accent-500"
+              className="input"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               Level
             </label>
-            <select
+            <Select
               value={levelFilter}
               onChange={(e) => setLevelFilter(e.target.value)}
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-accent-500"
             >
               <option value="">All Levels</option>
               <option value="debug">Debug</option>
               <option value="info">Info</option>
               <option value="warn">Warn</option>
               <option value="error">Error</option>
-            </select>
+            </Select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               Session
             </label>
-            <select
+            <Select
               value={sessionFilter}
               onChange={(e) => setSessionFilter(e.target.value)}
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-accent-500"
             >
               <option value="">All Sessions</option>
               {sessions.map((s) => (
@@ -130,27 +129,26 @@ function ClientLogsTab() {
                   {s.length > 20 ? s.slice(0, 20) + "…" : s}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               Time Range
             </label>
-            <select
+            <Select
               value={dateRange}
               onChange={(e) =>
                 setDateRange(e.target.value as typeof dateRange)
               }
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-accent-500"
             >
               <option value="all">All Time</option>
               <option value="1h">Last Hour</option>
               <option value="24h">Last 24h</option>
               <option value="7d">Last 7 Days</option>
-            </select>
+            </Select>
           </div>
         </div>
-        <div className="mt-2 text-xs text-gray-700 dark:text-gray-400">
+        <div className="mt-2 text-xs text-fg-muted">
           Showing {filtered.length} of {logs.length} entries
         </div>
       </div>
@@ -170,26 +168,26 @@ function ClientLogsTab() {
         <div className="card overflow-hidden">
           <div className="overflow-x-auto max-h-[65vh] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0 z-10">
+              <thead className="bg-surface-raised sticky top-0 z-10">
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Time
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Level
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Tag
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Message
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Session
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              <tbody className="divide-y divide-edge">
                 {filtered.map((log) => (
                   <ClientLogRow key={log.id} log={log} />
                 ))}
@@ -197,7 +195,7 @@ function ClientLogsTab() {
                   <tr>
                     <td
                       colSpan={5}
-                      className="text-center py-8 text-gray-600 dark:text-gray-500"
+                      className="text-center py-8 text-fg-muted"
                     >
                       No client log entries found
                     </td>
@@ -207,7 +205,7 @@ function ClientLogsTab() {
             </table>
           </div>
           {nextCursor && (
-            <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-3 text-center">
+            <div className="border-t border-edge px-4 py-3 text-center">
               <button
                 onClick={loadMore}
                 disabled={loadingMore}
@@ -230,11 +228,11 @@ function ClientLogRow({ log }: { log: ClientLogEntry }) {
   return (
     <>
       <tr
-        className="hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer"
+        className="hover:bg-surface-sunken dark:hover:bg-white/5 cursor-pointer"
         onClick={() => setExpanded((v) => !v)}
       >
         <td
-          className="px-3 py-2 text-xs text-gray-700 dark:text-gray-400 whitespace-nowrap"
+          className="px-3 py-2 text-xs text-fg-muted whitespace-nowrap"
           title={formatDate(log.client_ts)}
         >
           {relativeTime(log.created_at)}
@@ -246,20 +244,20 @@ function ClientLogRow({ log }: { log: ClientLogEntry }) {
             {log.level}
           </span>
         </td>
-        <td className="px-3 py-2 text-xs font-mono text-gray-600 dark:text-gray-400">
+        <td className="px-3 py-2 text-xs font-mono text-fg-muted">
           {log.tag}
         </td>
-        <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-300 max-w-md truncate">
+        <td className="px-3 py-2 text-xs text-fg-muted max-w-md truncate">
           {log.message}
         </td>
-        <td className="px-3 py-2 text-xs font-mono text-gray-600 dark:text-gray-400 max-w-[100px] truncate">
+        <td className="px-3 py-2 text-xs font-mono text-fg-muted max-w-[100px] truncate">
           {log.session_id.slice(0, 8)}…
         </td>
       </tr>
       {expanded && (
-        <tr className="bg-gray-50 dark:bg-gray-800/80">
+        <tr className="bg-surface/80">
           <td colSpan={5} className="px-4 py-3">
-            <div className="text-xs space-y-1.5 text-gray-600 dark:text-gray-300">
+            <div className="text-xs space-y-1.5 text-fg-muted">
               <p>
                 <span className="font-medium">Full Message:</span>{" "}
                 <span className="break-all">{log.message}</span>
@@ -283,7 +281,7 @@ function ClientLogRow({ log }: { log: ClientLogEntry }) {
               {log.context != null && (
                 <div>
                   <span className="font-medium">Context:</span>
-                  <pre className="mt-1 p-2 bg-gray-100 dark:bg-gray-900 rounded text-xs font-mono whitespace-pre-wrap break-all">
+                  <pre className="mt-1 p-2 bg-canvas rounded text-xs font-mono whitespace-pre-wrap break-all">
                     {tryPrettyJson(
                       typeof log.context === "string"
                         ? log.context

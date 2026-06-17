@@ -5,20 +5,19 @@
  *  "saveCopy" task is active (ffmpeg render on the server can take 30+ sec
  *  for large videos). */
 import { useProcessingStore } from "../store/processing";
+import { ProgressBanner } from "./ProgressBanner";
 
 export default function SavingBanner() {
   const isActive = useProcessingStore((s) => s.tasks.has("saveCopy"));
 
   if (!isActive) return null;
 
+  // Spinner-only (no pct, not dismissible) — the render is a single opaque job.
   return (
-    <div className="fixed bottom-20 left-4 right-4 z-50 pointer-events-none">
-      <div className="card shadow-card-hover pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
-        <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-accent-500 dark:border-t-accent-400 rounded-full animate-spin flex-shrink-0" />
-        <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
-          Rendering edited copy…
-        </p>
-      </div>
-    </div>
+    <ProgressBanner
+      position="bottom-20"
+      tone="accent"
+      label="Rendering edited copy…"
+    />
   );
 }

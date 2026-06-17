@@ -6,12 +6,14 @@
  * and sharing controls.
  */
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
 import { db, type CachedPhoto, type CachedAlbum } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../components/AppHeader";
+import { GallerySkeleton } from "../components/skeletons";
 import AppIcon from "../components/AppIcon";
 import AlbumTile from "../components/AlbumTile";
 import AddPhotosPanel from "../components/AddPhotosPanel";
@@ -88,7 +90,7 @@ export default function AlbumDetail() {
 // ── Smart Album View ──────────────────────────────────────────────────────────
 
 function SmartAlbumView({ albumId }: { albumId: string }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const def = SMART_ALBUM_DEFS[albumId];
   const [loading, setLoading] = useState(true);
   const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
@@ -142,7 +144,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       <main className="p-4">
@@ -150,18 +152,18 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
           </button>
           <h2 className="text-xl font-semibold truncate">{def.label}</h2>
-          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photoCount} items</span>
+          <span className="text-fg-muted text-sm shrink-0">{photoCount} items</span>
           {hasPhotosForSlideshow && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
+              className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -170,7 +172,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -182,10 +184,10 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : photoCount === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No {def.label.toLowerCase()} found</p>
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No {def.label.toLowerCase()} found</p>
           </div>
         ) : (
           <SelectablePhotoGrid
@@ -221,7 +223,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
 // ── Regular Album View ────────────────────────────────────────────────────────
 
 function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const isBackupServer = useIsBackupServer();
   const [error, setError] = useState("");
   const [showAddPhotos, setShowAddPhotos] = useState(false);
@@ -455,13 +457,13 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   if (!album) {
     return (
       <div className="p-4 text-center py-12">
-        <p className="text-gray-700 dark:text-gray-400">Loading album…</p>
+        <p className="text-fg-muted">Loading album…</p>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       {/* Share user picker modal */}
@@ -474,21 +476,21 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
                 <button
                   key={u.id}
                   onClick={() => handleShareWithUser(u.id)}
-                  className="w-full text-left px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-sm flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-sunken dark:hover:bg-white/10 text-sm flex items-center gap-2"
                 >
-                  <svg className="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <svg className="w-5 h-5 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                   </svg>
                   {u.username}
                 </button>
               ))}
               {shareUsers.length === 0 && (
-                <p className="text-gray-700 dark:text-gray-500 text-sm text-center py-4">No other users found</p>
+                <p className="text-fg-muted text-sm text-center py-4">No other users found</p>
               )}
             </div>
             <button
               onClick={() => setShowSharePicker(false)}
-              className="mt-4 w-full py-2 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
+              className="mt-4 w-full py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 rounded-md"
             >
               Cancel
             </button>
@@ -502,18 +504,18 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => navigate("/albums")}
-              className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+              className="text-fg-muted hover:text-fg transition-colors shrink-0"
               title="Back to Albums"
             >
               <AppIcon name="back-arrow" size="w-5 h-5" />
             </button>
             <h2 className="text-xl font-semibold truncate">{album.name}</h2>
-            <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{album.photoBlobIds.length} items</span>
+            <span className="text-fg-muted text-sm shrink-0">{album.photoBlobIds.length} items</span>
             {hasPhotosForSlideshow && (
               <>
               <button
                 onClick={() => slideshow.start(0)}
-                className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
+                className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
                 title="Start Slideshow"
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -522,7 +524,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
               </button>
               <button
                 onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-                className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
+                className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
                 title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -538,7 +540,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={openSharePicker}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20 shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
             >
               <AppIcon name="shared" />
               <span className="hidden sm:inline">Share</span>
@@ -548,14 +550,14 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 shadow-sm ${
                 showAddPhotos
                   ? "bg-accent-600 text-white border border-accent-500 hover:bg-accent-700"
-                  : "text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20"
+                  : "text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20"
               }`}
             >
               {showAddPhotos ? "Done" : "Add Photos"}
             </button>
             <button
               onClick={deleteAlbum}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-red-600 dark:text-red-400 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-red-50 dark:hover:bg-red-900/30 shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-red-600 dark:text-red-400 bg-white dark:bg-white/10 border border-edge hover:bg-red-50 dark:hover:bg-red-900/30 shadow-sm"
             >
               Delete
             </button>
@@ -580,7 +582,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           <div className="flex items-center gap-3">
             <button
               onClick={clearSelection}
-              className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+              className="text-fg-muted hover:text-fg"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -603,9 +605,9 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
         </div>
       )}
       {albumPhotos.length === 0 ? (
-        <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-          <p className="text-gray-700 dark:text-gray-400 mb-2">This album is empty</p>
-          <p className="text-gray-600 dark:text-gray-400 text-sm">
+        <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+          <p className="text-fg-muted mb-2">This album is empty</p>
+          <p className="text-fg-muted text-sm">
             Click "Add Photos" to add media from your gallery
           </p>
         </div>
@@ -666,7 +668,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
 // ── People View (Face Clusters) ──────────────────────────────────────────────
 
 function PeopleView() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [clusters, setClusters] = useState<Array<{
     id: number; label: string | null; photo_count: number;
     representative: string | null;
@@ -710,13 +712,13 @@ function PeopleView() {
   }, [clusters]);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -725,11 +727,11 @@ function PeopleView() {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : clusters.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No faces detected yet</p>
-            <p className="text-gray-600 dark:text-gray-500 text-sm mt-1">
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No faces detected yet</p>
+            <p className="text-fg-muted text-sm mt-1">
               Enable AI processing in Settings to detect faces
             </p>
           </div>
@@ -741,7 +743,7 @@ function PeopleView() {
                 onClick={() => navigate(`/albums/smart-people/${cluster.id}`)}
                 className="card card-interactive p-3 cursor-pointer"
               >
-                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
+                <div className="aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
                   {thumbUrls[cluster.id] ? (
                     <img
                       src={thumbUrls[cluster.id]}
@@ -749,7 +751,7 @@ function PeopleView() {
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : (
-                    <svg className="w-10 h-10 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-10 h-10 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                     </svg>
                   )}
@@ -757,7 +759,7 @@ function PeopleView() {
                 <p className="font-medium text-center text-sm truncate">
                   {cluster.label || "Unknown Person"}
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400 text-center">
+                <p className="text-xs text-fg-muted text-center">
                   {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
                 </p>
               </div>
@@ -772,7 +774,7 @@ function PeopleView() {
 // ── Pets View (smart album for detected animal clusters) ─────────────────────
 
 function PetsView() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [clusters, setClusters] = useState<Array<{
     id: number; label: string | null; species: string; photo_count: number;
     representative: string | null;
@@ -820,13 +822,13 @@ function PetsView() {
   }, [clusters]);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -835,11 +837,11 @@ function PetsView() {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : clusters.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No pets detected yet</p>
-            <p className="text-gray-600 dark:text-gray-500 text-sm mt-1">
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No pets detected yet</p>
+            <p className="text-fg-muted text-sm mt-1">
               Enable AI processing in Settings to detect pets in your photos
             </p>
           </div>
@@ -851,7 +853,7 @@ function PetsView() {
                 onClick={() => navigate(`/albums/smart-pets/${cluster.id}`)}
                 className="card card-interactive p-3 cursor-pointer"
               >
-                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
+                <div className="aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
                   {thumbUrls[cluster.id] ? (
                     <img
                       src={thumbUrls[cluster.id]}
@@ -859,7 +861,7 @@ function PetsView() {
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : (
-                    <svg className="w-10 h-10 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-10 h-10 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
                     </svg>
                   )}
@@ -867,7 +869,7 @@ function PetsView() {
                 <p className="font-medium text-center text-sm truncate capitalize">
                   {cluster.label || `Unknown ${cluster.species}`}
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400 text-center">
+                <p className="text-xs text-fg-muted text-center">
                   {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
                 </p>
               </div>
@@ -880,7 +882,7 @@ function PetsView() {
 }
 
 function PetDetailView({ clusterId }: { clusterId: number }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [clusterName, setClusterName] = useState<string>("Pet");
   const [species, setSpecies] = useState<string>("");
   const [photos, setPhotos] = useState<CachedPhoto[]>([]);
@@ -933,13 +935,13 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
   const hasPhotos = photos.some(p => p.mediaType === "photo" || p.mediaType === "gif");
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums/smart-pets")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to Pets"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -950,38 +952,38 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
                 type="text"
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                className="border rounded px-2 py-1 text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-accent-500"
+                className="input w-auto text-lg font-semibold py-1"
                 autoFocus
                 maxLength={100}
               />
               <button type="submit" className="text-accent-600 text-sm font-medium">Save</button>
-              <button type="button" onClick={() => setEditing(false)} className="text-gray-600 dark:text-gray-400 text-sm">Cancel</button>
+              <button type="button" onClick={() => setEditing(false)} className="text-fg-muted text-sm">Cancel</button>
             </form>
           ) : (
             <>
               <h2 className="text-xl font-semibold truncate capitalize">{clusterName}</h2>
               <button
                 onClick={() => setEditing(true)}
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-600 text-sm"
+                className="text-fg-muted hover:text-gray-600 text-sm"
                 title="Rename"
               >
                 ✏️
               </button>
             </>
           )}
-          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          <span className="text-fg-muted text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
+              className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -993,10 +995,10 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : photos.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No photos found for this pet</p>
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No photos found for this pet</p>
           </div>
         ) : (
           <SelectablePhotoGrid
@@ -1033,7 +1035,7 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
 // ── Memories View (auto-generated location + date albums) ────────────────────
 
 function MemoriesView() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [memories, setMemories] = useState<Array<{
     id: string; name: string; city: string; country: string;
     date_label: string; photo_count: number;
@@ -1078,13 +1080,13 @@ function MemoriesView() {
   }, [memories]);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -1093,11 +1095,11 @@ function MemoriesView() {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : memories.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No memories yet</p>
-            <p className="text-gray-600 dark:text-gray-500 text-sm mt-1">
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No memories yet</p>
+            <p className="text-fg-muted text-sm mt-1">
               Memories are auto-generated when you have 3+ photos from the same location and day
             </p>
           </div>
@@ -1109,7 +1111,7 @@ function MemoriesView() {
                 onClick={() => navigate(`/albums/smart-memories/${memory.id}`)}
                 className="card card-interactive cursor-pointer overflow-hidden"
               >
-                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                <div className="aspect-video bg-surface-raised flex items-center justify-center overflow-hidden">
                   {thumbUrls[memory.id] ? (
                     <img
                       src={thumbUrls[memory.id]}
@@ -1117,7 +1119,7 @@ function MemoriesView() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <svg className="w-8 h-8 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-8 h-8 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
                     </svg>
@@ -1125,7 +1127,7 @@ function MemoriesView() {
                 </div>
                 <div className="p-3">
                   <p className="font-medium text-sm truncate">{memory.name}</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-400">
+                  <p className="text-xs text-fg-muted">
                     {memory.photo_count} photo{memory.photo_count !== 1 ? "s" : ""} · {memory.country}
                   </p>
                 </div>
@@ -1141,7 +1143,7 @@ function MemoriesView() {
 // ── Person Detail View (photos of a specific face cluster) ───────────────────
 
 function PersonDetailView({ clusterId }: { clusterId: number }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [clusterName, setClusterName] = useState<string>("Person");
   const [photos, setPhotos] = useState<CachedPhoto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1196,13 +1198,13 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
   const hasPhotos = photos.some(p => p.mediaType === "photo" || p.mediaType === "gif");
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums/smart-people")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to People"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -1213,38 +1215,38 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
                 type="text"
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                className="border rounded px-2 py-1 text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-accent-500"
+                className="input w-auto text-lg font-semibold py-1"
                 autoFocus
                 maxLength={100}
               />
               <button type="submit" className="text-accent-600 text-sm font-medium">Save</button>
-              <button type="button" onClick={() => setEditing(false)} className="text-gray-600 dark:text-gray-400 text-sm">Cancel</button>
+              <button type="button" onClick={() => setEditing(false)} className="text-fg-muted text-sm">Cancel</button>
             </form>
           ) : (
             <>
               <h2 className="text-xl font-semibold truncate">{clusterName}</h2>
               <button
                 onClick={() => setEditing(true)}
-                className="text-gray-600 dark:text-gray-400 hover:text-gray-600 text-sm"
+                className="text-fg-muted hover:text-gray-600 text-sm"
                 title="Rename"
               >
                 ✏️
               </button>
             </>
           )}
-          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          <span className="text-fg-muted text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
+              className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1256,10 +1258,10 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : photos.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No photos found for this person</p>
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No photos found for this person</p>
           </div>
         ) : (
           <SelectablePhotoGrid
@@ -1296,7 +1298,7 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
 // ── Trips View (list of all multi-day smart location albums) ─────────────────
 
 function TripsView() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [trips, setTrips] = useState<Array<{
     id: string; name: string; city: string; country: string;
     country_code: string; start_date: string; end_date: string;
@@ -1343,13 +1345,13 @@ function TripsView() {
   }, [trips]);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -1358,11 +1360,11 @@ function TripsView() {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : trips.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No trips yet</p>
-            <p className="text-gray-600 dark:text-gray-500 text-sm mt-1">
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No trips yet</p>
+            <p className="text-fg-muted text-sm mt-1">
               Trips are auto-generated when you have photos from the same location across multiple days
             </p>
           </div>
@@ -1374,7 +1376,7 @@ function TripsView() {
                 onClick={() => navigate(`/albums/smart-trips/${trip.id}`)}
                 className="card card-interactive cursor-pointer overflow-hidden"
               >
-                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                <div className="aspect-video bg-surface-raised flex items-center justify-center overflow-hidden">
                   {thumbUrls[trip.id] ? (
                     <img
                       src={thumbUrls[trip.id]}
@@ -1382,15 +1384,15 @@ function TripsView() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <svg className="w-8 h-8 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-8 h-8 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" />
                     </svg>
                   )}
                 </div>
                 <div className="p-3">
                   <p className="font-medium text-sm truncate">{trip.city}</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-400 truncate">{trip.date_label}</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-400">
+                  <p className="text-xs text-fg-muted truncate">{trip.date_label}</p>
+                  <p className="text-xs text-fg-muted">
                     {trip.photo_count} photo{trip.photo_count !== 1 ? "s" : ""} · {trip.day_count} day{trip.day_count !== 1 ? "s" : ""} · {trip.country}
                   </p>
                 </div>
@@ -1459,7 +1461,7 @@ async function resolveServerPhotos(summaries: { id: string; filename: string; th
 }
 
 function MemoryDetailView({ memoryId }: { memoryId: string }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [memoryName, setMemoryName] = useState("Memory");
   const [photos, setPhotos] = useState<CachedPhoto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1494,31 +1496,31 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
   const hasPhotos = photos.some(p => p.mediaType === "photo" || p.mediaType === "gif");
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums/smart-memories")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to Memories"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
           </button>
           <h2 className="text-xl font-semibold truncate">{memoryName}</h2>
-          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          <span className="text-fg-muted text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
+              className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1530,10 +1532,10 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : photos.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No photos found for this memory</p>
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No photos found for this memory</p>
           </div>
         ) : (
           <SelectablePhotoGrid
@@ -1570,7 +1572,7 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
 // ── Trip Detail View ──────────────────────────────────────────────────────────
 
 function TripDetailView({ tripId }: { tripId: string }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [tripName, setTripName] = useState("Trip");
   const [photos, setPhotos] = useState<CachedPhoto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1602,31 +1604,31 @@ function TripDetailView({ tripId }: { tripId: string }) {
   const hasPhotos = photos.some(p => p.mediaType === "photo" || p.mediaType === "gif");
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="p-4">
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums/smart-trips")}
-            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-fg-muted hover:text-fg transition-colors shrink-0"
             title="Back to Trips"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
           </button>
           <h2 className="text-xl font-semibold truncate">{tripName}</h2>
-          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          <span className="text-fg-muted text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
+              className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1638,10 +1640,10 @@ function TripDetailView({ tripId }: { tripId: string }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
+          <GallerySkeleton />
         ) : photos.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-700 dark:text-gray-400">No photos found for this trip</p>
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted">No photos found for this trip</p>
           </div>
         ) : (
           <SelectablePhotoGrid

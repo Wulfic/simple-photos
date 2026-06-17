@@ -520,7 +520,7 @@ export default function Welcome() {
         <ThemeToggle />
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-accent-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-600 dark:text-gray-400">Connecting to server…</p>
+          <p className="text-fg-muted">Connecting to server…</p>
         </div>
       </div>
     );
@@ -689,7 +689,7 @@ export default function Welcome() {
           )}
         </div>
 
-        <p className="text-center text-gray-600 dark:text-gray-400 text-xs mt-6">
+        <p className="text-center text-fg-muted text-xs mt-6">
           Simple Photos v{status?.version ?? "1.0.0"} — End-to-end encrypted
         </p>
       </div>

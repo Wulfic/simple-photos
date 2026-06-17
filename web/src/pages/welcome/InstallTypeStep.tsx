@@ -24,10 +24,10 @@ export default function InstallTypeStep({
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+      <h2 className="text-2xl font-bold text-fg mb-2">
         Installation Type
       </h2>
-      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
+      <p className="text-fg-muted text-sm mb-6">
         Is this a brand new installation, or are you restoring from an existing
         backup server?
       </p>
@@ -36,7 +36,7 @@ export default function InstallTypeStep({
         {/* Fresh Install */}
         <button
           onClick={() => choose("fresh")}
-          className="w-full p-5 text-left rounded-xl border-2 border-gray-200 dark:border-gray-600 hover:border-accent-400 dark:hover:border-accent-500 transition-colors group"
+          className="w-full p-5 text-left rounded-xl border-2 border-edge hover:border-accent-400 dark:hover:border-accent-500 transition-colors group"
         >
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-accent-100 dark:bg-accent-900/30 flex items-center justify-center shrink-0">
@@ -55,10 +55,10 @@ export default function InstallTypeStep({
               </svg>
             </div>
             <div>
-              <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
+              <p className="font-semibold text-fg text-base group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
                 Fresh Install
               </p>
-              <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">
+              <p className="text-sm text-fg-muted mt-0.5">
                 Start from scratch with a new, empty photo library.
               </p>
             </div>
@@ -68,7 +68,7 @@ export default function InstallTypeStep({
         {/* Restore from Backup */}
         <button
           onClick={() => choose("restore")}
-          className="w-full p-5 text-left rounded-xl border-2 border-gray-200 dark:border-gray-600 hover:border-amber-400 dark:hover:border-amber-500 transition-colors group"
+          className="w-full p-5 text-left rounded-xl border-2 border-edge hover:border-amber-400 dark:hover:border-amber-500 transition-colors group"
         >
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0">
@@ -87,10 +87,10 @@ export default function InstallTypeStep({
               </svg>
             </div>
             <div>
-              <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
+              <p className="font-semibold text-fg text-base group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
                 Restore from Backup
               </p>
-              <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">
+              <p className="text-sm text-fg-muted mt-0.5">
                 Recover your photos from an existing Simple Photos backup
                 server on your network.
               </p>
@@ -99,13 +99,13 @@ export default function InstallTypeStep({
         </button>
       </div>
 
-      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+      <div className="mt-8 pt-6 border-t border-edge">
         <button
           onClick={() => {
             setStep("server-role");
             setError("");
           }}
-          className="text-sm text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          className="text-sm text-gray-700 hover:text-fg-muted dark:hover:text-gray-200"
         >
           &larr; Back
         </button>

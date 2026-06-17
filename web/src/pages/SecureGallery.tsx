@@ -6,7 +6,8 @@
  * are hidden from the main gallery view.
  */
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { encrypt, sha256Hex } from "../crypto/crypto";
 import { db, type CachedPhoto } from "../db";
@@ -20,6 +21,7 @@ import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
 import { setGalleryToken as persistGalleryToken } from "../utils/galleryToken";
 import { SecureGalleryItem, PickerThumbnail, type ThumbnailSource } from "../gallery";
+import { GallerySkeleton, AlbumGridSkeleton } from "../components/skeletons";
 
 interface Gallery {
   id: string;
@@ -45,7 +47,7 @@ interface GalleryItem {
  * Uses the user's account password (not a per-album password).
  */
 export default function SecureGallery() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [searchParams] = useSearchParams();
   const isBackupServer = useIsBackupServer();
 
@@ -356,7 +358,7 @@ export default function SecureGallery() {
 
   if (!authenticated) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <div className="min-h-screen bg-canvas">
         <AppHeader />
         <main className="max-w-md mx-auto p-4 mt-16">
           <div className="card shadow-card-hover p-8">
@@ -364,17 +366,17 @@ export default function SecureGallery() {
               <div className="w-16 h-16 mx-auto mb-4 bg-accent-100 dark:bg-accent-900/30 rounded-full flex items-center justify-center">
                 <AppIcon name="locks" size="w-8 h-8" />
               </div>
-              <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              <h2 className="text-xl font-bold text-fg">
                 Secure Albums
               </h2>
-              <p className="text-sm text-gray-700 dark:text-gray-400 mt-2">
+              <p className="text-sm text-fg-muted mt-2">
                 Enter your account password to access your secure albums.
               </p>
             </div>
 
             <form onSubmit={handleUnlock} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-fg-muted mb-1">
                   Password
                 </label>
                 <input
@@ -420,7 +422,7 @@ export default function SecureGallery() {
 
   if (selectedGallery) {
     return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <div className="min-h-screen bg-canvas">
         <AppHeader />
         <main className="p-4">
           {/* Add photos action bar */}
@@ -465,7 +467,7 @@ export default function SecureGallery() {
               <h2 className="text-xl font-semibold dark:text-white flex items-center gap-2">
                 <span>🔒</span> {selectedGallery.name}
               </h2>
-              <span className="text-gray-600 dark:text-gray-400 text-sm">{items.length} items</span>
+              <span className="text-fg-muted text-sm">{items.length} items</span>
             </div>
             {!showAddPhotos && !isBackupServer && (
               <div className="flex gap-2">
@@ -503,7 +505,7 @@ export default function SecureGallery() {
                 Select photos from your gallery to add ({selectedPhotos.size} selected)
               </p>
               {availablePhotos.length === 0 ? (
-                <p className="text-gray-700 dark:text-gray-400 text-sm">
+                <p className="text-fg-muted text-sm">
                   {(cachedPhotos?.length ?? 0) === 0
                     ? "No photos in your gallery yet. Upload some photos first."
                     : "All photos are already in this album."}
@@ -525,7 +527,7 @@ export default function SecureGallery() {
                           className={`relative w-full h-full rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
                             isSelected
                               ? "border-accent-600 ring-2 ring-accent-400"
-                              : "border-transparent hover:border-gray-300 dark:hover:border-gray-500"
+                              : "border-transparent hover:border-edge-strong"
                           }`}
                           onClick={() => togglePhotoSelection(photo.blobId)}
                         >
@@ -568,13 +570,11 @@ export default function SecureGallery() {
           )}
 
           {itemsLoading ? (
-            <div className="flex justify-center py-12">
-              <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
-            </div>
+            <GallerySkeleton />
           ) : items.length === 0 && !showAddPhotos ? (
-            <div className="text-center py-16 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
+            <div className="text-center py-16 border-2 border-dashed border-edge rounded-lg">
               <span className="text-4xl mb-3 block">🖼️</span>
-              <p className="text-gray-600 dark:text-gray-400 text-sm mb-3">This album is empty.</p>
+              <p className="text-fg-muted text-sm mb-3">This album is empty.</p>
               {!isBackupServer && (
               <button
                 onClick={() => {
@@ -629,7 +629,7 @@ export default function SecureGallery() {
   // ── Album List View ─────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
       <main className="max-w-4xl mx-auto p-4">
         {/* Header */}
@@ -638,7 +638,7 @@ export default function SecureGallery() {
             <h2 className="text-xl font-semibold dark:text-white flex items-center gap-2">
               <span>🔒</span> Secure Albums
             </h2>
-            <p className="text-gray-700 dark:text-gray-400 text-sm mt-1">
+            <p className="text-fg-muted text-sm mt-1">
               End-to-end encrypted albums for your most private photos.
             </p>
           </div>
@@ -674,11 +674,11 @@ export default function SecureGallery() {
             onSubmit={handleCreate}
             className="card p-5 mb-6 space-y-3"
           >
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+            <h3 className="text-sm font-semibold text-fg-muted">
               Create New Album
             </h3>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Album Name
               </label>
               <input
@@ -716,16 +716,14 @@ export default function SecureGallery() {
 
         {/* Album list */}
         {galleriesLoading ? (
-          <div className="flex justify-center py-12">
-            <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
-          </div>
+          <AlbumGridSkeleton />
         ) : galleries.length === 0 ? (
           <div className="card text-center py-16">
             <span className="text-4xl mb-3 block">🔒</span>
-            <p className="text-gray-700 dark:text-gray-400 font-medium">
+            <p className="text-fg-muted font-medium">
               No secure albums yet
             </p>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+            <p className="text-sm text-fg-muted mt-1">
               Create an album to store your most private photos securely.
             </p>
             {!showCreate && !isBackupServer && (
@@ -756,10 +754,10 @@ export default function SecureGallery() {
                     <span className="text-xl">🔒</span>
                   </div>
                   <div>
-                    <h3 className="font-medium text-gray-900 dark:text-gray-100">
+                    <h3 className="font-medium text-fg">
                       {g.name}
                     </h3>
-                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                    <p className="text-xs text-fg-muted mt-0.5">
                       {g.item_count} item{g.item_count !== 1 ? "s" : ""} · Created{" "}
                       {new Date(g.created_at).toLocaleDateString()}
                     </p>

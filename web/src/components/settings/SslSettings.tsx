@@ -250,7 +250,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
   return (
     <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-1">SSL / TLS</h2>
-      <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
+      <p className="text-sm text-fg-muted mb-4">
         Serve your photos over HTTPS. Toggling this saves immediately;
         a server restart is required for the change to take effect.
       </p>
@@ -258,8 +258,8 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
       {/* ── Enable toggle ─────────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Enable TLS</h3>
-          <p className="text-xs text-gray-700 dark:text-gray-400">
+          <h3 className="text-sm font-medium text-fg-muted">Enable TLS</h3>
+          <p className="text-xs text-fg-muted">
             {sslEnabled ? "HTTPS is enabled." : "Running on plain HTTP."}
           </p>
         </div>
@@ -299,7 +299,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
           </div>
         </div>
       ) : (
-        <div className="mb-5 p-3 rounded-md bg-gray-50 dark:bg-gray-700/40 border border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400">
+        <div className="mb-5 p-3 rounded-md bg-surface-raised/40 border border-edge text-xs text-fg-muted">
           TLS is disabled. The server is reachable at{" "}
           <span className="font-mono">{httpUrl}</span>. Pick one of the
           options below to obtain or install a certificate.
@@ -318,7 +318,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "letsencrypt" ? null : "letsencrypt")
           }
         >
-          <p className="text-xs text-gray-700 dark:text-gray-400 mb-3">
+          <p className="text-xs text-fg-muted mb-3">
             Requires a public DNS name pointing at this server and inbound
             port {leChallengePort || "80"} reachable from the internet.
           </p>
@@ -340,7 +340,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
 
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Domain (FQDN)
               </label>
               <input
@@ -354,7 +354,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Contact email
               </label>
               <input
@@ -369,7 +369,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-fg-muted mb-1">
                   HTTP-01 port
                 </label>
                 <input
@@ -390,7 +390,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                   className="mt-0.5 accent-indigo-600"
                   disabled={leProvisioning}
                 />
-                <span className="text-gray-700 dark:text-gray-300">
+                <span className="text-fg-muted">
                   Staging directory (testing)
                 </span>
               </label>
@@ -403,7 +403,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 className="mt-0.5 accent-indigo-600"
                 disabled={leProvisioning}
               />
-              <span className="text-gray-700 dark:text-gray-300">
+              <span className="text-fg-muted">
                 I agree to the{" "}
                 <a
                   href="https://letsencrypt.org/repository/"
@@ -440,7 +440,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "local_ca" ? null : "local_ca")
           }
         >
-          <p className="text-xs text-gray-700 dark:text-gray-400 mb-3">
+          <p className="text-xs text-fg-muted mb-3">
             Install the public root on each device using the bundled scripts
             and you'll get a real, trusted HTTPS connection on your LAN —
             no Let's Encrypt, no public DNS, no inbound firewall rules.
@@ -490,7 +490,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
 
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 CA label (optional)
               </label>
               <input
@@ -505,7 +505,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Extra hosts (optional, space- or comma-separated)
               </label>
               <input
@@ -517,7 +517,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 className="input"
                 disabled={lcGenerating}
               />
-              <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
+              <p className="text-xs text-fg-muted mt-1">
                 Localhost, the server hostname, and detected LAN IPs are added
                 automatically.
               </p>
@@ -550,14 +550,14 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "manual" ? null : "manual")
           }
         >
-          <p className="text-xs text-gray-700 dark:text-gray-400 mb-3">
+          <p className="text-xs text-fg-muted mb-3">
             Use this if you have a certificate from another provider (corporate
             CA, Cloudflare Origin, etc.). Both files must be PEM-encoded and
             readable by the server process.
           </p>
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Certificate Path (.crt / .pem)
               </label>
               <input
@@ -570,7 +570,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Private Key Path (.key / .pem)
               </label>
               <input
@@ -625,20 +625,20 @@ function Disclosure({
     blue: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
     emerald:
       "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-    gray: "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
+    gray: "bg-edge text-fg-muted",
   }[tone];
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+    <div className="border border-edge rounded-lg overflow-hidden">
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors"
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-surface-sunken dark:hover:bg-white/10/40 transition-colors"
         aria-expanded={open}
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+            <span className="text-sm font-semibold text-fg">
               {title}
             </span>
             {badge && (
@@ -647,12 +647,12 @@ function Disclosure({
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5 truncate">
+          <p className="text-xs text-fg-muted mt-0.5 truncate">
             {subtitle}
           </p>
         </div>
         <svg
-          className={`w-4 h-4 text-gray-600 dark:text-gray-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`w-4 h-4 text-fg-muted flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -662,7 +662,7 @@ function Disclosure({
         </svg>
       </button>
       {open && (
-        <div className="px-4 pb-4 pt-1 border-t border-gray-200 dark:border-gray-700">
+        <div className="px-4 pb-4 pt-1 border-t border-edge">
           {children}
         </div>
       )}

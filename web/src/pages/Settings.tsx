@@ -6,14 +6,14 @@
  * user management (admin), and thumbnail size preference.
  */
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import type { ExportJob, ExportFile } from "../api/export";
 import { useAuthStore } from "../store/auth";
 import { useBackupStore } from "../store/backup";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
-import { Toggle } from "../components/ui";
+import { Toggle, Select } from "../components/ui";
 import { useIsAdmin } from "../hooks/useIsAdmin";
 import StorageStatsSection from "../components/StorageStatsSection";
 import UserManagement from "../components/settings/UserManagement";
@@ -34,7 +34,7 @@ export default function Settings() {
   const isAdmin = useIsAdmin();
   const { canInstall, isInstalled, promptInstall } = usePwaInstall();
   const { thumbnailSize, toggle: toggleThumbnailSize } = useThumbnailSizeStore();
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
 
   // ── General state ────────────────────────────────────────────────────────
   const [error, setError] = useState("");
@@ -220,7 +220,7 @@ export default function Settings() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       <main className="max-w-5xl mx-auto p-4">
@@ -245,7 +245,7 @@ export default function Settings() {
         /* Backup servers mirror accounts from the primary — no local changes */
         <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Account</h2>
-          <p className="text-sm text-gray-700 dark:text-gray-400">
+          <p className="text-sm text-fg-muted">
             Logged in as <strong>{username}</strong>. Account changes (password, 2FA) are managed on the primary server.
           </p>
         </section>
@@ -258,23 +258,22 @@ export default function Settings() {
       {!isBackupMode && (
         <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Library Export</h2>
-          <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
+          <p className="text-sm text-fg-muted mb-4">
             Package your entire media library with metadata into downloadable zip files.
             Files are available for 24 hours after export.
           </p>
 
           {/* Export controls */}
           <div className="flex flex-wrap items-center gap-3 mb-4">
-            <select
+            <Select
               value={exportSizeLimit}
               onChange={(e) => setExportSizeLimit(Number(e.target.value))}
               disabled={exportLoading || (exportJob?.status === "pending" || exportJob?.status === "running")}
-              className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
             >
               <option value={10_737_418_240}>10 GB per file</option>
               <option value={21_474_836_480}>20 GB per file</option>
               <option value={53_687_091_200}>50 GB per file</option>
-            </select>
+            </Select>
 
             <button
               onClick={() => navigate("/export-downloads")}
@@ -329,10 +328,11 @@ export default function Settings() {
       {backupLoaded && !isBackupMode && (
         <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Active Server</h2>
-          <p className="text-sm text-gray-700 dark:text-gray-400 mb-3">
+          <p className="text-sm text-fg-muted mb-3">
             Choose which server to view photos from.
           </p>
-          <select
+          <Select
+            fullWidth
             value={viewMode === "main" ? "__main__" : (activeBackupServerId ?? "__main__")}
             onChange={(e) => {
               const val = e.target.value;
@@ -343,7 +343,6 @@ export default function Settings() {
                 setViewMode("backup");
               }
             }}
-            className="input"
           >
             <option value="__main__">Main Server (local)</option>
             {backupServers.map((s) => (
@@ -351,9 +350,9 @@ export default function Settings() {
                 {s.name} — {s.address}
               </option>
             ))}
-          </select>
+          </Select>
           {backupServers.length === 0 && (
-            <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+            <p className="text-xs text-fg-muted mt-2">
               No backup servers configured. Add one in the Backup Recovery section below.
             </p>
           )}
@@ -365,10 +364,10 @@ export default function Settings() {
         <h2 className="text-lg font-semibold mb-3">Display</h2>
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            <h3 className="text-sm font-medium text-fg-muted">
               Thumbnail Size
             </h3>
-            <p className="text-sm text-gray-700 dark:text-gray-400">
+            <p className="text-sm text-fg-muted">
               {thumbnailSize === "large"
                 ? "Large — taller rows for bigger photo previews."
                 : "Normal — compact rows showing more photos (default)."}
@@ -378,7 +377,7 @@ export default function Settings() {
             <span className={`text-xs font-medium ${
               thumbnailSize === "normal"
                 ? "text-accent-600 dark:text-accent-400"
-                : "text-gray-600 dark:text-gray-500"
+                : "text-fg-muted"
             }`}>Normal</span>
             <Toggle
               label="Use large thumbnails"
@@ -388,7 +387,7 @@ export default function Settings() {
             <span className={`text-xs font-medium ${
               thumbnailSize === "large"
                 ? "text-accent-600 dark:text-accent-400"
-                : "text-gray-600 dark:text-gray-500"
+                : "text-fg-muted"
             }`}>Large</span>
           </div>
         </div>
@@ -431,8 +430,8 @@ export default function Settings() {
         <h2 className="text-lg font-semibold mb-3">Apps</h2>
         <div className="space-y-4">
           <div>
-            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Install Simple Photos</h3>
-            <p className="text-sm text-gray-700 dark:text-gray-400 mb-2">
+            <h3 className="text-sm font-medium text-fg-muted mb-1">Install Simple Photos</h3>
+            <p className="text-sm text-fg-muted mb-2">
               Use this site like a native app. Choose <strong>Install App</strong> for a quick web-app install on any device, or <strong>Android App</strong> for automatic phone-photo backup.
             </p>
             <div className="flex flex-wrap gap-2">
@@ -505,45 +504,45 @@ export default function Settings() {
               Android Install Instructions
             </button>
             {showInstallInstructions && (
-              <div className="mt-3 bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-                <h3 className="font-medium text-gray-800 dark:text-gray-200 text-sm mb-3">
+              <div className="mt-3 bg-canvas rounded-lg p-4">
+                <h3 className="font-medium text-fg text-sm mb-3">
                   How to install (sideload):
                 </h3>
-                <ol className="text-sm text-gray-600 dark:text-gray-400 space-y-3">
+                <ol className="text-sm text-fg-muted space-y-3">
                   <li className="flex gap-3">
                     <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">1</span>
                     <div>
-                      <p className="font-medium text-gray-700 dark:text-gray-300">Download the APK</p>
-                      <p className="text-xs text-gray-700 dark:text-gray-400">Click the button above or transfer the APK to your phone via USB/email.</p>
+                      <p className="font-medium text-fg-muted">Download the APK</p>
+                      <p className="text-xs text-fg-muted">Click the button above or transfer the APK to your phone via USB/email.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
                     <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">2</span>
                     <div>
-                      <p className="font-medium text-gray-700 dark:text-gray-300">Enable "Install unknown apps"</p>
-                      <p className="text-xs text-gray-700 dark:text-gray-400">Go to <strong>Settings → Apps → Special access → Install unknown apps</strong> and enable it for your file manager or browser.</p>
+                      <p className="font-medium text-fg-muted">Enable "Install unknown apps"</p>
+                      <p className="text-xs text-fg-muted">Go to <strong>Settings → Apps → Special access → Install unknown apps</strong> and enable it for your file manager or browser.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
                     <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">3</span>
                     <div>
-                      <p className="font-medium text-gray-700 dark:text-gray-300">Open the APK</p>
-                      <p className="text-xs text-gray-700 dark:text-gray-400">Tap the downloaded APK file and confirm the installation prompt.</p>
+                      <p className="font-medium text-fg-muted">Open the APK</p>
+                      <p className="text-xs text-fg-muted">Tap the downloaded APK file and confirm the installation prompt.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
                     <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">4</span>
                     <div>
-                      <p className="font-medium text-gray-700 dark:text-gray-300">Connect to your server</p>
-                      <p className="text-xs text-gray-700 dark:text-gray-400">Open the app, enter your server URL:</p>
-                      <code className="block mt-1 bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded text-xs text-gray-800 dark:text-gray-200 break-all">{window.location.origin}</code>
+                      <p className="font-medium text-fg-muted">Connect to your server</p>
+                      <p className="text-xs text-fg-muted">Open the app, enter your server URL:</p>
+                      <code className="block mt-1 bg-edge-strong px-2 py-1 rounded text-xs text-fg break-all">{window.location.origin}</code>
                     </div>
                   </li>
                   <li className="flex gap-3">
                     <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">5</span>
                     <div>
-                      <p className="font-medium text-gray-700 dark:text-gray-300">Sign in & grant permissions</p>
-                      <p className="text-xs text-gray-700 dark:text-gray-400">Log in with your account and allow the app to access your photos and videos for automatic encrypted backup.</p>
+                      <p className="font-medium text-fg-muted">Sign in & grant permissions</p>
+                      <p className="text-xs text-fg-muted">Log in with your account and allow the app to access your photos and videos for automatic encrypted backup.</p>
                     </div>
                   </li>
                 </ol>
@@ -565,10 +564,10 @@ export default function Settings() {
           <h2 className="text-lg font-semibold mb-3">Audio Backup</h2>
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              <h3 className="text-sm font-medium text-fg-muted">
                 Include Audio in Backups
               </h3>
-              <p className="text-sm text-gray-700 dark:text-gray-400">
+              <p className="text-sm text-fg-muted">
                 {audioBackupEnabled
                   ? "Audio files (MP3, FLAC, WAV, etc.) are included when syncing to backup servers."
                   : "Audio files are excluded from backup sync. Only photos and videos will be backed up."}
@@ -610,7 +609,7 @@ export default function Settings() {
       {window.location.protocol === "https:" && (
         <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Cast</h2>
-          <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
+          <p className="text-sm text-fg-muted mb-4">
             Stream your gallery slideshow to a Chromecast or compatible receiver on your local network.
           </p>
           <button
@@ -635,7 +634,7 @@ export default function Settings() {
       {isAdmin && (
         <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Server</h2>
-          <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
+          <p className="text-sm text-fg-muted mb-4">
             Restart the server process. The page will automatically reload once the server comes back up.
           </p>
           {restartConfirm ? (
@@ -674,19 +673,19 @@ export default function Settings() {
         <h2 className="text-lg font-semibold mb-4">About</h2>
         <div className="flex flex-col items-center text-center">
           <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mb-3" />
-          <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Simple Photos</h3>
-          <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
+          <h3 className="text-xl font-bold text-fg">Simple Photos</h3>
+          <p className="text-sm text-fg-muted mb-4">
             v1.0.0 — Self-hosted, end-to-end encrypted photo & video library
           </p>
-          <hr className="w-full border-gray-100 dark:border-gray-700 mb-4" />
-          <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">Developed by</p>
+          <hr className="w-full border-edge mb-4" />
+          <p className="text-xs text-fg-muted mb-2">Developed by</p>
           <img
             src="/wulfnet.jpg"
             alt="WulfNet Designs"
             className="h-16 mb-1"
           />
-          <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">WulfNet Designs</p>
-          <p className="text-xs text-gray-600 dark:text-gray-400 mt-3">
+          <p className="text-sm font-semibold text-fg-muted">WulfNet Designs</p>
+          <p className="text-xs text-fg-muted mt-3">
             &copy; {new Date().getFullYear()} WulfNet Designs. All rights
             reserved.
           </p>
@@ -700,8 +699,8 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <AppIcon name="star" size="w-5 h-5" />
             <div>
-              <p className="text-gray-900 dark:text-gray-100 font-medium">Icons</p>
-              <p className="text-gray-700 dark:text-gray-400">
+              <p className="text-fg font-medium">Icons</p>
+              <p className="text-fg-muted">
                 Custom icons by{" "}
                 <a
                   href="https://www.flaticon.com/authors/angus-87"
@@ -723,12 +722,12 @@ export default function Settings() {
               </p>
             </div>
           </div>
-          <hr className="border-gray-100 dark:border-gray-700" />
+          <hr className="border-edge" />
           <div className="flex items-center gap-3">
             <AppIcon name="shared" size="w-5 h-5" />
             <div>
-              <p className="text-gray-900 dark:text-gray-100 font-medium">Source Code</p>
-              <p className="text-gray-700 dark:text-gray-400">
+              <p className="text-fg font-medium">Source Code</p>
+              <p className="text-fg-muted">
                 <a
                   href="https://github.com/wulfic/simple-photos"
                   target="_blank"

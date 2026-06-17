@@ -128,8 +128,8 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
         className="card shadow-pop w-full max-w-md max-h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-          <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
+          <h3 className="text-base font-semibold text-fg">
             Add {blobIds.length} {blobIds.length === 1 ? "item" : "items"} to album
           </h3>
           <button
@@ -144,7 +144,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
         </div>
 
         {/* Create-new-album affordance — sticky at the top of the picker */}
-        <div className="border-b border-gray-200 dark:border-gray-700">
+        <div className="border-b border-edge">
           {creating ? (
             <form onSubmit={createAndAdd} className="flex items-center gap-2 px-4 py-3">
               <input
@@ -154,7 +154,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="New album name"
                 disabled={creatingBusy}
-                className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:opacity-50"
+                className="input flex-1 min-w-0 py-1.5 disabled:opacity-50"
               />
               <button
                 type="submit"
@@ -176,7 +176,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
             <button
               onClick={() => setCreating(true)}
               disabled={busyId !== null}
-              className="w-full flex items-center gap-2 px-4 py-3 text-left text-sm font-medium text-accent-600 dark:text-accent-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+              className="w-full flex items-center gap-2 px-4 py-3 text-left text-sm font-medium text-accent-600 dark:text-accent-400 hover:bg-surface-sunken dark:hover:bg-white/10 transition-colors disabled:opacity-50"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -188,24 +188,24 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
 
         <div className="flex-1 overflow-y-auto">
           {albums === null && (
-            <p className="text-center text-sm text-gray-700 dark:text-gray-400 py-8">Loading albums…</p>
+            <p className="text-center text-sm text-fg-muted py-8">Loading albums…</p>
           )}
           {albums?.length === 0 && (
-            <p className="text-center text-sm text-gray-700 dark:text-gray-400 py-8">
+            <p className="text-center text-sm text-fg-muted py-8">
               No albums yet. Use “New album” above to create one.
             </p>
           )}
           {albums && albums.length > 0 && (
-            <ul className="divide-y divide-gray-100 dark:divide-gray-700">
+            <ul className="divide-y divide-edge">
               {albums.map((a) => (
                 <li key={a.albumId}>
                   <button
                     onClick={() => pickAlbum(a)}
                     disabled={busyId !== null}
-                    className="w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-between disabled:opacity-50"
+                    className="w-full text-left px-4 py-3 hover:bg-surface-sunken dark:hover:bg-white/10 transition-colors flex items-center justify-between disabled:opacity-50"
                   >
-                    <span className="text-sm font-medium text-gray-800 dark:text-gray-100">{a.name}</span>
-                    <span className="text-xs text-gray-700 dark:text-gray-400">
+                    <span className="text-sm font-medium text-fg">{a.name}</span>
+                    <span className="text-xs text-fg-muted">
                       {busyId === a.albumId ? "Adding…" : `${a.photoBlobIds.length} items`}
                     </span>
                   </button>
@@ -216,7 +216,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
         </div>
 
         {error && (
-          <p className="px-4 py-2 text-sm text-red-600 dark:text-red-400 border-t border-gray-200 dark:border-gray-700">
+          <p className="px-4 py-2 text-sm text-red-600 dark:text-red-400 border-t border-edge">
             {error}
           </p>
         )}

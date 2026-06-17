@@ -24,10 +24,10 @@ export default function ServerRoleStep({
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+      <h2 className="text-2xl font-bold text-fg mb-2">
         Server Role
       </h2>
-      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
+      <p className="text-fg-muted text-sm mb-6">
         Is this the primary server that stores your photos, or a backup that
         mirrors another Simple Photos instance?
       </p>
@@ -36,7 +36,7 @@ export default function ServerRoleStep({
         {/* Primary server */}
         <button
           onClick={() => choose("primary")}
-          className="w-full p-5 text-left rounded-xl border-2 border-gray-200 dark:border-gray-600 hover:border-accent-400 dark:hover:border-accent-500 transition-colors group"
+          className="w-full p-5 text-left rounded-xl border-2 border-edge hover:border-accent-400 dark:hover:border-accent-500 transition-colors group"
         >
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-accent-100 dark:bg-accent-900/30 flex items-center justify-center shrink-0">
@@ -55,10 +55,10 @@ export default function ServerRoleStep({
               </svg>
             </div>
             <div>
-              <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
+              <p className="font-semibold text-fg text-base group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
                 Primary Server
               </p>
-              <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">
+              <p className="text-sm text-fg-muted mt-0.5">
                 This is the main server where you upload and manage your photos.
                 You can optionally add backup targets later.
               </p>
@@ -69,7 +69,7 @@ export default function ServerRoleStep({
         {/* Backup server */}
         <button
           onClick={() => choose("backup")}
-          className="w-full p-5 text-left rounded-xl border-2 border-gray-200 dark:border-gray-600 hover:border-green-400 dark:hover:border-green-500 transition-colors group"
+          className="w-full p-5 text-left rounded-xl border-2 border-edge hover:border-green-400 dark:hover:border-green-500 transition-colors group"
         >
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center shrink-0">
@@ -88,10 +88,10 @@ export default function ServerRoleStep({
               </svg>
             </div>
             <div>
-              <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">
+              <p className="font-semibold text-fg text-base group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">
                 Backup Server
               </p>
-              <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">
+              <p className="text-sm text-fg-muted mt-0.5">
                 This server will mirror an existing Simple Photos instance.
                 You'll pair with the primary server and log in with its admin
                 credentials.
@@ -101,13 +101,13 @@ export default function ServerRoleStep({
         </button>
       </div>
 
-      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+      <div className="mt-8 pt-6 border-t border-edge">
         <button
           onClick={() => {
             setStep("welcome");
             setError("");
           }}
-          className="text-sm text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          className="text-sm text-gray-700 hover:text-fg-muted dark:hover:text-gray-200"
         >
           &larr; Back
         </button>

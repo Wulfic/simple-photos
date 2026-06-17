@@ -4,7 +4,7 @@
  * and shared albums (server-managed, multi-user).
  */
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex } from "../crypto/crypto";
 import { db, type CachedAlbum, type CachedPhoto } from "../db";
@@ -29,6 +29,7 @@ type SharedAlbumInfo = {
 };
 
 import type { ShareUser } from "../types/sharing";
+import { AlbumGridSkeleton } from "../components/skeletons";
 
 export default function Albums() {
   const [loading, setLoading] = useState(true);
@@ -45,7 +46,7 @@ export default function Albums() {
   const { accessToken } = useAuthStore();
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
 
   // Shared albums state
   const [sharedAlbums, setSharedAlbums] = useState<SharedAlbumInfo[]>([]);
@@ -391,13 +392,13 @@ export default function Albums() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       <main className="p-4">
         {/* ── User Albums ────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-400 uppercase tracking-wider">Albums</h2>
+          <h2 className="text-sm font-semibold text-fg-muted uppercase tracking-wider">Albums</h2>
           {!isBackupServer && (
           <button
             onClick={() => setShowCreate(!showCreate)}
@@ -470,12 +471,12 @@ export default function Albums() {
 
         {/* ── User-created albums ───────────────────────────────────────── */}
         {loading && (!albums || albums.length === 0) && (
-          <p className="col-span-full text-gray-700 dark:text-gray-400 text-center py-12">
-            Loading albums...
-          </p>
+          <div className="col-span-full">
+            <AlbumGridSkeleton />
+          </div>
         )}
         {!loading && (!albums || albums.length === 0) && (
-          <p className="col-span-full text-gray-700 dark:text-gray-400 text-center py-12">
+          <p className="col-span-full text-fg-muted text-center py-12">
             No albums yet. Create one to get started.
           </p>
         )}
@@ -488,7 +489,7 @@ export default function Albums() {
       {peopleClusters.length > 0 && (
         <div className="mt-8">
           <h2
-            className="text-sm font-semibold text-gray-700 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            className="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3 cursor-pointer hover:text-fg transition-colors inline-block"
             onClick={() => navigate("/albums/smart-people")}
           >People</h2>
           {/* One-row layout: cap to lg-grid-cols (6). When more exist, the
@@ -500,7 +501,7 @@ export default function Albums() {
                 onClick={() => navigate(`/albums/smart-people/${cluster.id}`)}
                 className="card card-interactive p-3 cursor-pointer"
               >
-                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
+                <div className="aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
                   {peopleThumbUrls[cluster.id] ? (
                     <img
                       src={peopleThumbUrls[cluster.id]}
@@ -508,7 +509,7 @@ export default function Albums() {
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : (
-                    <svg className="w-10 h-10 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-10 h-10 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                     </svg>
                   )}
@@ -516,7 +517,7 @@ export default function Albums() {
                 <p className="font-medium text-center text-sm truncate">
                   {cluster.label || "Unknown Person"}
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400 text-center">
+                <p className="text-xs text-fg-muted text-center">
                   {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
                 </p>
               </div>
@@ -544,7 +545,7 @@ export default function Albums() {
       {petClusters.length > 0 && (
         <div className="mt-8">
           <h2
-            className="text-sm font-semibold text-gray-700 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            className="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3 cursor-pointer hover:text-fg transition-colors inline-block"
             onClick={() => navigate("/albums/smart-pets")}
           >Pets</h2>
           {/* One-row layout — see People section comment. */}
@@ -555,7 +556,7 @@ export default function Albums() {
                 onClick={() => navigate(`/albums/smart-pets/${cluster.id}`)}
                 className="card card-interactive p-3 cursor-pointer"
               >
-                <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
+                <div className="aspect-square bg-surface-raised rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
                   {petThumbUrls[cluster.id] ? (
                     <img
                       src={petThumbUrls[cluster.id]}
@@ -563,7 +564,7 @@ export default function Albums() {
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : (
-                    <svg className="w-10 h-10 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-10 h-10 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
                     </svg>
                   )}
@@ -571,7 +572,7 @@ export default function Albums() {
                 <p className="font-medium text-center text-sm truncate">
                   {cluster.label || `Unknown ${cluster.species}`}
                 </p>
-                <p className="text-xs text-gray-700 dark:text-gray-400 text-center">
+                <p className="text-xs text-fg-muted text-center">
                   {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
                 </p>
               </div>
@@ -599,7 +600,7 @@ export default function Albums() {
       {memories.length > 0 && (
         <div className="mt-8">
           <h2
-            className="text-sm font-semibold text-gray-700 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            className="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3 cursor-pointer hover:text-fg transition-colors inline-block"
             onClick={() => navigate("/albums/smart-memories")}
           >Memories</h2>
           {/* One-row layout: cap to md-grid-cols (4). When more exist, the
@@ -611,7 +612,7 @@ export default function Albums() {
                 onClick={() => navigate(`/albums/smart-memories/${memory.id}`)}
                 className="card card-interactive cursor-pointer overflow-hidden"
               >
-                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                <div className="aspect-video bg-surface-raised flex items-center justify-center overflow-hidden">
                   {memoryThumbUrls[memory.id] ? (
                     <img
                       src={memoryThumbUrls[memory.id]}
@@ -619,7 +620,7 @@ export default function Albums() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <svg className="w-8 h-8 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-8 h-8 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
                     </svg>
@@ -627,7 +628,7 @@ export default function Albums() {
                 </div>
                 <div className="p-3">
                   <p className="font-medium text-sm truncate">{memory.name}</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-400">
+                  <p className="text-xs text-fg-muted">
                     {memory.photo_count} photo{memory.photo_count !== 1 ? "s" : ""} · {memory.country}
                   </p>
                 </div>
@@ -656,7 +657,7 @@ export default function Albums() {
       {trips.length > 0 && (
         <div className="mt-8">
           <h2
-            className="text-sm font-semibold text-gray-700 dark:text-gray-400 uppercase tracking-wider mb-3 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200 transition-colors inline-block"
+            className="text-sm font-semibold text-fg-muted uppercase tracking-wider mb-3 cursor-pointer hover:text-fg transition-colors inline-block"
             onClick={() => navigate("/albums/smart-trips")}
           >Trips</h2>
           {/* One-row layout — see Memories section comment. */}
@@ -667,7 +668,7 @@ export default function Albums() {
                 onClick={() => navigate(`/albums/smart-trips/${trip.id}`)}
                 className="card card-interactive cursor-pointer overflow-hidden"
               >
-                <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                <div className="aspect-video bg-surface-raised flex items-center justify-center overflow-hidden">
                   {tripThumbUrls[trip.id] ? (
                     <img
                       src={tripThumbUrls[trip.id]}
@@ -675,17 +676,17 @@ export default function Albums() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <svg className="w-8 h-8 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-8 h-8 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" />
                     </svg>
                   )}
                 </div>
                 <div className="p-3">
                   <p className="font-medium text-sm truncate">{trip.city}</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-400 truncate">
+                  <p className="text-xs text-fg-muted truncate">
                     {trip.date_label}
                   </p>
-                  <p className="text-xs text-gray-700 dark:text-gray-400">
+                  <p className="text-xs text-fg-muted">
                     {trip.photo_count} photo{trip.photo_count !== 1 ? "s" : ""} · {trip.day_count} day{trip.day_count !== 1 ? "s" : ""} · {trip.country}
                   </p>
                 </div>
@@ -713,7 +714,7 @@ export default function Albums() {
       {/* ── Shared Albums ───────────────────────────────────────── */}
       <div className="mt-8">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Shared Albums</h2>
+          <h2 className="text-lg font-semibold text-fg">Shared Albums</h2>
         </div>
 
         {showCreateShared && (
@@ -743,21 +744,21 @@ export default function Albums() {
                   <button
                     key={u.id}
                     onClick={() => { addMemberToAlbum(u.id); setSharePickerAlbumId(null); }}
-                    className="w-full text-left px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-sm flex items-center gap-2"
+                    className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-sunken dark:hover:bg-white/10 text-sm flex items-center gap-2"
                   >
-                    <svg className="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-5 h-5 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                     </svg>
                     {u.username}
                   </button>
                 ))}
                 {shareUsers.length === 0 && (
-                  <p className="text-gray-700 dark:text-gray-500 text-sm text-center py-4">No users found</p>
+                  <p className="text-fg-muted text-sm text-center py-4">No users found</p>
                 )}
               </div>
               <button
                 onClick={() => setSharePickerAlbumId(null)}
-                className="mt-4 w-full py-2 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
+                className="mt-4 w-full py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 rounded-md"
               >
                 Cancel
               </button>
@@ -767,12 +768,12 @@ export default function Albums() {
 
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
           {sharedLoading && sharedAlbums.length === 0 && (
-            <p className="col-span-full text-gray-700 dark:text-gray-400 text-center py-8">
+            <p className="col-span-full text-fg-muted text-center py-8">
               Loading shared albums...
             </p>
           )}
           {!sharedLoading && sharedAlbums.length === 0 && (
-            <p className="col-span-full text-gray-700 dark:text-gray-400 text-center py-8">
+            <p className="col-span-full text-fg-muted text-center py-8">
               No shared albums yet. Create one to share photos with other users.
             </p>
           )}
@@ -786,10 +787,10 @@ export default function Albums() {
                 className="aspect-square bg-gradient-to-br from-green-50 to-accent-50 dark:from-green-900/20 dark:to-accent-900/20 rounded mb-1.5 flex flex-col items-center justify-center"
               >
                 <span className="text-xl font-semibold text-green-600 dark:text-green-400">{sa.photo_count}</span>
-                <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">{sa.member_count} member{sa.member_count !== 1 ? "s" : ""}</span>
+                <span className="text-xs text-fg-muted mt-0.5">{sa.member_count} member{sa.member_count !== 1 ? "s" : ""}</span>
               </div>
               <p className="font-medium text-sm truncate">{sa.name}</p>
-              <p className="text-xs text-gray-700 dark:text-gray-400">
+              <p className="text-xs text-fg-muted">
                 {sa.is_owner ? "You" : sa.owner_username}
               </p>
 
@@ -870,17 +871,17 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
       onClick={onClick}
       className="card card-interactive p-2 cursor-pointer"
     >
-      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-1.5 flex items-center justify-center overflow-hidden">
+      <div className="aspect-square bg-surface-raised rounded mb-1.5 flex items-center justify-center overflow-hidden">
         {thumbUrl ? (
           <img src={thumbUrl} alt={album.name} className="w-full h-full object-cover" />
         ) : (
-          <span className="text-gray-600 dark:text-gray-400 text-2xl">
+          <span className="text-fg-muted text-2xl">
             {album.photoBlobIds.length}
           </span>
         )}
       </div>
       <p className="font-medium text-sm truncate">{album.name}</p>
-      <p className="text-xs text-gray-700 dark:text-gray-400">
+      <p className="text-xs text-fg-muted">
         {album.photoBlobIds.length} items
       </p>
     </div>
@@ -932,15 +933,15 @@ function SmartAlbumCard({
       onClick={onClick}
       className="card card-interactive p-2 cursor-pointer"
     >
-      <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-1.5 flex items-center justify-center overflow-hidden">
+      <div className="aspect-square bg-surface-raised rounded mb-1.5 flex items-center justify-center overflow-hidden">
         {thumbUrl ? (
           <img src={thumbUrl} alt={label} className="w-full h-full object-cover" />
         ) : (
-          <span className="text-gray-600 dark:text-gray-400 text-2xl">{count}</span>
+          <span className="text-fg-muted text-2xl">{count}</span>
         )}
       </div>
       <p className="font-medium text-sm truncate">{label}</p>
-      <p className="text-xs text-gray-700 dark:text-gray-400">
+      <p className="text-xs text-fg-muted">
         {count} items
       </p>
     </div>

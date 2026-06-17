@@ -82,7 +82,7 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen flex items-center justify-center bg-canvas">
       <ThemeToggle />
       <div className="card max-w-md w-full p-8">
         <div className="flex flex-col items-center mb-6">
@@ -93,7 +93,7 @@ export default function Login() {
           {!totpSession ? (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-fg-muted mb-1">
                   Username
                 </label>
                 <input
@@ -110,7 +110,7 @@ export default function Login() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-fg-muted mb-1">
                   Password
                 </label>
                 <div className="relative">
@@ -128,7 +128,7 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowPassword((s) => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 focus:outline-none"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted hover:text-fg focus:outline-none"
                     tabIndex={-1}
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
@@ -150,7 +150,7 @@ export default function Login() {
             </>
           ) : (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Two-Factor Code
               </label>
               <input
@@ -167,7 +167,7 @@ export default function Login() {
                 spellCheck={false}
                 inputMode="numeric"
               />
-              <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
+              <p className="text-xs text-fg-muted mt-1">
                 Enter code from your authenticator app or a backup code
               </p>
             </div>

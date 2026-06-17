@@ -127,7 +127,7 @@ export default function GeolocationSection({
   return (
     <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">Geolocation</h2>
-      <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
+      <p className="text-sm text-fg-muted mb-4">
         Automatically resolve GPS coordinates into city, state, and country
         names. Browse photos by location or timeline.
       </p>
@@ -135,10 +135,10 @@ export default function GeolocationSection({
       {/* Enable toggle */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-medium text-fg-muted">
             Enable Geolocation
           </h3>
-          <p className="text-xs text-gray-700 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             {status?.enabled
               ? "Location resolution is active."
               : "Geolocation processing is disabled."}
@@ -155,10 +155,10 @@ export default function GeolocationSection({
       {/* Scrub on upload toggle */}
       <div className="flex items-center justify-between mb-2">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-medium text-fg-muted">
             Remove GPS from New Uploads
           </h3>
-          <p className="text-xs text-gray-700 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             {status?.scrub_on_upload
               ? "New uploads will have GPS coordinates removed before saving."
               : "New uploads will keep their original GPS coordinates."}
@@ -171,7 +171,7 @@ export default function GeolocationSection({
           disabled={togglingScrub}
         />
       </div>
-      <p className="text-xs text-gray-600 dark:text-gray-500 mb-4 ml-1">
+      <p className="text-xs text-fg-muted mb-4 ml-1">
         This only affects future uploads — photos already in your library are not changed.
         Use &quot;Scrub All&quot; below to remove GPS from existing photos.
       </p>
@@ -179,10 +179,10 @@ export default function GeolocationSection({
       {/* Precise (street-level) addresses — opt-in, contacts a third party */}
       <div className="flex items-center justify-between mb-2">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-medium text-fg-muted">
             Precise Street Addresses
           </h3>
-          <p className="text-xs text-gray-700 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             {status?.precise_enabled
               ? "Resolving house-number/street addresses (e.g. memories like “86 Nelson Blvd”)."
               : "City-level only. Turn on to resolve full street addresses."}
@@ -216,7 +216,7 @@ export default function GeolocationSection({
       <Button variant="danger" onClick={handleScrubAll} disabled={scrubbing}>
         {scrubbing ? "Scrubbing..." : "Scrub All Location Data"}
       </Button>
-      <p className="text-xs text-gray-700 dark:text-gray-400 mt-2">
+      <p className="text-xs text-fg-muted mt-2">
         Permanently remove all GPS coordinates and resolved location data from your photos.
       </p>
     </section>

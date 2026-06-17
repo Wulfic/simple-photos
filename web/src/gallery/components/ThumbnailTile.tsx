@@ -31,7 +31,11 @@ export default function ThumbnailTile({
   onDimensionMismatch,
 }: ThumbnailTileProps) {
   const tileRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const [visible, setVisible] = useState(false);
+  // Blur-up / fade-in: the image starts transparent over the neutral tile
+  // background and fades in once decoded, instead of popping in.
+  const [decoded, setDecoded] = useState(false);
 
   const isGif = mediaType === "gif";
   const hasAnimatedThumb = isGif && source.thumbnailMimeType === "image/gif";
@@ -68,13 +72,29 @@ export default function ThumbnailTile({
   // The displayed URL: full GIF blob when in view, otherwise the thumbnail
   const displayUrl = gif.fullGifUrl ?? thumb.url;
 
+  // Reset the fade when the source URL changes. If the new image is already
+  // cached/complete (blob URLs often are), the onLoad event may not fire, so
+  // mark it decoded straight away to avoid a tile that stays blank.
+  useEffect(() => {
+    if (!displayUrl) {
+      setDecoded(false);
+      return;
+    }
+    const img = imgRef.current;
+    if (img && img.complete && img.naturalWidth > 0) {
+      setDecoded(true);
+    } else {
+      setDecoded(false);
+    }
+  }, [displayUrl]);
+
   // Long press for selection mode
   const longPress = useLongPress(() => onLongPress?.(), 500);
 
   return (
     <div
       ref={tileRef}
-      className={`relative w-full h-full bg-gray-100 dark:bg-gray-700 overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${isSelected ? "ring-2 ring-accent-500" : ""}`}
+      className={`relative w-full h-full bg-surface-raised overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${isSelected ? "ring-2 ring-accent-500" : ""}`}
       onClick={(e) => {
         if (longPress.wasLongPress()) { e.preventDefault(); return; }
         onClick();
@@ -89,20 +109,24 @@ export default function ThumbnailTile({
           {/* GIFs use object-cover without crop transforms (breaks animation).
               JustifiedGrid already sizes the tile to match the GIF's aspect ratio. */}
           <img
+            ref={imgRef}
             src={displayUrl}
             alt={filename}
-            className="w-full h-full object-cover"
+            className={`w-full h-full object-cover transition-opacity duration-500 ease-out motion-reduce:transition-none ${decoded ? "opacity-100" : "opacity-0"}`}
             loading="lazy"
             style={isGif ? undefined : getThumbnailStyle(cropData)}
-            onLoad={onDimensionMismatch ? (e) => {
-              const img = e.currentTarget;
-              const nw = img.naturalWidth;
-              const nh = img.naturalHeight;
-              // Self-heal: if thumbnail orientation disagrees with stored dimensions
-              if (nw > 0 && nh > 0 && nw !== nh && !cropData) {
-                onDimensionMismatch(nw, nh);
+            onLoad={(e) => {
+              setDecoded(true);
+              if (onDimensionMismatch) {
+                const img = e.currentTarget;
+                const nw = img.naturalWidth;
+                const nh = img.naturalHeight;
+                // Self-heal: if thumbnail orientation disagrees with stored dimensions
+                if (nw > 0 && nh > 0 && nw !== nh && !cropData) {
+                  onDimensionMismatch(nw, nh);
+                }
               }
-            } : undefined}
+            }}
           />
 
           {/* Filename overlay for audio files */}
@@ -117,19 +141,19 @@ export default function ThumbnailTile({
           {thumb.state === "loading" || thumb.state === "placeholder" ? (
             !source.thumbnailData ? (
               <>
-                <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-accent-500 dark:border-t-accent-400 rounded-full animate-spin" />
-                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-500 uppercase tracking-wide">Queued</span>
+                <div className="w-5 h-5 border-2 border-edge-strong border-t-accent-500 dark:border-t-accent-400 rounded-full animate-spin" />
+                <span className="text-[10px] font-medium text-fg-muted uppercase tracking-wide">Queued</span>
               </>
             ) : (
-              <span className="text-gray-600 dark:text-gray-400 text-xs">{filename}</span>
+              <span className="text-fg-muted text-xs">{filename}</span>
             )
           ) : thumb.state === "error" ? (
-            <div className="text-center text-gray-600 dark:text-gray-400">
+            <div className="text-center text-fg-muted">
               <span className="text-2xl block mb-1">🔐</span>
               <span className="text-xs">Encrypted</span>
             </div>
           ) : (
-            <span className="text-gray-600 dark:text-gray-400 text-xs">{filename}</span>
+            <span className="text-fg-muted text-xs">{filename}</span>
           )}
         </div>
       )}

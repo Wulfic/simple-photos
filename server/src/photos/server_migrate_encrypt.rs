@@ -215,11 +215,27 @@ pub async fn encrypt_one_photo(
         return Ok(());
     }
 
-    // Generate web preview and thumbnail concurrently
-    let web_preview_fut = build_web_preview(&photo, &full_path, &file_data, storage_root);
-    let thumbnail_fut = build_thumbnail(&photo, &full_path, &file_data, storage_root);
-
-    let ((payload_data, payload_mime), thumb_data) = tokio::join!(web_preview_fut, thumbnail_fut);
+    // Generate web preview and thumbnail.
+    //
+    // For files that need a web preview (non-browser-native formats) we run both
+    // concurrently. For everything else — notably large videos — the preview
+    // path just clones `file_data` byte-for-byte, doubling peak memory for no
+    // benefit. In that case we build the thumbnail (which only borrows the
+    // bytes), then *move* `file_data` straight into the payload, avoiding a
+    // full-size redundant copy.
+    let (payload_data, payload_mime, thumb_data) =
+        if needs_web_preview(&photo.filename).is_some() {
+            let web_preview_fut = build_web_preview(&photo, &full_path, &file_data, storage_root);
+            let thumbnail_fut = build_thumbnail(&photo, &full_path, &file_data, storage_root);
+            let ((payload_data, payload_mime), thumb_data) =
+                tokio::join!(web_preview_fut, thumbnail_fut);
+            (payload_data, payload_mime, thumb_data)
+        } else {
+            let thumb_data = build_thumbnail(&photo, &full_path, &file_data, storage_root).await;
+            // `file_data` is no longer needed after this (the content hash was
+            // already computed above) — move it instead of cloning.
+            (file_data, photo.mime_type.clone(), thumb_data)
+        };
 
     // Upload thumbnail blob (if generated)
     let mut thumb_blob_id = String::new();

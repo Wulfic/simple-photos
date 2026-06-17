@@ -20,6 +20,12 @@ use super::server_migrate_encrypt::{
     PlainPhotoRow,
 };
 
+/// Aggregate source-file bytes (in MiB) allowed in flight across all migration
+/// workers at once. Each encrypting file holds several times its own size on the
+/// heap, so this caps peak migration memory at roughly `BUDGET × ~6`. A file
+/// larger than the budget runs alone (its permit request is clamped to this).
+const MIGRATION_MEM_BUDGET_MIB: usize = 384;
+
 // ── Shared migration progress (lock-free) ───────────────────────────────────
 
 struct MigrationProgress {
@@ -95,20 +101,53 @@ async fn run_migration(
 
     let parallelism = num_cpus::get().min(8).max(1);
     let semaphore = Arc::new(Semaphore::new(parallelism));
-    tracing::info!("Migration parallelism: {} concurrent tasks", parallelism);
+
+    // Memory-budget gate. The count semaphore alone let up to `parallelism`
+    // large videos encrypt at once; each file balloons to ~5–6× its size on the
+    // heap (raw bytes + base64 JSON payload + serde buffer + AES ciphertext
+    // copy), so 8 concurrent multi-hundred-MB files exhausted the allocator and
+    // aborted the process with "memory allocation of N bytes failed".
+    //
+    // We additionally gate on the *source size* of the files in flight: each
+    // task acquires permits proportional to its size (in MiB, clamped to the
+    // budget so a single oversized file can always run — alone). This serializes
+    // big videos while still letting many small photos run in parallel.
+    let mem_budget_mib: usize = MIGRATION_MEM_BUDGET_MIB;
+    let mem_semaphore = Arc::new(Semaphore::new(mem_budget_mib));
+    tracing::info!(
+        "Migration parallelism: {} concurrent tasks, {} MiB in-flight memory budget",
+        parallelism,
+        mem_budget_mib
+    );
 
     let migration_start = std::time::Instant::now();
     let mut handles = Vec::with_capacity(photos.len());
 
     for photo in photos {
         let sem = semaphore.clone();
+        let mem_sem = mem_semaphore.clone();
         let key_copy = key;
         let pool_clone = pool.clone();
         let root_clone = storage_root.clone();
         let progress_clone = progress.clone();
         let filename = photo.filename.clone();
+        // Permits to reserve for this file's in-flight memory: source size in
+        // MiB (rounded up, min 1), clamped to the whole budget so a file larger
+        // than the budget still runs instead of deadlocking on acquire_many.
+        let cost_mib = (((photo.size_bytes.max(0) as u64) / (1024 * 1024)) as usize + 1)
+            .clamp(1, mem_budget_mib) as u32;
         let handle = tokio::spawn(async move {
             let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => {
+                    progress_clone.failed.fetch_add(1, Ordering::Relaxed);
+                    progress_clone.completed.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            };
+            // Reserve the memory budget for the duration of this file. Held
+            // alongside `_permit` until the task returns, then released.
+            let _mem_permit = match mem_sem.acquire_many(cost_mib).await {
                 Ok(p) => p,
                 Err(_) => {
                     progress_clone.failed.fetch_add(1, Ordering::Relaxed);

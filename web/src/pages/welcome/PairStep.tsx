@@ -170,10 +170,10 @@ export default function PairStep({
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+      <h2 className="text-2xl font-bold text-fg mb-2">
         Pair with Primary Server
       </h2>
-      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
+      <p className="text-fg-muted text-sm mb-6">
         Find your primary Simple Photos server on the network or enter its
         address manually, then log in with its admin credentials.
       </p>
@@ -181,7 +181,7 @@ export default function PairStep({
       {/* Auto-Discovery Section */}
       <div className="mb-5">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-semibold text-fg-muted">
             Auto-Discover
           </h3>
           <button
@@ -198,19 +198,19 @@ export default function PairStep({
         </div>
 
         {discovering && !hasScanned && (
-          <div className="flex items-center gap-3 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
+          <div className="flex items-center gap-3 p-4 bg-surface-raised/50 rounded-lg">
+            <p className="text-sm text-fg-muted">
               Scanning your network for Simple Photos servers…
             </p>
           </div>
         )}
 
         {hasScanned && !discovering && discovered.length === 0 && (
-          <div className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-center">
+          <div className="p-3 bg-surface-raised/50 rounded-lg text-center">
             <svg className="w-8 h-8 mx-auto text-gray-300 dark:text-gray-600 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z" />
             </svg>
-            <p className="text-xs text-gray-700 dark:text-gray-400">
+            <p className="text-xs text-fg-muted">
               No servers found. Enter the address manually below.
             </p>
           </div>
@@ -226,7 +226,7 @@ export default function PairStep({
                 className={`w-full flex items-center justify-between p-3 rounded-lg border-2 transition-colors text-left ${
                   serverAddress === server.address
                     ? "border-accent-500 bg-accent-50 dark:bg-accent-900/20"
-                    : "border-gray-200 dark:border-gray-600 hover:border-accent-300 dark:hover:border-accent-500"
+                    : "border-edge hover:border-accent-300 dark:hover:border-accent-500"
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -236,10 +236,10 @@ export default function PairStep({
                     </svg>
                   </div>
                   <div>
-                    <p className="font-medium text-gray-900 dark:text-white text-sm">
+                    <p className="font-medium text-fg text-sm">
                       {server.name}
                     </p>
-                    <p className="text-xs text-gray-700 dark:text-gray-400 font-mono">
+                    <p className="text-xs text-fg-muted font-mono">
                       {server.address} · v{server.version}
                     </p>
                   </div>
@@ -258,7 +258,7 @@ export default function PairStep({
       <form onSubmit={handlePair} className="space-y-4">
         {/* Server address */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-fg-muted mb-1">
             Primary Server Address
           </label>
           <input
@@ -267,9 +267,9 @@ export default function PairStep({
             onChange={(e) => setServerAddress(e.target.value)}
             placeholder="e.g. 192.168.1.10:8080 or photos.example.com:8080"
             maxLength={500}
-            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent font-mono"
+            className="input font-mono"
           />
-          <p className="text-xs text-gray-600 dark:text-gray-500 mt-1">
+          <p className="text-xs text-fg-muted mt-1">
             IP address or hostname (DNS name) with port of the primary server
           </p>
         </div>
@@ -285,7 +285,7 @@ export default function PairStep({
           const mismatchWarning = primaryRemote && backupPrivate;
           return (
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 This Backup Server&rsquo;s Public URL
               </label>
               <input
@@ -294,9 +294,9 @@ export default function PairStep({
                 onChange={(e) => setBackupPublicUrl(e.target.value)}
                 placeholder="e.g. https://backup.example.com or http://203.0.113.5:8080"
                 maxLength={500}
-                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent font-mono"
+                className="input font-mono"
               />
-              <p className="text-xs text-gray-600 dark:text-gray-500 mt-1">
+              <p className="text-xs text-fg-muted mt-1">
                 The URL the <strong>primary</strong> server will use to push
                 photos to this backup. The primary must be able to reach this
                 URL over the network.
@@ -305,7 +305,7 @@ export default function PairStep({
                 className={`mt-2 rounded-lg p-3 text-xs ${
                   mismatchWarning
                     ? "bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700"
-                    : "bg-gray-50 dark:bg-gray-700/40 text-gray-600 dark:text-gray-400"
+                    : "bg-surface-raised/40 text-fg-muted"
                 }`}
               >
                 <p className="font-semibold mb-1">
@@ -355,10 +355,10 @@ export default function PairStep({
         {/* Divider */}
         <div className="relative py-2">
           <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-gray-200 dark:border-gray-700" />
+            <div className="w-full border-t border-edge" />
           </div>
           <div className="relative flex justify-center text-xs">
-            <span className="px-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400">
+            <span className="px-2 bg-surface text-fg-muted">
               admin credentials
             </span>
           </div>
@@ -366,7 +366,7 @@ export default function PairStep({
 
         {/* Username */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-fg-muted mb-1">
             Admin Username
           </label>
           <input
@@ -375,13 +375,13 @@ export default function PairStep({
             onChange={(e) => setUsername(e.target.value)}
             placeholder="admin"
             autoComplete="username"
-            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
+            className="input"
           />
         </div>
 
         {/* Password */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+          <label className="block text-sm font-medium text-fg-muted mb-1">
             Admin Password
           </label>
           <div className="relative">
@@ -390,12 +390,12 @@ export default function PairStep({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
-              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 pr-10 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
+              className="input pr-10"
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-muted hover:text-fg"
               tabIndex={-1}
             >
               {showPassword ? (
@@ -429,7 +429,7 @@ export default function PairStep({
         {/* 2FA Code — shown when primary requires TOTP */}
         {requiresTotp && (
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               2FA Code
             </label>
             <input
@@ -442,7 +442,7 @@ export default function PairStep({
               placeholder="000000"
               autoFocus
               autoComplete="one-time-code"
-              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent font-mono tracking-widest text-center text-lg"
+              className="input font-mono tracking-widest text-center text-lg"
             />
           </div>
         )}
