@@ -359,9 +359,9 @@ export default function SecureGallery() {
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
         <AppHeader />
         <main className="max-w-md mx-auto p-4 mt-16">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
+          <div className="card shadow-card-hover p-8">
             <div className="text-center mb-6">
-              <div className="w-16 h-16 mx-auto mb-4 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">
+              <div className="w-16 h-16 mx-auto mb-4 bg-accent-100 dark:bg-accent-900/30 rounded-full flex items-center justify-center">
                 <AppIcon name="locks" size="w-8 h-8" />
               </div>
               <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
@@ -381,7 +381,7 @@ export default function SecureGallery() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                   required
                   autoFocus
                   autoComplete="current-password"
@@ -398,7 +398,7 @@ export default function SecureGallery() {
               <button
                 type="submit"
                 disabled={authLoading || !password}
-                className="w-full bg-blue-600 text-white py-2.5 rounded-md hover:bg-blue-700 disabled:opacity-50 font-medium text-sm"
+                className="btn btn-primary btn-md w-full"
               >
                 {authLoading ? (
                   <span className="flex items-center justify-center gap-2">
@@ -429,7 +429,7 @@ export default function SecureGallery() {
               <button
                 onClick={handleAddSelectedPhotos}
                 disabled={selectedPhotos.size === 0 || addingPhotos}
-                className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors shadow-sm shadow-blue-900/20 disabled:opacity-50"
+                className="btn btn-primary btn-md inline-flex items-center"
               >
                 {addingPhotos ? "Adding…" : `Add (${selectedPhotos.size})`}
               </button>
@@ -438,7 +438,7 @@ export default function SecureGallery() {
                   setShowAddPhotos(false);
                   setSelectedPhotos(new Set());
                 }}
-                className="inline-flex items-center gap-1.5 bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-3.5 py-1.5 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm font-medium transition-colors"
+                className="btn btn-secondary btn-md inline-flex items-center"
               >
                 Cancel
               </button>
@@ -457,7 +457,7 @@ export default function SecureGallery() {
                   // button returns to the album list, not an orphaned URL.
                   navigate("/secure-gallery", { replace: true });
                 }}
-                className="text-blue-600 hover:text-blue-700 text-sm font-medium flex items-center gap-1"
+                className="text-accent-600 hover:text-accent-700 text-sm font-medium flex items-center gap-1"
               >
                 <AppIcon name="back-arrow" />
                 Back
@@ -474,7 +474,7 @@ export default function SecureGallery() {
                     setShowAddPhotos(true);
                     setSelectedPhotos(new Set());
                   }}
-                  className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors"
+                  className="btn btn-primary btn-md inline-flex items-center"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -498,8 +498,8 @@ export default function SecureGallery() {
 
           {/* Add photos picker */}
           {showAddPhotos && (
-            <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/30 rounded-lg">
-              <p className="text-sm font-medium text-blue-800 dark:text-blue-300 mb-3">
+            <div className="mb-6 p-4 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
+              <p className="text-sm font-medium text-accent-800 dark:text-accent-300 mb-3">
                 Select photos from your gallery to add ({selectedPhotos.size} selected)
               </p>
               {availablePhotos.length === 0 ? (
@@ -524,7 +524,7 @@ export default function SecureGallery() {
                         <div
                           className={`relative w-full h-full rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
                             isSelected
-                              ? "border-blue-600 ring-2 ring-blue-400"
+                              ? "border-accent-600 ring-2 ring-accent-400"
                               : "border-transparent hover:border-gray-300 dark:hover:border-gray-500"
                           }`}
                           onClick={() => togglePhotoSelection(photo.blobId)}
@@ -544,7 +544,7 @@ export default function SecureGallery() {
                           <div
                             className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
                               isSelected
-                                ? "bg-blue-600 border-blue-600"
+                                ? "bg-accent-600 border-accent-600"
                                 : "bg-white/70 border-gray-400 dark:bg-gray-800/70 dark:border-gray-500"
                             }`}
                           >
@@ -569,7 +569,7 @@ export default function SecureGallery() {
 
           {itemsLoading ? (
             <div className="flex justify-center py-12">
-              <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
             </div>
           ) : items.length === 0 && !showAddPhotos ? (
             <div className="text-center py-16 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
@@ -581,7 +581,7 @@ export default function SecureGallery() {
                   setShowAddPhotos(true);
                   setSelectedPhotos(new Set());
                 }}
-                className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
+                className="btn btn-primary btn-md"
               >
                 Add Photos from Gallery
               </button>
@@ -649,7 +649,7 @@ export default function SecureGallery() {
                 setError("");
                 setSuccess("");
               }}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
+              className="btn btn-primary btn-md"
             >
               + New Album
             </button>
@@ -672,7 +672,7 @@ export default function SecureGallery() {
         {showCreate && (
           <form
             onSubmit={handleCreate}
-            className="bg-white dark:bg-gray-800 rounded-lg shadow p-5 mb-6 space-y-3"
+            className="card p-5 mb-6 space-y-3"
           >
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
               Create New Album
@@ -686,7 +686,7 @@ export default function SecureGallery() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="e.g. Private Photos"
-                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                 required
                 maxLength={100}
                 autoFocus
@@ -696,7 +696,7 @@ export default function SecureGallery() {
               <button
                 type="submit"
                 disabled={creating || !newName.trim()}
-                className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+                className="btn btn-primary btn-md"
               >
                 {creating ? "Creating…" : "Create Album"}
               </button>
@@ -706,7 +706,7 @@ export default function SecureGallery() {
                   setShowCreate(false);
                   setNewName("");
                 }}
-                className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                className="btn btn-secondary btn-md"
               >
                 Cancel
               </button>
@@ -717,10 +717,10 @@ export default function SecureGallery() {
         {/* Album list */}
         {galleriesLoading ? (
           <div className="flex justify-center py-12">
-            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
           </div>
         ) : galleries.length === 0 ? (
-          <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-lg shadow">
+          <div className="card text-center py-16">
             <span className="text-4xl mb-3 block">🔒</span>
             <p className="text-gray-700 dark:text-gray-400 font-medium">
               No secure albums yet
@@ -731,7 +731,7 @@ export default function SecureGallery() {
             {!showCreate && !isBackupServer && (
               <button
                 onClick={() => setShowCreate(true)}
-                className="mt-4 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
+                className="btn btn-primary btn-md mt-4"
               >
                 + Create your first album
               </button>
@@ -742,7 +742,7 @@ export default function SecureGallery() {
             {galleries.map((g) => (
               <div
                 key={g.id}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex items-center justify-between hover:ring-2 hover:ring-blue-200 dark:hover:ring-blue-800 transition-all cursor-pointer"
+                className="card p-4 flex items-center justify-between hover:ring-2 hover:ring-accent-200 dark:hover:ring-accent-800 transition-all cursor-pointer"
                 onClick={() => {
                   setSelectedGallery(g);
                   // Push a history entry so the browser Back button returns
@@ -752,7 +752,7 @@ export default function SecureGallery() {
                 }}
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
+                  <div className="w-12 h-12 bg-accent-100 dark:bg-accent-900/30 rounded-lg flex items-center justify-center">
                     <span className="text-xl">🔒</span>
                   </div>
                   <div>

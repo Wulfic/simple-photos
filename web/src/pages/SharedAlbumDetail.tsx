@@ -161,7 +161,7 @@ export default function SharedAlbumDetail() {
 
         {/* Members panel */}
         {showMembers && (
-          <div className="mb-4 bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <div className="card mb-4 p-4">
             <h3 className="text-sm font-semibold mb-2">Members</h3>
             {members.length === 0 && (
               <p className="text-sm text-gray-700 dark:text-gray-400">No members yet.</p>
@@ -186,8 +186,8 @@ export default function SharedAlbumDetail() {
 
         {/* Share picker modal */}
         {showSharePicker && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
+            <div className="card shadow-pop max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-lg font-semibold mb-4">Add Member</h3>
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {shareUsers.map((u) => (

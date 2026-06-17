@@ -127,7 +127,7 @@ export default function AccountSection({
   }
 
   return (
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+      <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Account</h2>
         <p className="text-gray-600 dark:text-gray-400 mb-4">
           Signed in as <span className="font-medium">{username}</span>
@@ -144,7 +144,7 @@ export default function AccountSection({
                 setError("");
                 setSuccess("");
               }}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm"
+              className="btn btn-primary btn-md"
             >
               Change Password
             </button>
@@ -158,7 +158,7 @@ export default function AccountSection({
                   type="password"
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   required
                   autoComplete="current-password"
                   autoFocus
@@ -173,7 +173,7 @@ export default function AccountSection({
                   type="password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   required
                   minLength={8}
                   maxLength={128}
@@ -211,7 +211,7 @@ export default function AccountSection({
                   type="password"
                   value={confirmNewPassword}
                   onChange={(e) => setConfirmNewPassword(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   required
                   autoComplete="new-password"
                 />
@@ -227,7 +227,7 @@ export default function AccountSection({
                 <button
                   type="submit"
                   disabled={loading || !pw.core}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+                  className="btn btn-primary btn-md"
                 >
                   {loading ? "Saving..." : "Update Password"}
                 </button>
@@ -239,7 +239,7 @@ export default function AccountSection({
                     setNewPassword("");
                     setConfirmNewPassword("");
                   }}
-                  className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                  className="btn btn-secondary btn-md"
                 >
                   Cancel
                 </button>
@@ -260,13 +260,13 @@ export default function AccountSection({
               <button
                 onClick={handleSetup2fa}
                 disabled={loading}
-                className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm disabled:opacity-50"
+                className="btn btn-primary btn-md"
               >
                 Enable 2FA
               </button>
               <button
                 onClick={() => setShowDisable2fa(true)}
-                className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                className="btn btn-secondary btn-md"
               >
                 Disable 2FA
               </button>
@@ -301,13 +301,13 @@ export default function AccountSection({
                   value={totpCode}
                   onChange={(e) => setTotpCode(e.target.value)}
                   placeholder="Enter 6-digit code"
-                  className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   autoFocus
                 />
                 <button
                   type="submit"
                   disabled={loading}
-                  className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+                  className="btn btn-primary btn-md"
                 >
                   Confirm
                 </button>
@@ -326,20 +326,20 @@ export default function AccountSection({
                   value={disableCode}
                   onChange={(e) => setDisableCode(e.target.value)}
                   placeholder="6-digit code"
-                  className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   autoFocus
                 />
                 <button
                   type="submit"
                   disabled={loading}
-                  className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 text-sm"
+                  className="btn btn-danger btn-md"
                 >
                   Disable
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowDisable2fa(false)}
-                  className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                  className="btn btn-secondary btn-md"
                 >
                   Cancel
                 </button>

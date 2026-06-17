@@ -74,7 +74,7 @@ export default function ThumbnailTile({
   return (
     <div
       ref={tileRef}
-      className={`relative w-full h-full bg-gray-100 dark:bg-gray-700 overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${isSelected ? "ring-2 ring-blue-500" : ""}`}
+      className={`relative w-full h-full bg-gray-100 dark:bg-gray-700 overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${isSelected ? "ring-2 ring-accent-500" : ""}`}
       onClick={(e) => {
         if (longPress.wasLongPress()) { e.preventDefault(); return; }
         onClick();
@@ -117,7 +117,7 @@ export default function ThumbnailTile({
           {thumb.state === "loading" || thumb.state === "placeholder" ? (
             !source.thumbnailData ? (
               <>
-                <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-blue-500 dark:border-t-blue-400 rounded-full animate-spin" />
+                <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-accent-500 dark:border-t-accent-400 rounded-full animate-spin" />
                 <span className="text-[10px] font-medium text-gray-600 dark:text-gray-500 uppercase tracking-wide">Queued</span>
               </>
             ) : (

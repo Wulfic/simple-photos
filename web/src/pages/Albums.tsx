@@ -401,7 +401,7 @@ export default function Albums() {
           {!isBackupServer && (
           <button
             onClick={() => setShowCreate(!showCreate)}
-            className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3.5 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors shadow-sm shadow-blue-900/20"
+            className="btn btn-primary btn-md inline-flex items-center"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -419,12 +419,12 @@ export default function Albums() {
             onChange={(e) => setNewAlbumName(e.target.value)}
             placeholder="Album name"
             maxLength={200}
-            className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
             autoFocus
           />
           <button
             type="submit"
-            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm"
+            className="btn btn-primary btn-md"
           >
             Create
           </button>
@@ -498,7 +498,7 @@ export default function Albums() {
               <div
                 key={cluster.id}
                 onClick={() => navigate(`/albums/smart-people/${cluster.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
+                className="card card-interactive p-3 cursor-pointer"
               >
                 <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
                   {peopleThumbUrls[cluster.id] ? (
@@ -524,14 +524,14 @@ export default function Albums() {
             {peopleClusters.length > 6 && (
               <div
                 onClick={() => navigate("/albums/smart-people")}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow flex flex-col items-center justify-center text-center"
+                className="card card-interactive p-3 cursor-pointer flex flex-col items-center justify-center text-center"
               >
-                <div className="w-20 h-20 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mb-2">
-                  <svg className="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <div className="w-20 h-20 rounded-full bg-accent-50 dark:bg-accent-900/30 flex items-center justify-center mb-2">
+                  <svg className="w-8 h-8 text-accent-600 dark:text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
                 </div>
-                <p className="font-medium text-sm text-blue-600 dark:text-blue-400">
+                <p className="font-medium text-sm text-accent-600 dark:text-accent-400">
                   See {peopleClusters.length - 5} more
                 </p>
               </div>
@@ -553,7 +553,7 @@ export default function Albums() {
               <div
                 key={cluster.id}
                 onClick={() => navigate(`/albums/smart-pets/${cluster.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
+                className="card card-interactive p-3 cursor-pointer"
               >
                 <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-20 h-20 flex items-center justify-center overflow-hidden">
                   {petThumbUrls[cluster.id] ? (
@@ -579,14 +579,14 @@ export default function Albums() {
             {petClusters.length > 6 && (
               <div
                 onClick={() => navigate("/albums/smart-pets")}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow flex flex-col items-center justify-center text-center"
+                className="card card-interactive p-3 cursor-pointer flex flex-col items-center justify-center text-center"
               >
-                <div className="w-20 h-20 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mb-2">
-                  <svg className="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <div className="w-20 h-20 rounded-full bg-accent-50 dark:bg-accent-900/30 flex items-center justify-center mb-2">
+                  <svg className="w-8 h-8 text-accent-600 dark:text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
                 </div>
-                <p className="font-medium text-sm text-blue-600 dark:text-blue-400">
+                <p className="font-medium text-sm text-accent-600 dark:text-accent-400">
                   See {petClusters.length - 5} more
                 </p>
               </div>
@@ -609,7 +609,7 @@ export default function Albums() {
               <div
                 key={memory.id}
                 onClick={() => navigate(`/albums/smart-memories/${memory.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
+                className="card card-interactive cursor-pointer overflow-hidden"
               >
                 <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
                   {memoryThumbUrls[memory.id] ? (
@@ -636,14 +636,14 @@ export default function Albums() {
             {memories.length > 4 && (
               <div
                 onClick={() => navigate("/albums/smart-memories")}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden flex flex-col items-center justify-center text-center p-6"
+                className="card card-interactive cursor-pointer overflow-hidden flex flex-col items-center justify-center text-center p-6"
               >
-                <div className="w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mb-2">
-                  <svg className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <div className="w-12 h-12 rounded-full bg-accent-50 dark:bg-accent-900/30 flex items-center justify-center mb-2">
+                  <svg className="w-6 h-6 text-accent-600 dark:text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
                 </div>
-                <p className="font-medium text-sm text-blue-600 dark:text-blue-400">
+                <p className="font-medium text-sm text-accent-600 dark:text-accent-400">
                   See {memories.length - 3} more
                 </p>
               </div>
@@ -665,7 +665,7 @@ export default function Albums() {
               <div
                 key={trip.id}
                 onClick={() => navigate(`/albums/smart-trips/${trip.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
+                className="card card-interactive cursor-pointer overflow-hidden"
               >
                 <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
                   {tripThumbUrls[trip.id] ? (
@@ -694,14 +694,14 @@ export default function Albums() {
             {trips.length > 4 && (
               <div
                 onClick={() => navigate("/albums/smart-trips")}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden flex flex-col items-center justify-center text-center p-6"
+                className="card card-interactive cursor-pointer overflow-hidden flex flex-col items-center justify-center text-center p-6"
               >
-                <div className="w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center mb-2">
-                  <svg className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <div className="w-12 h-12 rounded-full bg-accent-50 dark:bg-accent-900/30 flex items-center justify-center mb-2">
+                  <svg className="w-6 h-6 text-accent-600 dark:text-accent-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
                 </div>
-                <p className="font-medium text-sm text-blue-600 dark:text-blue-400">
+                <p className="font-medium text-sm text-accent-600 dark:text-accent-400">
                   See {trips.length - 3} more
                 </p>
               </div>
@@ -735,8 +735,8 @@ export default function Albums() {
 
         {/* Share user picker modal */}
         {sharePickerAlbumId && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setSharePickerAlbumId(null)}>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSharePickerAlbumId(null)}>
+            <div className="card shadow-pop max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-lg font-semibold mb-4">Share with User</h3>
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {shareUsers.map((u) => (
@@ -779,11 +779,11 @@ export default function Albums() {
           {sharedAlbums.map((sa) => (
             <div
               key={sa.id}
-              className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow relative group"
+              className="card card-interactive p-4 cursor-pointer relative group"
             >
               <div
                 onClick={() => navigate(`/shared/${sa.id}`)}
-                className="aspect-square bg-gradient-to-br from-green-50 to-blue-50 dark:from-green-900/20 dark:to-blue-900/20 rounded mb-2 flex flex-col items-center justify-center"
+                className="aspect-square bg-gradient-to-br from-green-50 to-accent-50 dark:from-green-900/20 dark:to-accent-900/20 rounded mb-2 flex flex-col items-center justify-center"
               >
                 <span className="text-2xl font-semibold text-green-600 dark:text-green-400">{sa.photo_count}</span>
                 <span className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">{sa.member_count} member{sa.member_count !== 1 ? "s" : ""}</span>
@@ -868,7 +868,7 @@ function AlbumCard({ album, onClick }: { album: CachedAlbum; onClick: () => void
   return (
     <div
       onClick={onClick}
-      className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+      className="card card-interactive p-4 cursor-pointer"
     >
       <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-2 flex items-center justify-center overflow-hidden">
         {thumbUrl ? (
@@ -930,7 +930,7 @@ function SmartAlbumCard({
   return (
     <div
       onClick={onClick}
-      className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 cursor-pointer hover:shadow-md transition-shadow"
+      className="card card-interactive p-4 cursor-pointer"
     >
       <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded mb-2 flex items-center justify-center overflow-hidden">
         {thumbUrl ? (

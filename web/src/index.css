@@ -105,6 +105,80 @@
   .dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus,
   .dark select:focus,
   .dark textarea:focus {
-    @apply ring-blue-400 border-blue-400;
+    @apply ring-accent-400 border-accent-400;
+  }
+}
+
+/* ── Refined button / card / input system (#14 facelift) ─────────────────────
+ *
+ * "Refined & subtle" design language: crisp inset rings, soft layered shadows,
+ * gentle hover-lift, keyboard-only focus rings. Defined once here so call sites
+ * use a semantic class (`btn btn-primary btn-md`) instead of hand-rolled flat
+ * Tailwind soup. The <Button>/<IconButton>/<Card> primitives compose these. */
+@layer components {
+  /* Buttons — base + size + variant are additive (`btn btn-primary btn-md`). */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 font-medium rounded-lg
+           whitespace-nowrap select-none transition-all duration-150 ease-out
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+           focus-visible:ring-accent-500/60 focus-visible:ring-offset-white
+           dark:focus-visible:ring-offset-gray-900
+           active:scale-[0.98]
+           disabled:opacity-50 disabled:pointer-events-none disabled:active:scale-100;
+  }
+  .btn-sm { @apply text-xs px-2.5 py-1.5 gap-1.5 rounded-md; }
+  .btn-md { @apply text-sm px-4 py-2; }
+  .btn-lg { @apply text-base px-5 py-2.5; }
+
+  .btn-primary {
+    @apply bg-accent-600 text-white shadow-xs ring-1 ring-inset ring-white/10
+           hover:bg-accent-500 hover:shadow-card
+           active:bg-accent-700;
+  }
+  .btn-secondary {
+    @apply bg-white text-gray-800 shadow-xs ring-1 ring-inset ring-gray-300
+           hover:bg-gray-50 active:bg-gray-100
+           dark:bg-gray-700 dark:text-gray-100 dark:ring-white/10
+           dark:hover:bg-gray-600 dark:active:bg-gray-600/70;
+  }
+  .btn-ghost {
+    @apply text-gray-700 hover:bg-gray-100 active:bg-gray-200
+           dark:text-gray-200 dark:hover:bg-white/10 dark:active:bg-white/15;
+  }
+  .btn-danger {
+    @apply bg-red-600 text-white shadow-xs ring-1 ring-inset ring-white/10
+           hover:bg-red-500 hover:shadow-card active:bg-red-700;
+  }
+
+  /* Square icon button — neutral, ghost-style hover, keyboard ring. */
+  .icon-btn {
+    @apply inline-flex items-center justify-center rounded-lg p-2 leading-none
+           text-gray-600 transition-colors
+           hover:bg-gray-100 hover:text-gray-900
+           dark:text-gray-300 dark:hover:bg-white/10 dark:hover:text-white
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60
+           disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  /* Surfaces — `card` is the resting surface; add `card-interactive` for
+   * clickable cards that should lift on hover. */
+  .card {
+    @apply bg-white dark:bg-gray-800 rounded-xl
+           border border-gray-200/80 dark:border-white/10 shadow-card;
+  }
+  .card-interactive {
+    @apply transition-all duration-150 hover:shadow-card-hover
+           hover:-translate-y-0.5 hover:border-gray-300 dark:hover:border-white/20;
+  }
+
+  /* Text input / select / textarea opt-in class. */
+  .input {
+    @apply w-full rounded-lg border border-gray-300 dark:border-gray-600
+           bg-white dark:bg-gray-700 px-3 py-2 text-sm
+           text-gray-900 dark:text-gray-100
+           placeholder-gray-400 dark:placeholder-gray-500
+           shadow-xs transition
+           focus:outline-none focus:ring-2 focus:ring-accent-500/50
+           focus:border-accent-500;
   }
 }

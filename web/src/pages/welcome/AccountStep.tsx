@@ -52,7 +52,7 @@ export default function AccountStep({
             type="text"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
             required
             minLength={3}
             maxLength={50}
@@ -98,14 +98,14 @@ export default function AccountStep({
               setStep("install-type");
               setError("");
             }}
-            className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 dark:bg-gray-600 text-sm font-medium transition-colors"
+            className="btn btn-secondary btn-md flex-1"
           >
             ← Back
           </button>
           <button
             type="submit"
             disabled={loading || !pw.core || !un.length || !un.chars}
-            className="flex-[2] bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+            className="btn btn-primary btn-md flex-[2]"
           >
             {loading ? "Creating account\u2026" : "Create Account →"}
           </button>

@@ -84,7 +84,7 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
       <ThemeToggle />
-      <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow p-8">
+      <div className="card max-w-md w-full p-8">
         <div className="flex flex-col items-center mb-6">
           <img src="/logo.png" alt="Simple Photos" className="w-16 h-16 mb-2" />
           <h1 className="text-2xl font-bold text-center">Simple Photos</h1>
@@ -100,7 +100,7 @@ export default function Login() {
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
                   required
                   autoFocus
                   autoComplete="username"
@@ -118,7 +118,7 @@ export default function Login() {
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full border rounded-md px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full border rounded-md px-3 py-2 pr-10 focus:outline-none focus:ring-2 focus:ring-accent-500"
                     required
                     autoComplete="current-password"
                     autoCorrect="off"
@@ -157,7 +157,7 @@ export default function Login() {
                 type="text"
                 value={totpCode}
                 onChange={(e) => setTotpCode(e.target.value)}
-                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500"
                 placeholder="6-digit code or backup code"
                 required
                 autoFocus
@@ -180,7 +180,7 @@ export default function Login() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+            className="btn btn-primary btn-md w-full"
           >
             {loading ? "Signing in..." : totpSession ? "Verify" : "Sign In"}
           </button>

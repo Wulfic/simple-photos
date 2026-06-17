@@ -382,7 +382,7 @@ export default function Slideshow({
             <button
               onClick={onToggleShuffle}
               className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${
-                shuffleEnabled ? "bg-blue-600 text-white" : "text-white/70 hover:bg-white/20"
+                shuffleEnabled ? "bg-accent-600 text-white" : "text-white/70 hover:bg-white/20"
               }`}
               title={`Shuffle ${shuffleEnabled ? "On" : "Off"} (S)`}
             >
@@ -399,7 +399,7 @@ export default function Slideshow({
                   onClick={() => onSetSpeed(opt.value)}
                   className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
                     intervalMs === opt.value
-                      ? "bg-blue-600 text-white"
+                      ? "bg-accent-600 text-white"
                       : "text-white/70 hover:bg-white/20"
                   }`}
                 >
@@ -419,7 +419,7 @@ export default function Slideshow({
                   onClick={() => onSetTransition(opt.value)}
                   className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
                     transition === opt.value
-                      ? "bg-blue-600 text-white"
+                      ? "bg-accent-600 text-white"
                       : "text-white/70 hover:bg-white/20"
                   }`}
                 >

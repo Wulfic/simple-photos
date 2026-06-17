@@ -730,7 +730,7 @@ export default function Viewer() {
             </svg>
             <p className="text-gray-300 text-sm mb-1">This video format is not supported by your browser.</p>
             <p className="text-gray-500 text-xs mb-4 px-4 text-center truncate max-w-[80%]">{filename}</p>
-            <button onClick={handleDownload} className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors">Download</button>
+            <button onClick={handleDownload} className="btn btn-primary btn-md">Download</button>
           </div>
         )}
 

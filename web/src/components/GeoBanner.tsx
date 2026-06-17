@@ -158,7 +158,7 @@ export default function GeoBanner() {
   if (downloading) {
     return (
       <div className="fixed bottom-44 left-4 right-4 z-50 pointer-events-none">
-        <div className="pointer-events-auto max-w-md mx-auto flex items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 shadow-lg">
+        <div className="card shadow-card-hover pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
           <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-emerald-500 dark:border-t-emerald-400 rounded-full animate-spin flex-shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
@@ -178,7 +178,7 @@ export default function GeoBanner() {
   if (unavailable) {
     return (
       <div className="fixed bottom-44 left-4 right-4 z-50 pointer-events-none">
-        <div className="pointer-events-auto max-w-md mx-auto flex items-center gap-3 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-lg px-4 py-3 shadow-lg">
+        <div className="pointer-events-auto max-w-md mx-auto flex items-center gap-3 bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded-xl px-4 py-3 shadow-card-hover">
           <svg className="w-5 h-5 text-amber-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
           </svg>
@@ -193,7 +193,7 @@ export default function GeoBanner() {
           </div>
           <button
             onClick={() => setDismissed(true)}
-            className="p-1 text-gray-600 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+            className="icon-btn p-1 flex-shrink-0"
             aria-label="Dismiss"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

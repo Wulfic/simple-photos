@@ -148,7 +148,7 @@ export default function VideoControls({ videoRef, visible }: VideoControlsProps)
           onPointerUp={() => setSeeking(false)}
         >
           <div
-            className="h-full bg-blue-500 rounded-full transition-[width] duration-75"
+            className="h-full bg-accent-500 rounded-full transition-[width] duration-75"
             style={{ width: `${progress}%` }}
           />
           <div
@@ -162,7 +162,7 @@ export default function VideoControls({ videoRef, visible }: VideoControlsProps)
           {/* Play / Pause */}
           <button
             onClick={togglePlay}
-            className="text-white hover:text-blue-400 transition-colors"
+            className="text-white hover:text-accent-400 transition-colors"
             aria-label={playing ? "Pause" : "Play"}
           >
             {playing ? (

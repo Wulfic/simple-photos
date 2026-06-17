@@ -36,12 +36,12 @@ export default function ServerRoleStep({
         {/* Primary server */}
         <button
           onClick={() => choose("primary")}
-          className="w-full p-5 text-left rounded-xl border-2 border-gray-200 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors group"
+          className="w-full p-5 text-left rounded-xl border-2 border-gray-200 dark:border-gray-600 hover:border-accent-400 dark:hover:border-accent-500 transition-colors group"
         >
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+            <div className="w-12 h-12 rounded-full bg-accent-100 dark:bg-accent-900/30 flex items-center justify-center shrink-0">
               <svg
-                className="w-6 h-6 text-blue-600 dark:text-blue-400"
+                className="w-6 h-6 text-accent-600 dark:text-accent-400"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -55,7 +55,7 @@ export default function ServerRoleStep({
               </svg>
             </div>
             <div>
-              <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+              <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-accent-600 dark:group-hover:text-accent-400 transition-colors">
                 Primary Server
               </p>
               <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">

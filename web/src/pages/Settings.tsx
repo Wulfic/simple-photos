@@ -237,7 +237,7 @@ export default function Settings() {
         <AccountSection username={username ?? ""} error={error} setError={setError} success={success} setSuccess={setSuccess} loading={loading} setLoading={setLoading} />
       ) : (
         /* Backup servers mirror accounts from the primary — no local changes */
-        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Account</h2>
           <p className="text-sm text-gray-700 dark:text-gray-400">
             Logged in as <strong>{username}</strong>. Account changes (password, 2FA) are managed on the primary server.
@@ -250,7 +250,7 @@ export default function Settings() {
 
       {/* ── Library Export ─────────────────────────────────────────────────── */}
       {!isBackupMode && (
-        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Library Export</h2>
           <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
             Package your entire media library with metadata into downloadable zip files.
@@ -263,7 +263,7 @@ export default function Settings() {
               value={exportSizeLimit}
               onChange={(e) => setExportSizeLimit(Number(e.target.value))}
               disabled={exportLoading || (exportJob?.status === "pending" || exportJob?.status === "running")}
-              className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+              className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
             >
               <option value={10_737_418_240}>10 GB per file</option>
               <option value={21_474_836_480}>20 GB per file</option>
@@ -285,7 +285,7 @@ export default function Settings() {
             <button
               onClick={startExport}
               disabled={exportLoading || exportJob?.status === "pending" || exportJob?.status === "running"}
-              className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn btn-primary btn-md inline-flex items-center"
             >
               {exportJob?.status === "pending" || exportJob?.status === "running"
                 ? "Exporting…"
@@ -303,8 +303,8 @@ export default function Settings() {
                 </p>
               )}
               {exportJob.status === "running" && (
-                <p className="text-blue-600 dark:text-blue-400 flex items-center gap-2">
-                  <span className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin inline-block" />
+                <p className="text-accent-600 dark:text-accent-400 flex items-center gap-2">
+                  <span className="w-3 h-3 border-2 border-accent-500 border-t-transparent rounded-full animate-spin inline-block" />
                   Packaging your library…
                 </p>
               )}
@@ -325,7 +325,7 @@ export default function Settings() {
 
       {/* ── Server Selection (hidden on backup servers) ─────────────────── */}
       {backupLoaded && !isBackupMode && (
-        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Active Server</h2>
           <p className="text-sm text-gray-700 dark:text-gray-400 mb-3">
             Choose which server to view photos from.
@@ -341,7 +341,7 @@ export default function Settings() {
                 setViewMode("backup");
               }
             }}
-            className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+            className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
           >
             <option value="__main__">Main Server (local)</option>
             {backupServers.map((s) => (
@@ -359,7 +359,7 @@ export default function Settings() {
       )}
 
       {/* ── Display ──────────────────────────────────────────────────── */}
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+      <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Display</h2>
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
@@ -375,14 +375,14 @@ export default function Settings() {
           <div className="flex items-center gap-2 flex-shrink-0">
             <span className={`text-xs font-medium ${
               thumbnailSize === "normal"
-                ? "text-blue-600 dark:text-blue-400"
+                ? "text-accent-600 dark:text-accent-400"
                 : "text-gray-600 dark:text-gray-500"
             }`}>Normal</span>
             <button
               onClick={toggleThumbnailSize}
-              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 ${
                 thumbnailSize === "large"
-                  ? "bg-blue-600"
+                  ? "bg-accent-600"
                   : "bg-gray-300 dark:bg-gray-600"
               }`}
               role="switch"
@@ -398,7 +398,7 @@ export default function Settings() {
             </button>
             <span className={`text-xs font-medium ${
               thumbnailSize === "large"
-                ? "text-blue-600 dark:text-blue-400"
+                ? "text-accent-600 dark:text-accent-400"
                 : "text-gray-600 dark:text-gray-500"
             }`}>Large</span>
           </div>
@@ -438,7 +438,7 @@ export default function Settings() {
 
       {/* ── Apps (hidden on backup servers — Android clients connect to primary) ── */}
       {!isBackupMode && (
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+      <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Apps</h2>
         <div className="space-y-4">
           <div>
@@ -468,7 +468,7 @@ export default function Settings() {
                   else if (outcome === "dismissed") setError("Install dismissed.");
                   else if (outcome === "unavailable") setInstallHelpOpen(true);
                 }}
-                className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-sm"
+                className="btn btn-primary btn-md inline-flex items-center"
                 disabled={isInstalled}
                 title={
                   isInstalled
@@ -510,7 +510,7 @@ export default function Settings() {
             {/* Collapsible install instructions */}
             <button
               onClick={() => setShowInstallInstructions((v) => !v)}
-              className="mt-3 flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors"
+              className="mt-3 flex items-center gap-1.5 text-sm text-accent-600 dark:text-accent-400 hover:text-accent-800 dark:hover:text-accent-300 transition-colors"
             >
               <span className={`inline-block transition-transform ${showInstallInstructions ? "rotate-90" : ""}`}>▶</span>
               Android Install Instructions
@@ -522,28 +522,28 @@ export default function Settings() {
                 </h3>
                 <ol className="text-sm text-gray-600 dark:text-gray-400 space-y-3">
                   <li className="flex gap-3">
-                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">1</span>
+                    <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">1</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Download the APK</p>
                       <p className="text-xs text-gray-700 dark:text-gray-400">Click the button above or transfer the APK to your phone via USB/email.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
-                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">2</span>
+                    <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">2</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Enable "Install unknown apps"</p>
                       <p className="text-xs text-gray-700 dark:text-gray-400">Go to <strong>Settings → Apps → Special access → Install unknown apps</strong> and enable it for your file manager or browser.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
-                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">3</span>
+                    <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">3</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Open the APK</p>
                       <p className="text-xs text-gray-700 dark:text-gray-400">Tap the downloaded APK file and confirm the installation prompt.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
-                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">4</span>
+                    <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">4</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Connect to your server</p>
                       <p className="text-xs text-gray-700 dark:text-gray-400">Open the app, enter your server URL:</p>
@@ -551,7 +551,7 @@ export default function Settings() {
                     </div>
                   </li>
                   <li className="flex gap-3">
-                    <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">5</span>
+                    <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">5</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Sign in & grant permissions</p>
                       <p className="text-xs text-gray-700 dark:text-gray-400">Log in with your account and allow the app to access your photos and videos for automatic encrypted backup.</p>
@@ -572,7 +572,7 @@ export default function Settings() {
 
       {/* ── Audio Backup (hidden on backup servers) ─────────────────────── */}
       {isAdmin && !audioBackupLoading && !isBackupMode && (
-        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Audio Backup</h2>
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
@@ -601,8 +601,8 @@ export default function Settings() {
                 }
               }}
               disabled={togglingAudioBackup}
-              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
-                audioBackupEnabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:opacity-50 ${
+                audioBackupEnabled ? "bg-accent-600" : "bg-gray-300 dark:bg-gray-600"
               }`}
               role="switch"
               aria-checked={audioBackupEnabled}
@@ -628,14 +628,14 @@ export default function Settings() {
 
       {/* ── Cast (HTTPS only) ────────────────────────────────────────────── */}
       {window.location.protocol === "https:" && (
-        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Cast</h2>
           <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
             Stream your gallery slideshow to a Chromecast or compatible receiver on your local network.
           </p>
           <button
             onClick={() => setCastDialogOpen(true)}
-            className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm"
+            className="btn btn-primary btn-md inline-flex items-center"
           >
             <CastIcon className="w-4 h-4" />
             Cast to device…
@@ -653,7 +653,7 @@ export default function Settings() {
 
       {/* ── Restart Server (admin only) ─────────────────────────────────── */}
       {isAdmin && (
-        <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+        <section className="card p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Server</h2>
           <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
             Restart the server process. The page will automatically reload once the server comes back up.
@@ -666,14 +666,14 @@ export default function Settings() {
               <button
                 onClick={handleRestartServer}
                 disabled={restartLoading}
-                className="inline-flex items-center gap-1.5 bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 text-sm disabled:opacity-50"
+                className="btn btn-danger btn-md inline-flex items-center"
               >
                 {restartLoading ? "Restarting…" : "Yes, restart"}
               </button>
               <button
                 onClick={() => setRestartConfirm(false)}
                 disabled={restartLoading}
-                className="inline-flex items-center gap-1.5 bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                className="btn btn-secondary btn-md inline-flex items-center"
               >
                 Cancel
               </button>
@@ -690,7 +690,7 @@ export default function Settings() {
       )}
 
       {/* ── About ───────────────────────────────────────────────────────────── */}
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+      <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-4">About</h2>
         <div className="flex flex-col items-center text-center">
           <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mb-3" />
@@ -714,7 +714,7 @@ export default function Settings() {
       </section>
 
       {/* ── Credits & Links ─────────────────────────────────────────────────── */}
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+      <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-4">Credits &amp; Links</h2>
         <div className="space-y-3 text-sm">
           <div className="flex items-center gap-3">
@@ -727,7 +727,7 @@ export default function Settings() {
                   href="https://www.flaticon.com/authors/angus-87"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-accent-600 dark:text-accent-400 hover:underline"
                 >
                   Angus_87
                 </a>{" "}
@@ -736,7 +736,7 @@ export default function Settings() {
                   href="https://www.flaticon.com"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-accent-600 dark:text-accent-400 hover:underline"
                 >
                   Flaticon
                 </a>
@@ -753,7 +753,7 @@ export default function Settings() {
                   href="https://github.com/wulfic/simple-photos"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-accent-600 dark:text-accent-400 hover:underline"
                 >
                   github.com/wulfic/simple-photos
                 </a>

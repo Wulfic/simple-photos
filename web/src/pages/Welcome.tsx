@@ -516,10 +516,10 @@ export default function Welcome() {
 
   if (step === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 dark:from-gray-900 to-indigo-100 dark:to-gray-800">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent-50 dark:from-gray-900 to-indigo-100 dark:to-gray-800">
         <ThemeToggle />
         <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <div className="w-12 h-12 border-4 border-accent-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
           <p className="text-gray-600 dark:text-gray-400">Connecting to server…</p>
         </div>
       </div>
@@ -527,12 +527,12 @@ export default function Welcome() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 dark:from-gray-900 to-indigo-100 dark:to-gray-800 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent-50 dark:from-gray-900 to-indigo-100 dark:to-gray-800 p-4">
       <ThemeToggle />
       <div className="max-w-lg w-full">
         <StepIndicator step={step} serverRole={serverRole} installType={installType} />
 
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
+        <div className="card shadow-card-hover p-8">
           {step === "welcome" && (
             <WelcomeStep setStep={setStep} status={status} error={error} />
           )}

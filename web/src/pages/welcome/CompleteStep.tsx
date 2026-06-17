@@ -130,7 +130,7 @@ export default function CompleteStep({
       )}
 
       {restoreStatus && (
-        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-4 text-xs text-blue-800 dark:text-blue-300 text-left">
+        <div className="bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 rounded-lg p-3 mb-4 text-xs text-accent-800 dark:text-accent-300 text-left">
           {restoreStatus}
         </div>
       )}
@@ -142,7 +142,7 @@ export default function CompleteStep({
               setError("");
               setStep(serverRole === "backup" ? "ssl" : "android");
             }}
-            className="w-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+            className="btn btn-secondary btn-md w-full"
           >
             ← Back
           </button>
@@ -312,7 +312,7 @@ export default function CompleteStep({
             }
           }}
           disabled={loading}
-          className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-lg font-medium transition-colors"
+          className="btn btn-primary btn-lg w-full"
         >
           {loading
             ? restoreStatus

@@ -121,11 +121,11 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
 
   return (
     <div
-      className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={onClose}
     >
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full max-w-md max-h-[80vh] flex flex-col"
+        className="card shadow-pop w-full max-w-md max-h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
@@ -134,7 +134,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
           </h3>
           <button
             onClick={onClose}
-            className="text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white"
+            className="icon-btn -mr-1.5"
             aria-label="Close"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -154,12 +154,12 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="New album name"
                 disabled={creatingBusy}
-                className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-accent-500 disabled:opacity-50"
               />
               <button
                 type="submit"
                 disabled={!newName.trim() || creatingBusy}
-                className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                className="btn btn-primary btn-md shrink-0"
               >
                 {creatingBusy ? "Creating…" : "Create & add"}
               </button>
@@ -167,7 +167,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
                 type="button"
                 onClick={() => { setCreating(false); setNewName(""); }}
                 disabled={creatingBusy}
-                className="shrink-0 rounded-lg px-2 py-1.5 text-sm text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white disabled:opacity-50"
+                className="btn btn-ghost btn-md shrink-0"
               >
                 Cancel
               </button>
@@ -176,7 +176,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
             <button
               onClick={() => setCreating(true)}
               disabled={busyId !== null}
-              className="w-full flex items-center gap-2 px-4 py-3 text-left text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+              className="w-full flex items-center gap-2 px-4 py-3 text-left text-sm font-medium text-accent-600 dark:text-accent-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />

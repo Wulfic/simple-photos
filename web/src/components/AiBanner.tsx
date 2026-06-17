@@ -110,7 +110,7 @@ export default function AiBanner() {
 
   return (
     <div className="fixed bottom-32 left-4 right-4 z-50 pointer-events-none">
-      <div className="pointer-events-auto max-w-md mx-auto flex items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 shadow-lg">
+      <div className="card shadow-card-hover pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
         <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-purple-500 dark:border-t-purple-400 rounded-full animate-spin flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">

@@ -224,7 +224,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             key={value}
             className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
               mode === value
-                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
+                ? "border-accent-500 bg-accent-50 dark:bg-accent-900/20"
                 : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
             }`}
           >
@@ -240,7 +240,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 setLeSuccess(null);
                 setLcSuccess(null);
               }}
-              className="mt-1 accent-blue-600"
+              className="mt-1 accent-indigo-600"
             />
             <div>
               <span className="font-medium text-sm">{label}</span>
@@ -262,7 +262,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               value={certPath}
               onChange={(e) => setCertPath(e.target.value)}
               placeholder="/etc/ssl/certs/my-cert.pem"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
             />
           </div>
           <div>
@@ -274,13 +274,13 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               value={keyPath}
               onChange={(e) => setKeyPath(e.target.value)}
               placeholder="/etc/ssl/private/my-key.pem"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
             />
           </div>
           <button
             onClick={handleSaveManual}
             disabled={saving}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+            className="btn btn-primary btn-md w-full"
           >
             {saving ? "Saving…" : "Save & Enable TLS"}
           </button>
@@ -312,7 +312,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLeDomain(e.target.value)}
               placeholder="photos.example.com"
               autoComplete="off"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
               disabled={leProvisioning}
             />
             <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -329,7 +329,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLeEmail(e.target.value)}
               placeholder="admin@example.com"
               autoComplete="off"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
               disabled={leProvisioning}
             />
             <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -347,7 +347,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 max={65535}
                 value={leChallengePort}
                 onChange={(e) => setLeChallengePort(e.target.value)}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                 disabled={leProvisioning}
               />
               <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -359,7 +359,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 type="checkbox"
                 checked={leStaging}
                 onChange={(e) => setLeStaging(e.target.checked)}
-                className="mt-0.5 accent-blue-600"
+                className="mt-0.5 accent-indigo-600"
                 disabled={leProvisioning}
               />
               <span className="text-gray-700 dark:text-gray-300">
@@ -375,7 +375,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               type="checkbox"
               checked={leAgreeTos}
               onChange={(e) => setLeAgreeTos(e.target.checked)}
-              className="mt-0.5 accent-blue-600"
+              className="mt-0.5 accent-indigo-600"
               disabled={leProvisioning}
             />
             <span className="text-gray-700 dark:text-gray-300">
@@ -384,7 +384,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 href="https://letsencrypt.org/repository/"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 dark:text-blue-400 underline"
+                className="text-accent-600 dark:text-accent-400 underline"
               >
                 Let's Encrypt Subscriber Agreement
               </a>
@@ -394,7 +394,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           <button
             onClick={handleProvisionLetsEncrypt}
             disabled={leProvisioning}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+            className="btn btn-primary btn-md w-full"
           >
             {leProvisioning
               ? "Requesting certificate from Let's Encrypt…"
@@ -439,7 +439,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLcLabel(e.target.value)}
               placeholder="Simple Photos — home NAS"
               maxLength={128}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
               disabled={lcGenerating}
             />
             <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -455,7 +455,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               value={lcExtraHosts}
               onChange={(e) => setLcExtraHosts(e.target.value)}
               placeholder="photos.lan, 192.168.1.50, nas.local"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
               disabled={lcGenerating}
             />
             <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
@@ -466,7 +466,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           <button
             onClick={handleGenerateLocalCa}
             disabled={lcGenerating}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+            className="btn btn-primary btn-md w-full"
           >
             {lcGenerating ? "Generating local CA…" : "Generate local CA"}
           </button>
@@ -538,7 +538,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             // users to create on a backup instance.
             setStep(serverRole === "backup" ? "complete" : "users");
           }}
-          className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 text-sm font-medium disabled:opacity-50"
+          className="btn btn-primary btn-md"
           disabled={leProvisioning || lcGenerating}
         >
           {isDone ? "Continue →" : "Skip →"}

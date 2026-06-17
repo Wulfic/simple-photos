@@ -165,12 +165,12 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
   if (!usersLoaded || !isAdmin) return null;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">Manage Users</h2>
         <button
           onClick={() => setShowAddUser(!showAddUser)}
-          className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors"
+          className="btn btn-primary btn-md inline-flex items-center"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -188,7 +188,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
               type="text"
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
               required
               minLength={3}
               autoFocus
@@ -200,7 +200,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
               type="password"
               value={newUserPassword}
               onChange={(e) => setNewUserPassword(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
               required
               minLength={8}
             />
@@ -213,7 +213,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                   type="radio"
                   checked={newUserRole === "user"}
                   onChange={() => setNewUserRole("user")}
-                  className="accent-blue-600"
+                  className="accent-indigo-600"
                 />
                 User
               </label>
@@ -222,14 +222,14 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                   type="radio"
                   checked={newUserRole === "admin"}
                   onChange={() => setNewUserRole("admin")}
-                  className="accent-blue-600"
+                  className="accent-indigo-600"
                 />
                 Admin
               </label>
             </div>
           </div>
           <div className="flex gap-2">
-            <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm">
+            <button type="submit" className="btn btn-primary btn-md">
               Create User
             </button>
             <button type="button" onClick={() => setShowAddUser(false)} className="px-4 py-2 rounded-md text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
@@ -260,7 +260,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                     <select
                       value={u.role}
                       onChange={(e) => handleChangeRole(u.id, e.target.value as "admin" | "user")}
-                      className="text-xs border rounded px-2 py-1 bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="text-xs border rounded px-2 py-1 bg-transparent focus:outline-none focus:ring-1 focus:ring-accent-500"
                     >
                       <option value="user">User</option>
                       <option value="admin">Admin</option>
@@ -281,7 +281,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                     <button
                       onClick={() => handleAdminSetup2fa(u.id)}
                       disabled={setup2faLoading}
-                      className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium transition-colors disabled:opacity-50"
+                      className="text-xs text-accent-600 dark:text-accent-400 hover:text-accent-800 dark:hover:text-accent-300 font-medium transition-colors disabled:opacity-50"
                     >
                       Enable
                     </button>
@@ -331,12 +331,12 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                         value={resetPwValue}
                         onChange={(e) => setResetPwValue(e.target.value)}
                         placeholder="New password"
-                        className="border rounded px-2 py-1 text-xs w-36 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="border rounded px-2 py-1 text-xs w-36 focus:outline-none focus:ring-1 focus:ring-accent-500"
                         autoFocus
                       />
                       <button
                         onClick={() => handleResetUserPassword(u.id)}
-                        className="bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700"
+                        className="btn btn-primary btn-sm"
                       >
                         Set
                       </button>
@@ -348,7 +348,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                       <span className="text-xs text-red-600 dark:text-red-400">Delete?</span>
                       <button
                         onClick={() => handleDeleteUser(u.id)}
-                        className="bg-red-600 text-white px-2 py-1 rounded text-xs hover:bg-red-700"
+                        className="btn btn-danger btn-sm"
                       >
                         Yes
                       </button>
@@ -370,7 +370,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       {/* 2FA Setup Modal */}
       {setup2faUserId && setup2faUri && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6">
+          <div className="card shadow-pop w-full max-w-md p-6">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
               Enable 2FA for {managedUsers.find(u => u.id === setup2faUserId)?.username}
             </h3>
@@ -393,14 +393,14 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                   onChange={(e) => setSetup2faCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAdminConfirm2fa(); }}
                   placeholder="000000"
-                  className="flex-1 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-center font-mono text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700"
+                  className="flex-1 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-center font-mono text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700"
                   maxLength={6}
                   autoFocus
                 />
                 <button
                   onClick={handleAdminConfirm2fa}
                   disabled={setup2faLoading || setup2faCode.length !== 6}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+                  className="btn btn-primary btn-md"
                 >
                   {setup2faLoading ? "Verifying…" : "Confirm"}
                 </button>

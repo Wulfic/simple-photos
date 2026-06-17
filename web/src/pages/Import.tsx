@@ -366,7 +366,7 @@ export default function Import() {
 
         {/* Server Directory Mode */}
         {mode === "server" && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-6">
+          <div className="card p-6 mb-6">
             <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-3">Scan Server Directory</h3>
             <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
               Scan a directory on the server for photos and videos to import. Files are encrypted locally before being stored.
@@ -377,13 +377,13 @@ export default function Import() {
                 value={scanPath}
                 onChange={(e) => setScanPath(e.target.value)}
                 placeholder="Server directory path (defaults to storage root)"
-                className="flex-1 border dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                className="flex-1 border dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-accent-500 text-sm"
                 onKeyDown={(e) => { if (e.key === "Enter") handleServerScan(); }}
               />
               <button
                 onClick={() => handleServerScan()}
                 disabled={scanning}
-                className="bg-blue-600 text-white px-5 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium whitespace-nowrap"
+                className="btn btn-primary btn-md whitespace-nowrap"
               >
                 {scanning ? (
                   <span className="flex items-center gap-2">
@@ -401,13 +401,13 @@ export default function Import() {
         {/* Local Upload Mode */}
         {mode === "local" && (
           <>
-            <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
-              <h3 className="font-semibold text-blue-900 dark:text-blue-300 mb-2">📥 How to Import</h3>
-              <ol className="text-sm text-blue-800 dark:text-blue-300 space-y-1.5 list-decimal list-inside">
+            <div className="bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 rounded-lg p-4 mb-6">
+              <h3 className="font-semibold text-accent-900 dark:text-accent-300 mb-2">📥 How to Import</h3>
+              <ol className="text-sm text-accent-800 dark:text-accent-300 space-y-1.5 list-decimal list-inside">
                 <li>Select photos or videos from your computer, or drag & drop below</li>
                 <li>
                   Optionally include{" "}
-                  <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded">.json</code>{" "}
+                  <code className="bg-accent-100 dark:bg-accent-900/40 px-1 rounded">.json</code>{" "}
                   metadata files from Google Takeout
                 </li>
                 <li>Click <strong>Import</strong> to encrypt and upload</li>
@@ -417,7 +417,7 @@ export default function Import() {
             <div
               className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors mb-6 ${
                 dragOver
-                  ? "border-blue-500 dark:border-blue-400 bg-blue-50 dark:bg-blue-900/30"
+                  ? "border-accent-500 dark:border-accent-400 bg-accent-50 dark:bg-accent-900/30"
                   : "border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
               }`}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -433,7 +433,7 @@ export default function Import() {
                 Drag & drop photos, videos, and JSON metadata files here
               </p>
               <p className="text-gray-700 dark:text-gray-400 text-sm mb-4">or click to browse</p>
-              <label className="inline-block bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 cursor-pointer text-sm font-medium transition-colors">
+              <label className="btn btn-primary btn-md inline-block cursor-pointer">
                 Select Files
                 <input
                   ref={inputRef}
@@ -459,7 +459,7 @@ export default function Import() {
 
         {/* Stats bar */}
         {items.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between bg-white dark:bg-gray-800 rounded-lg shadow p-4 mb-4 gap-3">
+          <div className="card flex flex-wrap items-center justify-between p-4 mb-4 gap-3">
             <div className="flex flex-wrap gap-4 text-sm">
               <span className="text-gray-700 dark:text-gray-300"><strong>{items.length}</strong> files</span>
               <span className="text-gray-700 dark:text-gray-400">{formatBytes(items.reduce((sum, i) => sum + i.size, 0))}</span>
@@ -467,7 +467,7 @@ export default function Import() {
                 <span className="text-green-700 dark:text-green-400"><strong>{withMetadata}</strong> with metadata</span>
               )}
               {completedCount > 0 && (
-                <span className="text-blue-700 dark:text-blue-300"><strong>{completedCount}</strong> imported</span>
+                <span className="text-accent-700 dark:text-accent-300"><strong>{completedCount}</strong> imported</span>
               )}
               {errorCount > 0 && (
                 <span className="text-red-700 dark:text-red-400"><strong>{errorCount}</strong> failed</span>
@@ -475,7 +475,7 @@ export default function Import() {
             </div>
             <div className="flex gap-2">
               {importing && (
-                <button onClick={stopImport} className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 text-sm font-medium">
+                <button onClick={stopImport} className="btn btn-danger btn-md">
                   Stop
                 </button>
               )}
@@ -490,7 +490,7 @@ export default function Import() {
                 </button>
               )}
               {!importing && (
-                <button onClick={clearAll} className="bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm">
+                <button onClick={clearAll} className="btn btn-secondary btn-md">
                   Clear
                 </button>
               )}
@@ -507,7 +507,7 @@ export default function Import() {
             </div>
             <div className="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
               <div
-                className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                className="h-full bg-accent-600 rounded-full transition-all duration-300"
                 style={{ width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%` }}
               />
             </div>

@@ -63,7 +63,7 @@ function ExternalApiSection() {
   };
 
   return (
-    <div className="mb-4 bg-white dark:bg-gray-800 rounded-lg shadow">
+    <div className="card mb-4">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between p-5 text-left"
@@ -375,13 +375,13 @@ export default function Diagnostics() {
                     type="checkbox"
                     checked={autoRefresh}
                     onChange={(e) => setAutoRefresh(e.target.checked)}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    className="rounded border-gray-300 text-accent-600 focus:ring-accent-500"
                   />
                   Auto-refresh
                 </label>
                 <button
                   onClick={fetchMetrics}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+                  className="btn btn-primary btn-md flex items-center"
                 >
                   <AppIcon name="reload" themed={false} />
                   Refresh
@@ -399,7 +399,7 @@ export default function Diagnostics() {
 
         {/* ── Diagnostics Master Toggle ── */}
         {!configLoading && config && (
-          <div className="mb-4 bg-white dark:bg-gray-800 rounded-lg shadow p-5">
+          <div className="card mb-4 p-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-1">
@@ -426,7 +426,7 @@ export default function Diagnostics() {
                 className={`shrink-0 px-5 py-2 text-sm font-medium rounded-lg transition-all shadow-sm disabled:opacity-50 ${
                   diagnosticsEnabled
                     ? "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600"
-                    : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-200 dark:shadow-blue-900/30"
+                    : "bg-accent-600 text-white hover:bg-accent-700 shadow-accent-200 dark:shadow-accent-900/30"
                 }`}
               >
                 {toggling
@@ -453,9 +453,9 @@ export default function Diagnostics() {
                     onClick={() =>
                       toggleClientDiagnostics(!config.client_diagnostics_enabled)
                     }
-                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 ${
                       config.client_diagnostics_enabled
-                        ? "bg-blue-600"
+                        ? "bg-accent-600"
                         : "bg-gray-300 dark:bg-gray-600"
                     }`}
                     role="switch"
@@ -482,7 +482,7 @@ export default function Diagnostics() {
 
         {/* ── Disabled State ── */}
         {!diagnosticsEnabled && !loading && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-12 text-center">
+          <div className="card p-12 text-center">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-700 mb-4">
               <svg
                 className="w-8 h-8 text-gray-600 dark:text-gray-400"
@@ -519,14 +519,14 @@ export default function Diagnostics() {
         {diagnosticsEnabled && (
           <>
             {/* ── Tab Bar ── */}
-            <div className="flex gap-1 mb-4 bg-white dark:bg-gray-800 rounded-lg shadow p-1">
+            <div className="card flex gap-1 mb-4 p-1">
               {tabs.map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex-1 py-2 px-4 text-sm font-medium rounded-md transition-colors ${
                     activeTab === tab.id
-                      ? "bg-blue-600 text-white shadow"
+                      ? "bg-accent-600 text-white shadow"
                       : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                   }`}
                 >
@@ -538,7 +538,7 @@ export default function Diagnostics() {
             {/* ── Tab Content ── */}
             {loading ? (
               <div className="flex justify-center py-20">
-                <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : (
               <>

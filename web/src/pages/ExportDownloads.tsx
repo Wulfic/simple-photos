@@ -128,7 +128,7 @@ export default function ExportDownloads() {
           </h1>
           <button
             onClick={() => navigate("/settings")}
-            className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+            className="text-sm text-accent-600 dark:text-accent-400 hover:underline"
           >
             &larr; Back to Settings
           </button>
@@ -142,10 +142,10 @@ export default function ExportDownloads() {
 
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
           </div>
         ) : files.length === 0 ? (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-8 text-center">
+          <div className="card p-8 text-center">
             <p className="text-gray-700 dark:text-gray-400 mb-2">
               No export files available.
             </p>
@@ -157,7 +157,7 @@ export default function ExportDownloads() {
           <>
             {/* Job status summary */}
             {job && (
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 mb-4">
+              <div className="card p-4 mb-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-gray-700 dark:text-gray-400">
@@ -183,7 +183,7 @@ export default function ExportDownloads() {
               {files.map((file) => (
                 <div
                   key={file.id}
-                  className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 flex items-center justify-between"
+                  className="card p-4 flex items-center justify-between"
                 >
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
@@ -196,7 +196,7 @@ export default function ExportDownloads() {
                   <button
                     onClick={() => handleDownload(file)}
                     disabled={downloading === file.id}
-                    className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-700 text-sm flex-shrink-0 disabled:opacity-50"
+                    className="btn btn-primary btn-md inline-flex items-center flex-shrink-0"
                   >
                     {downloading === file.id ? "Downloading…" : "Download"}
                   </button>

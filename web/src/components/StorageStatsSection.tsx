@@ -22,7 +22,7 @@ export default function StorageStatsSection({
 }) {
   if (loading) {
     return (
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+      <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Storage</h2>
         <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse">Loading storage stats…</p>
       </section>
@@ -41,7 +41,7 @@ export default function StorageStatsSection({
   const pctOther = otherUsage / stats.fs_total_bytes * 100;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-4">Storage</h2>
 
       {/* Stacked usage bar */}

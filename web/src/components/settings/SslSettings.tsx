@@ -247,7 +247,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
   const httpUrl = `http://${currentHost}`;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-1">SSL / TLS</h2>
       <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
         Serve your photos over HTTPS. Toggling this saves immediately;
@@ -265,8 +265,8 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
         <button
           onClick={() => void handleToggleEnabled(!sslEnabled)}
           disabled={togglePending}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
-            sslEnabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:opacity-50 ${
+            sslEnabled ? "bg-accent-600" : "bg-gray-300 dark:bg-gray-600"
           }`}
           role="switch"
           aria-checked={sslEnabled}
@@ -281,28 +281,28 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
 
       {/* ── TLS status card ───────────────────────────────────────── */}
       {sslEnabled ? (
-        <div className="mb-5 p-3 rounded-md bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs space-y-1">
+        <div className="mb-5 p-3 rounded-md bg-accent-50 dark:bg-accent-900/20 border border-accent-200 dark:border-accent-800 text-xs space-y-1">
           <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-blue-600 dark:text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-4 h-4 text-accent-600 dark:text-accent-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span className="font-medium text-blue-800 dark:text-blue-300">TLS configured</span>
+            <span className="font-medium text-accent-800 dark:text-accent-300">TLS configured</span>
           </div>
-          <div className="text-blue-700 dark:text-blue-400">
+          <div className="text-accent-700 dark:text-accent-400">
             Server URL after restart:{" "}
             <a href={tlsUrl} className="font-mono underline" target="_blank" rel="noopener noreferrer">{tlsUrl}</a>
           </div>
           {sslCertPath && (
-            <div className="text-blue-700 dark:text-blue-400">
+            <div className="text-accent-700 dark:text-accent-400">
               Certificate: <span className="font-mono break-all">{sslCertPath}</span>
             </div>
           )}
           {sslKeyPath && (
-            <div className="text-blue-700 dark:text-blue-400">
+            <div className="text-accent-700 dark:text-accent-400">
               Private key: <span className="font-mono break-all">{sslKeyPath}</span>
             </div>
           )}
-          <div className="text-blue-700 dark:text-blue-400 italic">
+          <div className="text-accent-700 dark:text-accent-400 italic">
             Plain-HTTP requests to <span className="font-mono">{httpUrl}</span> will be 301-upgraded to HTTPS.
           </div>
         </div>
@@ -332,14 +332,14 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
           </p>
 
           {leExisting && (
-            <div className="mb-3 p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs">
-              <div className="font-medium text-blue-800 dark:text-blue-300">Active</div>
-              <div className="text-blue-700 dark:text-blue-400">
+            <div className="mb-3 p-2 rounded bg-accent-50 dark:bg-accent-900/20 border border-accent-200 dark:border-accent-800 text-xs">
+              <div className="font-medium text-accent-800 dark:text-accent-300">Active</div>
+              <div className="text-accent-700 dark:text-accent-400">
                 Domain: <span className="font-mono">{leExisting.domain}</span>
                 {leExisting.staging ? " (staging)" : ""}
               </div>
               {leExisting.last_issued_at && (
-                <div className="text-blue-700 dark:text-blue-400">
+                <div className="text-accent-700 dark:text-accent-400">
                   Last issued: {new Date(leExisting.last_issued_at).toLocaleString()}
                 </div>
               )}
@@ -357,7 +357,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 onChange={(e) => setLeDomain(e.target.value)}
                 placeholder="photos.example.com"
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                 disabled={leProvisioning}
               />
             </div>
@@ -371,7 +371,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 onChange={(e) => setLeEmail(e.target.value)}
                 placeholder="admin@example.com"
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                 disabled={leProvisioning}
               />
             </div>
@@ -386,7 +386,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                   max={65535}
                   value={leChallengePort}
                   onChange={(e) => setLeChallengePort(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                   disabled={leProvisioning}
                 />
               </div>
@@ -395,7 +395,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                   type="checkbox"
                   checked={leStaging}
                   onChange={(e) => setLeStaging(e.target.checked)}
-                  className="mt-0.5 accent-blue-600"
+                  className="mt-0.5 accent-indigo-600"
                   disabled={leProvisioning}
                 />
                 <span className="text-gray-700 dark:text-gray-300">
@@ -408,7 +408,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 type="checkbox"
                 checked={leAgreeTos}
                 onChange={(e) => setLeAgreeTos(e.target.checked)}
-                className="mt-0.5 accent-blue-600"
+                className="mt-0.5 accent-indigo-600"
                 disabled={leProvisioning}
               />
               <span className="text-gray-700 dark:text-gray-300">
@@ -417,7 +417,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                   href="https://letsencrypt.org/repository/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 dark:text-blue-400 underline"
+                  className="text-accent-600 dark:text-accent-400 underline"
                 >
                   Let's Encrypt Subscriber Agreement
                 </a>
@@ -427,7 +427,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             <button
               onClick={handleProvisionLetsEncrypt}
               disabled={leProvisioning}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+              className="btn btn-primary btn-md"
             >
               {leProvisioning
                 ? "Requesting certificate from Let's Encrypt…"
@@ -573,7 +573,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 value={manualCert}
                 onChange={(e) => setManualCert(e.target.value)}
                 placeholder="/etc/ssl/certs/my-cert.pem"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                 disabled={manualSaving}
               />
             </div>
@@ -586,14 +586,14 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 value={manualKey}
                 onChange={(e) => setManualKey(e.target.value)}
                 placeholder="/etc/ssl/private/my-key.pem"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500"
                 disabled={manualSaving}
               />
             </div>
             <button
               onClick={handleSaveManual}
               disabled={manualSaving}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+              className="btn btn-primary btn-md"
             >
               {manualSaving ? "Saving…" : "Save certificate paths"}
             </button>

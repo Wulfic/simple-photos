@@ -42,7 +42,7 @@ export function checkPasswordStrength(pw: string): PasswordStrength {
       : score <= 3
         ? "bg-yellow-500"
         : score <= 4
-          ? "bg-blue-500"
+          ? "bg-accent-500"
           : "bg-green-500";
   return { checks, core, score, label, color, max: 6 };
 }

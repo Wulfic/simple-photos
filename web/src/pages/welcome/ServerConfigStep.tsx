@@ -280,14 +280,14 @@ export default function ServerConfigStep({
               setPortInput(e.target.value);
               setPortSaved(false);
             }}
-            className="w-28 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-center"
+            className="w-28 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent text-center"
             placeholder="8080"
           />
           <button
             type="button"
             onClick={handleSavePort}
             disabled={loading || portSaved || portInput === String(serverPort)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+            className="btn btn-primary btn-md"
           >
             {portSaved ? "Saved ✓" : "Save"}
           </button>
@@ -339,7 +339,7 @@ export default function ServerConfigStep({
           onChange={(e) => setPathInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") handleSavePath(); }}
           placeholder="/path/to/photo/storage"
-          className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-gray-200"
+          className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent dark:bg-gray-700 dark:text-gray-200"
         />
         <button
           type="button"
@@ -356,7 +356,7 @@ export default function ServerConfigStep({
           type="button"
           onClick={handleSavePath}
           disabled={saving || !pathInput.trim()}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+          className="btn btn-primary btn-md"
         >
           {saving
             ? "Saving…"
@@ -384,7 +384,7 @@ export default function ServerConfigStep({
               setError("");
               setStep("admin-2fa");
             }}
-            className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+            className="btn btn-secondary btn-md flex-1"
           >
             ← Back
           </button>
@@ -418,12 +418,12 @@ export default function ServerConfigStep({
           an SMB-style address into the storage path field and hits Set Path. */}
       {smbModalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget && !smbBusy) setSmbModalOpen(false);
           }}
         >
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6">
+          <div className="card shadow-pop w-full max-w-md p-6">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">
               Connect to network share
             </h3>
@@ -452,7 +452,7 @@ export default function ServerConfigStep({
                   onChange={(e) => setSmbUser(e.target.value)}
                   autoComplete="off"
                   autoFocus
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:text-gray-200"
                 />
               </div>
               <div>
@@ -467,7 +467,7 @@ export default function ServerConfigStep({
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !smbBusy) handleConnectSmb();
                   }}
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:text-gray-200"
                 />
               </div>
               <div>
@@ -478,7 +478,7 @@ export default function ServerConfigStep({
                   type="text"
                   value={smbDomain}
                   onChange={(e) => setSmbDomain(e.target.value)}
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:text-gray-200"
                 />
               </div>
             </div>
@@ -506,7 +506,7 @@ export default function ServerConfigStep({
                 type="button"
                 onClick={() => setSmbModalOpen(false)}
                 disabled={smbBusy}
-                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-sm font-medium transition-colors"
+                className="btn btn-secondary btn-md flex-1"
               >
                 Cancel
               </button>
@@ -514,7 +514,7 @@ export default function ServerConfigStep({
                 type="button"
                 onClick={handleTestSmb}
                 disabled={smbBusy}
-                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-sm font-medium transition-colors"
+                className="btn btn-secondary btn-md flex-1"
               >
                 {smbBusy ? "…" : "Test"}
               </button>
@@ -522,7 +522,7 @@ export default function ServerConfigStep({
                 type="button"
                 onClick={handleConnectSmb}
                 disabled={smbBusy}
-                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+                className="btn btn-primary btn-md flex-1"
               >
                 {smbBusy ? "Mounting…" : "Connect"}
               </button>

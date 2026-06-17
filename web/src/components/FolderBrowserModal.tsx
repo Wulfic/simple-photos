@@ -45,7 +45,7 @@ export default function FolderBrowserModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
+      <div className="card shadow-pop w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
           <div>
@@ -76,7 +76,7 @@ export default function FolderBrowserModal({
             {browsePath}
           </span>
           {browseLoading && (
-            <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin shrink-0" />
+            <div className="w-4 h-4 border-2 border-accent-500 border-t-transparent rounded-full animate-spin shrink-0" />
           )}
           {/* Writable indicator */}
           <span className={`flex items-center gap-1 text-xs shrink-0 ${browseWritable ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
@@ -93,12 +93,12 @@ export default function FolderBrowserModal({
               type="button"
               onClick={() => browseDirectory(browseParent)}
               disabled={browseLoading}
-              className="w-full text-left px-5 py-2.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-3 text-sm border-b border-gray-100 dark:border-gray-700/50 transition-colors disabled:opacity-50"
+              className="w-full text-left px-5 py-2.5 hover:bg-accent-50 dark:hover:bg-accent-900/20 flex items-center gap-3 text-sm border-b border-gray-100 dark:border-gray-700/50 transition-colors disabled:opacity-50"
             >
-              <svg className="w-4 h-4 text-blue-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="w-4 h-4 text-accent-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
               </svg>
-              <span className="text-blue-600 dark:text-blue-400 font-medium">..</span>
+              <span className="text-accent-600 dark:text-accent-400 font-medium">..</span>
               <span className="text-gray-600 dark:text-gray-400 text-xs ml-auto">Parent folder</span>
             </button>
           )}
@@ -117,7 +117,7 @@ export default function FolderBrowserModal({
               type="button"
               onClick={() => browseDirectory(dir.path)}
               disabled={browseLoading}
-              className="w-full text-left px-5 py-2.5 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-3 text-sm border-b border-gray-100 dark:border-gray-700/50 last:border-b-0 transition-colors disabled:opacity-50"
+              className="w-full text-left px-5 py-2.5 hover:bg-accent-50 dark:hover:bg-accent-900/20 flex items-center gap-3 text-sm border-b border-gray-100 dark:border-gray-700/50 last:border-b-0 transition-colors disabled:opacity-50"
             >
               <svg className="w-4 h-4 text-yellow-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                 <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
@@ -132,7 +132,7 @@ export default function FolderBrowserModal({
           <button
             type="button"
             onClick={() => setShowManual((v) => !v)}
-            className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1 mb-2"
+            className="text-xs text-accent-600 hover:text-accent-800 dark:text-accent-400 dark:hover:text-accent-300 flex items-center gap-1 mb-2"
           >
             <svg className={`w-3 h-3 transition-transform ${showManual ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -146,14 +146,14 @@ export default function FolderBrowserModal({
                 value={manualPath}
                 onChange={(e) => setManualPath(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") handleManualGo(); }}
-                className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-900"
+                className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent bg-white dark:bg-gray-900"
                 placeholder="/path/to/storage"
               />
               <button
                 type="button"
                 onClick={handleManualGo}
                 disabled={browseLoading}
-                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors disabled:opacity-50"
+                className="btn btn-secondary btn-md"
               >
                 Go
               </button>
@@ -174,7 +174,7 @@ export default function FolderBrowserModal({
             type="button"
             onClick={() => onSelect(browsePath)}
             disabled={!browseWritable}
-            className="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+            className="btn btn-primary btn-md"
           >
             Select This Folder
           </button>

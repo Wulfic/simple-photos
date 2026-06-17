@@ -86,7 +86,7 @@ export default function ConversionBanner() {
 
   return (
     <div className="fixed bottom-20 left-4 right-4 z-50 pointer-events-none">
-      <div className="pointer-events-auto max-w-md mx-auto flex items-center gap-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-3 shadow-lg">
+      <div className="card shadow-card-hover pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
         <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-orange-500 dark:border-t-orange-400 rounded-full animate-spin flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between">
@@ -108,7 +108,7 @@ export default function ConversionBanner() {
         </div>
         <button
           onClick={() => setDismissed(true)}
-          className="p-1 text-gray-600 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+          className="icon-btn p-1 flex-shrink-0"
           aria-label="Dismiss"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

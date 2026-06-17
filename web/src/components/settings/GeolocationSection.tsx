@@ -124,7 +124,7 @@ export default function GeolocationSection({
   if (!loaded) return null;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">Geolocation</h2>
       <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
         Automatically resolve GPS coordinates into city, state, and country
@@ -146,9 +146,9 @@ export default function GeolocationSection({
         <button
           onClick={handleToggle}
           disabled={toggling}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 ${
             status?.enabled
-              ? "bg-blue-600"
+              ? "bg-accent-600"
               : "bg-gray-300 dark:bg-gray-600"
           }`}
           role="switch"
@@ -177,9 +177,9 @@ export default function GeolocationSection({
         <button
           onClick={handleScrubToggle}
           disabled={togglingScrub}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 ${
             status?.scrub_on_upload
-              ? "bg-blue-600"
+              ? "bg-accent-600"
               : "bg-gray-300 dark:bg-gray-600"
           }`}
           role="switch"
@@ -213,8 +213,8 @@ export default function GeolocationSection({
           onClick={handlePreciseToggle}
           disabled={togglingPrecise || !status?.enabled}
           title={!status?.enabled ? "Enable Geolocation first" : undefined}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-40 ${
-            status?.precise_enabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 disabled:opacity-40 ${
+            status?.precise_enabled ? "bg-accent-600" : "bg-gray-300 dark:bg-gray-600"
           }`}
           role="switch"
           aria-checked={status?.precise_enabled ?? false}
@@ -236,7 +236,7 @@ export default function GeolocationSection({
       {status && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
+            <p className="text-xl font-bold text-accent-600 dark:text-accent-400">
               {status.photos_with_location}
             </p>
             <p className="text-xs text-gray-700 dark:text-gray-400">With Location</p>

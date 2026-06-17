@@ -65,7 +65,7 @@ export default function ViewerTopBar({
         <button
           onClick={() => setShowInfoPanel(!showInfoPanel)}
           className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-            showInfoPanel ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
+            showInfoPanel ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
           }`}
           title="Info"
         >
@@ -77,7 +77,7 @@ export default function ViewerTopBar({
           <button
             onClick={() => setShowTagPanel(!showTagPanel)}
             className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-              showTagPanel ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
+              showTagPanel ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
             }`}
             title="Tags"
           >
@@ -88,7 +88,7 @@ export default function ViewerTopBar({
           <button
             onClick={onToggleEdit}
             className={`flex items-center gap-1 px-2 py-1 rounded text-sm font-medium transition-colors ${
-              editMode ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
+              editMode ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
             }`}
             title="Edit"
           >Edit</button>

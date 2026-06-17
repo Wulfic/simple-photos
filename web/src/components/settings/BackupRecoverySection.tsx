@@ -119,7 +119,7 @@ export default function BackupRecoverySection({
   // ── Backup-mode view: show paired primary server ───────────────────────
   if (isBackupMode) {
     return (
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+      <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Primary Server</h2>
         <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
           This server is running in <strong>backup mode</strong>. All photos, accounts, and settings are mirrored from the primary server.
@@ -158,7 +158,7 @@ export default function BackupRecoverySection({
               }
             }}
             disabled={forceSyncing}
-            className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
+            className="btn btn-primary btn-md inline-flex items-center"
           >
             <AppIcon name="reload" size="w-4 h-4" className={forceSyncing ? "animate-spin" : ""} />
             {forceSyncing ? "Requesting Sync…" : "Force Sync from Primary"}
@@ -173,7 +173,7 @@ export default function BackupRecoverySection({
 
   // ── Primary-mode view: recovery + add/scan ─────────────────────────────
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">Backup Recovery</h2>
       <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
         Recover photos from a configured backup server. Any photos on the backup
@@ -196,7 +196,7 @@ export default function BackupRecoverySection({
               value={selectedRecoveryServerId}
               onChange={(e) => setSelectedRecoveryServerId(e.target.value)}
               disabled={recovering}
-              className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 min-w-[200px]"
+              className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 min-w-[200px]"
               data-testid="recovery-server-select"
             >
               <option value="">Select a backup server…</option>
@@ -213,7 +213,7 @@ export default function BackupRecoverySection({
                 setSuccess("");
               }}
               disabled={recovering || !selectedRecoveryServerId}
-              className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+              className="btn btn-danger btn-md"
               data-testid="recovery-button"
             >
               {recovering ? (
@@ -229,8 +229,8 @@ export default function BackupRecoverySection({
 
           {/* Confirmation modal */}
           {showRecoverConfirm && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" data-testid="recovery-confirm-modal">
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" data-testid="recovery-confirm-modal">
+              <div className="card shadow-pop max-w-md w-full mx-4 p-6">
                 <h3 className="text-lg font-semibold text-red-600 dark:text-red-400 mb-3">
                   ⚠️ Confirm Recovery
                 </h3>
@@ -249,7 +249,7 @@ export default function BackupRecoverySection({
                 <div className="flex gap-2 justify-end">
                   <button
                     onClick={() => setShowRecoverConfirm(false)}
-                    className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                    className="btn btn-secondary btn-md"
                     data-testid="recovery-cancel-button"
                   >
                     No, Cancel
@@ -257,7 +257,7 @@ export default function BackupRecoverySection({
                   <button
                     onClick={handleRecover}
                     disabled={recovering}
-                    className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+                    className="btn btn-danger btn-md"
                     data-testid="recovery-confirm-button"
                   >
                     {recovering ? "Starting…" : "Yes, Recover"}
@@ -277,7 +277,7 @@ export default function BackupRecoverySection({
               <button
                 onClick={scanForBackupServers}
                 disabled={discovering}
-                className="text-sm text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+                className="text-sm text-accent-600 dark:text-accent-400 hover:underline disabled:opacity-50"
               >
                 {discovering ? "Scanning…" : "Scan network for backup servers"}
               </button>
@@ -320,7 +320,7 @@ export default function BackupRecoverySection({
                         setBackupServerApiKey(srv.api_key ?? "");
                         setShowAddBackupServer(true);
                       }}
-                      className="flex-shrink-0 text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+                      className="btn btn-primary btn-sm flex-shrink-0"
                     >
                       Add
                     </button>
@@ -340,7 +340,7 @@ export default function BackupRecoverySection({
                 onChange={(e) => setBackupServerName(e.target.value)}
                 placeholder="My Backup Server"
                 maxLength={200}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
               />
             </div>
             <div>
@@ -351,7 +351,7 @@ export default function BackupRecoverySection({
                 onChange={(e) => setBackupServerAddress(e.target.value)}
                 placeholder="https://backup.example.com:8443"
                 maxLength={500}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
               />
             </div>
             <div>
@@ -362,7 +362,7 @@ export default function BackupRecoverySection({
                 onChange={(e) => setBackupServerApiKey(e.target.value)}
                 placeholder="Backup server API key"
                 maxLength={256}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
               />
             </div>
             <div>
@@ -372,14 +372,14 @@ export default function BackupRecoverySection({
                 min={1}
                 value={backupServerFrequency}
                 onChange={(e) => setBackupServerFrequency(e.target.value)}
-                className="w-28 border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                className="w-28 border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-500 dark:bg-gray-700 dark:border-gray-600"
               />
             </div>
             <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={addingBackupServer}
-                className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+                className="btn btn-primary btn-md"
               >
                 {addingBackupServer ? (
                   <span className="flex items-center gap-2">
@@ -393,7 +393,7 @@ export default function BackupRecoverySection({
               <button
                 type="button"
                 onClick={() => setShowAddBackupServer(false)}
-                className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                className="btn btn-secondary btn-md"
               >
                 Cancel
               </button>

@@ -303,7 +303,7 @@ export default function Gallery() {
               <button
                 onClick={() => setShowAddToAlbum(true)}
                 disabled={selectedIds.size === 0}
-                className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
+                className="btn btn-primary btn-md inline-flex items-center"
                 title="Add to album"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -314,7 +314,7 @@ export default function Gallery() {
               <button
                 onClick={deleteSelected}
                 disabled={selectedIds.size === 0}
-                className="inline-flex items-center gap-1.5 bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-500 text-sm font-medium transition-colors disabled:opacity-50"
+                className="btn btn-danger btn-md inline-flex items-center"
                 title="Delete"
               >
                 <AppIcon name="trashcan" size="w-4 h-4" themed={false} />
@@ -351,7 +351,7 @@ export default function Gallery() {
             <>
               {/* Backdrop to close menu on outside click */}
               <div className="fixed inset-0 z-40" onClick={() => setShowUploadMenu(false)} />
-              <div className="absolute bottom-16 right-0 z-50 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]">
+              <div className="card shadow-pop absolute bottom-16 right-0 z-50 py-1 min-w-[160px]">
                 <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors">
                   <svg className="w-5 h-5 text-gray-600 dark:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14" />
@@ -387,12 +387,11 @@ export default function Gallery() {
           )}
           {/* FAB button */}
           <button
-            className="w-14 h-14 flex items-center justify-center rounded-2xl shadow-lg cursor-pointer select-none transition-colors"
-            style={{ backgroundColor: "#A8C7FA" }}
+            className="w-14 h-14 flex items-center justify-center rounded-2xl bg-accent-600 text-white ring-1 ring-inset ring-white/15 shadow-lg shadow-accent-900/25 hover:bg-accent-500 hover:shadow-xl active:scale-95 cursor-pointer select-none transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-50 dark:focus-visible:ring-offset-gray-900"
             title="Upload photos"
             onClick={() => setShowUploadMenu((v) => !v)}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="#1C1B1F" strokeWidth={2.5}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
           </button>
@@ -403,14 +402,14 @@ export default function Gallery() {
         {isBackupView ? (
           <div>
             {/* Banner showing which backup server we're browsing */}
-            <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-2 mb-4">
-              <svg className="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <div className="flex items-center gap-2 bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 rounded-lg px-4 py-2 mb-4">
+              <svg className="w-4 h-4 text-accent-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
               </svg>
-              <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+              <span className="text-sm font-medium text-accent-700 dark:text-accent-300">
                 Viewing backup: <span className="font-semibold">{activeBackupServer?.name ?? "Unknown server"}</span>
               </span>
-              <span className="ml-auto text-xs text-blue-500 dark:text-blue-400">Read-only</span>
+              <span className="ml-auto text-xs text-accent-500 dark:text-accent-400">Read-only</span>
             </div>
 
             {backupLoading && (

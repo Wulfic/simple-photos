@@ -160,7 +160,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -169,7 +169,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -484,8 +484,8 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
 
       {/* Share user picker modal */}
       {showSharePicker && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
+          <div className="card shadow-pop max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold mb-4">Share "{album.name}" with</h3>
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {shareUsers.map((u) => (
@@ -531,7 +531,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
               <>
               <button
                 onClick={() => slideshow.start(0)}
-                className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+                className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
                 title="Start Slideshow"
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -540,7 +540,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
               </button>
               <button
                 onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-                className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+                className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
                 title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -565,7 +565,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
               onClick={() => setShowAddPhotos(!showAddPhotos)}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 shadow-sm ${
                 showAddPhotos
-                  ? "bg-blue-600 text-white border border-blue-500 hover:bg-blue-700"
+                  ? "bg-accent-600 text-white border border-accent-500 hover:bg-accent-700"
                   : "text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20"
               }`}
             >
@@ -594,7 +594,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
 
       {/* Album photo grid */}
       {isSelectionMode && (
-        <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg">
+        <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
           <div className="flex items-center gap-3">
             <button
               onClick={clearSelection}
@@ -607,7 +607,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
             <span className="text-sm font-medium">{selectedIds.size} selected</span>
             <button
               onClick={selectAll}
-              className="text-blue-600 dark:text-blue-400 text-sm hover:underline"
+              className="text-accent-600 dark:text-accent-400 text-sm hover:underline"
             >
               Select All
             </button>
@@ -757,7 +757,7 @@ function PeopleView() {
               <div
                 key={cluster.id}
                 onClick={() => navigate(`/albums/smart-people/${cluster.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
+                className="card card-interactive p-3 cursor-pointer"
               >
                 <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
                   {thumbUrls[cluster.id] ? (
@@ -867,7 +867,7 @@ function PetsView() {
               <div
                 key={cluster.id}
                 onClick={() => navigate(`/albums/smart-pets/${cluster.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 cursor-pointer hover:shadow-md transition-shadow"
+                className="card card-interactive p-3 cursor-pointer"
               >
                 <div className="aspect-square bg-gray-100 dark:bg-gray-700 rounded-full mb-2 mx-auto w-24 h-24 flex items-center justify-center overflow-hidden">
                   {thumbUrls[cluster.id] ? (
@@ -968,11 +968,11 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
                 type="text"
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                className="border rounded px-2 py-1 text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="border rounded px-2 py-1 text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-accent-500"
                 autoFocus
                 maxLength={100}
               />
-              <button type="submit" className="text-blue-600 text-sm font-medium">Save</button>
+              <button type="submit" className="text-accent-600 text-sm font-medium">Save</button>
               <button type="button" onClick={() => setEditing(false)} className="text-gray-600 dark:text-gray-400 text-sm">Cancel</button>
             </form>
           ) : (
@@ -992,14 +992,14 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1143,7 +1143,7 @@ function MemoriesView() {
               <div
                 key={memory.id}
                 onClick={() => navigate(`/albums/smart-memories/${memory.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
+                className="card card-interactive cursor-pointer overflow-hidden"
               >
                 <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
                   {thumbUrls[memory.id] ? (
@@ -1249,11 +1249,11 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
                 type="text"
                 value={nameInput}
                 onChange={(e) => setNameInput(e.target.value)}
-                className="border rounded px-2 py-1 text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="border rounded px-2 py-1 text-lg font-semibold focus:outline-none focus:ring-2 focus:ring-accent-500"
                 autoFocus
                 maxLength={100}
               />
-              <button type="submit" className="text-blue-600 text-sm font-medium">Save</button>
+              <button type="submit" className="text-accent-600 text-sm font-medium">Save</button>
               <button type="button" onClick={() => setEditing(false)} className="text-gray-600 dark:text-gray-400 text-sm">Cancel</button>
             </form>
           ) : (
@@ -1273,14 +1273,14 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1426,7 +1426,7 @@ function TripsView() {
               <div
                 key={trip.id}
                 onClick={() => navigate(`/albums/smart-trips/${trip.id}`)}
-                className="bg-white dark:bg-gray-800 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow overflow-hidden"
+                className="card card-interactive cursor-pointer overflow-hidden"
               >
                 <div className="aspect-video bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
                   {thumbUrls[trip.id] ? (
@@ -1565,14 +1565,14 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1691,14 +1691,14 @@ function TripDetailView({ tripId }: { tripId: string }) {
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-gray-700 dark:text-gray-400 hover:text-accent-600 dark:hover:text-accent-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">

@@ -69,7 +69,7 @@ export function PasswordField({
           type={show ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 pr-11 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 pr-11 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
           required
           minLength={8}
           maxLength={128}
@@ -145,7 +145,7 @@ export function ConfirmPasswordField({
           type={show ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 pr-11 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 pr-11 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent"
           required
           autoComplete="new-password"
         />

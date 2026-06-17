@@ -22,7 +22,7 @@ export default function WelcomeStep({ setStep, status, error }: WelcomeStepProps
       </p>
 
       {status && (
-        <div className="text-left bg-blue-50 dark:bg-blue-900/30 rounded-lg p-4 mb-6 text-sm">
+        <div className="text-left bg-accent-50 dark:bg-accent-900/30 rounded-lg p-4 mb-6 text-sm">
           <div className="flex items-center gap-2 mb-2">
             <span className="w-2 h-2 rounded-full bg-green-500" />
             <span className="text-gray-700 dark:text-gray-300">
@@ -44,7 +44,7 @@ export default function WelcomeStep({ setStep, status, error }: WelcomeStepProps
       <button
         onClick={() => setStep("server-role")}
         disabled={!!error && !status}
-        className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-lg font-medium transition-colors"
+        className="btn btn-primary btn-lg w-full"
       >
         Get Started →
       </button>

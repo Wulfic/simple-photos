@@ -94,15 +94,15 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
 
   // ── Tab-cast help panel ──────────────────────────────────────────────────
   const tabCastHelp = (
-    <div className="mt-3 p-3 rounded-md bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs text-blue-800 dark:text-blue-200 space-y-1">
+    <div className="mt-3 p-3 rounded-md bg-accent-50 dark:bg-accent-900/20 border border-accent-200 dark:border-accent-800 text-xs text-accent-800 dark:text-accent-200 space-y-1">
       <p className="font-medium">How to cast a tab in Brave:</p>
-      <ol className="list-decimal list-inside space-y-0.5 text-blue-700 dark:text-blue-300">
+      <ol className="list-decimal list-inside space-y-0.5 text-accent-700 dark:text-accent-300">
         <li>Open the photo you want to cast in the viewer.</li>
         <li>Click the Cast icon in the Brave toolbar (or go to Menu → Cast…).</li>
         <li>Under "Cast to", choose <strong>Cast tab</strong>.</li>
         <li>Select your Chromecast device.</li>
       </ol>
-      <p className="text-blue-600 dark:text-blue-400 pt-1">
+      <p className="text-accent-600 dark:text-accent-400 pt-1">
         Tab casting works even with a local HTTPS certificate because the
         browser streams its rendered output — the Chromecast never fetches
         the URL directly.
@@ -124,7 +124,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
           </p>
           <button
             onClick={() => setShowTabCastHelp((v) => !v)}
-            className="text-xs text-blue-600 dark:text-blue-400 underline"
+            className="text-xs text-accent-600 dark:text-accent-400 underline"
           >
             {showTabCastHelp ? "Hide" : "Show"} tab-casting instructions
           </button>
@@ -143,7 +143,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
           <button
             onClick={handleConnect}
             disabled={busy}
-            className="w-full px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+            className="btn btn-primary btn-md w-full flex items-center justify-center"
           >
             <CastIcon className="w-4 h-4" />
             {busy ? "Opening picker…" : "Open device picker"}
@@ -169,7 +169,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
           <button
             onClick={handleConnect}
             disabled={busy}
-            className="w-full px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+            className="btn btn-primary btn-md w-full flex items-center justify-center"
           >
             <CastIcon className="w-4 h-4" />
             {busy ? "Opening picker…" : "Choose a device"}
@@ -194,7 +194,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
     case "connecting":
       body = (
         <div className="flex items-center gap-3 py-2">
-          <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin shrink-0" />
+          <div className="w-4 h-4 border-2 border-accent-500 border-t-transparent rounded-full animate-spin shrink-0" />
           <p className="text-sm text-gray-600 dark:text-gray-300">
             Connecting{device ? ` to ${device}` : ""}…
           </p>
@@ -219,7 +219,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
           <button
             onClick={handleDisconnect}
             disabled={busy}
-            className="w-full px-4 py-2 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium disabled:opacity-50"
+            className="btn btn-danger btn-md w-full"
           >
             Stop casting
           </button>
@@ -234,7 +234,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
       onClick={onClose}
     >
       <div
-        className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-sm mx-4"
+        className="card shadow-pop w-full max-w-sm mx-4"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

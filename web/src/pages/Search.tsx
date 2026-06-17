@@ -276,7 +276,7 @@ export default function Search() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search tags, filenames, dates, media types…"
             maxLength={500}
-            className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
+            className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent text-base"
           />
           {query && (
             <button
@@ -298,7 +298,7 @@ export default function Search() {
         {/* Loading */}
         {loading && (
           <div className="flex justify-center py-12">
-            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
 

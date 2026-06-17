@@ -85,7 +85,7 @@ function ClientLogsTab() {
   return (
     <div className="space-y-4">
       {/* Filters */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="card p-4">
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex-1 min-w-[200px]">
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
@@ -96,7 +96,7 @@ function ClientLogsTab() {
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="Filter by message, tag, session..."
-              className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-accent-500 focus:border-accent-500"
             />
           </div>
           <div>
@@ -106,7 +106,7 @@ function ClientLogsTab() {
             <select
               value={levelFilter}
               onChange={(e) => setLevelFilter(e.target.value)}
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500"
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-accent-500"
             >
               <option value="">All Levels</option>
               <option value="debug">Debug</option>
@@ -122,7 +122,7 @@ function ClientLogsTab() {
             <select
               value={sessionFilter}
               onChange={(e) => setSessionFilter(e.target.value)}
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500"
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-accent-500"
             >
               <option value="">All Sessions</option>
               {sessions.map((s) => (
@@ -141,7 +141,7 @@ function ClientLogsTab() {
               onChange={(e) =>
                 setDateRange(e.target.value as typeof dateRange)
               }
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500"
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-accent-500"
             >
               <option value="all">All Time</option>
               <option value="1h">Last Hour</option>
@@ -164,10 +164,10 @@ function ClientLogsTab() {
       {/* Log List */}
       {loading ? (
         <div className="flex justify-center py-12">
-          <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="card overflow-hidden">
           <div className="overflow-x-auto max-h-[65vh] overflow-y-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0 z-10">
@@ -211,7 +211,7 @@ function ClientLogsTab() {
               <button
                 onClick={loadMore}
                 disabled={loadingMore}
-                className="px-4 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition-colors disabled:opacity-50"
+                className="px-4 py-1.5 text-sm font-medium text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/20 rounded-md transition-colors disabled:opacity-50"
               >
                 {loadingMore ? "Loading..." : "Load More"}
               </button>

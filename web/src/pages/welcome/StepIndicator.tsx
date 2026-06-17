@@ -55,7 +55,7 @@ export default function StepIndicator({ step, serverRole, installType }: StepInd
               i < currentIdx
                 ? "bg-green-500 text-white"
                 : i === currentIdx
-                  ? "bg-blue-600 text-white"
+                  ? "bg-accent-600 text-white"
                   : "bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-400"
             }`}
           >
@@ -64,7 +64,7 @@ export default function StepIndicator({ step, serverRole, installType }: StepInd
           <span
             className={`text-xs hidden sm:inline ${
               i === currentIdx
-                ? "text-blue-600 font-medium"
+                ? "text-accent-600 font-medium"
                 : "text-gray-600 dark:text-gray-400"
             }`}
           >

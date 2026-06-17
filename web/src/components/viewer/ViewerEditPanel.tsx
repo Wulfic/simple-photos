@@ -287,7 +287,7 @@ export default function ViewerEditPanel({
             <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-2 rounded-full bg-white/10" />
             {/* Selected range highlight */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 h-2 rounded-full bg-blue-500/60"
+              className="absolute top-1/2 -translate-y-1/2 h-2 rounded-full bg-accent-500/60"
               style={{
                 left: `${(trimStart / duration) * 100}%`,
                 right: `${100 - (trimEnd / duration) * 100}%`,
@@ -295,12 +295,12 @@ export default function ViewerEditPanel({
             />
             {/* Start thumb */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-blue-500 shadow-lg"
+              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-accent-500 shadow-lg"
               style={{ left: `calc(${(trimStart / duration) * 100}% - 8px)` }}
             />
             {/* End thumb */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-blue-500 shadow-lg"
+              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-accent-500 shadow-lg"
               style={{ left: `calc(${(trimEnd / duration) * 100}% - 8px)` }}
             />
           </div>
@@ -328,7 +328,7 @@ export default function ViewerEditPanel({
       <div className="flex items-center justify-center gap-2">
         <button
           onClick={onSave}
-          className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          className="btn btn-primary btn-md"
         >
           Save
         </button>

@@ -70,7 +70,7 @@ export default function AiRecognitionSection({
   if (!loaded) return null;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">AI Recognition</h2>
       <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
         Automatically detect faces and objects in your photos. Detected people
@@ -92,9 +92,9 @@ export default function AiRecognitionSection({
         <button
           onClick={handleToggle}
           disabled={toggling}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 focus:ring-offset-2 ${
             status?.enabled
-              ? "bg-blue-600"
+              ? "bg-accent-600"
               : "bg-gray-300 dark:bg-gray-600"
           }`}
           role="switch"
@@ -112,7 +112,7 @@ export default function AiRecognitionSection({
       {status && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
+            <p className="text-xl font-bold text-accent-600 dark:text-accent-400">
               {status.photos_processed}
             </p>
             <p className="text-xs text-gray-700 dark:text-gray-400">Processed</p>
@@ -157,7 +157,7 @@ export default function AiRecognitionSection({
       <button
         onClick={handleReprocess}
         disabled={reprocessing || !status?.enabled}
-        className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+        className="btn btn-primary btn-md"
       >
         {reprocessing ? (
           <span className="flex items-center gap-2">

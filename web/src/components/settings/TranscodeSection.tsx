@@ -22,7 +22,7 @@ export default function TranscodeSection() {
   }, []);
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">Video Transcoding</h2>
 
       {loading && (

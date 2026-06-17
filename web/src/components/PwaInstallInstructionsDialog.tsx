@@ -178,14 +178,14 @@ export default function PwaInstallInstructionsDialog({
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-labelledby="pwa-install-title"
     >
       <div
-        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-5"
+        className="card shadow-pop max-w-md w-full p-5"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-3">
@@ -219,7 +219,7 @@ export default function PwaInstallInstructionsDialog({
         <div className="mt-5 flex justify-end">
           <button
             onClick={onClose}
-            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
+            className="btn btn-primary btn-md"
           >
             Got it
           </button>

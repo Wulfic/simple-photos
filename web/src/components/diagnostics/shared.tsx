@@ -10,7 +10,7 @@ export function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
+    <section className="card p-6">
       <h2 className="text-base font-semibold text-gray-900 dark:text-white mb-4">
         {title}
       </h2>

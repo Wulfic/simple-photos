@@ -11,7 +11,7 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
   if (items.length === 0) return null;
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+    <div className="card overflow-hidden">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 dark:bg-gray-900 border-b dark:border-gray-700">
           <tr>
@@ -62,8 +62,8 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
                   </span>
                 )}
                 {item.status === "uploading" && (
-                  <span className="text-blue-600 text-xs flex items-center gap-1">
-                    <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-accent-600 text-xs flex items-center gap-1">
+                    <div className="w-3 h-3 border-2 border-accent-600 border-t-transparent rounded-full animate-spin" />
                     Importing
                   </span>
                 )}

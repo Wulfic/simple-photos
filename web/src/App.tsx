@@ -63,7 +63,7 @@ function ProtectedLayout() {
   if (!setupChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -80,7 +80,7 @@ function ProtectedLayout() {
           </p>
           <button
             onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="btn btn-primary btn-md"
           >
             Retry
           </button>
@@ -131,7 +131,7 @@ function LoginGuard({ children }: { children: React.ReactNode }) {
   if (!setupChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -173,7 +173,7 @@ function RootRedirect() {
   if (!target) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
