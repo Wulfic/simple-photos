@@ -52,6 +52,9 @@ interface ViewerEditPanelProps {
   onClear: () => void;
   /** Cancel exits edit mode without saving */
   onCancel: () => void;
+  /** Ref to the panel root so the Viewer can measure its height and keep the
+   *  media area clear of the panel (the panel is an absolute bottom overlay). */
+  rootRef?: React.Ref<HTMLDivElement>;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -86,6 +89,7 @@ export default function ViewerEditPanel({
   onSaveCopy,
   onClear,
   onCancel,
+  rootRef,
 }: ViewerEditPanelProps) {
   // Determine which tabs are available for this media type
   const isPhoto = mediaType === "photo";
@@ -159,7 +163,7 @@ export default function ViewerEditPanel({
   }, [isAudio, editTab, setEditTab]);
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 py-3 space-y-3">
+    <div ref={rootRef} className="absolute bottom-0 left-0 right-0 z-30 bg-black/90 border-t border-white/10 px-4 py-3 space-y-3">
       {/* Tab switcher */}
       <div className="flex items-center justify-center gap-2">
         {showCrop && (
@@ -283,7 +287,7 @@ export default function ViewerEditPanel({
             <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-2 rounded-full bg-white/10" />
             {/* Selected range highlight */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 h-2 rounded-full bg-blue-500/60"
+              className="absolute top-1/2 -translate-y-1/2 h-2 rounded-full bg-accent-500/60"
               style={{
                 left: `${(trimStart / duration) * 100}%`,
                 right: `${100 - (trimEnd / duration) * 100}%`,
@@ -291,12 +295,12 @@ export default function ViewerEditPanel({
             />
             {/* Start thumb */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-blue-500 shadow-lg"
+              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-accent-500 shadow-lg"
               style={{ left: `calc(${(trimStart / duration) * 100}% - 8px)` }}
             />
             {/* End thumb */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-blue-500 shadow-lg"
+              className="absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white border-2 border-accent-500 shadow-lg"
               style={{ left: `calc(${(trimEnd / duration) * 100}% - 8px)` }}
             />
           </div>
@@ -324,13 +328,13 @@ export default function ViewerEditPanel({
       <div className="flex items-center justify-center gap-2">
         <button
           onClick={onSave}
-          className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          className="btn btn-primary btn-md"
         >
           Save
         </button>
         <button
           onClick={onSaveCopy}
-          className="px-5 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+          className="btn btn-success btn-md"
           title="Save as a new copy — keeps the original unchanged"
         >
           Save Copy

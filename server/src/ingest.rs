@@ -213,9 +213,26 @@ pub async fn run_conversion_pass(
         return;
     }
 
+    // Convert fast formats (images, audio) before slow video transcodes so a
+    // mixed import shows steady progress instead of appearing to stall on the
+    // first large video (#10). `sort_by_key` is stable, so discovery order is
+    // preserved within each tier.
+    candidates.sort_by_key(|c| conversion::conversion_priority(c.target.category));
+
+    let (n_img, n_aud, n_vid) = candidates
+        .iter()
+        .fold((0i64, 0i64, 0i64), |(i, a, v), c| match c.target.category {
+            conversion::MediaCategory::Image => (i + 1, a, v),
+            conversion::MediaCategory::Audio => (i, a + 1, v),
+            conversion::MediaCategory::Video => (i, a, v + 1),
+        });
     tracing::info!(
-        "[INGEST] Found {} convertible files, starting conversion",
-        candidates.len()
+        "[INGEST] Found {} convertible files ({} image, {} audio, {} video) — \
+         converting fast formats first",
+        candidates.len(),
+        n_img,
+        n_aud,
+        n_vid
     );
 
     // ── Step 3: Convert all files to .converted/ staging folder ──────────
@@ -230,9 +247,27 @@ pub async fn run_conversion_pass(
         let conv_abs = conv_dir.join(&conv_filename);
         let conv_rel = format!(".converted/{conv_filename}");
 
+        // Log BEFORE the transcode with file + category so that, if a single
+        // file hangs (the Windows "conversion stalls" report, #10), the last
+        // "converting" line names the culprit — the matching "converted in"
+        // line below never appears for a stuck file.
+        let file_start = std::time::Instant::now();
+        tracing::info!(
+            file = %candidate.name,
+            category = ?candidate.target.category,
+            size_bytes = candidate.size,
+            "[INGEST] converting"
+        );
+
         match conversion::convert_file(&candidate.abs_path, &conv_abs, &candidate.target).await {
             Ok(()) => {
                 conversion::progress_tick();
+                tracing::info!(
+                    file = %candidate.name,
+                    category = ?candidate.target.category,
+                    elapsed_ms = file_start.elapsed().as_millis(),
+                    "[INGEST] converted in"
+                );
                 let new_name = {
                     let stem = std::path::Path::new(&candidate.name)
                         .file_stem()
@@ -422,6 +457,8 @@ pub async fn run_conversion_pass(
                 conversion::progress_tick();
                 tracing::warn!(
                     file = %candidate.name,
+                    category = ?candidate.target.category,
+                    elapsed_ms = file_start.elapsed().as_millis(),
                     error = %e,
                     "[INGEST] Conversion failed, skipping file"
                 );

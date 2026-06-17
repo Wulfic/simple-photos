@@ -1,5 +1,5 @@
 /** Wizard step — configure storage path, photo directory, and server URL. */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { api } from "../../api/client";
 import FolderBrowserModal from "../../components/FolderBrowserModal";
 import type { WizardStep, ServerRole } from "./types";
@@ -51,6 +51,10 @@ export default function ServerConfigStep({
 }: ServerConfigStepProps) {
   const [pathInput, setPathInput] = useState(storagePath || "");
   const [saving, setSaving] = useState(false);
+  // Single-flight guard for the folder picker. Without this, rapid clicks on
+  // "Browse…" can spawn multiple OS dialogs stacked on top of each other.
+  const [picking, setPicking] = useState(false);
+  const pickingRef = useRef(false);
 
   // ── SMB / network-share state ───────────────────────────────────────────
   // When the user types an SMB-style address into the storage path field
@@ -97,20 +101,33 @@ export default function ServerConfigStep({
   }
 
   async function handleNativePick() {
+    // Single-flight: ignore re-clicks while a picker is already open. This is
+    // what stops multiple OS dialogs from stacking up if the button is mashed.
+    if (pickingRef.current) return;
+    pickingRef.current = true;
+    setPicking(true);
     setError("");
+    try {
+      await runNativePick();
+    } finally {
+      pickingRef.current = false;
+      setPicking(false);
+    }
+  }
 
-    // 1. Preferred: the browser's native OS folder dialog (File System Access
-    //    API — Chrome/Edge/Opera). This is the *same* native OS chooser the
-    //    "+" upload button opens via <input type="file">, so the storage-root
-    //    picker feels identical to picking files to upload. We try it first
-    //    because, unlike the server-spawned dialog below, it works whether the
-    //    UI is on the server machine or a remote one, and it doesn't silently
-    //    no-op when the server runs as a background service (no desktop
-    //    session). A tiny sentinel file lets the server map the chosen folder
-    //    back to an absolute path.
+  async function runNativePick() {
+    // 1. Preferred: the browser's own native OS folder dialog (File System
+    //    Access API — Chrome/Edge/Brave/Opera). This is the *same* modern OS
+    //    chooser the "+" upload button opens, so the storage-root picker looks
+    //    and feels identical to picking files to upload. Crucially, the browser
+    //    owns the foreground, so this dialog always appears *in front* — unlike
+    //    the server-spawned Win32 dialog (step 2) which loses the foreground
+    //    race and pops up behind the window. A tiny sentinel file lets the
+    //    server map the chosen folder back to an absolute path.
     if (typeof window !== "undefined" && "showDirectoryPicker" in window) {
       let dirHandle: FileSystemDirectoryHandle | null = null;
       const sentinelName = `sp-picker-${crypto.randomUUID()}.tmp`;
+
       try {
         dirHandle = await (
           window as Window &
@@ -120,37 +137,52 @@ export default function ServerConfigStep({
               ) => Promise<FileSystemDirectoryHandle>;
             }
         ).showDirectoryPicker({ mode: "readwrite" });
-
-        // Write a tiny sentinel file so the server can locate the directory.
-        const fileHandle = await dirHandle.getFileHandle(sentinelName, {
-          create: true,
-        });
-        const writable = await fileHandle.createWritable();
-        await writable.write("x");
-        await writable.close();
-
-        // Ask the server to resolve the absolute path.
-        const res = await api.admin.resolveStorageSentinel(sentinelName);
-        setPathInput(res.path);
-        return;
       } catch (err: unknown) {
         const e = err as { name?: string };
         if (e?.name === "AbortError") return; // user pressed Cancel
-        // Any other failure (chosen folder not on the server, write
-        // permissions, server unreachable) → fall through to the
-        // server-spawned dialog, then the in-browser browser.
-      } finally {
-        // Best-effort cleanup — ignore errors (e.g. handle already released).
-        if (dirHandle) {
+        // Picker unavailable/blocked (e.g. insecure context) — fall through to
+        // the server-spawned dialog / in-browser browser below.
+        dirHandle = null;
+      }
+
+      if (dirHandle) {
+        try {
+          // Write a tiny sentinel file so the server can locate the directory.
+          const fileHandle = await dirHandle.getFileHandle(sentinelName, {
+            create: true,
+          });
+          const writable = await fileHandle.createWritable();
+          await writable.write("x");
+          await writable.close();
+
+          // Ask the server to resolve the absolute path.
+          const res = await api.admin.resolveStorageSentinel(sentinelName);
+          setPathInput(res.path);
+          return;
+        } catch {
+          // The user *did* pick a folder, but the server couldn't resolve it to
+          // an absolute path (folder not on the server, not readable, etc.).
+          // Do NOT fall back to the server-spawned native dialog here — on a
+          // desktop install it pops up *behind* the browser with no taskbar
+          // entry, which is exactly the confusing behaviour we're avoiding.
+          // Surface the problem and drop straight to the in-browser browser.
+          setError(
+            "Couldn't resolve the selected folder to a server path. Pick it from the list below, or type the path manually."
+          );
+          handleOpenBrowser();
+          return;
+        } finally {
+          // Best-effort cleanup — ignore errors (e.g. handle already released).
           dirHandle.removeEntry(sentinelName).catch(() => {});
         }
       }
     }
 
-    // 2. Fallback: a native OS folder dialog spawned by the server itself.
-    //    Only works for a desktop/localhost install where the server has a
-    //    visible session; returns "native_picker_unavailable" on a headless
-    //    or service install.
+    // 2. Fallback for browsers without the File System Access API (Firefox/
+    //    Safari): a native OS folder dialog spawned by the server itself. Only
+    //    works for a desktop/localhost install where the server has a visible
+    //    session; returns "native_picker_unavailable" on a headless or service
+    //    install.
     try {
       const res = await api.admin.pickDirectory();
       if (res?.path) {
@@ -163,8 +195,8 @@ export default function ServerConfigStep({
       // "native_picker_unavailable" → fall through to the in-browser browser.
     }
 
-    // 3. Last resort: the in-browser FolderBrowserModal (Firefox/Safari, or
-    //    when neither native dialog is usable).
+    // 3. Last resort: the in-browser FolderBrowserModal (when neither native
+    //    dialog is usable).
     handleOpenBrowser();
   }
 
@@ -254,18 +286,18 @@ export default function ServerConfigStep({
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
+      <h2 className="text-2xl font-bold text-fg mb-1">
         Server Configuration
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-5">
+      <p className="text-fg-muted text-sm mb-5">
         Configure the server port and choose where your photos
         will be stored.
       </p>
 
       {/* ── Server Port ─────────────────────────────────────────── */}
       <div className="mb-6">
-        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
-          <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <h3 className="text-sm font-semibold text-fg-muted mb-2 flex items-center gap-2">
+          <svg className="w-4 h-4 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z" />
           </svg>
           Server Port
@@ -280,14 +312,14 @@ export default function ServerConfigStep({
               setPortInput(e.target.value);
               setPortSaved(false);
             }}
-            className="w-28 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-center"
+            className="input w-28 font-mono text-center"
             placeholder="8080"
           />
           <button
             type="button"
             onClick={handleSavePort}
             disabled={loading || portSaved || portInput === String(serverPort)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+            className="btn btn-primary btn-md"
           >
             {portSaved ? "Saved ✓" : "Save"}
           </button>
@@ -297,19 +329,19 @@ export default function ServerConfigStep({
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+        <p className="text-xs text-fg-muted mt-1">
           Range: 1024–65535. Currently running on port {originalPort}.
         </p>
       </div>
 
       {/* ── Storage Location ────────────────────────────────────── */}
-      <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
-        <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <h3 className="text-sm font-semibold text-fg-muted mb-2 flex items-center gap-2">
+        <svg className="w-4 h-4 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
         </svg>
         Photo Storage Location
       </h3>
-      <p className="text-gray-500 dark:text-gray-400 text-xs mb-3">
+      <p className="text-fg-muted text-xs mb-3">
         Enter the full path to where your photos and videos will be stored.
         This can be a local folder, an external drive, or a network share —
         for SMB, just type{" "}
@@ -339,24 +371,25 @@ export default function ServerConfigStep({
           onChange={(e) => setPathInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") handleSavePath(); }}
           placeholder="/path/to/photo/storage"
-          className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-gray-200"
+          className="input flex-1 font-mono"
         />
         <button
           type="button"
           onClick={handleNativePick}
-          className="px-3 py-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors flex items-center gap-1.5"
+          disabled={picking}
+          className="px-3 py-2 bg-surface-raised text-fg-muted rounded-lg hover:bg-edge dark:hover:bg-white/15 text-sm font-medium transition-colors flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
           title="Open system folder picker"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
           </svg>
-          Browse…
+          {picking ? "Opening…" : "Browse…"}
         </button>
         <button
           type="button"
           onClick={handleSavePath}
           disabled={saving || !pathInput.trim()}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+          className="btn btn-primary btn-md"
         >
           {saving
             ? "Saving…"
@@ -366,7 +399,7 @@ export default function ServerConfigStep({
         </button>
       </div>
 
-      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+      <p className="text-xs text-fg-muted mb-4">
         The directory will be created if it doesn't exist. Must be writable by the server process.
       </p>
 
@@ -384,7 +417,7 @@ export default function ServerConfigStep({
               setError("");
               setStep("admin-2fa");
             }}
-            className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+            className="btn btn-secondary btn-md flex-1"
           >
             ← Back
           </button>
@@ -396,7 +429,7 @@ export default function ServerConfigStep({
             // so every server can opt into Let's Encrypt or a manual cert.
             setStep("ssl");
           }}
-          className={`${serverRole === "primary" && installType === "fresh" ? "flex-[2]" : "w-full"} bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors`}
+          className={`${serverRole === "primary" && installType === "fresh" ? "flex-[2]" : "w-full"} bg-surface-raised text-fg-muted py-2.5 rounded-lg hover:bg-edge dark:hover:bg-white/15 text-sm font-medium transition-colors`}
         >
           Continue →
         </button>
@@ -418,20 +451,20 @@ export default function ServerConfigStep({
           an SMB-style address into the storage path field and hits Set Path. */}
       {smbModalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget && !smbBusy) setSmbModalOpen(false);
           }}
         >
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">
+          <div className="card shadow-pop w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-fg mb-1">
               Connect to network share
             </h3>
-            <p className="font-mono text-xs text-gray-500 dark:text-gray-400 mb-4 break-all">
+            <p className="font-mono text-xs text-fg-muted mb-4 break-all">
               {pathInput.trim()}
             </p>
 
-            <label className="flex items-center gap-2 mb-3 text-sm text-gray-700 dark:text-gray-300">
+            <label className="flex items-center gap-2 mb-3 text-sm text-fg-muted">
               <input
                 type="checkbox"
                 checked={smbAnonymous}
@@ -443,7 +476,7 @@ export default function ServerConfigStep({
 
             <div className={`space-y-3 ${smbAnonymous ? "opacity-50 pointer-events-none" : ""}`}>
               <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                <label className="block text-xs font-medium text-fg-muted mb-1">
                   Username
                 </label>
                 <input
@@ -452,11 +485,11 @@ export default function ServerConfigStep({
                   onChange={(e) => setSmbUser(e.target.value)}
                   autoComplete="off"
                   autoFocus
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                  className="input"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                <label className="block text-xs font-medium text-fg-muted mb-1">
                   Password
                 </label>
                 <input
@@ -467,18 +500,18 @@ export default function ServerConfigStep({
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !smbBusy) handleConnectSmb();
                   }}
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                  className="input"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  Domain <span className="text-gray-400 font-normal">(optional, AD only)</span>
+                <label className="block text-xs font-medium text-fg-muted mb-1">
+                  Domain <span className="text-fg-muted font-normal">(optional, AD only)</span>
                 </label>
                 <input
                   type="text"
                   value={smbDomain}
                   onChange={(e) => setSmbDomain(e.target.value)}
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                  className="input"
                 />
               </div>
             </div>
@@ -495,7 +528,7 @@ export default function ServerConfigStep({
               </div>
             )}
 
-            <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-4 leading-snug">
+            <p className="text-[11px] text-fg-muted mt-4 leading-snug">
               The server stores the password encrypted at rest (AES-GCM keyed off
               the JWT secret) and remounts the share on every restart. Requires{" "}
               <code className="font-mono">cifs-utils</code> on the host.
@@ -506,7 +539,7 @@ export default function ServerConfigStep({
                 type="button"
                 onClick={() => setSmbModalOpen(false)}
                 disabled={smbBusy}
-                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-sm font-medium transition-colors"
+                className="btn btn-secondary btn-md flex-1"
               >
                 Cancel
               </button>
@@ -514,7 +547,7 @@ export default function ServerConfigStep({
                 type="button"
                 onClick={handleTestSmb}
                 disabled={smbBusy}
-                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-sm font-medium transition-colors"
+                className="btn btn-secondary btn-md flex-1"
               >
                 {smbBusy ? "…" : "Test"}
               </button>
@@ -522,7 +555,7 @@ export default function ServerConfigStep({
                 type="button"
                 onClick={handleConnectSmb}
                 disabled={smbBusy}
-                className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+                className="btn btn-primary btn-md flex-1"
               >
                 {smbBusy ? "Mounting…" : "Connect"}
               </button>

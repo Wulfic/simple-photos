@@ -270,7 +270,7 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
             {!editing && photoId && (
               <button
                 onClick={startEdit}
-                className="text-blue-400 hover:text-blue-300 text-xs transition-colors"
+                className="text-accent-400 hover:text-accent-300 text-xs transition-colors"
               >
                 Edit
               </button>
@@ -350,7 +350,7 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
                   <button
                     onClick={saveEdit}
                     disabled={saving}
-                    className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-xs"
+                    className="btn btn-primary btn-sm flex-1"
                   >
                     {saving ? "Saving..." : "Save"}
                   </button>
@@ -443,7 +443,7 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
                       href={`https://www.google.com/maps?q=${photoInfo.latitude},${photoInfo.longitude}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 text-right break-all"
+                      className="text-accent-400 hover:text-accent-300 text-right break-all"
                     >
                       {photoInfo.latitude.toFixed(5)}, {photoInfo.longitude.toFixed(5)} ↗
                     </a>

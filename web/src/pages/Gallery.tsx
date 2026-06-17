@@ -9,7 +9,7 @@
  * displays it as a read-only grid.
  */
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
 import AppHeader from "../components/AppHeader";
@@ -17,17 +17,19 @@ import AppIcon from "../components/AppIcon";
 import AddToAlbumModal from "../components/AddToAlbumModal";
 import { ThumbnailTile, type ThumbnailSource, applyDimensionCorrection, correctDimensionsFromThumbnail } from "../gallery";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
+import { GallerySkeleton } from "../components/skeletons";
 import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
 import { useGalleryData } from "../hooks/useGalleryData";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
 import { useBackupStore } from "../store/backup";
 import { useAuthStore } from "../store/auth";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import { toast } from "../store/toast";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function Gallery() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
 
   // ── Core data hook ──────────────────────────────────────────────────────
   const {
@@ -35,6 +37,15 @@ export default function Gallery() {
     secureBlobIds,
     loadEncryptedPhotos,
   } = useGalleryData();
+
+  // Surface load/upload errors as a dismissible toast popup instead of an
+  // under-navbar red bar (#8). Clearing the source state avoids re-firing.
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+      setError("");
+    }
+  }, [error, setError]);
 
   // ── Backup view mode ────────────────────────────────────────────────────
   const { viewMode, activeBackupServerId, backupServers } = useBackupStore();
@@ -276,24 +287,24 @@ export default function Gallery() {
   const hasContent = collapsedPhotos && collapsedPhotos.length > 0;
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       <main className={`p-4 ${selectionMode && !isBackupView && !isBackupServer ? "pt-16" : ""}`}>
         {/* ── Selection mode bar (fixed just under the AppHeader, always visible) ── */}
         {selectionMode && !isBackupView && !isBackupServer && (
-          <div className="fixed top-14 left-0 right-0 z-40 flex items-center justify-between bg-gray-200/95 dark:bg-gray-800/95 backdrop-blur px-4 py-2 shadow-sm">
+          <div className="fixed top-14 left-0 right-0 z-40 flex items-center justify-between bg-surface-raised/95 dark:bg-surface/95 backdrop-blur px-4 py-2 shadow-sm">
             <div className="flex items-center gap-3">
-              <button onClick={clearSelection} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white transition-colors" aria-label="Cancel selection">
+              <button onClick={clearSelection} className="text-fg-muted hover:text-fg dark:hover:text-white transition-colors" aria-label="Cancel selection">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{selectedIds.size} selected</span>
+              <span className="text-sm font-medium text-fg-muted">{selectedIds.size} selected</span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowAddToAlbum(true)}
                 disabled={selectedIds.size === 0}
-                className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
+                className="btn btn-primary btn-md inline-flex items-center"
                 title="Add to album"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -304,7 +315,7 @@ export default function Gallery() {
               <button
                 onClick={deleteSelected}
                 disabled={selectedIds.size === 0}
-                className="inline-flex items-center gap-1.5 bg-red-600 text-white px-3 py-1.5 rounded-md hover:bg-red-500 text-sm font-medium transition-colors disabled:opacity-50"
+                className="btn btn-danger btn-md inline-flex items-center"
                 title="Delete"
               >
                 <AppIcon name="trashcan" size="w-4 h-4" themed={false} />
@@ -326,23 +337,28 @@ export default function Gallery() {
           />
         )}
 
-        {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
+        {/* Errors surface via the global toast host (#8) */}
 
-        {/* Floating upload button — hidden when viewing a backup server or when this IS a backup server */}
+        {/* Floating upload button — hidden when viewing a backup server or when this IS a backup server.
+            z-[60] keeps the FAB + its upward-opening menu above the conversion/
+            import banner (z-50), which sits just above it and otherwise overlaps
+            and intercepts taps while convert/import is running (#2). The file
+            inputs gate only on local `uploading`, never on server-side
+            conversion, so manual upload stays available during background work. */}
         {!isBackupView && !isBackupServer && (
-        <div className="fixed bottom-6 right-6 z-50">
+        <div className="fixed bottom-6 right-6 z-[60]">
           {/* Upload menu popover */}
           {showUploadMenu && (
             <>
               {/* Backdrop to close menu on outside click */}
               <div className="fixed inset-0 z-40" onClick={() => setShowUploadMenu(false)} />
-              <div className="absolute bottom-16 right-0 z-50 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 py-1 min-w-[160px]">
-                <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors">
-                  <svg className="w-5 h-5 text-gray-600 dark:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <div className="card shadow-pop absolute bottom-16 right-0 z-50 py-1 min-w-[160px]">
+                <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-sunken dark:hover:bg-white/10 cursor-pointer transition-colors">
+                  <svg className="w-5 h-5 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14" />
                     <rect x="3" y="3" width="18" height="18" rx="2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Select files</span>
+                  <span className="text-sm font-medium text-fg-muted">Select files</span>
                   <input
                     ref={inputRef}
                     type="file"
@@ -353,11 +369,11 @@ export default function Gallery() {
                     disabled={uploading}
                   />
                 </label>
-                <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors">
-                  <svg className="w-5 h-5 text-gray-600 dark:text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <label className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-sunken dark:hover:bg-white/10 cursor-pointer transition-colors">
+                  <svg className="w-5 h-5 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                   </svg>
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-200">Select folder</span>
+                  <span className="text-sm font-medium text-fg-muted">Select folder</span>
                   <input
                     ref={folderInputRef}
                     type="file"
@@ -372,12 +388,11 @@ export default function Gallery() {
           )}
           {/* FAB button */}
           <button
-            className="w-14 h-14 flex items-center justify-center rounded-2xl shadow-lg cursor-pointer select-none transition-colors"
-            style={{ backgroundColor: "#A8C7FA" }}
+            className="w-14 h-14 flex items-center justify-center rounded-2xl bg-accent-600 text-white ring-1 ring-inset ring-white/15 shadow-lg shadow-accent-900/25 hover:bg-accent-500 hover:shadow-xl active:scale-95 cursor-pointer select-none transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas"
             title="Upload photos"
             onClick={() => setShowUploadMenu((v) => !v)}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="#1C1B1F" strokeWidth={2.5}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
             </svg>
           </button>
@@ -388,18 +403,18 @@ export default function Gallery() {
         {isBackupView ? (
           <div>
             {/* Banner showing which backup server we're browsing */}
-            <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-2 mb-4">
-              <svg className="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <div className="flex items-center gap-2 bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 rounded-lg px-4 py-2 mb-4">
+              <svg className="w-4 h-4 text-accent-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
               </svg>
-              <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+              <span className="text-sm font-medium text-accent-700 dark:text-accent-300">
                 Viewing backup: <span className="font-semibold">{activeBackupServer?.name ?? "Unknown server"}</span>
               </span>
-              <span className="ml-auto text-xs text-blue-500 dark:text-blue-400">Read-only</span>
+              <span className="ml-auto text-xs text-accent-500 dark:text-accent-400">Read-only</span>
             </div>
 
             {backupLoading && (
-              <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading backup photos…</p>
+              <p className="text-fg-muted text-center py-12">Loading backup photos…</p>
             )}
 
             {backupError && (
@@ -407,9 +422,9 @@ export default function Gallery() {
             )}
 
             {!backupLoading && !backupError && backupPhotos?.length === 0 && (
-              <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-                <p className="text-gray-500 dark:text-gray-400 mb-2">No media on backup server</p>
-                <p className="text-gray-400 text-sm">
+              <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+                <p className="text-fg-muted mb-2">No media on backup server</p>
+                <p className="text-fg-muted text-sm">
                   Photos will appear here once the primary server has synced them.
                 </p>
               </div>
@@ -419,11 +434,11 @@ export default function Gallery() {
             {backupDayGroups.map((group) => (
               <div key={group.key}>
                 <div className="flex items-center gap-2 py-2 mt-2 first:mt-0">
-                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  <h3 className="text-sm font-semibold text-fg-muted">
                     {group.label}
                   </h3>
-                  <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
-                  <span className="text-xs text-gray-400 dark:text-gray-500">
+                  <div className="flex-1 h-px bg-edge" />
+                  <span className="text-xs text-fg-muted">
                     {group.photos.length}
                   </span>
                 </div>
@@ -437,7 +452,7 @@ export default function Gallery() {
                     const globalIdx = backupPhotos!.indexOf(photo);
                     return (
                       <div
-                        className="relative w-full h-full bg-gray-200 dark:bg-gray-700 overflow-hidden cursor-pointer"
+                        className="relative w-full h-full bg-edge overflow-hidden cursor-pointer"
                         title={photo.filename}
                         onClick={() => setBackupLightboxIdx(globalIdx)}
                       >
@@ -523,14 +538,12 @@ export default function Gallery() {
           onDragOver={(e) => e.preventDefault()}
           onDrop={handleDrop}
         >
-        {loading && !hasContent && (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
-        )}
+        {loading && !hasContent && <GallerySkeleton />}
 
         {!loading && !hasContent && (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400 mb-2">No media yet</p>
-            <p className="text-gray-400 text-sm">
+          <div className="text-center py-12 border-2 border-dashed border-edge-strong rounded-lg">
+            <p className="text-fg-muted mb-2">No media yet</p>
+            <p className="text-fg-muted text-sm">
               Place photos in the storage directory or upload them to get started.
             </p>
           </div>
@@ -546,11 +559,11 @@ export default function Gallery() {
           return (
             <div key={group.key}>
               <div className="flex items-center gap-2 py-2 mt-2 first:mt-0">
-                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                <h3 className="text-sm font-semibold text-fg-muted">
                   {group.label}
                 </h3>
-                <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
-                <span className="text-xs text-gray-400 dark:text-gray-500">
+                <div className="flex-1 h-px bg-edge" />
+                <span className="text-xs text-fg-muted">
                   {group.photos.length}
                 </span>
                 {/* Select-all-for-day circle. Tapping toggles selection for every
@@ -567,7 +580,7 @@ export default function Gallery() {
                       className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
                         allSelected
                           ? "bg-green-500 border-green-500 shadow"
-                          : "bg-white/40 dark:bg-gray-700/60 border-gray-400 dark:border-gray-500 hover:bg-white dark:hover:bg-gray-600"
+                          : "bg-white/40 dark:bg-gray-700/60 border-edge-strong hover:bg-white dark:hover:bg-gray-600"
                       }`}
                     >
                       {allSelected && (

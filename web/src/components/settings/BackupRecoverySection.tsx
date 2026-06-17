@@ -10,6 +10,7 @@ import { useBackupStore } from "../../store/backup";
 import { useProcessingStore } from "../../store/processing";
 import AppIcon from "../AppIcon";
 import { getErrorMessage } from "../../utils/formatters";
+import { Select } from "../ui";
 
 interface BackupRecoverySectionProps {
   isBackupMode: boolean;
@@ -119,9 +120,9 @@ export default function BackupRecoverySection({
   // ── Backup-mode view: show paired primary server ───────────────────────
   if (isBackupMode) {
     return (
-      <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+      <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Primary Server</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+        <p className="text-sm text-fg-muted mb-4">
           This server is running in <strong>backup mode</strong>. All photos, accounts, and settings are mirrored from the primary server.
         </p>
         <div className="flex items-center gap-3 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
@@ -139,10 +140,10 @@ export default function BackupRecoverySection({
             </p>
           </div>
         </div>
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">
+        <p className="text-xs text-fg-muted mt-3">
           Changes to photos, users, passwords, and 2FA should be made on the primary server. They will be synced automatically.
         </p>
-        <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="mt-4 pt-4 border-t border-edge">
           <button
             onClick={async () => {
               setForceSyncing(true);
@@ -158,12 +159,12 @@ export default function BackupRecoverySection({
               }
             }}
             disabled={forceSyncing}
-            className="inline-flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-50"
+            className="btn btn-primary btn-md inline-flex items-center"
           >
             <AppIcon name="reload" size="w-4 h-4" className={forceSyncing ? "animate-spin" : ""} />
             {forceSyncing ? "Requesting Sync…" : "Force Sync from Primary"}
           </button>
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+          <p className="text-xs text-fg-muted mt-2">
             Request the primary server to immediately push all new photos and data to this backup.
           </p>
         </div>
@@ -173,30 +174,31 @@ export default function BackupRecoverySection({
 
   // ── Primary-mode view: recovery + add/scan ─────────────────────────────
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">Backup Recovery</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-fg-muted mb-4">
         Recover photos from a configured backup server. Any photos on the backup
         that don't already exist on this server (by filename) will be downloaded and imported.
       </p>
 
       {!backupLoaded ? (
-        <div className="text-gray-400 text-sm">Loading backup servers…</div>
+        <div className="text-fg-muted text-sm">Loading backup servers…</div>
       ) : backupServers.length === 0 ? (
         <div className="space-y-3">
-          <div className="text-center py-4 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-400 text-sm">No backup servers configured.</p>
+          <div className="text-center py-4 border-2 border-dashed border-edge rounded-lg">
+            <p className="text-fg-muted text-sm">No backup servers configured.</p>
           </div>
 
         </div>
       ) : (
         <>
           <div className="flex items-center gap-3 flex-wrap">
-            <select
+            <Select
+              wrapperClassName="min-w-[200px]"
+              fullWidth
               value={selectedRecoveryServerId}
               onChange={(e) => setSelectedRecoveryServerId(e.target.value)}
               disabled={recovering}
-              className="border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 min-w-[200px]"
               data-testid="recovery-server-select"
             >
               <option value="">Select a backup server…</option>
@@ -205,7 +207,7 @@ export default function BackupRecoverySection({
                   {s.name} ({s.address})
                 </option>
               ))}
-            </select>
+            </Select>
             <button
               onClick={() => {
                 setShowRecoverConfirm(true);
@@ -213,7 +215,7 @@ export default function BackupRecoverySection({
                 setSuccess("");
               }}
               disabled={recovering || !selectedRecoveryServerId}
-              className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+              className="btn btn-danger btn-md"
               data-testid="recovery-button"
             >
               {recovering ? (
@@ -229,19 +231,19 @@ export default function BackupRecoverySection({
 
           {/* Confirmation modal */}
           {showRecoverConfirm && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" data-testid="recovery-confirm-modal">
-              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" data-testid="recovery-confirm-modal">
+              <div className="card shadow-pop max-w-md w-full mx-4 p-6">
                 <h3 className="text-lg font-semibold text-red-600 dark:text-red-400 mb-3">
                   ⚠️ Confirm Recovery
                 </h3>
-                <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
+                <p className="text-sm text-fg-muted mb-2">
                   This will recover data from backup server{" "}
                   <strong>"{backupServers.find((s) => s.id === selectedRecoveryServerId)?.name}"</strong>.
                 </p>
                 <p className="text-sm text-red-600 dark:text-red-400 font-medium mb-3">
                   This action will overwrite your current data and cannot be undone.
                 </p>
-                <ul className="text-sm text-gray-600 dark:text-gray-400 list-disc list-inside mb-4 space-y-0.5">
+                <ul className="text-sm text-fg-muted list-disc list-inside mb-4 space-y-0.5">
                   <li>All photos from the backup will be imported.</li>
                   <li>This process runs in the background and may take a while.</li>
                   <li>The backup server must be reachable with a valid API key.</li>
@@ -249,7 +251,7 @@ export default function BackupRecoverySection({
                 <div className="flex gap-2 justify-end">
                   <button
                     onClick={() => setShowRecoverConfirm(false)}
-                    className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                    className="btn btn-secondary btn-md"
                     data-testid="recovery-cancel-button"
                   >
                     No, Cancel
@@ -257,7 +259,7 @@ export default function BackupRecoverySection({
                   <button
                     onClick={handleRecover}
                     disabled={recovering}
-                    className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+                    className="btn btn-danger btn-md"
                     data-testid="recovery-confirm-button"
                   >
                     {recovering ? "Starting…" : "Yes, Recover"}
@@ -270,14 +272,14 @@ export default function BackupRecoverySection({
       )}
 
       {/* ── Add / Scan ─────────────────────────────────────────── */}
-      <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+      <div className="mt-4 pt-4 border-t border-edge">
         {!showAddBackupServer ? (
           <div className="space-y-4">
             <div className="flex items-center gap-4 flex-wrap">
               <button
                 onClick={scanForBackupServers}
                 disabled={discovering}
-                className="text-sm text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50"
+                className="text-sm text-accent-600 dark:text-accent-400 hover:underline disabled:opacity-50"
               >
                 {discovering ? "Scanning…" : "Scan network for backup servers"}
               </button>
@@ -288,7 +290,7 @@ export default function BackupRecoverySection({
                   setBackupServerApiKey("");
                   setShowAddBackupServer(true);
                 }}
-                className="text-sm text-gray-600 dark:text-gray-400 hover:underline"
+                className="text-sm text-fg-muted hover:underline"
               >
                 + Add backup server manually
               </button>
@@ -297,19 +299,19 @@ export default function BackupRecoverySection({
             {/* Discovered servers — shown as suggestions, user adds manually */}
             {discoveredServers.length > 0 && (
               <div className="space-y-2 mt-4">
-                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                <p className="text-xs font-medium text-fg-muted uppercase tracking-wide">
                   Found on local network
                 </p>
                 {discoveredServers.map((srv) => (
                   <div
                     key={srv.address}
-                    className="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600"
+                    className="flex items-center justify-between gap-3 p-3 bg-surface-raised/50 rounded-lg border border-edge"
                   >
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
+                      <p className="text-sm font-medium text-fg truncate">
                         {srv.name || "Simple Photos"}
                       </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      <p className="text-xs text-fg-muted truncate">
                         {srv.address} &nbsp;·&nbsp; v{srv.version}
                       </p>
                     </div>
@@ -320,7 +322,7 @@ export default function BackupRecoverySection({
                         setBackupServerApiKey(srv.api_key ?? "");
                         setShowAddBackupServer(true);
                       }}
-                      className="flex-shrink-0 text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+                      className="btn btn-primary btn-sm flex-shrink-0"
                     >
                       Add
                     </button>
@@ -331,55 +333,55 @@ export default function BackupRecoverySection({
           </div>
         ) : (
           <form onSubmit={handleAddBackupServer} className="space-y-3">
-            <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Add Backup Server</h4>
+            <h4 className="text-sm font-semibold text-fg-muted">Add Backup Server</h4>
             <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Name</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Name</label>
               <input
                 type="text"
                 value={backupServerName}
                 onChange={(e) => setBackupServerName(e.target.value)}
                 placeholder="My Backup Server"
                 maxLength={200}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                className="input"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Server Address</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Server Address</label>
               <input
                 type="text"
                 value={backupServerAddress}
                 onChange={(e) => setBackupServerAddress(e.target.value)}
                 placeholder="https://backup.example.com:8443"
                 maxLength={500}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                className="input"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">API Key</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">API Key</label>
               <input
                 type="password"
                 value={backupServerApiKey}
                 onChange={(e) => setBackupServerApiKey(e.target.value)}
                 placeholder="Backup server API key"
                 maxLength={256}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                className="input"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Backup Frequency (hours)</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Backup Frequency (hours)</label>
               <input
                 type="number"
                 min={1}
                 value={backupServerFrequency}
                 onChange={(e) => setBackupServerFrequency(e.target.value)}
-                className="w-28 border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600"
+                className="input w-28"
               />
             </div>
             <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={addingBackupServer}
-                className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+                className="btn btn-primary btn-md"
               >
                 {addingBackupServer ? (
                   <span className="flex items-center gap-2">
@@ -393,7 +395,7 @@ export default function BackupRecoverySection({
               <button
                 type="button"
                 onClick={() => setShowAddBackupServer(false)}
-                className="bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200 px-4 py-2 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 text-sm"
+                className="btn btn-secondary btn-md"
               >
                 Cancel
               </button>

@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../../api/client";
 import { getErrorMessage } from "../../utils/formatters";
+import { Button, Toggle, StatTile } from "../ui";
 import type { GeoStatus } from "../../api/geo";
 
 interface GeolocationSectionProps {
@@ -124,9 +125,9 @@ export default function GeolocationSection({
   if (!loaded) return null;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">Geolocation</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-fg-muted mb-4">
         Automatically resolve GPS coordinates into city, state, and country
         names. Browse photos by location or timeline.
       </p>
@@ -134,65 +135,43 @@ export default function GeolocationSection({
       {/* Enable toggle */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-medium text-fg-muted">
             Enable Geolocation
           </h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             {status?.enabled
               ? "Location resolution is active."
               : "Geolocation processing is disabled."}
           </p>
         </div>
-        <button
+        <Toggle
+          label="Enable Geolocation"
+          checked={status?.enabled ?? false}
           onClick={handleToggle}
           disabled={toggling}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-            status?.enabled
-              ? "bg-blue-600"
-              : "bg-gray-300 dark:bg-gray-600"
-          }`}
-          role="switch"
-          aria-checked={status?.enabled ?? false}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              status?.enabled ? "translate-x-6" : "translate-x-1"
-            }`}
-          />
-        </button>
+        />
       </div>
 
       {/* Scrub on upload toggle */}
       <div className="flex items-center justify-between mb-2">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-medium text-fg-muted">
             Remove GPS from New Uploads
           </h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             {status?.scrub_on_upload
               ? "New uploads will have GPS coordinates removed before saving."
               : "New uploads will keep their original GPS coordinates."}
           </p>
         </div>
-        <button
+        <Toggle
+          label="Remove GPS from New Uploads"
+          checked={status?.scrub_on_upload ?? false}
           onClick={handleScrubToggle}
           disabled={togglingScrub}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-            status?.scrub_on_upload
-              ? "bg-blue-600"
-              : "bg-gray-300 dark:bg-gray-600"
-          }`}
-          role="switch"
-          aria-checked={status?.scrub_on_upload ?? false}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              status?.scrub_on_upload ? "translate-x-6" : "translate-x-1"
-            }`}
-          />
-        </button>
+        />
       </div>
-      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4 ml-1">
+      <p className="text-xs text-fg-muted mb-4 ml-1">
         This only affects future uploads — photos already in your library are not changed.
         Use &quot;Scrub All&quot; below to remove GPS from existing photos.
       </p>
@@ -200,31 +179,22 @@ export default function GeolocationSection({
       {/* Precise (street-level) addresses — opt-in, contacts a third party */}
       <div className="flex items-center justify-between mb-2">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-medium text-fg-muted">
             Precise Street Addresses
           </h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             {status?.precise_enabled
               ? "Resolving house-number/street addresses (e.g. memories like “86 Nelson Blvd”)."
               : "City-level only. Turn on to resolve full street addresses."}
           </p>
         </div>
-        <button
+        <Toggle
+          label="Precise Street Addresses"
+          checked={status?.precise_enabled ?? false}
           onClick={handlePreciseToggle}
           disabled={togglingPrecise || !status?.enabled}
           title={!status?.enabled ? "Enable Geolocation first" : undefined}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-40 ${
-            status?.precise_enabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
-          }`}
-          role="switch"
-          aria-checked={status?.precise_enabled ?? false}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              status?.precise_enabled ? "translate-x-6" : "translate-x-1"
-            }`}
-          />
-        </button>
+        />
       </div>
       <p className="text-xs text-amber-600 dark:text-amber-500 mb-4 ml-1">
         ⚠ Privacy: when on, your photos&apos; GPS coordinates are sent to a free
@@ -235,42 +205,18 @@ export default function GeolocationSection({
       {/* Status info */}
       {status && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
-              {status.photos_with_location}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">With Location</p>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-amber-600 dark:text-amber-400">
-              {status.photos_without_location}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">No Location</p>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-green-600 dark:text-green-400">
-              {status.unique_countries}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Countries</p>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-purple-600 dark:text-purple-400">
-              {status.unique_cities}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Cities</p>
-          </div>
+          <StatTile tone="accent" value={status.photos_with_location} label="With Location" />
+          <StatTile tone="amber" value={status.photos_without_location} label="No Location" />
+          <StatTile tone="green" value={status.unique_countries} label="Countries" />
+          <StatTile tone="purple" value={status.unique_cities} label="Cities" />
         </div>
       )}
 
       {/* Scrub all button */}
-      <button
-        onClick={handleScrubAll}
-        disabled={scrubbing}
-        className="px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 disabled:opacity-50"
-      >
+      <Button variant="danger" onClick={handleScrubAll} disabled={scrubbing}>
         {scrubbing ? "Scrubbing..." : "Scrub All Location Data"}
-      </button>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+      </Button>
+      <p className="text-xs text-fg-muted mt-2">
         Permanently remove all GPS coordinates and resolved location data from your photos.
       </p>
     </section>

@@ -3,13 +3,19 @@
  * (local IndexedDB) and server, with unified results.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
+import AddToAlbumModal from "../components/AddToAlbumModal";
+import { usePhotoSelection } from "../hooks/usePhotoSelection";
+import { trashPhotos } from "../utils/trashPhotos";
+import { getErrorMessage } from "../utils/formatters";
+import { toast } from "../store/toast";
+import { GallerySkeleton } from "../components/skeletons";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -68,13 +74,18 @@ function withinEditDistance1(a: string, b: string): boolean {
 // ── Search Page ──────────────────────────────────────────────────────────────
 
 export default function Search() {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [searchError, setSearchError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── Multi-select (parity with the main gallery; #2) ─────────────────────
+  const { selectionMode, selectedIds, enter, toggle, setAll, clear: clearSelection } = usePhotoSelection();
+  const [showAddToAlbum, setShowAddToAlbum] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Auto-focus the search input
   useEffect(() => {
@@ -259,8 +270,29 @@ export default function Search() {
     };
   }, [results]);
 
+  const allSelected = results.length > 0 && selectedIds.size === results.length;
+
+  async function deleteSelected() {
+    if (selectedIds.size === 0 || deleting) return;
+    const ids = [...selectedIds];
+    if (!confirm(`Move ${ids.length} item${ids.length !== 1 ? "s" : ""} to trash? You can restore within 30 days.`)) return;
+    setDeleting(true);
+    try {
+      await trashPhotos(ids);
+      toast.success(`Moved ${ids.length} item${ids.length !== 1 ? "s" : ""} to trash`);
+      clearSelection();
+      // Re-run the search so results (and their thumbnail object URLs) rebuild
+      // cleanly from the now-pruned local DB instead of leaving stale tiles.
+      await doSearch(query);
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+    <div className="min-h-screen bg-canvas text-fg">
       <AppHeader />
 
       <main className="max-w-screen-2xl mx-auto px-4 py-6">
@@ -276,12 +308,12 @@ export default function Search() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search tags, filenames, dates, media types…"
             maxLength={500}
-            className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
+            className="w-full pl-10 pr-4 py-3 rounded-xl border border-edge-strong bg-surface text-fg placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent text-base"
           />
           {query && (
             <button
               onClick={() => { setQuery(""); setResults([]); setSearched(false); inputRef.current?.focus(); }}
-              className="absolute inset-y-0 right-3 flex items-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              className="absolute inset-y-0 right-3 flex items-center text-fg-muted hover:text-fg"
             >
               ✕
             </button>
@@ -296,17 +328,13 @@ export default function Search() {
         )}
 
         {/* Loading */}
-        {loading && (
-          <div className="flex justify-center py-12">
-            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
+        {loading && <GallerySkeleton />}
 
         {/* No results */}
         {searched && !loading && results.length === 0 && (
           <div className="text-center py-12">
-            <p className="text-gray-500 dark:text-gray-400">No results found for "{query}"</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
+            <p className="text-fg-muted">No results found for "{query}"</p>
+            <p className="text-sm text-fg-muted mt-1">
               Try a tag, filename, date (e.g. "2024"), or type (e.g. "video")
             </p>
           </div>
@@ -315,9 +343,52 @@ export default function Search() {
         {/* Results grid */}
         {results.length > 0 && (
           <>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-              {results.length} result{results.length !== 1 ? "s" : ""}
-            </p>
+            {selectionMode ? (
+              <div className="flex items-center justify-between gap-3 mb-3 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={clearSelection}
+                    className="text-fg-muted hover:text-fg"
+                    aria-label="Cancel selection"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                  <span className="text-sm font-medium">{selectedIds.size} selected</span>
+                  <button
+                    onClick={() => (allSelected ? clearSelection() : setAll(results.map((r) => r.id)))}
+                    className="text-accent-600 dark:text-accent-400 text-sm hover:underline"
+                  >
+                    {allSelected ? "Deselect All" : "Select All"}
+                  </button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowAddToAlbum(true)}
+                    disabled={selectedIds.size === 0}
+                    className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+                    title="Add to album"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                    Album
+                  </button>
+                  <button
+                    onClick={deleteSelected}
+                    disabled={selectedIds.size === 0 || deleting}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700 shadow-sm disabled:opacity-50"
+                  >
+                    {deleting ? "Deleting…" : `Delete (${selectedIds.size})`}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-fg-muted mb-3">
+                {results.length} result{results.length !== 1 ? "s" : ""}
+              </p>
+            )}
             <JustifiedGrid
               items={results}
               getAspectRatio={(r) => (r.width && r.height) ? r.width / r.height : 1}
@@ -325,26 +396,47 @@ export default function Search() {
               renderItem={(result, idx) => (
                 <SearchResultTile
                   result={result}
-                  onClick={() =>
-                    navigate(`/photo/${result.id}`, {
-                      state: {
-                        photoIds: results.map((r) => r.id),
-                        currentIndex: idx,
-                      },
-                    })
-                  }
+                  selectionMode={selectionMode}
+                  isSelected={selectedIds.has(result.id)}
+                  onToggleSelect={() => (selectionMode ? toggle(result.id) : enter(result.id))}
+                  onClick={() => {
+                    if (selectionMode) {
+                      toggle(result.id);
+                    } else {
+                      navigate(`/photo/${result.id}`, {
+                        state: {
+                          photoIds: results.map((r) => r.id),
+                          currentIndex: idx,
+                        },
+                      });
+                    }
+                  }}
+                  onLongPress={() => enter(result.id)}
                 />
               )}
             />
           </>
         )}
 
+        {/* Add-to-album picker for the current selection */}
+        {showAddToAlbum && selectedIds.size > 0 && (
+          <AddToAlbumModal
+            blobIds={[...selectedIds]}
+            onClose={() => setShowAddToAlbum(false)}
+            onAdded={(_album, count) => {
+              setShowAddToAlbum(false);
+              toast.success(`Added ${count} item${count !== 1 ? "s" : ""} to album`);
+              clearSelection();
+            }}
+          />
+        )}
+
         {/* Empty state */}
         {!query && (
           <div className="text-center py-16">
             <AppIcon name="magnify-glass" size="w-12 h-12" className="mx-auto mb-4 opacity-30" />
-            <p className="text-gray-500 dark:text-gray-400 mb-1">Search your library</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500">
+            <p className="text-fg-muted mb-1">Search your library</p>
+            <p className="text-sm text-fg-muted">
               Search by tags, filenames, dates, or media types
             </p>
           </div>
@@ -359,14 +451,46 @@ export default function Search() {
 function SearchResultTile({
   result,
   onClick,
+  selectionMode,
+  isSelected,
+  onToggleSelect,
+  onLongPress,
 }: {
   result: SearchResult;
   onClick: () => void;
+  selectionMode: boolean;
+  isSelected: boolean;
+  onToggleSelect: () => void;
+  onLongPress: () => void;
 }) {
   const isGif = result.media_type === "gif";
   const [visible, setVisible] = useState(false);
   const [thumbSrc, setThumbSrc] = useState<string | null>(null);
   const tileRef = useRef<HTMLDivElement>(null);
+  const longPressRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didLongPress = useRef(false);
+
+  function handlePointerDown() {
+    didLongPress.current = false;
+    longPressRef.current = setTimeout(() => {
+      didLongPress.current = true;
+      onLongPress();
+      longPressRef.current = null;
+    }, 500);
+  }
+  function handlePointerUp() {
+    if (longPressRef.current) {
+      clearTimeout(longPressRef.current);
+      longPressRef.current = null;
+    }
+    if (!didLongPress.current) onClick();
+  }
+  function handlePointerLeave() {
+    if (longPressRef.current) {
+      clearTimeout(longPressRef.current);
+      longPressRef.current = null;
+    }
+  }
 
   // One-shot viewport observer for all tiles — thumbnail IS the animated GIF for GIFs.
   useEffect(() => {
@@ -427,9 +551,39 @@ function SearchResultTile({
   return (
     <div
       ref={tileRef}
-      className="relative w-full h-full bg-gray-100 dark:bg-gray-700 overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group"
-      onClick={onClick}
+      className={`relative w-full h-full bg-surface-raised overflow-hidden cursor-pointer hover:opacity-90 transition-opacity group ${
+        isSelected ? "ring-2 ring-accent-500" : ""
+      }`}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerLeave}
+      onContextMenu={(e) => e.preventDefault()}
     >
+      {/* Selection circle — always visible (top-right); tapping selects and
+          enters selection mode, mirroring the gallery's AlbumTile. */}
+      <button
+        type="button"
+        aria-label={isSelected ? "Deselect" : "Select"}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          onToggleSelect();
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        className={`absolute top-1.5 right-1.5 z-10 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
+          isSelected
+            ? "bg-green-500 border-green-500 shadow"
+            : selectionMode
+              ? "bg-white/80 border-gray-400 hover:bg-white"
+              : "bg-white/40 border-white/70 opacity-70 hover:opacity-100 hover:bg-white/80 shadow-sm"
+        }`}
+      >
+        {isSelected && (
+          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+          </svg>
+        )}
+      </button>
       {thumbSrc ? (
         <img
           src={thumbSrc}
@@ -438,7 +592,7 @@ function SearchResultTile({
           loading="lazy"
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center">
+        <div className="w-full h-full flex items-center justify-center text-fg-muted text-xs px-1 text-center">
           {result.filename}
         </div>
       )}

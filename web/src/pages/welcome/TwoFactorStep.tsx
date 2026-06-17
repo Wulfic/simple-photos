@@ -40,10 +40,10 @@ export default function TwoFactorStep({
 }: TwoFactorStepProps) {
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
+      <h2 className="text-2xl font-bold text-fg mb-1">
         Two-Factor Authentication
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-fg-muted text-sm mb-6">
         {step === "admin-2fa"
           ? "Secure your admin account with 2FA. Highly recommended."
           : `Set up 2FA for ${pendingTotpUser?.username ?? "the new user"}. Each user can also do this later in Settings.`}
@@ -51,7 +51,7 @@ export default function TwoFactorStep({
 
       {!totpData && !totpConfirmed && (
         <div className="text-center space-y-4">
-          <div className="bg-blue-50 dark:bg-blue-900/30 rounded-lg p-4 text-sm text-blue-800 dark:text-blue-300">
+          <div className="bg-accent-50 dark:bg-accent-900/30 rounded-lg p-4 text-sm text-accent-800 dark:text-accent-300">
             <p>
               Two-factor authentication adds an extra layer of security.
               You'll need an authenticator app like Google Authenticator,
@@ -72,14 +72,14 @@ export default function TwoFactorStep({
                   setStep("account");
                   setError("");
                 }}
-                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+                className="btn btn-secondary btn-md flex-1"
               >
                 ← Back
               </button>
             )}
             <button
               onClick={skipTotpStep}
-              className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 dark:bg-gray-600 text-sm font-medium transition-colors"
+              className="btn btn-secondary btn-md flex-1"
             >
               Skip for now →
             </button>
@@ -87,7 +87,7 @@ export default function TwoFactorStep({
               <button
                 onClick={startTotpSetup}
                 disabled={loading}
-                className="flex-[2] bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+                className="btn btn-primary btn-md flex-[2]"
               >
                 {loading ? "Setting up\u2026" : "Enable 2FA →"}
               </button>
@@ -99,18 +99,18 @@ export default function TwoFactorStep({
       {totpData && !totpConfirmed && (
         <div className="space-y-4">
           <div className="flex justify-center">
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border-2 border-gray-200 dark:border-gray-700">
+            <div className="bg-surface p-4 rounded-lg border-2 border-edge">
               <QRCodeSVG
                 value={totpData.otpauth_uri}
                 size={200}
               />
             </div>
           </div>
-          <details className="text-xs text-gray-500 dark:text-gray-400">
-            <summary className="cursor-pointer hover:text-gray-700 dark:hover:text-gray-300 dark:text-gray-300">
+          <details className="text-xs text-fg-muted">
+            <summary className="cursor-pointer hover:text-fg dark:text-gray-300">
               Can't scan? Enter manually
             </summary>
-            <code className="block mt-2 bg-gray-50 dark:bg-gray-900 p-2 rounded break-all font-mono">
+            <code className="block mt-2 bg-canvas p-2 rounded break-all font-mono">
               {(() => {
                 try {
                   const url = new URL(totpData.otpauth_uri);
@@ -121,7 +121,7 @@ export default function TwoFactorStep({
               })()}
             </code>
           </details>
-          <p className="text-center text-sm text-gray-600 dark:text-gray-400">
+          <p className="text-center text-sm text-fg-muted">
             Scan this QR code with your authenticator app, then enter the
             6-digit code below.
           </p>
@@ -130,7 +130,7 @@ export default function TwoFactorStep({
               type="text"
               value={totpCode}
               onChange={(e) => setTotpCode(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 text-center text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input text-center text-lg tracking-widest"
               placeholder="000000"
               maxLength={6}
               pattern="\d{6}"
@@ -145,7 +145,7 @@ export default function TwoFactorStep({
             <button
               type="submit"
               disabled={loading || totpCode.length !== 6}
-              className="w-full bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+              className="btn btn-primary btn-md w-full"
             >
               {loading ? "Verifying\u2026" : "Verify Code"}
             </button>
@@ -164,13 +164,13 @@ export default function TwoFactorStep({
 
           {backupCodes.length > 0 && (
             <div>
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <p className="text-sm font-medium text-fg-muted mb-2">
                 Save these backup codes somewhere safe. Each can be used
                 once if you lose your authenticator:
               </p>
-              <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 font-mono text-sm grid grid-cols-2 gap-1">
+              <div className="bg-canvas rounded-lg p-4 font-mono text-sm grid grid-cols-2 gap-1">
                 {backupCodes.map((code, i) => (
-                  <div key={i} className="text-gray-700 dark:text-gray-300">
+                  <div key={i} className="text-fg-muted">
                     {code}
                   </div>
                 ))}
@@ -181,7 +181,7 @@ export default function TwoFactorStep({
                     backupCodes.join("\n")
                   );
                 }}
-                className="mt-2 text-blue-600 text-sm hover:underline"
+                className="mt-2 text-accent-600 text-sm hover:underline"
               >
                 Copy all codes
               </button>
@@ -190,7 +190,7 @@ export default function TwoFactorStep({
 
           <button
             onClick={finishTotpStep}
-            className="w-full bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
+            className="btn btn-primary btn-md w-full"
           >
             Continue →
           </button>

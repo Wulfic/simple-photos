@@ -15,6 +15,7 @@ import { useState, useEffect, type ReactNode } from "react";
 import { api } from "../../api/client";
 import { downloadRaw } from "../../api/core";
 import { getErrorMessage } from "../../utils/formatters";
+import { Toggle } from "../ui";
 
 interface SslSettingsProps {
   error: string;
@@ -247,9 +248,9 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
   const httpUrl = `http://${currentHost}`;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-1">SSL / TLS</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-fg-muted mb-4">
         Serve your photos over HTTPS. Toggling this saves immediately;
         a server restart is required for the change to take effect.
       </p>
@@ -257,57 +258,48 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
       {/* ── Enable toggle ─────────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Enable TLS</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <h3 className="text-sm font-medium text-fg-muted">Enable TLS</h3>
+          <p className="text-xs text-fg-muted">
             {sslEnabled ? "HTTPS is enabled." : "Running on plain HTTP."}
           </p>
         </div>
-        <button
-          onClick={() => void handleToggleEnabled(!sslEnabled)}
+        <Toggle
+          label="Enable TLS"
+          checked={sslEnabled}
           disabled={togglePending}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 ${
-            sslEnabled ? "bg-blue-600" : "bg-gray-300 dark:bg-gray-600"
-          }`}
-          role="switch"
-          aria-checked={sslEnabled}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              sslEnabled ? "translate-x-6" : "translate-x-1"
-            }`}
-          />
-        </button>
+          onClick={() => void handleToggleEnabled(!sslEnabled)}
+        />
       </div>
 
       {/* ── TLS status card ───────────────────────────────────────── */}
       {sslEnabled ? (
-        <div className="mb-5 p-3 rounded-md bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs space-y-1">
+        <div className="mb-5 p-3 rounded-md bg-accent-50 dark:bg-accent-900/20 border border-accent-200 dark:border-accent-800 text-xs space-y-1">
           <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-blue-600 dark:text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-4 h-4 text-accent-600 dark:text-accent-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span className="font-medium text-blue-800 dark:text-blue-300">TLS configured</span>
+            <span className="font-medium text-accent-800 dark:text-accent-300">TLS configured</span>
           </div>
-          <div className="text-blue-700 dark:text-blue-400">
+          <div className="text-accent-700 dark:text-accent-400">
             Server URL after restart:{" "}
             <a href={tlsUrl} className="font-mono underline" target="_blank" rel="noopener noreferrer">{tlsUrl}</a>
           </div>
           {sslCertPath && (
-            <div className="text-blue-700 dark:text-blue-400">
+            <div className="text-accent-700 dark:text-accent-400">
               Certificate: <span className="font-mono break-all">{sslCertPath}</span>
             </div>
           )}
           {sslKeyPath && (
-            <div className="text-blue-700 dark:text-blue-400">
+            <div className="text-accent-700 dark:text-accent-400">
               Private key: <span className="font-mono break-all">{sslKeyPath}</span>
             </div>
           )}
-          <div className="text-blue-700 dark:text-blue-400 italic">
+          <div className="text-accent-700 dark:text-accent-400 italic">
             Plain-HTTP requests to <span className="font-mono">{httpUrl}</span> will be 301-upgraded to HTTPS.
           </div>
         </div>
       ) : (
-        <div className="mb-5 p-3 rounded-md bg-gray-50 dark:bg-gray-700/40 border border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400">
+        <div className="mb-5 p-3 rounded-md bg-surface-raised/40 border border-edge text-xs text-fg-muted">
           TLS is disabled. The server is reachable at{" "}
           <span className="font-mono">{httpUrl}</span>. Pick one of the
           options below to obtain or install a certificate.
@@ -326,20 +318,20 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "letsencrypt" ? null : "letsencrypt")
           }
         >
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-fg-muted mb-3">
             Requires a public DNS name pointing at this server and inbound
             port {leChallengePort || "80"} reachable from the internet.
           </p>
 
           {leExisting && (
-            <div className="mb-3 p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-xs">
-              <div className="font-medium text-blue-800 dark:text-blue-300">Active</div>
-              <div className="text-blue-700 dark:text-blue-400">
+            <div className="mb-3 p-2 rounded bg-accent-50 dark:bg-accent-900/20 border border-accent-200 dark:border-accent-800 text-xs">
+              <div className="font-medium text-accent-800 dark:text-accent-300">Active</div>
+              <div className="text-accent-700 dark:text-accent-400">
                 Domain: <span className="font-mono">{leExisting.domain}</span>
                 {leExisting.staging ? " (staging)" : ""}
               </div>
               {leExisting.last_issued_at && (
-                <div className="text-blue-700 dark:text-blue-400">
+                <div className="text-accent-700 dark:text-accent-400">
                   Last issued: {new Date(leExisting.last_issued_at).toLocaleString()}
                 </div>
               )}
@@ -348,7 +340,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
 
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Domain (FQDN)
               </label>
               <input
@@ -357,12 +349,12 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 onChange={(e) => setLeDomain(e.target.value)}
                 placeholder="photos.example.com"
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="input"
                 disabled={leProvisioning}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Contact email
               </label>
               <input
@@ -371,13 +363,13 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 onChange={(e) => setLeEmail(e.target.value)}
                 placeholder="admin@example.com"
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="input"
                 disabled={leProvisioning}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                <label className="block text-sm font-medium text-fg-muted mb-1">
                   HTTP-01 port
                 </label>
                 <input
@@ -386,7 +378,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                   max={65535}
                   value={leChallengePort}
                   onChange={(e) => setLeChallengePort(e.target.value)}
-                  className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="input"
                   disabled={leProvisioning}
                 />
               </div>
@@ -395,10 +387,10 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                   type="checkbox"
                   checked={leStaging}
                   onChange={(e) => setLeStaging(e.target.checked)}
-                  className="mt-0.5 accent-blue-600"
+                  className="mt-0.5 accent-indigo-600"
                   disabled={leProvisioning}
                 />
-                <span className="text-gray-700 dark:text-gray-300">
+                <span className="text-fg-muted">
                   Staging directory (testing)
                 </span>
               </label>
@@ -408,16 +400,16 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 type="checkbox"
                 checked={leAgreeTos}
                 onChange={(e) => setLeAgreeTos(e.target.checked)}
-                className="mt-0.5 accent-blue-600"
+                className="mt-0.5 accent-indigo-600"
                 disabled={leProvisioning}
               />
-              <span className="text-gray-700 dark:text-gray-300">
+              <span className="text-fg-muted">
                 I agree to the{" "}
                 <a
                   href="https://letsencrypt.org/repository/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 dark:text-blue-400 underline"
+                  className="text-accent-600 dark:text-accent-400 underline"
                 >
                   Let's Encrypt Subscriber Agreement
                 </a>
@@ -427,7 +419,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             <button
               onClick={handleProvisionLetsEncrypt}
               disabled={leProvisioning}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+              className="btn btn-primary btn-md"
             >
               {leProvisioning
                 ? "Requesting certificate from Let's Encrypt…"
@@ -448,7 +440,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "local_ca" ? null : "local_ca")
           }
         >
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-fg-muted mb-3">
             Install the public root on each device using the bundled scripts
             and you'll get a real, trusted HTTPS connection on your LAN —
             no Let's Encrypt, no public DNS, no inbound firewall rules.
@@ -482,7 +474,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
               <button
                 onClick={handleDownloadLocalCaBundle}
                 disabled={lcDownloading}
-                className="mt-3 bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm"
+                className="mt-3 btn btn-success btn-md"
               >
                 {lcDownloading ? "Preparing download…" : "⬇ Download CA install bundle (.zip)"}
               </button>
@@ -498,7 +490,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
 
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 CA label (optional)
               </label>
               <input
@@ -508,12 +500,12 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 placeholder="Simple Photos Local CA — kitchen-NAS"
                 maxLength={128}
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="input"
                 disabled={lcGenerating}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Extra hosts (optional, space- or comma-separated)
               </label>
               <input
@@ -522,10 +514,10 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 onChange={(e) => setLcExtraHosts(e.target.value)}
                 placeholder="photos.local 192.168.1.50"
                 autoComplete="off"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="input"
                 disabled={lcGenerating}
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-xs text-fg-muted mt-1">
                 Localhost, the server hostname, and detected LAN IPs are added
                 automatically.
               </p>
@@ -533,7 +525,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             <button
               onClick={handleGenerateLocalCa}
               disabled={lcGenerating}
-              className="bg-emerald-600 text-white px-4 py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm"
+              className="btn btn-success btn-md"
             >
               {lcGenerating
                 ? "Generating CA…"
@@ -558,14 +550,14 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "manual" ? null : "manual")
           }
         >
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-fg-muted mb-3">
             Use this if you have a certificate from another provider (corporate
             CA, Cloudflare Origin, etc.). Both files must be PEM-encoded and
             readable by the server process.
           </p>
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Certificate Path (.crt / .pem)
               </label>
               <input
@@ -573,12 +565,12 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 value={manualCert}
                 onChange={(e) => setManualCert(e.target.value)}
                 placeholder="/etc/ssl/certs/my-cert.pem"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="input"
                 disabled={manualSaving}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 Private Key Path (.key / .pem)
               </label>
               <input
@@ -586,14 +578,14 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 value={manualKey}
                 onChange={(e) => setManualKey(e.target.value)}
                 placeholder="/etc/ssl/private/my-key.pem"
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="input"
                 disabled={manualSaving}
               />
             </div>
             <button
               onClick={handleSaveManual}
               disabled={manualSaving}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+              className="btn btn-primary btn-md"
             >
               {manualSaving ? "Saving…" : "Save certificate paths"}
             </button>
@@ -633,20 +625,20 @@ function Disclosure({
     blue: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
     emerald:
       "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-    gray: "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
+    gray: "bg-edge text-fg-muted",
   }[tone];
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+    <div className="border border-edge rounded-lg overflow-hidden">
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors"
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-surface-sunken dark:hover:bg-white/10/40 transition-colors"
         aria-expanded={open}
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+            <span className="text-sm font-semibold text-fg">
               {title}
             </span>
             {badge && (
@@ -655,12 +647,12 @@ function Disclosure({
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+          <p className="text-xs text-fg-muted mt-0.5 truncate">
             {subtitle}
           </p>
         </div>
         <svg
-          className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`w-4 h-4 text-fg-muted flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -670,7 +662,7 @@ function Disclosure({
         </svg>
       </button>
       {open && (
-        <div className="px-4 pb-4 pt-1 border-t border-gray-200 dark:border-gray-700">
+        <div className="px-4 pb-4 pt-1 border-t border-edge">
           {children}
         </div>
       )}

@@ -9,7 +9,7 @@
 package com.simplephotos.data.remote
 
 import android.content.Context
-import android.net.wifi.WifiManager
+import android.net.ConnectivityManager
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -338,28 +338,26 @@ object ServerDiscovery {
             Log.w(TAG, "NetworkInterface enumeration failed: ${e.message}")
         }
 
-        // Strategy 2: WifiManager fallback (Android-specific)
+        // Strategy 2: ConnectivityManager fallback (Android-specific). Replaces
+        // the deprecated WifiManager.connectionInfo/ipAddress path — reads the
+        // active network's IPv4 link address instead.
         if (addresses.isEmpty() && context != null) {
             try {
-                @Suppress("DEPRECATION")
-                val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                val connInfo = wifiManager?.connectionInfo
-                val ipInt = connInfo?.ipAddress ?: 0
-                if (ipInt != 0) {
-                    val ip = String.format(
-                        "%d.%d.%d.%d",
-                        ipInt and 0xff,
-                        ipInt shr 8 and 0xff,
-                        ipInt shr 16 and 0xff,
-                        ipInt shr 24 and 0xff
-                    )
-                    if (ip != "0.0.0.0") {
-                        Log.d(TAG, "WiFi Manager fallback IP: $ip")
-                        addresses.add(ip)
+                val cm = context.applicationContext
+                    .getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                val activeNetwork = cm?.activeNetwork
+                val linkProps = activeNetwork?.let { cm.getLinkProperties(it) }
+                linkProps?.linkAddresses?.forEach { linkAddr ->
+                    val addr = linkAddr.address
+                    if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                        addr.hostAddress?.let {
+                            Log.d(TAG, "ConnectivityManager fallback IP: $it")
+                            addresses.add(it)
+                        }
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "WifiManager fallback failed: ${e.message}")
+                Log.w(TAG, "ConnectivityManager fallback failed: ${e.message}")
             }
         }
 

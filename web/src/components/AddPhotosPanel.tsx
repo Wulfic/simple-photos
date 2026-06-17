@@ -21,22 +21,22 @@ export default function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPan
   }
 
   return (
-    <div className="mb-6 p-4 bg-blue-50 dark:bg-blue-900/30 rounded-lg">
+    <div className="mb-6 p-4 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
       <div className="flex items-center justify-between mb-3">
-        <p className="text-sm font-medium text-blue-800 dark:text-blue-300">
+        <p className="text-sm font-medium text-accent-800 dark:text-accent-300">
           Select photos to add ({selected.size} selected)
         </p>
         <div className="flex gap-2">
           <button
             onClick={() => onAdd(Array.from(selected))}
             disabled={selected.size === 0}
-            className="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+            className="btn btn-primary btn-sm"
           >
             Add Selected
           </button>
           <button
             onClick={onCancel}
-            className="bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 px-3 py-1 rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-500"
+            className="btn btn-secondary btn-sm"
           >
             Cancel
           </button>
@@ -44,7 +44,7 @@ export default function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPan
       </div>
 
       {photos.length === 0 ? (
-        <p className="text-gray-500 dark:text-gray-400 text-sm">
+        <p className="text-fg-muted text-sm">
           All photos are already in this album.
         </p>
       ) : (
@@ -55,13 +55,13 @@ export default function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPan
               <div
                 key={photo.blobId}
                 className={`relative aspect-square rounded overflow-hidden cursor-pointer border-2 ${
-                  isSelected ? "border-blue-600" : "border-transparent"
+                  isSelected ? "border-accent-600" : "border-transparent"
                 }`}
                 onClick={() => toggle(photo.blobId)}
               >
                 <ThumbnailImg photo={photo} />
                 {isSelected && (
-                  <div className="absolute inset-0 bg-blue-600/30 flex items-center justify-center">
+                  <div className="absolute inset-0 bg-accent-600/30 flex items-center justify-center">
                     <svg
                       className="w-6 h-6 text-white"
                       fill="currentColor"

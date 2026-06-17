@@ -203,7 +203,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           </svg>
         </div>
         <h2 className="text-xl font-bold">SSL / TLS</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 text-center mt-1">
+        <p className="text-sm text-fg-muted text-center mt-1">
           Secure your server with HTTPS.  When TLS is on, plain-HTTP requests
           are automatically redirected to HTTPS.  You can skip this and
           configure it later in Settings.
@@ -224,8 +224,8 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             key={value}
             className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
               mode === value
-                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
-                : "border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600"
+                ? "border-accent-500 bg-accent-50 dark:bg-accent-900/20"
+                : "border-edge hover:border-edge-strong"
             }`}
           >
             <input
@@ -240,11 +240,11 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 setLeSuccess(null);
                 setLcSuccess(null);
               }}
-              className="mt-1 accent-blue-600"
+              className="mt-1 accent-indigo-600"
             />
             <div>
               <span className="font-medium text-sm">{label}</span>
-              <p className="text-xs text-gray-500 dark:text-gray-400">{desc}</p>
+              <p className="text-xs text-fg-muted">{desc}</p>
             </div>
           </label>
         ))}
@@ -252,9 +252,9 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
 
       {/* ── Manual cert form ───────────────────────────────────────── */}
       {mode === "manual" && !saved && (
-        <div className="space-y-3 mb-5 bg-gray-50 dark:bg-gray-700/40 rounded-lg p-4">
+        <div className="space-y-3 mb-5 bg-surface-raised/40 rounded-lg p-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Certificate Path (.crt / .pem)
             </label>
             <input
@@ -262,11 +262,11 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               value={certPath}
               onChange={(e) => setCertPath(e.target.value)}
               placeholder="/etc/ssl/certs/my-cert.pem"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Private Key Path (.key / .pem)
             </label>
             <input
@@ -274,13 +274,13 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               value={keyPath}
               onChange={(e) => setKeyPath(e.target.value)}
               placeholder="/etc/ssl/private/my-key.pem"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
             />
           </div>
           <button
             onClick={handleSaveManual}
             disabled={saving}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+            className="btn btn-primary btn-md w-full"
           >
             {saving ? "Saving…" : "Save & Enable TLS"}
           </button>
@@ -301,9 +301,9 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
 
       {/* ── Let's Encrypt form ────────────────────────────────────── */}
       {mode === "letsencrypt" && !leSuccess && (
-        <div className="space-y-3 mb-5 bg-gray-50 dark:bg-gray-700/40 rounded-lg p-4">
+        <div className="space-y-3 mb-5 bg-surface-raised/40 rounded-lg p-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Domain (FQDN)
             </label>
             <input
@@ -312,15 +312,15 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLeDomain(e.target.value)}
               placeholder="photos.example.com"
               autoComplete="off"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               disabled={leProvisioning}
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-fg-muted mt-1">
               Must resolve to this server's public IP. Wildcards and raw IPs are not supported.
             </p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Contact email
             </label>
             <input
@@ -329,16 +329,16 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLeEmail(e.target.value)}
               placeholder="admin@example.com"
               autoComplete="off"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               disabled={leProvisioning}
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-fg-muted mt-1">
               Used by Let's Encrypt for renewal reminders only.
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-fg-muted mb-1">
                 HTTP-01 challenge port
               </label>
               <input
@@ -347,10 +347,10 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 max={65535}
                 value={leChallengePort}
                 onChange={(e) => setLeChallengePort(e.target.value)}
-                className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="input"
                 disabled={leProvisioning}
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-xs text-fg-muted mt-1">
                 Default 80. Forward port 80 → here if the server runs unprivileged.
               </p>
             </div>
@@ -359,12 +359,12 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 type="checkbox"
                 checked={leStaging}
                 onChange={(e) => setLeStaging(e.target.checked)}
-                className="mt-0.5 accent-blue-600"
+                className="mt-0.5 accent-indigo-600"
                 disabled={leProvisioning}
               />
-              <span className="text-gray-700 dark:text-gray-300">
+              <span className="text-fg-muted">
                 Use staging directory
-                <span className="block text-xs text-gray-500 dark:text-gray-400">
+                <span className="block text-xs text-fg-muted">
                   Test only — issues untrusted certs with relaxed rate limits.
                 </span>
               </span>
@@ -375,16 +375,16 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               type="checkbox"
               checked={leAgreeTos}
               onChange={(e) => setLeAgreeTos(e.target.checked)}
-              className="mt-0.5 accent-blue-600"
+              className="mt-0.5 accent-indigo-600"
               disabled={leProvisioning}
             />
-            <span className="text-gray-700 dark:text-gray-300">
+            <span className="text-fg-muted">
               I agree to the{" "}
               <a
                 href="https://letsencrypt.org/repository/"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 dark:text-blue-400 underline"
+                className="text-accent-600 dark:text-accent-400 underline"
               >
                 Let's Encrypt Subscriber Agreement
               </a>
@@ -394,7 +394,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           <button
             onClick={handleProvisionLetsEncrypt}
             disabled={leProvisioning}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+            className="btn btn-primary btn-md w-full"
           >
             {leProvisioning
               ? "Requesting certificate from Let's Encrypt…"
@@ -422,16 +422,16 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
       )}
       {/* ── Self-signed local CA form ────────────────────── */}
       {mode === "local_ca" && !lcSuccess && (
-        <div className="space-y-3 mb-5 bg-gray-50 dark:bg-gray-700/40 rounded-lg p-4">
-          <p className="text-xs text-gray-600 dark:text-gray-400">
+        <div className="space-y-3 mb-5 bg-surface-raised/40 rounded-lg p-4">
+          <p className="text-xs text-fg-muted">
             Creates a private root CA + leaf certificate covering
             <span className="font-mono">&nbsp;localhost</span>, this server's hostname,
             and any LAN IPs detected automatically. Install the bundled CA on
             each device once and Simple Photos will load with no browser warnings.
           </p>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Friendly label <span className="text-gray-400 font-normal">(optional)</span>
+            <label className="block text-sm font-medium text-fg-muted mb-1">
+              Friendly label <span className="text-fg-muted font-normal">(optional)</span>
             </label>
             <input
               type="text"
@@ -439,26 +439,26 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               onChange={(e) => setLcLabel(e.target.value)}
               placeholder="Simple Photos — home NAS"
               maxLength={128}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               disabled={lcGenerating}
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-fg-muted mt-1">
               Shown in your browser / OS as the certificate’s common name.
             </p>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Extra hostnames / IPs <span className="text-gray-400 font-normal">(optional)</span>
+            <label className="block text-sm font-medium text-fg-muted mb-1">
+              Extra hostnames / IPs <span className="text-fg-muted font-normal">(optional)</span>
             </label>
             <input
               type="text"
               value={lcExtraHosts}
               onChange={(e) => setLcExtraHosts(e.target.value)}
               placeholder="photos.lan, 192.168.1.50, nas.local"
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               disabled={lcGenerating}
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-fg-muted mt-1">
               Comma- or space-separated. Up to 32 entries. Each must be a DNS
               label or an IP address (no wildcards).
             </p>
@@ -466,7 +466,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           <button
             onClick={handleGenerateLocalCa}
             disabled={lcGenerating}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium"
+            className="btn btn-primary btn-md w-full"
           >
             {lcGenerating ? "Generating local CA…" : "Generate local CA"}
           </button>
@@ -499,7 +499,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           <button
             onClick={handleDownloadLocalCaBundle}
             disabled={lcDownloading}
-            className="w-full bg-emerald-600 text-white py-2 rounded-md hover:bg-emerald-700 disabled:opacity-50 text-sm font-medium"
+            className="btn btn-success btn-md w-full"
           >
             {lcDownloading
               ? "Preparing download…"
@@ -526,7 +526,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             setError("");
             setStep("storage");
           }}
-          className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 text-sm"
+          className="text-fg-muted hover:text-fg text-sm"
           disabled={leProvisioning || lcGenerating}
         >
           ← Back
@@ -538,7 +538,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             // users to create on a backup instance.
             setStep(serverRole === "backup" ? "complete" : "users");
           }}
-          className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 text-sm font-medium disabled:opacity-50"
+          className="btn btn-primary btn-md"
           disabled={leProvisioning || lcGenerating}
         >
           {isDone ? "Continue →" : "Skip →"}

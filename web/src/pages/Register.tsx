@@ -31,7 +31,7 @@ function checkPasswordStrength(pw: string) {
       : score <= 3
         ? "bg-yellow-500"
         : score <= 4
-          ? "bg-blue-500"
+          ? "bg-accent-500"
           : "bg-green-500";
   return { checks, core, score, label, color, max: 6 };
 }
@@ -98,15 +98,15 @@ export default function Register() {
   }
 
   const Checkmark = ({ ok }: { ok: boolean }) => (
-    <span className={ok ? "text-green-600 dark:text-green-400" : "text-gray-400"}>
+    <span className={ok ? "text-green-600 dark:text-green-400" : "text-fg-muted"}>
       {ok ? "✓" : "○"}
     </span>
   );
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen flex items-center justify-center bg-canvas">
       <ThemeToggle />
-      <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow p-8">
+      <div className="card max-w-md w-full p-8">
         <div className="flex flex-col items-center mb-6">
           <img src="/logo.png" alt="Simple Photos" className="w-16 h-16 mb-2" />
           <h1 className="text-2xl font-bold text-center">Create Account</h1>
@@ -114,14 +114,14 @@ export default function Register() {
         <form onSubmit={handleRegister} className="space-y-4">
           {/* Username */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Username
             </label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               required
               minLength={3}
               maxLength={50}
@@ -145,14 +145,14 @@ export default function Register() {
 
           {/* Password */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Password
             </label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               required
               minLength={8}
               maxLength={128}
@@ -166,13 +166,13 @@ export default function Register() {
             {password.length > 0 && (
               <div className="mt-2">
                 <div className="flex items-center gap-2 mb-1">
-                  <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                  <div className="flex-1 h-1.5 bg-edge-strong rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all duration-300 ${pw.color}`}
                       style={{ width: `${(pw.score / pw.max) * 100}%` }}
                     />
                   </div>
-                  <span className="text-xs font-medium text-gray-600 dark:text-gray-400 w-12 text-right">
+                  <span className="text-xs font-medium text-fg-muted w-12 text-right">
                     {pw.label}
                   </span>
                 </div>
@@ -191,11 +191,11 @@ export default function Register() {
                   </li>
                   <li>
                     <Checkmark ok={pw.checks.special} /> Special character
-                    <span className="text-gray-400"> (optional)</span>
+                    <span className="text-fg-muted"> (optional)</span>
                   </li>
                   <li>
                     <Checkmark ok={pw.checks.long} /> 12+ characters
-                    <span className="text-gray-400"> (recommended)</span>
+                    <span className="text-fg-muted"> (recommended)</span>
                   </li>
                 </ul>
               </div>
@@ -204,14 +204,14 @@ export default function Register() {
 
           {/* Confirm password */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Confirm Password
             </label>
             <input
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               required
               autoComplete="new-password"
               autoCorrect="off"
@@ -230,15 +230,15 @@ export default function Register() {
           <button
             type="submit"
             disabled={loading || !pw.core}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="btn btn-primary btn-md w-full"
           >
             {loading ? "Creating account..." : "Register"}
           </button>
         </form>
 
-        <p className="text-center text-sm text-gray-600 dark:text-gray-400 mt-4">
+        <p className="text-center text-sm text-fg-muted mt-4">
           Already have an account?{" "}
-          <Link to="/login" className="text-blue-600 hover:underline">
+          <Link to="/login" className="text-accent-600 hover:underline">
             Sign In
           </Link>
         </p>

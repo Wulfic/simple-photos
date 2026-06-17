@@ -42,10 +42,10 @@ export default function CompleteStep({
   return (
     <div className="text-center">
       <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mx-auto mb-4" />
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+      <h2 className="text-2xl font-bold text-fg mb-2">
         You're All Set!
       </h2>
-      <p className="text-gray-600 dark:text-gray-400 mb-6">
+      <p className="text-fg-muted mb-6">
         {serverRole === "backup"
           ? "This server is paired as a backup and ready to receive synced photos."
           : isRestore
@@ -56,12 +56,12 @@ export default function CompleteStep({
       <div className="bg-green-50 dark:bg-green-900/30 rounded-lg p-4 mb-6 text-sm text-left space-y-2">
         <div className="flex items-center gap-2">
           <span className="text-green-600 dark:text-green-400">{"\u2713"}</span>
-          <span className="text-gray-700 dark:text-gray-300">Admin account created</span>
+          <span className="text-fg-muted">Admin account created</span>
         </div>
         {serverRole === "backup" && mainServerUrl && (
           <div className="flex items-center gap-2">
             <span className="text-green-600 dark:text-green-400">{"\u2713"}</span>
-            <span className="text-gray-700 dark:text-gray-300">
+            <span className="text-fg-muted">
               Paired with {mainServerUrl}
             </span>
           </div>
@@ -69,7 +69,7 @@ export default function CompleteStep({
         {serverRole === "backup" && (
           <div className="flex items-center gap-2">
             <span className="text-green-600 dark:text-green-400">{"\u2713"}</span>
-            <span className="text-gray-700 dark:text-gray-300">
+            <span className="text-fg-muted">
               Backup mode enabled
             </span>
           </div>
@@ -77,7 +77,7 @@ export default function CompleteStep({
         {isRestore && (
           <div className="flex items-center gap-2">
             <span className="text-amber-500">{"\u21BB"}</span>
-            <span className="text-gray-700 dark:text-gray-300">
+            <span className="text-fg-muted">
               Restore from {restoreSource.name} ({restoreSource.photo_count} photos)
             </span>
           </div>
@@ -86,13 +86,13 @@ export default function CompleteStep({
           <>
             <div className="flex items-center gap-2">
               <span className="text-green-600 dark:text-green-400">{"\u2713"}</span>
-              <span className="text-gray-700 dark:text-gray-300">
+              <span className="text-fg-muted">
                 Encryption key derived
               </span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-green-600 dark:text-green-400">{"\u2713"}</span>
-              <span className="text-gray-700 dark:text-gray-300">
+              <span className="text-fg-muted">
                 Storage: All photos encrypted
               </span>
             </div>
@@ -101,7 +101,7 @@ export default function CompleteStep({
         {createdUsers.length > 0 && (
           <div className="flex items-center gap-2">
             <span className="text-green-600 dark:text-green-400">{"\u2713"}</span>
-            <span className="text-gray-700 dark:text-gray-300">
+            <span className="text-fg-muted">
               {createdUsers.length} additional user
               {createdUsers.length > 1 ? "s" : ""} created
             </span>
@@ -110,14 +110,14 @@ export default function CompleteStep({
         {serverPort !== originalPort && (
           <div className="flex items-center gap-2">
             <span className="text-amber-500">{"\u21BB"}</span>
-            <span className="text-gray-700 dark:text-gray-300">
+            <span className="text-fg-muted">
               Port changed to {serverPort} — restart pending
             </span>
           </div>
         )}
         <div className="flex items-center gap-2">
           <span className="text-green-600 dark:text-green-400">{"\u2713"}</span>
-          <span className="text-gray-700 dark:text-gray-300">Ready to upload</span>
+          <span className="text-fg-muted">Ready to upload</span>
         </div>
       </div>
 
@@ -130,7 +130,7 @@ export default function CompleteStep({
       )}
 
       {restoreStatus && (
-        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-4 text-xs text-blue-800 dark:text-blue-300 text-left">
+        <div className="bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 rounded-lg p-3 mb-4 text-xs text-accent-800 dark:text-accent-300 text-left">
           {restoreStatus}
         </div>
       )}
@@ -142,7 +142,7 @@ export default function CompleteStep({
               setError("");
               setStep(serverRole === "backup" ? "ssl" : "android");
             }}
-            className="w-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+            className="btn btn-secondary btn-md w-full"
           >
             ← Back
           </button>
@@ -312,7 +312,7 @@ export default function CompleteStep({
             }
           }}
           disabled={loading}
-          className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 text-lg font-medium transition-colors"
+          className="btn btn-primary btn-lg w-full"
         >
           {loading
             ? restoreStatus
@@ -327,16 +327,16 @@ export default function CompleteStep({
                 : "Go to Gallery \u2192"}
         </button>
         {loading && serverPort !== originalPort && !restoreStatus && (
-          <p className="text-gray-500 dark:text-gray-400 text-xs animate-pulse">
+          <p className="text-fg-muted text-xs animate-pulse">
             Waiting for server to restart on port {serverPort}\u2026
           </p>
         )}
         {loading && restoreStatus && (
-          <p className="text-gray-500 dark:text-gray-400 text-xs animate-pulse">
+          <p className="text-fg-muted text-xs animate-pulse">
             {restoreStatus}
           </p>
         )}
-        <p className="text-gray-400 text-xs">
+        <p className="text-fg-muted text-xs">
           You can manage users, 2FA, and storage in Settings.
         </p>
       </div>

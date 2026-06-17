@@ -16,7 +16,9 @@ export interface ViewerTopBarProps {
   isFavorite: boolean;
   isBackupServer: boolean;
   isRenderingVideo: boolean;
-  albumId?: string;
+  /** True only for real user-created albums — smart albums (Photos, Videos,
+   *  GIFs, Audio, People, …) can't have items "removed" so they show Delete. */
+  canRemoveFromAlbum?: boolean;
   onBack: () => void;
   onToggleEdit: () => void;
   onToggleFavorite: () => void;
@@ -39,7 +41,7 @@ export default function ViewerTopBar({
   isFavorite,
   isBackupServer,
   isRenderingVideo,
-  albumId,
+  canRemoveFromAlbum,
   onBack,
   onToggleEdit,
   onToggleFavorite,
@@ -65,7 +67,7 @@ export default function ViewerTopBar({
         <button
           onClick={() => setShowInfoPanel(!showInfoPanel)}
           className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-            showInfoPanel ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
+            showInfoPanel ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
           }`}
           title="Info"
         >
@@ -77,7 +79,7 @@ export default function ViewerTopBar({
           <button
             onClick={() => setShowTagPanel(!showTagPanel)}
             className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-              showTagPanel ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
+              showTagPanel ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
             }`}
             title="Tags"
           >
@@ -88,7 +90,7 @@ export default function ViewerTopBar({
           <button
             onClick={onToggleEdit}
             className={`flex items-center gap-1 px-2 py-1 rounded text-sm font-medium transition-colors ${
-              editMode ? "bg-blue-600 text-white" : "text-white hover:bg-white/20"
+              editMode ? "bg-accent-600 text-white" : "text-white hover:bg-white/20"
             }`}
             title="Edit"
           >Edit</button>
@@ -129,7 +131,7 @@ export default function ViewerTopBar({
         </button>
         {!isBackupServer && (
         <>
-        {albumId ? (
+        {canRemoveFromAlbum ? (
           <button
             onClick={onRemoveFromAlbum}
             className="text-orange-400 hover:text-orange-300 flex items-center justify-center w-8 h-8 rounded-full hover:bg-white/20 transition-colors"

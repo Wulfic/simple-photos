@@ -226,6 +226,20 @@ pub async fn soft_delete_blob(
         None
     };
 
+    // Capture the deleted photo's ORIGINAL on-disk plaintext path. Server-side
+    // encryption leaves the plaintext original in place (photos.file_path stays
+    // set), so unless we record it here the filesystem autoscan re-imports it
+    // the moment the photos row is removed below. May be absent for blobs that
+    // never had a photos-table row (e.g. pure client-side E2E uploads).
+    let original_file_path: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT file_path FROM photos \
+         WHERE encrypted_blob_id = ? AND user_id = ? AND file_path != '' LIMIT 1",
+    )
+    .bind(&blob_id)
+    .bind(&blob_owner_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
     // Read retention days from server_settings (default 30)
     let retention_days: i64 = sqlx::query_scalar(
         "SELECT CAST(value AS INTEGER) FROM server_settings WHERE key = 'trash_retention_days'",
@@ -243,8 +257,8 @@ pub async fn soft_delete_blob(
         "INSERT INTO trash_items (id, user_id, photo_id, filename, file_path, mime_type, \
          media_type, size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
          thumb_path, deleted_at, expires_at, encrypted_blob_id, thumbnail_blob_id, \
-         client_hash, content_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
+         client_hash, content_hash, original_file_path) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&trash_id)
     .bind(&blob_owner_id)
@@ -265,6 +279,7 @@ pub async fn soft_delete_blob(
     .bind(&req.thumbnail_blob_id)
     .bind(&client_hash)
     .bind(&content_hash)
+    .bind(&original_file_path)
     .execute(&mut *tx)
     .await?;
 
@@ -576,15 +591,16 @@ pub async fn permanent_delete(
     // Begin transaction — ref-count check + DELETE must be atomic to prevent TOCTOU races
     let mut tx = state.pool.begin().await?;
 
-    let item: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT file_path, thumb_path FROM trash_items WHERE id = ? AND user_id = ?",
+    let item: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT file_path, thumb_path, original_file_path \
+         FROM trash_items WHERE id = ? AND user_id = ?",
     )
     .bind(&trash_id)
     .bind(&auth.user_id)
     .fetch_optional(&mut *tx)
     .await?;
 
-    let (file_path, thumb_path) = item.ok_or(AppError::NotFound)?;
+    let (file_path, thumb_path, original_file_path) = item.ok_or(AppError::NotFound)?;
 
     // Only delete files from disk if no other photo row references the same
     // file_path (which happens when the user duplicates a photo via "Save Copy").
@@ -594,6 +610,24 @@ pub async fn permanent_delete(
         .await?;
 
     let can_delete_file = other_refs == 0;
+
+    // The plaintext original kept on disk by encryption (#3) must be removed
+    // here too — otherwise the next autoscan re-imports it once this trash row
+    // is gone. Guard against a live Save-Copy still referencing the path.
+    let can_delete_original = if let Some(ref orig) = original_file_path {
+        if orig.is_empty() || orig == &file_path {
+            false
+        } else {
+            let orig_refs: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE file_path = ?")
+                    .bind(orig)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            orig_refs == 0
+        }
+    } else {
+        false
+    };
 
     let can_delete_thumb = if let Some(ref tp) = thumb_path {
         let other_thumb_refs: i64 =
@@ -625,6 +659,17 @@ pub async fn permanent_delete(
         if tokio::fs::try_exists(&full_path).await.unwrap_or(false) {
             if let Err(e) = tokio::fs::remove_file(&full_path).await {
                 tracing::warn!("Failed to delete photo file {}: {}", file_path, e);
+            }
+        }
+    }
+
+    if can_delete_original {
+        if let Some(ref orig) = original_file_path {
+            let orig_full = storage_root.join(orig);
+            if tokio::fs::try_exists(&orig_full).await.unwrap_or(false) {
+                if let Err(e) = tokio::fs::remove_file(&orig_full).await {
+                    tracing::warn!("Failed to delete original photo file {}: {}", orig, e);
+                }
             }
         }
     }
@@ -669,11 +714,12 @@ pub async fn empty_trash(
     let mut tx = state.pool.begin().await?;
 
     // Fetch all trash items for file cleanup
-    let items: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT file_path, thumb_path FROM trash_items WHERE user_id = ?")
-            .bind(&auth.user_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let items: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT file_path, thumb_path, original_file_path FROM trash_items WHERE user_id = ?",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&mut *tx)
+    .await?;
 
     let deleted_count = items.len() as i64;
 
@@ -683,7 +729,7 @@ pub async fn empty_trash(
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
 
-    for (file_path, thumb_path) in &items {
+    for (file_path, thumb_path, original_file_path) in &items {
         let other_refs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE file_path = ?")
             .bind(file_path)
             .fetch_one(&mut *tx)
@@ -691,6 +737,21 @@ pub async fn empty_trash(
 
         if other_refs == 0 {
             files_to_delete.push(storage_root.join(file_path));
+        }
+
+        // Remove the plaintext original kept on disk by encryption (#3), unless
+        // a live Save-Copy still references the same path.
+        if let Some(orig) = original_file_path {
+            if !orig.is_empty() && orig != file_path {
+                let orig_refs: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE file_path = ?")
+                        .bind(orig)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                if orig_refs == 0 {
+                    files_to_delete.push(storage_root.join(orig));
+                }
+            }
         }
 
         if let Some(tp) = thumb_path {

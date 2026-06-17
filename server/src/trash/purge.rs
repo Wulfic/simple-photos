@@ -21,9 +21,12 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
         }
     };
 
-    // Fetch expired items for file cleanup
-    let expired: Vec<(String, String, Option<String>)> = match sqlx::query_as(
-        "SELECT id, file_path, thumb_path FROM trash_items WHERE expires_at <= ?",
+    // Fetch expired items for file cleanup. `original_file_path` is the deleted
+    // photo's plaintext original kept on disk by the encryption step (#3); it
+    // must be removed here too, otherwise dropping the trash row re-exposes the
+    // file to the next autoscan.
+    let expired: Vec<(String, String, Option<String>, Option<String>)> = match sqlx::query_as(
+        "SELECT id, file_path, thumb_path, original_file_path FROM trash_items WHERE expires_at <= ?",
     )
     .bind(&now)
     .fetch_all(&mut *tx)
@@ -44,7 +47,7 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
     let mut files_to_delete: Vec<std::path::PathBuf> = Vec::new();
     let mut ids_to_delete: Vec<&str> = Vec::new();
 
-    for (id, file_path, thumb_path) in &expired {
+    for (id, file_path, thumb_path, original_file_path) in &expired {
         // Only delete files if no other photo row still references them.
         // On DB error, skip this item entirely — do NOT default to 0
         // because that would cause irreversible file deletion.
@@ -63,6 +66,32 @@ pub async fn purge_expired_trash(pool: &sqlx::SqlitePool, storage_root: &std::pa
 
         if other_refs == 0 {
             files_to_delete.push(storage_root.join(file_path));
+        }
+
+        // Remove the plaintext original too (kept on disk by encryption, #3),
+        // unless a live photo (e.g. a Save-Copy sharing the path) still uses it.
+        if let Some(orig) = original_file_path {
+            if !orig.is_empty() && orig != file_path {
+                let orig_refs: i64 =
+                    match sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE file_path = ?")
+                        .bind(orig)
+                        .fetch_one(&mut *tx)
+                        .await
+                    {
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::error!(
+                                "DB error checking original-file refs for {}: {} — skipping orig",
+                                id,
+                                e
+                            );
+                            continue;
+                        }
+                    };
+                if orig_refs == 0 {
+                    files_to_delete.push(storage_root.join(orig));
+                }
+            }
         }
 
         if let Some(tp) = thumb_path {

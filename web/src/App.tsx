@@ -1,29 +1,37 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { useAuthStore } from "./store/auth";
 import { useThemeStore } from "./store/theme";
 import { hasCryptoKey, loadKeyFromSession } from "./crypto/crypto";
-import Login from "./pages/Login";
-import Setup from "./pages/Setup";
-import Gallery from "./pages/Gallery";
-import Albums from "./pages/Albums";
-import AlbumDetail from "./pages/AlbumDetail";
-import Viewer from "./pages/Viewer";
-import Settings from "./pages/Settings";
-import Welcome from "./pages/Welcome";
-import Trash from "./pages/Trash";
-import SecureGallery from "./pages/SecureGallery";
-import SharedAlbumDetail from "./pages/SharedAlbumDetail";
-import Search from "./pages/Search";
-import Diagnostics from "./pages/Diagnostics";
-import ExportDownloads from "./pages/ExportDownloads";
-import CastReceiver from "./pages/CastReceiver";
+import RouteFallback from "./components/RouteFallback";
+
+// Route pages are code-split with React.lazy so the initial bundle only ships
+// the shell + the first route's chunk. Each lazy route is caught by a
+// <Suspense> boundary (RouteFallback for protected pages; a minimal boot
+// fallback for the public/guard routes) so the chunk download shows an
+// intentional loading state rather than a blank screen.
+const Login = lazy(() => import("./pages/Login"));
+const Setup = lazy(() => import("./pages/Setup"));
+const Gallery = lazy(() => import("./pages/Gallery"));
+const Albums = lazy(() => import("./pages/Albums"));
+const AlbumDetail = lazy(() => import("./pages/AlbumDetail"));
+const Viewer = lazy(() => import("./pages/Viewer"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Welcome = lazy(() => import("./pages/Welcome"));
+const Trash = lazy(() => import("./pages/Trash"));
+const SecureGallery = lazy(() => import("./pages/SecureGallery"));
+const SharedAlbumDetail = lazy(() => import("./pages/SharedAlbumDetail"));
+const Search = lazy(() => import("./pages/Search"));
+const Diagnostics = lazy(() => import("./pages/Diagnostics"));
+const ExportDownloads = lazy(() => import("./pages/ExportDownloads"));
+const CastReceiver = lazy(() => import("./pages/CastReceiver"));
 import EncryptionBanner from "./components/EncryptionBanner";
 import ConversionBanner from "./components/ConversionBanner";
 import SavingBanner from "./components/SavingBanner";
 import AiBanner from "./components/AiBanner";
 import GeoBanner from "./components/GeoBanner";
 import ServerOfflineBanner from "./components/ServerOfflineBanner";
+import ToastHost from "./components/ToastHost";
 
 /**
  * Layout route for authenticated pages.
@@ -61,25 +69,25 @@ function ProtectedLayout() {
 
   if (!setupChecked) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-canvas">
+        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   if (serverUnreachable) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-canvas p-4">
         {/* Runtime offline banner stays visible even on this error page */}
         <ServerOfflineBanner />
         <div className="text-center max-w-md">
-          <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Cannot reach server</h1>
-          <p className="text-gray-600 dark:text-gray-400 mb-4">
+          <h1 className="text-xl font-semibold text-fg mb-2">Cannot reach server</h1>
+          <p className="text-fg-muted mb-4">
             Unable to connect to the Simple Photos server. Check that the server is running, then retry.
           </p>
           <button
             onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="btn btn-primary btn-md"
           >
             Retry
           </button>
@@ -98,12 +106,21 @@ function ProtectedLayout() {
 
   return (
     <>
+      <ToastHost />
       <ConversionBanner />
       <EncryptionBanner />
       <AiBanner />
       <GeoBanner />
       <SavingBanner />
-      <Outlet />
+      {/* Route-content wrapper carries `view-transition-name: page` so only
+          the page body crossfades on navigation (see index.css). The fixed
+          AppHeader rendered inside each page has its own `app-header` name and
+          is lifted out of this snapshot, so it never flickers. */}
+      <div className="[view-transition-name:page]">
+        <Suspense fallback={<RouteFallback />}>
+          <Outlet />
+        </Suspense>
+      </div>
     </>
   );
 }
@@ -128,8 +145,8 @@ function LoginGuard({ children }: { children: React.ReactNode }) {
 
   if (!setupChecked) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-canvas">
+        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -170,13 +187,23 @@ function RootRedirect() {
 
   if (!target) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-canvas">
+        <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   return <Navigate to={target} replace />;
+}
+
+/** Minimal full-screen fallback for the outer Suspense boundary (public/guard
+ * route chunks). Mirrors the existing setup-check spinner. */
+function BootFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-canvas">
+      <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
 }
 
 export default function App() {
@@ -203,6 +230,11 @@ export default function App() {
       {/* Global server-health banner — shows on every page when the server
           is unreachable at runtime and auto-hides once it reconnects. */}
       <ServerOfflineBanner />
+      {/* Outer boundary: catches the lazy chunk load for public/guard routes
+          (login, welcome, cast) where a full-page grid skeleton wouldn't fit —
+          a neutral centered spinner matches those screens. Protected routes
+          have their own closer <Suspense> with RouteFallback. */}
+      <Suspense fallback={<BootFallback />}>
       <Routes>
         {/* Public routes — no auth required */}
         {/* Cast receiver — must be public so Chromecast can load it */}
@@ -240,6 +272,7 @@ export default function App() {
 
         <Route path="*" element={<RootRedirect />} />
       </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

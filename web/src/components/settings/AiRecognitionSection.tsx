@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../../api/client";
 import { getErrorMessage } from "../../utils/formatters";
+import { Toggle, StatTile } from "../ui";
 import type { AiStatus } from "../../api/ai";
 
 interface AiRecognitionSectionProps {
@@ -70,9 +71,9 @@ export default function AiRecognitionSection({
   if (!loaded) return null;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">AI Recognition</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-fg-muted mb-4">
         Automatically detect faces and objects in your photos. Detected people
         are grouped into clusters and objects are tagged for easy searching.
       </p>
@@ -80,73 +81,37 @@ export default function AiRecognitionSection({
       {/* Enable toggle */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          <h3 className="text-sm font-medium text-fg-muted">
             Enable AI Processing
           </h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-fg-muted">
             {status?.enabled
               ? "AI is analysing your photos in the background."
               : "AI processing is disabled."}
           </p>
         </div>
-        <button
+        <Toggle
+          label="Enable AI Processing"
+          checked={status?.enabled ?? false}
           onClick={handleToggle}
           disabled={toggling}
-          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-            status?.enabled
-              ? "bg-blue-600"
-              : "bg-gray-300 dark:bg-gray-600"
-          }`}
-          role="switch"
-          aria-checked={status?.enabled ?? false}
-        >
-          <span
-            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              status?.enabled ? "translate-x-6" : "translate-x-1"
-            }`}
-          />
-        </button>
+        />
       </div>
 
       {/* Status info */}
       {status && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
-              {status.photos_processed}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Processed</p>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-amber-600 dark:text-amber-400">
-              {status.photos_pending}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Pending</p>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-green-600 dark:text-green-400">
-              {status.face_clusters}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">People</p>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-orange-600 dark:text-orange-400">
-              {status.pet_clusters ?? 0}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Pets</p>
-          </div>
-          <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
-            <p className="text-xl font-bold text-purple-600 dark:text-purple-400">
-              {status.object_detections}
-            </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Objects</p>
-          </div>
+          <StatTile tone="accent" value={status.photos_processed} label="Processed" />
+          <StatTile tone="amber" value={status.photos_pending} label="Pending" />
+          <StatTile tone="green" value={status.face_clusters} label="People" />
+          <StatTile tone="orange" value={status.pet_clusters ?? 0} label="Pets" />
+          <StatTile tone="purple" value={status.object_detections} label="Objects" />
         </div>
       )}
 
       {/* GPU indicator */}
       {status && (
-        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        <p className="text-xs text-fg-muted mb-4">
           Execution: {status.gpu_available ? "GPU (CUDA)" : "CPU"} &middot;{" "}
           {status.face_detections} face detections &middot;{" "}
           {status.pet_detections ?? 0} pet detections
@@ -157,7 +122,7 @@ export default function AiRecognitionSection({
       <button
         onClick={handleReprocess}
         disabled={reprocessing || !status?.enabled}
-        className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm"
+        className="btn btn-primary btn-md"
       >
         {reprocessing ? (
           <span className="flex items-center gap-2">

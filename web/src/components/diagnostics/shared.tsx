@@ -10,8 +10,8 @@ export function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-      <h2 className="text-base font-semibold text-gray-900 dark:text-white mb-4">
+    <section className="card p-6">
+      <h2 className="text-base font-semibold text-fg mb-4">
         {title}
       </h2>
       {children}
@@ -37,16 +37,16 @@ export function StatCard({
         yellow: "text-yellow-600 dark:text-yellow-400",
         red: "text-red-600 dark:text-red-400",
       }[color]
-    : "text-gray-900 dark:text-white";
+    : "text-fg";
 
   return (
-    <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
-      <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+    <div className="bg-surface-raised/50 rounded-lg p-3">
+      <p className="text-xs text-fg-muted mb-0.5">
         {label}
       </p>
       <p className={`text-sm font-bold ${colorClass}`}>{value}</p>
       {subtitle && (
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+        <p className="text-xs text-fg-muted mt-0.5">
           {subtitle}
         </p>
       )}

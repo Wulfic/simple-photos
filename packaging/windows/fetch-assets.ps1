@@ -202,12 +202,14 @@ function Get-File {
     }
 }
 
-# Face models are mirrored on the GitHub release (github.com) so the install
-# does NOT depend on HuggingFace's Xet CDN (cas-bridge.xethub.co), which some
-# networks can't resolve -- that was the "remote name could not be resolved"
-# failure. Try the release asset first (by exact name), then fall back to the
-# original HuggingFace source when no -Version was passed or the release lacks
-# the asset (e.g. a locally-built installer).
+# Face models live on a pinned, version-independent "assets-models" GitHub
+# release (github.com) so the install does NOT depend on HuggingFace's Xet CDN
+# (cas-bridge.xethub.co), which some networks can't resolve -- that was the
+# "remote name could not be resolved" failure (issue #5b). The fixed tag works
+# for every build, including locally-built installers with no -Version. Try the
+# mirror first (by exact name), then fall back to the HuggingFace source.
+$ModelMirrorBase = "https://github.com/Wulfic/simple-photos/releases/download/assets-models"
+
 function Get-Model {
     param([string]$Name, [string]$FallbackUrl)
     $out = Join-Path $models $Name
@@ -215,11 +217,9 @@ function Get-Model {
         Write-Info "skip $Name (already present)"
         return
     }
-    if (-not [string]::IsNullOrWhiteSpace($Version)) {
-        Get-File "https://github.com/Wulfic/simple-photos/releases/download/v$Version/$Name" $out
-        if ((Test-Path $out) -and (Get-Item $out).Length -gt 0) { return }
-        Write-Warn2 "release mirror for $Name unavailable - falling back to HuggingFace"
-    }
+    Get-File "$ModelMirrorBase/$Name" $out
+    if ((Test-Path $out) -and (Get-Item $out).Length -gt 0) { return }
+    Write-Warn2 "models mirror for $Name unavailable - falling back to HuggingFace"
     Get-File $FallbackUrl $out
 }
 

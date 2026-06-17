@@ -691,14 +691,51 @@ async fn spawn_native_picker() -> Result<String, String> {
 /// directory browser.
 #[cfg(target_os = "windows")]
 async fn spawn_native_picker_windows() -> Result<String, String> {
+    // The dialog is spawned by the (background) server process, which Windows
+    // forbids from stealing the foreground — so a plain ShowDialog pops up
+    // *behind* the active window with no taskbar entry. We work around both:
+    //   1. The owner form sets `ShowInTaskbar = $true` and a title, so there's
+    //      always a visible taskbar button even if focus-stealing is blocked.
+    //   2. `Fg.Force` uses the AttachThreadInput trick (attach our input queue
+    //      to the current foreground thread) to legitimately call
+    //      SetForegroundWindow, pulling the owner — and therefore its owned
+    //      modal folder dialog — to the front and giving it focus.
     const PS: &str = r#"
 if (-not [Environment]::UserInteractive) { exit 2 }
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class Fg {
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+  public static void Force(IntPtr h) {
+    uint fg = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero);
+    uint cur = GetCurrentThreadId();
+    AttachThreadInput(cur, fg, true);
+    ShowWindow(h, 5);
+    BringWindowToTop(h);
+    SetForegroundWindow(h);
+    AttachThreadInput(cur, fg, false);
+  }
+}
+"@
 $owner = New-Object System.Windows.Forms.Form
+$owner.Text = 'Simple Photos — Select Storage Folder'
 $owner.TopMost = $true
-$owner.ShowInTaskbar = $false
-$owner.Opacity = 0
+$owner.ShowInTaskbar = $true
+$owner.FormBorderStyle = 'None'
+$owner.Size = New-Object System.Drawing.Size(1, 1)
+$owner.StartPosition = 'CenterScreen'
+$owner.Add_Shown({ [Fg]::Force($owner.Handle) })
 $owner.Show()
+[System.Windows.Forms.Application]::DoEvents()
+[Fg]::Force($owner.Handle)
 $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
 $dlg.Description = 'Select Photo Storage Folder'
 $dlg.ShowNewFolderButton = $true
@@ -869,6 +906,28 @@ pub async fn resolve_storage_sentinel(
         ));
     }
 
+    let located = locate_sentinel_file(&query.filename).await?;
+
+    let file_path = std::path::PathBuf::from(located.trim());
+    let parent = file_path
+        .parent()
+        .ok_or_else(|| AppError::Internal("Sentinel has no parent path".into()))?;
+
+    Ok(Json(SentinelResponse {
+        path: parent.display().to_string(),
+    }))
+}
+
+/// Locate a sentinel file the browser wrote via `showDirectoryPicker()` and
+/// return its absolute path. The search strategy is platform-specific because
+/// the filesystem layout is: Unix shells out to `find` over common mount roots;
+/// Windows uses PowerShell to scan the user profile (Desktop/Documents/Pictures
+/// live here) first, then every ready fixed drive.
+///
+/// `filename` is pre-validated by `is_valid_sentinel_name` to `sp-picker-<uuid>.tmp`
+/// (lowercase hex + hyphens only), so it is safe to embed in the shell command.
+#[cfg(not(target_os = "windows"))]
+async fn locate_sentinel_file(filename: &str) -> Result<String, AppError> {
     // Search common user-accessible locations (non-system roots only).
     // Non-existent roots are silently skipped by `find`.
     const SEARCH_ROOTS: &[&str] = &[
@@ -881,12 +940,11 @@ pub async fn resolve_storage_sentinel(
         "/srv",
     ];
 
-    let filename = query.filename.clone();
     let mut cmd = tokio::process::Command::new("find");
     for root in SEARCH_ROOTS {
         cmd.arg(root);
     }
-    cmd.args(["-maxdepth", "8", "-name", &filename, "-type", "f"]);
+    cmd.args(["-maxdepth", "8", "-name", filename, "-type", "f"]);
     // Suppress "Permission denied" noise from inaccessible subdirectories.
     cmd.stderr(std::process::Stdio::null());
 
@@ -900,21 +958,75 @@ pub async fn resolve_storage_sentinel(
         .map_err(|e| AppError::Internal(format!("find command error: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let first = stdout.lines().next().ok_or_else(|| {
-        AppError::BadRequest(
-            "Sentinel file not found. The selected folder may not be readable by \
-             the server process, or it is outside the searched locations \
-             (/home, /mnt, /media, /data, /srv). Enter the path manually instead."
-                .into(),
-        )
-    })?;
+    stdout
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "Sentinel file not found. The selected folder may not be readable by \
+                 the server process, or it is outside the searched locations \
+                 (/home, /mnt, /media, /data, /srv). Enter the path manually instead."
+                    .into(),
+            )
+        })
+}
 
-    let file_path = std::path::PathBuf::from(first.trim());
-    let parent = file_path
-        .parent()
-        .ok_or_else(|| AppError::Internal("Sentinel has no parent path".into()))?;
+#[cfg(target_os = "windows")]
+async fn locate_sentinel_file(filename: &str) -> Result<String, AppError> {
+    // Search the user profile first (Desktop/Documents/Pictures live there),
+    // then every ready fixed drive. First match wins. `-Depth` and the
+    // filesystem `-Filter` keep the scan reasonably fast; the 15s timeout
+    // below bounds the worst case.
+    let ps = format!(
+        r#"
+$name = '{name}'
+$roots = New-Object System.Collections.Generic.List[string]
+if ($env:USERPROFILE) {{ [void]$roots.Add($env:USERPROFILE) }}
+foreach ($d in [System.IO.DriveInfo]::GetDrives()) {{
+  if ($d.IsReady -and $d.DriveType -eq 'Fixed') {{ [void]$roots.Add($d.RootDirectory.FullName) }}
+}}
+foreach ($root in $roots) {{
+  $hit = Get-ChildItem -LiteralPath $root -Filter $name -Recurse -Depth 8 -File -Force -ErrorAction SilentlyContinue |
+         Select-Object -First 1
+  if ($hit) {{ [Console]::Out.Write($hit.FullName); exit 0 }}
+}}
+exit 1
+"#,
+        name = filename
+    );
 
-    Ok(Json(SentinelResponse {
-        path: parent.display().to_string(),
-    }))
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tokio::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &ps,
+            ])
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        AppError::BadRequest("Directory search timed out — try entering the path manually.".into())
+    })?
+    .map_err(|e| AppError::Internal(format!("powershell search error: {e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "Sentinel file not found. The selected folder may not be readable by \
+                 the server process. Enter the path manually instead."
+                    .into(),
+            )
+        })
 }

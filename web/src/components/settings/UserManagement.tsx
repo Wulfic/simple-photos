@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import { useIsAdmin } from "../../hooks/useIsAdmin";
 import AppIcon from "../AppIcon";
 import { getErrorMessage } from "../../utils/formatters";
+import { Select } from "../ui";
 
 type ManagedUser = {
   id: string;
@@ -165,12 +166,12 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
   if (!usersLoaded || !isAdmin) return null;
 
   return (
-    <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
+    <section className="card p-6 mb-4">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">Manage Users</h2>
         <button
           onClick={() => setShowAddUser(!showAddUser)}
-          className="inline-flex items-center gap-1.5 bg-blue-600 text-white px-3 py-1.5 rounded-md hover:bg-blue-500 text-sm font-medium transition-colors"
+          className="btn btn-primary btn-md inline-flex items-center"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -181,39 +182,39 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
 
       {/* Add user form */}
       {showAddUser && (
-        <form onSubmit={handleAddUser} className="mb-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg space-y-3">
+        <form onSubmit={handleAddUser} className="mb-4 p-4 bg-surface-raised/50 rounded-lg space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Username</label>
+            <label className="block text-sm font-medium text-fg-muted mb-1">Username</label>
             <input
               type="text"
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               required
               minLength={3}
               autoFocus
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
+            <label className="block text-sm font-medium text-fg-muted mb-1">Password</label>
             <input
               type="password"
               value={newUserPassword}
               onChange={(e) => setNewUserPassword(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               required
               minLength={8}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Role</label>
+            <label className="block text-sm font-medium text-fg-muted mb-1">Role</label>
             <div className="flex gap-4">
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="radio"
                   checked={newUserRole === "user"}
                   onChange={() => setNewUserRole("user")}
-                  className="accent-blue-600"
+                  className="accent-indigo-600"
                 />
                 User
               </label>
@@ -222,17 +223,17 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                   type="radio"
                   checked={newUserRole === "admin"}
                   onChange={() => setNewUserRole("admin")}
-                  className="accent-blue-600"
+                  className="accent-indigo-600"
                 />
                 Admin
               </label>
             </div>
           </div>
           <div className="flex gap-2">
-            <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm">
+            <button type="submit" className="btn btn-primary btn-md">
               Create User
             </button>
-            <button type="button" onClick={() => setShowAddUser(false)} className="px-4 py-2 rounded-md text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
+            <button type="button" onClick={() => setShowAddUser(false)} className="px-4 py-2 rounded-md text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10">
               Cancel
             </button>
           </div>
@@ -243,30 +244,30 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-200 dark:border-gray-700 text-left">
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400">Username</th>
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400">Role</th>
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400">2FA</th>
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400">Created</th>
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400 text-right">Actions</th>
+            <tr className="border-b border-edge text-left">
+              <th className="pb-2 font-medium text-fg-muted">Username</th>
+              <th className="pb-2 font-medium text-fg-muted">Role</th>
+              <th className="pb-2 font-medium text-fg-muted">2FA</th>
+              <th className="pb-2 font-medium text-fg-muted">Created</th>
+              <th className="pb-2 font-medium text-fg-muted text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {managedUsers.map((u) => (
-              <tr key={u.id} className="border-b border-gray-100 dark:border-gray-700/50">
+              <tr key={u.id} className="border-b border-edge/50">
                 <td className="py-2.5 font-medium">{u.username}</td>
                 <td className="py-2.5">
                   {managedUsers.length > 1 && managedUsers.some(mu => mu.role === "admin") ? (
-                    <select
+                    <Select
+                      className="text-xs py-1"
                       value={u.role}
                       onChange={(e) => handleChangeRole(u.id, e.target.value as "admin" | "user")}
-                      className="text-xs border rounded px-2 py-1 bg-transparent focus:outline-none focus:ring-1 focus:ring-blue-500"
                     >
                       <option value="user">User</option>
                       <option value="admin">Admin</option>
-                    </select>
+                    </Select>
                   ) : (
-                    <span className="text-xs capitalize text-gray-600 dark:text-gray-400">{u.role}</span>
+                    <span className="text-xs capitalize text-fg-muted">{u.role}</span>
                   )}
                 </td>
                 <td className="py-2.5">
@@ -281,13 +282,13 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                     <button
                       onClick={() => handleAdminSetup2fa(u.id)}
                       disabled={setup2faLoading}
-                      className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium transition-colors disabled:opacity-50"
+                      className="text-xs text-accent-600 dark:text-accent-400 hover:text-accent-800 dark:hover:text-accent-300 font-medium transition-colors disabled:opacity-50"
                     >
                       Enable
                     </button>
                   )}
                 </td>
-                <td className="py-2.5 text-xs text-gray-500 dark:text-gray-400">
+                <td className="py-2.5 text-xs text-fg-muted">
                   {new Date(u.created_at).toLocaleDateString()}
                 </td>
                 <td className="py-2.5 text-right">
@@ -295,7 +296,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                     {/* Reset Password */}
                     <button
                       onClick={() => { setResetPwUserId(resetPwUserId === u.id ? null : u.id); setResetPwValue(""); }}
-                      className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+                      className="p-1.5 rounded hover:bg-surface-sunken dark:hover:bg-white/10 text-fg-muted"
                       title="Reset password"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -306,7 +307,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                     {u.totp_enabled && (
                       <button
                         onClick={() => handleResetUser2fa(u.id)}
-                        className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+                        className="p-1.5 rounded hover:bg-surface-sunken dark:hover:bg-white/10 text-fg-muted"
                         title="Reset 2FA"
                       >
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -331,12 +332,12 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                         value={resetPwValue}
                         onChange={(e) => setResetPwValue(e.target.value)}
                         placeholder="New password"
-                        className="border rounded px-2 py-1 text-xs w-36 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="input w-36 text-xs py-1"
                         autoFocus
                       />
                       <button
                         onClick={() => handleResetUserPassword(u.id)}
-                        className="bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700"
+                        className="btn btn-primary btn-sm"
                       >
                         Set
                       </button>
@@ -348,13 +349,13 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                       <span className="text-xs text-red-600 dark:text-red-400">Delete?</span>
                       <button
                         onClick={() => handleDeleteUser(u.id)}
-                        className="bg-red-600 text-white px-2 py-1 rounded text-xs hover:bg-red-700"
+                        className="btn btn-danger btn-sm"
                       >
                         Yes
                       </button>
                       <button
                         onClick={() => setConfirmDeleteId(null)}
-                        className="px-2 py-1 rounded text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        className="px-2 py-1 rounded text-xs text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10"
                       >
                         No
                       </button>
@@ -370,11 +371,11 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
       {/* 2FA Setup Modal */}
       {setup2faUserId && setup2faUri && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
+          <div className="card shadow-pop w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-fg mb-2">
               Enable 2FA for {managedUsers.find(u => u.id === setup2faUserId)?.username}
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            <p className="text-sm text-fg-muted mb-4">
               Scan this QR code with an authenticator app (Google Authenticator, Authy, etc.), then enter the 6-digit code to confirm.
             </p>
 
@@ -383,7 +384,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+              <label className="block text-xs font-medium text-fg-muted mb-1">
                 Verification Code
               </label>
               <div className="flex gap-2">
@@ -393,14 +394,14 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                   onChange={(e) => setSetup2faCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAdminConfirm2fa(); }}
                   placeholder="000000"
-                  className="flex-1 border border-gray-300 dark:border-gray-600 rounded-md px-3 py-2 text-center font-mono text-lg tracking-widest focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700"
+                  className="input flex-1 text-center font-mono text-lg tracking-widest"
                   maxLength={6}
                   autoFocus
                 />
                 <button
                   onClick={handleAdminConfirm2fa}
                   disabled={setup2faLoading || setup2faCode.length !== 6}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 text-sm font-medium transition-colors"
+                  className="btn btn-primary btn-md"
                 >
                   {setup2faLoading ? "Verifying…" : "Confirm"}
                 </button>
@@ -409,12 +410,12 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
 
             {setup2faBackupCodes.length > 0 && (
               <details className="mb-4">
-                <summary className="text-xs text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
+                <summary className="text-xs text-fg-muted cursor-pointer hover:text-fg">
                   Backup codes (save these!)
                 </summary>
-                <div className="mt-2 grid grid-cols-2 gap-1 p-3 bg-gray-50 dark:bg-gray-900 rounded-md font-mono text-xs">
+                <div className="mt-2 grid grid-cols-2 gap-1 p-3 bg-canvas rounded-md font-mono text-xs">
                   {setup2faBackupCodes.map((code, i) => (
-                    <span key={i} className="text-gray-700 dark:text-gray-300">{code}</span>
+                    <span key={i} className="text-fg-muted">{code}</span>
                   ))}
                 </div>
               </details>
@@ -422,7 +423,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
 
             <button
               onClick={cancelAdminSetup2fa}
-              className="w-full mt-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+              className="w-full mt-2 px-4 py-2 text-sm text-fg-muted hover:text-fg hover:bg-surface-sunken dark:hover:bg-white/10 rounded-md transition-colors"
             >
               Cancel
             </button>

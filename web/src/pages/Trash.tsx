@@ -13,6 +13,7 @@ import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { decrypt } from "../crypto/crypto";
 import { downloadRaw } from "../api/core";
+import { GallerySkeleton } from "../components/skeletons";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -310,7 +311,7 @@ export default function Trash() {
   const totalSize = items.reduce((sum, i) => sum + i.size_bytes, 0);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       <main className="max-w-screen-2xl mx-auto px-4 py-6">
@@ -318,11 +319,11 @@ export default function Trash() {
         <div className="mb-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+              <h1 className="text-2xl font-bold text-fg flex items-center gap-3">
                 <AppIcon name="trashcan" size="w-7 h-7" />
                 Trash
               </h1>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-sm text-fg-muted mt-1">
                 {items.length === 0
                   ? "No items in trash"
                   : `${items.length} item${items.length !== 1 ? "s" : ""} · ${formatBytes(totalSize)} · Items are permanently deleted after 30 days`}
@@ -336,7 +337,7 @@ export default function Trash() {
               <button
                 onClick={() => setConfirmEmpty(true)}
                 disabled={actionLoading !== null}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                className="btn btn-danger btn-md flex items-center"
               >
                 <AppIcon name="trashcan" />
                 Empty Trash
@@ -376,15 +377,11 @@ export default function Trash() {
         )}
 
         {/* ── Loading ───────────────────────────────────────────────── */}
-        {loading && (
-          <div className="flex items-center justify-center py-20">
-            <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
+        {loading && <GallerySkeleton />}
 
         {/* ── Empty State ───────────────────────────────────────────── */}
         {!loading && items.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+          <div className="flex flex-col items-center justify-center py-20 text-fg-muted">
             <AppIcon name="trashcan" size="w-16 h-16" className="mb-4" />
             <p className="text-lg font-medium">Trash is empty</p>
             <p className="text-sm mt-1">Deleted photos will appear here for 30 days</p>
@@ -396,12 +393,12 @@ export default function Trash() {
           <div className="flex items-center gap-3 mb-4">
             <button
               onClick={selectAll}
-              className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+              className="text-sm text-accent-600 dark:text-accent-400 hover:underline"
             >
               {selectedIds.size === items.length ? "Deselect all" : "Select all"}
             </button>
             {selectedIds.size > 0 && (
-              <span className="text-sm text-gray-500 dark:text-gray-400">
+              <span className="text-sm text-fg-muted">
                 {selectedIds.size} selected
               </span>
             )}
@@ -426,8 +423,8 @@ export default function Trash() {
                 <div
                   className={`group relative w-full h-full overflow-hidden cursor-pointer border-2 transition-all ${
                     isSelected
-                      ? "border-blue-500 ring-2 ring-blue-500/30"
-                      : "border-transparent hover:border-gray-300 dark:hover:border-gray-600"
+                      ? "border-accent-500 ring-2 ring-accent-500/30"
+                      : "border-transparent hover:border-edge-strong"
                   }`}
                   onClick={() => toggleSelect(item.id)}
                 >
@@ -436,7 +433,7 @@ export default function Trash() {
                     src={thumbUrl}
                     alt={item.filename}
                     loading="lazy"
-                    className="w-full h-full object-cover bg-gray-200 dark:bg-gray-700"
+                    className="w-full h-full object-cover bg-edge"
                     onError={(e) => {
                       (e.target as HTMLImageElement).src = "";
                       (e.target as HTMLImageElement).classList.add("bg-gray-300", "dark:bg-gray-600");
@@ -447,8 +444,8 @@ export default function Trash() {
                   <div
                     className={`absolute top-2 left-2 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${
                       isSelected
-                        ? "bg-blue-500 border-blue-500 text-white"
-                        : "bg-white/70 dark:bg-gray-800/70 border-gray-300 dark:border-gray-500 opacity-0 group-hover:opacity-100"
+                        ? "bg-accent-500 border-accent-500 text-white"
+                        : "bg-white/70 dark:bg-gray-800/70 border-edge-strong opacity-0 group-hover:opacity-100"
                     }`}
                   >
                     {isSelected && (
@@ -485,7 +482,7 @@ export default function Trash() {
       {/* ── Empty Trash Confirmation Modal ──────────────────────────── */}
       {confirmEmpty && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6">
+          <div className="card shadow-pop max-w-md w-full mx-4 p-6">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
                 <svg className="w-5 h-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -493,10 +490,10 @@ export default function Trash() {
                 </svg>
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                <h3 className="text-lg font-semibold text-fg">
                   Empty Trash?
                 </h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <p className="text-sm text-fg-muted">
                   This will permanently delete {items.length} item{items.length !== 1 ? "s" : ""} ({formatBytes(totalSize)}).
                   This action cannot be undone.
                 </p>
@@ -505,14 +502,14 @@ export default function Trash() {
             <div className="flex gap-3 mt-6">
               <button
                 onClick={() => setConfirmEmpty(false)}
-                className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                className="btn btn-secondary btn-md flex-1"
               >
                 Cancel
               </button>
               <button
                 onClick={handleEmptyTrash}
                 disabled={actionLoading === "empty"}
-                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
+                className="btn btn-danger btn-md flex-1"
               >
                 {actionLoading === "empty" ? "Deleting..." : "Delete All"}
               </button>

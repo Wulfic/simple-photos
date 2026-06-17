@@ -178,26 +178,26 @@ export default function PwaInstallInstructionsDialog({
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-labelledby="pwa-install-title"
     >
       <div
-        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-5"
+        className="card shadow-pop max-w-md w-full p-5"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-3">
           <h3
             id="pwa-install-title"
-            className="text-base font-semibold text-gray-900 dark:text-white"
+            className="text-base font-semibold text-fg"
           >
             {title}
           </h3>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            className="text-fg-muted hover:text-fg"
             aria-label="Close"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -206,20 +206,20 @@ export default function PwaInstallInstructionsDialog({
           </button>
         </div>
 
-        <ol className="list-decimal pl-5 space-y-1.5 text-sm text-gray-700 dark:text-gray-300">
+        <ol className="list-decimal pl-5 space-y-1.5 text-sm text-fg-muted">
           {steps.map((s, i) => (
             <li key={i}>{s}</li>
           ))}
         </ol>
 
         {note && (
-          <p className="mt-3 text-xs text-gray-500 dark:text-gray-400 italic">{note}</p>
+          <p className="mt-3 text-xs text-fg-muted italic">{note}</p>
         )}
 
         <div className="mt-5 flex justify-end">
           <button
             onClick={onClose}
-            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 text-sm font-medium"
+            className="btn btn-primary btn-md"
           >
             Got it
           </button>

@@ -5,6 +5,7 @@ import { BASE } from "../../api/core";
 import { useAuthStore } from "../../store/auth";
 import { getDateCutoff, tryPrettyJson } from "./shared";
 import { formatDate, relativeTime } from "../../utils/formatters";
+import { Select } from "../ui";
 
 const EVENT_COLORS: Record<string, string> = {
   // Auth
@@ -20,8 +21,8 @@ const EVENT_COLORS: Record<string, string> = {
   totp_enabled: "text-indigo-600 dark:text-indigo-400",
   totp_disabled: "text-indigo-600 dark:text-indigo-400",
   backup_code_used: "text-yellow-600 dark:text-yellow-400",
-  token_refresh: "text-gray-500 dark:text-gray-400",
-  logout: "text-gray-500 dark:text-gray-400",
+  token_refresh: "text-fg-muted",
+  logout: "text-fg-muted",
   // Blobs
   blob_upload: "text-cyan-600 dark:text-cyan-400",
   blob_delete: "text-red-500 dark:text-red-400",
@@ -57,7 +58,7 @@ const EVENT_COLORS: Record<string, string> = {
   // Background tasks
   auto_scan_complete: "text-teal-600 dark:text-teal-400",
   trash_purge_complete: "text-orange-600 dark:text-orange-400",
-  housekeeping_complete: "text-gray-500 dark:text-gray-400",
+  housekeeping_complete: "text-fg-muted",
   encryption_migration_complete: "text-emerald-600 dark:text-emerald-400",
   backup_sync_cycle_complete: "text-sky-600 dark:text-sky-400",
   // Admin
@@ -191,11 +192,11 @@ function ServerLogsTab() {
   return (
     <div className="space-y-4">
       {/* Filters */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+      <div className="card p-4">
         <div className="flex flex-wrap gap-3 items-end">
           {/* Text Search */}
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               Search
             </label>
             <input
@@ -203,18 +204,17 @@ function ServerLogsTab() {
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
               placeholder="Filter by text..."
-              className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              className="input"
             />
           </div>
           {/* Event Type */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               Event Type
             </label>
-            <select
+            <Select
               value={eventFilter}
               onChange={(e) => setEventFilter(e.target.value)}
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500"
             >
               <option value="">All Events</option>
               {eventTypes.map((t) => (
@@ -222,11 +222,11 @@ function ServerLogsTab() {
                   {t.replace(/_/g, " ")}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           {/* IP Filter */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               IP Address
             </label>
             <input
@@ -234,38 +234,36 @@ function ServerLogsTab() {
               value={ipFilter}
               onChange={(e) => setIpFilter(e.target.value)}
               placeholder="e.g. 192.168.1.1"
-              className="w-36 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500"
+              className="input w-36"
             />
           </div>
           {/* Date Range */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               Time Range
             </label>
-            <select
+            <Select
               value={dateRange}
               onChange={(e) =>
                 setDateRange(e.target.value as typeof dateRange)
               }
-              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500"
             >
               <option value="all">All Time</option>
               <option value="1h">Last Hour</option>
               <option value="24h">Last 24h</option>
               <option value="7d">Last 7 Days</option>
               <option value="30d">Last 30 Days</option>
-            </select>
+            </Select>
           </div>
           {/* Source Server Filter */}
           {sourceServers.length > 0 && (
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+              <label className="block text-xs font-medium text-fg-muted mb-1">
                 Source
               </label>
-              <select
+              <Select
                 value={serverFilter}
                 onChange={(e) => setServerFilter(e.target.value)}
-                className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500"
               >
                 <option value="">All Servers</option>
                 <option value="local">This Server</option>
@@ -274,11 +272,11 @@ function ServerLogsTab() {
                     {s}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           )}
         </div>
-        <div className="mt-2 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+        <div className="mt-2 flex items-center gap-3 text-xs text-fg-muted">
           <span>Showing {filtered.length} of {total.toLocaleString()} entries</span>
           <span className="flex items-center gap-1">
             <span className={`inline-block w-2 h-2 rounded-full ${streaming ? "bg-green-500 animate-pulse" : "bg-gray-400"}`} />
@@ -296,35 +294,35 @@ function ServerLogsTab() {
       {/* Log Table */}
       {loading ? (
         <div className="flex justify-center py-12">
-          <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          <div className="w-8 h-8 border-4 border-accent-600 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : (
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden">
+        <div className="card overflow-hidden">
           <div className="overflow-x-auto max-h-[65vh] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0 z-10">
+              <thead className="bg-surface-raised sticky top-0 z-10">
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Time
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Event
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     User
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Source
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     IP
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-fg-muted">
                     Details
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              <tbody className="divide-y divide-edge">
                 {filtered.map((log) => (
                   <AuditLogRow key={log.id} log={log} />
                 ))}
@@ -332,7 +330,7 @@ function ServerLogsTab() {
                   <tr>
                     <td
                       colSpan={6}
-                      className="text-center py-8 text-gray-400 dark:text-gray-500"
+                      className="text-center py-8 text-fg-muted"
                     >
                       No audit log entries found
                     </td>
@@ -342,11 +340,11 @@ function ServerLogsTab() {
             </table>
           </div>
           {nextCursor && (
-            <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-3 text-center">
+            <div className="border-t border-edge px-4 py-3 text-center">
               <button
                 onClick={loadMore}
                 disabled={loadingMore}
-                className="px-4 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition-colors disabled:opacity-50"
+                className="px-4 py-1.5 text-sm font-medium text-accent-600 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-900/20 rounded-md transition-colors disabled:opacity-50"
               >
                 {loadingMore ? "Loading..." : "Load More"}
               </button>
@@ -360,21 +358,21 @@ function ServerLogsTab() {
 
 function AuditLogRow({ log }: { log: AuditLogEntry }) {
   const [expanded, setExpanded] = useState(false);
-  const colorClass = EVENT_COLORS[log.event_type] || "text-gray-700 dark:text-gray-300";
+  const colorClass = EVENT_COLORS[log.event_type] || "text-fg-muted";
 
   return (
     <>
       <tr
-        className="hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer"
+        className="hover:bg-surface-sunken dark:hover:bg-white/5 cursor-pointer"
         onClick={() => setExpanded((v) => !v)}
       >
-        <td className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap" title={formatDate(log.created_at)}>
+        <td className="px-3 py-2 text-xs text-fg-muted whitespace-nowrap" title={formatDate(log.created_at)}>
           {relativeTime(log.created_at)}
         </td>
         <td className={`px-3 py-2 text-xs font-mono font-medium ${colorClass}`}>
           {log.event_type.replace(/_/g, " ")}
         </td>
-        <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-300">
+        <td className="px-3 py-2 text-xs text-fg-muted">
           {log.username || log.user_id || "—"}
         </td>
         <td className="px-3 py-2 text-xs whitespace-nowrap">
@@ -386,20 +384,20 @@ function AuditLogRow({ log }: { log: AuditLogEntry }) {
               {log.source_server}
             </span>
           ) : (
-            <span className="text-gray-400 dark:text-gray-500">local</span>
+            <span className="text-fg-muted">local</span>
           )}
         </td>
-        <td className="px-3 py-2 text-xs font-mono text-gray-600 dark:text-gray-400">
+        <td className="px-3 py-2 text-xs font-mono text-fg-muted">
           {log.ip_address}
         </td>
-        <td className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400 max-w-xs truncate">
+        <td className="px-3 py-2 text-xs text-fg-muted max-w-xs truncate">
           {log.details !== "{}" ? log.details : "—"}
         </td>
       </tr>
       {expanded && (
-        <tr className="bg-gray-50 dark:bg-gray-800/80">
+        <tr className="bg-surface/80">
           <td colSpan={6} className="px-4 py-3">
-            <div className="text-xs space-y-1 text-gray-600 dark:text-gray-300">
+            <div className="text-xs space-y-1 text-fg-muted">
               <p>
                 <span className="font-medium">Full timestamp:</span>{" "}
                 {formatDate(log.created_at)}
@@ -417,7 +415,7 @@ function AuditLogRow({ log }: { log: AuditLogEntry }) {
               {log.details !== "{}" && (
                 <div>
                   <span className="font-medium">Details:</span>
-                  <pre className="mt-1 p-2 bg-gray-100 dark:bg-gray-900 rounded text-xs font-mono whitespace-pre-wrap break-all">
+                  <pre className="mt-1 p-2 bg-canvas rounded text-xs font-mono whitespace-pre-wrap break-all">
                     {tryPrettyJson(log.details)}
                   </pre>
                 </div>

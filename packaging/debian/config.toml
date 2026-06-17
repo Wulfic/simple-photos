@@ -32,3 +32,19 @@ static_root = "/usr/share/simple-photos/web"
 
 [tls]
 enabled = false
+
+[geo]
+# Reverse geocoding via the offline GeoNames cities500 dataset. OFF by default
+# (matches the server default and the Windows package). The setup service's
+# fetch-assets.sh downloads the dataset to this exact path, so enabling geo
+# (here or in Settings) works immediately.
+#
+# dataset_path MUST be absolute and match fetch-assets.sh. The server's
+# GeoConfig default is the RELATIVE "data/cities500.txt", which resolves against
+# WorkingDirectory=/var/lib/simple-photos → /var/lib/simple-photos/data/...,
+# i.e. NOT where fetch-assets.sh writes it (/var/lib/simple-photos/cities500.txt)
+# — so without this override reverse geocoding silently stays "unavailable" on
+# every .deb install (issue #5a). The absolute path also makes the runtime
+# self-heal download land where the server actually looks.
+enabled = false
+dataset_path = "/var/lib/simple-photos/cities500.txt"

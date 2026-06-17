@@ -3,7 +3,8 @@
  * and hamburger menu (mobile). Visible on all authenticated pages.
  */
 import { useState, useRef, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useLocation } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { useAuthStore } from "../store/auth";
 import { useThemeStore } from "../store/theme";
 import { useBackupStore } from "../store/backup";
@@ -60,7 +61,7 @@ export default function AppHeader({
   /** Optional action buttons (Upload, New Album, etc.) rendered on the right */
   children?: React.ReactNode;
 }) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const { pathname } = useLocation();
   const { username, refreshToken, logout: storeLogout, accessToken } = useAuthStore();
   const { theme, toggle: toggleTheme } = useThemeStore();
@@ -132,7 +133,7 @@ export default function AppHeader({
 
   return (
     <>
-    <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 shadow-sm dark:bg-gradient-to-r dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 dark:border-white/10 dark:shadow-lg dark:shadow-black/20">
+    <header className="fixed top-0 left-0 right-0 z-50 bg-surface/80 backdrop-blur-md border-b border-edge shadow-sm dark:bg-gradient-to-r dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 dark:border-white/10 dark:shadow-lg dark:shadow-black/20 [view-transition-name:app-header]">
       {/* Full-bleed: the nav must sit near the screen edges. A centred
           `max-w-screen-2xl mx-auto` cap left large empty gutters between the
           edge and the buttons on wide (Ubuntu) monitors — issue: "too much
@@ -148,7 +149,7 @@ export default function AppHeader({
             alt="Simple Photos"
             className="w-8 h-8 rounded-md shadow-sm group-hover:shadow-md transition-shadow"
           />
-          <span className="text-gray-900 dark:text-white font-semibold text-lg tracking-tight hidden sm:inline">
+          <span className="text-fg font-semibold text-lg tracking-tight hidden sm:inline">
             Simple Photos
           </span>
         </button>
@@ -169,8 +170,8 @@ export default function AppHeader({
                   transition-all duration-200
                   ${
                     isActive
-                      ? "bg-gray-200 text-gray-900 dark:bg-white/15 dark:text-white shadow-inner"
-                      : "text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-white/10"
+                      ? "bg-edge text-fg shadow-inner dark:bg-white/15 dark:text-white"
+                      : "text-fg-muted hover:text-fg hover:bg-surface-sunken dark:text-gray-400 dark:hover:text-white dark:hover:bg-white/10"
                   }
                 `}
               >
@@ -190,11 +191,11 @@ export default function AppHeader({
 
         {/* ── Activity indicator + User dropdown ──────────────────────── */}
         {username && (
-          <div className="flex items-center gap-2 border-l border-gray-200 dark:border-white/10 pl-2 sm:pl-4 ml-1 sm:ml-2 mr-1 shrink-0">
+          <div className="flex items-center gap-2 border-l border-edge dark:border-white/10 pl-2 sm:pl-4 ml-1 sm:ml-2 mr-1 shrink-0">
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen((v) => !v)}
-                className="flex items-center gap-2 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white text-xs transition-colors"
+                className="flex items-center gap-2 text-fg-muted hover:text-fg dark:text-gray-400 dark:hover:text-white text-xs transition-colors"
               >
                 <div className={`w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold uppercase shrink-0${hasActivity ? " processing-ring" : ""}`}>
                   {username.charAt(0)}
@@ -209,17 +210,17 @@ export default function AppHeader({
                 // edge, so on wide / centered layouts (and at non-100% UI
                 // scale) it detached from the button and floated off to the
                 // side (issue #5). top-full drops it directly below the avatar.
-                <div className="absolute right-0 top-full mt-2 w-44 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 py-1" style={{ zIndex: 9999 }}>
+                <div className="absolute right-0 top-full mt-2 w-44 bg-surface rounded-lg shadow-2xl border border-edge py-1" style={{ zIndex: 9999 }}>
                   <button
                     onClick={() => { navigate("/secure-gallery"); setDropdownOpen(false); }}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors"
                   >
                     <AppIcon name="locks" />
                     Secure Albums
                   </button>
                   <button
                     onClick={() => { navigate("/settings"); setDropdownOpen(false); }}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors"
                   >
                     <AppIcon name="gear" />
                     Settings
@@ -227,24 +228,24 @@ export default function AppHeader({
                   {isAdmin && (
                   <button
                     onClick={() => { navigate("/diagnostics"); setDropdownOpen(false); }}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors"
                   >
                     <AppIcon name="shield" />
                     Diagnostics
                   </button>
                   )}
-                  <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+                  <div className="border-t border-edge my-1" />
                   <button
                     onClick={() => { setCastOpen(true); setDropdownOpen(false); }}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors"
                   >
                     <CastIcon className="w-4 h-4" />
                     Cast…
                   </button>
-                  <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+                  <div className="border-t border-edge my-1" />
                   <button
                     onClick={() => { toggleTheme(); setDropdownOpen(false); }}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 flex items-center gap-2 transition-colors"
                   >
                     {theme === "dark" ? (
                       <AppIcon name="night" />
@@ -253,7 +254,7 @@ export default function AppHeader({
                     )}
                     {theme === "dark" ? "Dark Mode" : "Light Mode"}
                   </button>
-                  <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+                  <div className="border-t border-edge my-1" />
                   <button
                     onClick={() => { handleLogout(); setDropdownOpen(false); }}
                     className="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center gap-2 transition-colors"

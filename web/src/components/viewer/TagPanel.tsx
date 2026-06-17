@@ -104,12 +104,12 @@ export default function TagPanel({ show, onClose, photoId }: TagPanelProps) {
               value={input}
               onChange={e => setInput(e.target.value)}
               placeholder="Add a tag…"
-              className="flex-1 bg-white/10 text-white text-sm rounded-lg px-3 py-2 border border-white/10 focus:border-blue-500 focus:outline-none placeholder-gray-500"
+              className="flex-1 bg-white/10 text-white text-sm rounded-lg px-3 py-2 border border-white/10 focus:border-accent-500 focus:outline-none placeholder-gray-500"
             />
             <button
               type="submit"
               disabled={!input.trim()}
-              className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 disabled:opacity-40 disabled:cursor-default transition-colors"
+              className="btn btn-primary btn-md"
             >
               Add
             </button>

@@ -44,10 +44,10 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
+      <h2 className="text-2xl font-bold text-fg mb-1">
         Set Up Android App
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-fg-muted text-sm mb-6">
         Install the Simple Photos app on your Android device for
         automatic photo backup.
       </p>
@@ -57,41 +57,41 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
         <button
           onClick={handleDownload}
           disabled={downloading}
-          className="flex items-center justify-center gap-3 w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 disabled:opacity-50 text-sm font-medium transition-colors"
+          className="btn btn-success btn-lg w-full gap-3"
         >
           <AppIcon name="download" size="w-6 h-6" />
           {downloading ? "Downloading…" : "Download APK"}
         </button>
 
         {/* Sideloading instructions */}
-        <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4">
-          <h3 className="font-medium text-gray-800 dark:text-gray-200 text-sm mb-3">
+        <div className="bg-canvas rounded-lg p-4">
+          <h3 className="font-medium text-fg text-sm mb-3">
             How to install (sideload):
           </h3>
-          <ol className="text-sm text-gray-600 dark:text-gray-400 space-y-3">
+          <ol className="text-sm text-fg-muted space-y-3">
             <li className="flex gap-3">
-              <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">
+              <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">
                 1
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Download the APK
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Click the button above or transfer the APK to your
                   phone via USB/email.
                 </p>
               </div>
             </li>
             <li className="flex gap-3">
-              <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">
+              <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">
                 2
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Enable "Install unknown apps"
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Go to{" "}
                   <strong>
                     Settings → Apps → Special access → Install unknown
@@ -102,44 +102,44 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
               </div>
             </li>
             <li className="flex gap-3">
-              <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">
+              <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">
                 3
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Open the APK
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Tap the downloaded APK file and confirm the
                   installation prompt.
                 </p>
               </div>
             </li>
             <li className="flex gap-3">
-              <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">
+              <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">
                 4
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Connect to your server
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Open the app, enter your server URL:
                 </p>
-                <code className="block mt-1 bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded text-xs text-gray-800 dark:text-gray-200 break-all">
+                <code className="block mt-1 bg-edge-strong px-2 py-1 rounded text-xs text-fg break-all">
                   {window.location.origin}
                 </code>
               </div>
             </li>
             <li className="flex gap-3">
-              <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">
+              <span className="flex-shrink-0 w-6 h-6 bg-accent-100 dark:bg-accent-900/40 text-accent-700 dark:text-accent-300 rounded-full flex items-center justify-center text-xs font-bold">
                 5
               </span>
               <div>
-                <p className="font-medium text-gray-700 dark:text-gray-300">
+                <p className="font-medium text-fg-muted">
                   Sign in & grant permissions
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-fg-muted">
                   Log in with your account and allow the app to access
                   your photos and videos for automatic encrypted backup.
                 </p>
@@ -161,7 +161,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
             setError("");
             setStep("users");
           }}
-          className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2.5 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium transition-colors"
+          className="btn btn-secondary btn-md flex-1"
         >
           ← Back
         </button>
@@ -170,7 +170,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
             setError("");
             setStep("complete");
           }}
-          className="flex-[2] bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
+          className="btn btn-primary btn-md flex-[2]"
         >
           Continue →
         </button>

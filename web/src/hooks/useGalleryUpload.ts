@@ -70,6 +70,38 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
 
     setUploadProgress({ done: 0, total: fileArray.length });
 
+    // Pre-declare how many files the server will actually convert (#11). The
+    // inline upload path otherwise self-registers each file as its own +1, so
+    // the conversion banner shows "12/13" — the denominator one step ahead —
+    // instead of the true batch total. Declaring the convertible count up front
+    // pins the denominator so it reads n/total throughout. The set MUST mirror
+    // the server's `conversion::conversion_target` extension list; anything not
+    // listed is already browser-native and triggers no conversion.
+    const CONVERTIBLE_EXTENSIONS = new RegExp(
+      "\\.(" +
+        // images → jpeg
+        "heic|heif|tiff|tif|hdr|exr|psd|tga|pcx|ppm|pgm|pbm|pnm|xbm|xpm|" +
+        "jp2|j2k|jpx|jxl|jfif|jpe|cur|" +
+        // videos → mp4
+        "mkv|avi|wmv|mov|m4v|flv|f4v|3gp|3g2|mpg|mpeg|ts|mts|m2ts|vob|asf|" +
+        "rm|rmvb|divx|ogv|mxf|dv|hevc|h264|h265|" +
+        // audio → mp3
+        "wma|aiff|aif|m4a|aac|wv|ape|opus|ra|ram|amr|ac3|dts|tta|mka|au|snd|caf|spx|dsf|dff" +
+        ")$",
+      "i",
+    );
+    const convertibleCount = fileArray.filter((f) => CONVERTIBLE_EXTENSIONS.test(f.name)).length;
+    let batchPinned = false;
+    if (convertibleCount > 0) {
+      try {
+        await api.admin.conversionBatchStart(convertibleCount);
+        batchPinned = true;
+      } catch {
+        // Non-admin or endpoint unavailable — fall back to the legacy per-file
+        // counter behaviour. Never block the upload on this.
+      }
+    }
+
     let firstError: string | null = null;
     try {
       for (let i = 0; i < fileArray.length; i++) {
@@ -79,9 +111,16 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
           await uploadSingleFile(file);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : "Upload failed";
-          if (!firstError) firstError = `${file.name}: ${msg}`;
+          // Audio backup disabled is a server *policy*, not a user error — the
+          // file is intentionally skipped. Surface it only in the console/server
+          // logs (the diagnostics page), never as a gallery error toast (#12).
+          if (/audio backup is disabled/i.test(msg)) {
+            console.warn(`[upload] Skipped (audio backup disabled): ${file.name}`);
+          } else if (!firstError) {
+            firstError = `${file.name}: ${msg}`;
+          }
           // Continue with remaining files — one bad file shouldn't abort the
-          // whole batch (e.g. a single audio rejected by the server toggle).
+          // whole batch.
         }
       }
       setUploadProgress({ done: fileArray.length, total: fileArray.length });
@@ -90,6 +129,10 @@ export function useGalleryUpload({ loadEncryptedPhotos, setError }: UploadDeps) 
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
+      if (batchPinned) {
+        // Release the banner pin now that every inline conversion is done.
+        await api.admin.conversionBatchEnd().catch(() => {});
+      }
       setUploading(false);
       setUploadProgress(null);
       endTask("upload");

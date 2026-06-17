@@ -73,10 +73,90 @@
   animation: slide-in-left 0.25s ease-out;
 }
 
+/* ── Toast popups (#8) ──────────────────────────────────────── */
+@keyframes toast-in {
+  from {
+    transform: translateY(-12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.toast-in {
+  animation: toast-in 0.15s ease-out;
+}
+
+/* ── Route page transitions (View Transitions API) ──────────────
+ * React Router opts navigations into a view transition via
+ * `{ viewTransition: true }`. By default the browser snapshots the WHOLE
+ * document (root), which would crossfade the fixed AppHeader and make it
+ * flicker on every nav. We isolate two named regions instead:
+ *   - `app-header` (the fixed header) — no animation, stays put.
+ *   - `page` (the route-content wrapper) — the only thing that crossfades.
+ * Everything is gated behind `prefers-reduced-motion: no-preference` so
+ * reduced-motion users get instant, animation-free swaps. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes vt-fade-out {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+  }
+  @keyframes vt-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  ::view-transition-old(page) {
+    animation: vt-fade-out 200ms ease both;
+  }
+  ::view-transition-new(page) {
+    animation: vt-fade-in 200ms ease both;
+  }
+
+  /* The header has its own snapshot but we deliberately do NOT animate it,
+   * so it holds steady while the page content underneath crossfades. */
+  ::view-transition-old(app-header),
+  ::view-transition-new(app-header) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+}
+
 @layer base {
+  /* ── Semantic color tokens ─────────────────────────────────────────────────
+   * Channel triplets (space-separated R G B) consumed by tailwind.config.js via
+   * `rgb(var(--token) / <alpha-value>)`. Light mode is the deliberately-tuned
+   * cool-neutral ramp below: an off-white `slate-50` canvas (NOT pure white,
+   * which glares), white surfaces, and slate text whose muted step still clears
+   * the WCAG AA 4.5:1 floor on white (slate-400/`gray-400` did not). The `.dark`
+   * block re-points the same tokens at the original hand-tuned gray ramp, so
+   * existing dark mode is preserved 1:1. */
+  :root {
+    --canvas: 248 250 252; /* slate-50  — page background */
+    --surface: 255 255 255; /* white     — cards, header, modals, menus */
+    --surface-raised: 248 250 252; /* slate-50  — tiles / secondary panels above a surface */
+    --surface-sunken: 241 245 249; /* slate-100 — recessed wells */
+    --edge: 226 232 240; /* slate-200 — hairline borders / dividers */
+    --edge-strong: 203 213 225; /* slate-300 — stronger dividers */
+    --fg: 15 23 42; /* slate-900 — primary text */
+    --fg-muted: 71 85 105; /* slate-600 — secondary text (AA on white) */
+    --fg-subtle: 100 116 139; /* slate-500 — labels / muted (AA: 4.6:1 on white) */
+  }
+
   /* ── Dark-mode defaults ──────────────────────────────────────── */
   .dark {
     color-scheme: dark;
+    --canvas: 17 24 39; /* gray-900 */
+    --surface: 31 41 55; /* gray-800 */
+    --surface-raised: 55 65 81; /* gray-700 — lighter = raised in dark */
+    --surface-sunken: 17 24 39; /* gray-900 — recessed = darker than surface */
+    --edge: 55 65 81; /* gray-700 — solid stand-in for the old white/10 hairline */
+    --edge-strong: 75 85 99; /* gray-600 */
+    --fg: 243 244 246; /* gray-100 */
+    --fg-muted: 209 213 219; /* gray-300 */
+    --fg-subtle: 156 163 175; /* gray-400 */
   }
 
   /* Form elements automatically inherit dark styling */
@@ -89,6 +169,176 @@
   .dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus,
   .dark select:focus,
   .dark textarea:focus {
-    @apply ring-blue-400 border-blue-400;
+    @apply ring-accent-400 border-accent-400;
+  }
+}
+
+/* ── Refined button / card / input system (#14 facelift) ─────────────────────
+ *
+ * "Refined & subtle" design language: crisp inset rings, soft layered shadows,
+ * gentle hover-lift, keyboard-only focus rings. Defined once here so call sites
+ * use a semantic class (`btn btn-primary btn-md`) instead of hand-rolled flat
+ * Tailwind soup. The <Button>/<IconButton>/<Card> primitives compose these. */
+@layer components {
+  /* Buttons — base + size + variant are additive (`btn btn-primary btn-md`).
+   * Depth comes from a vertical gradient (lighter top → darker bottom), a lit
+   * top edge + grounding drop shadow (shadow-btn), and a tactile press that
+   * pushes the button down (translate-y) while the shadow recesses inward. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 font-semibold rounded-lg
+           whitespace-nowrap select-none bg-gradient-to-b
+           transition-all duration-150 ease-out
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+           focus-visible:ring-accent-500/60 focus-visible:ring-offset-canvas
+           active:translate-y-px
+           disabled:opacity-50 disabled:pointer-events-none
+           disabled:shadow-none disabled:active:translate-y-0;
+  }
+  .btn-sm { @apply text-xs px-2.5 py-1.5 gap-1.5 rounded-md; }
+  .btn-md { @apply text-sm px-4 py-2; }
+  .btn-lg { @apply text-base px-5 py-2.5; }
+
+  .btn-primary {
+    @apply from-accent-500 to-accent-600 text-white
+           ring-1 ring-inset ring-accent-700/50 shadow-btn
+           hover:from-accent-400 hover:to-accent-500 hover:shadow-btn-hover
+           active:from-accent-600 active:to-accent-700 active:shadow-btn-inset;
+  }
+  .btn-secondary {
+    @apply from-surface to-surface-raised text-fg
+           ring-1 ring-inset ring-edge-strong shadow-btn
+           hover:from-surface-raised hover:to-surface-sunken hover:shadow-btn-hover
+           active:from-surface-sunken active:to-surface-sunken active:shadow-btn-inset
+           dark:from-surface-raised dark:to-surface
+           dark:hover:from-edge-strong dark:hover:to-surface-raised
+           dark:active:from-surface dark:active:to-surface;
+  }
+  .btn-ghost {
+    @apply text-fg-muted hover:bg-surface-sunken hover:text-fg active:bg-edge
+           dark:hover:bg-white/10 dark:active:bg-white/15;
+  }
+  .btn-danger {
+    @apply from-red-500 to-red-600 text-white
+           ring-1 ring-inset ring-red-700/50 shadow-btn
+           hover:from-red-400 hover:to-red-500 hover:shadow-btn-hover
+           active:from-red-600 active:to-red-700 active:shadow-btn-inset;
+  }
+  /* Success / confirm — green semantic action (create, import, download). */
+  .btn-success {
+    @apply from-green-500 to-green-600 text-white
+           ring-1 ring-inset ring-green-700/50 shadow-btn
+           hover:from-green-400 hover:to-green-500 hover:shadow-btn-hover
+           active:from-green-600 active:to-green-700 active:shadow-btn-inset;
+  }
+
+  /* Square icon button — neutral, ghost-style hover, tactile press, keyboard
+   * ring. Stays low-emphasis (toolbars) but presses like the others. */
+  .icon-btn {
+    @apply inline-flex items-center justify-center rounded-lg p-2 leading-none
+           text-fg-subtle transition-all duration-150 ease-out
+           hover:bg-surface-sunken hover:text-fg active:bg-edge active:scale-95
+           dark:hover:bg-white/10 dark:hover:text-white dark:active:bg-white/15
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60
+           disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  /* Surfaces — `card` is the resting surface; add `card-interactive` for
+   * clickable cards that should lift on hover. Stronger layered shadow gives
+   * real separation from the page. */
+  .card {
+    @apply bg-surface rounded-xl border border-edge shadow-card;
+  }
+  .card-interactive {
+    @apply transition-all duration-150 hover:shadow-card-hover
+           hover:-translate-y-0.5 hover:border-edge-strong
+           active:translate-y-0 active:shadow-card;
+  }
+
+  /* Toggle switch — recessed track (inset shadow groove) with a raised knob
+   * (drop shadow). On-state uses the accent gradient like primary buttons. */
+  .toggle {
+    @apply relative inline-flex h-6 w-11 shrink-0 items-center rounded-full
+           bg-edge-strong transition-colors duration-200
+           shadow-[inset_0_1px_2px_0_rgb(0_0_0_/_0.25)]
+           focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60
+           focus-visible:ring-offset-2 focus-visible:ring-offset-canvas
+           disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .toggle-on {
+    @apply bg-gradient-to-b from-accent-500 to-accent-600;
+  }
+  .toggle-knob {
+    @apply inline-block h-4 w-4 transform rounded-full bg-white
+           shadow-[0_1px_2px_0_rgb(0_0_0_/_0.45)] ring-1 ring-black/5
+           transition-transform duration-200;
+  }
+
+  /* Stat tile — small metric card. Raised gradient surface + hairline + soft
+   * shadow so figures sit on a panel rather than a flat gray block. */
+  .stat-tile {
+    @apply rounded-lg p-3 text-center
+           bg-gradient-to-b from-surface to-surface-raised
+           dark:from-surface-raised dark:to-surface
+           border border-edge shadow-card;
+  }
+
+  /* Text input / select / textarea opt-in class. Recessed (inset shadow) so
+   * fields read as carved into the surface rather than floating on it. */
+  .input {
+    @apply w-full rounded-lg border border-edge-strong
+           bg-surface-raised px-3 py-2 text-sm
+           text-fg placeholder-fg-subtle
+           shadow-input transition
+           focus:outline-none focus:ring-2 focus:ring-accent-500/50
+           focus:border-accent-500;
+  }
+
+  /* Select control — same recessed, carved-in look as `.input` but width is
+   * left to the caller (toolbar filters are inline/content-width; form fields
+   * opt into full width). `appearance-none` + right padding make room for the
+   * custom chevron the <Select> primitive overlays. */
+  .select {
+    @apply rounded-lg border border-edge-strong
+           bg-surface-raised pl-3 pr-9 py-2 text-sm text-fg
+           shadow-input transition appearance-none cursor-pointer
+           focus:outline-none focus:ring-2 focus:ring-accent-500/50
+           focus:border-accent-500;
+  }
+
+  /* Skeleton placeholder — neutral resting block used by the <Skeleton>
+   * primitive while content loads. `.skeleton-shimmer` layers a moving
+   * highlight band on top; it is reduced-motion gated below so reduced-motion
+   * users get a flat static block instead of a sweeping animation. */
+  .skeleton {
+    @apply bg-edge dark:bg-surface-raised;
+  }
+}
+
+/* Shimmer sweep for skeletons — only when motion is welcome. The band is a
+ * translucent white gradient so it reads as a highlight over the gray base in
+ * both light and dark mode. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes skeleton-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+  .skeleton-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgb(255 255 255 / 0.35) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  }
+  .dark .skeleton-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgb(255 255 255 / 0.08) 50%,
+      transparent 100%
+    );
   }
 }

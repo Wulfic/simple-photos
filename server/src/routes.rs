@@ -347,6 +347,15 @@ fn photo_routes() -> Router<AppState> {
             "/admin/conversion-status",
             get(crate::conversion::conversion_status),
         )
+        // Client-declared conversion batch pin (banner denominator, #11)
+        .route(
+            "/admin/conversion-batch/start",
+            post(crate::conversion::conversion_batch_start),
+        )
+        .route(
+            "/admin/conversion-batch/end",
+            post(crate::conversion::conversion_batch_end),
+        )
         // Transcode GPU status
         .route(
             "/transcode/status",

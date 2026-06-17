@@ -16,7 +16,7 @@ export default function DownloadChoiceModal({
 }: DownloadChoiceModalProps) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onCancel}
     >
       <div
@@ -31,7 +31,7 @@ export default function DownloadChoiceModal({
         <div className="flex flex-col gap-3">
           <button
             onClick={onConvertedDownload}
-            className="w-full px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+            className="btn btn-primary btn-md w-full"
           >
             Converted file
           </button>

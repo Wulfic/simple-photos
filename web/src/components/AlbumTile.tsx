@@ -32,7 +32,7 @@ export function ThumbnailImg({ photo }: { photo: CachedPhoto }) {
   }
 
   return (
-    <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center bg-gray-100 dark:bg-gray-700">
+    <div className="w-full h-full flex items-center justify-center text-fg-muted text-xs px-1 text-center bg-surface-raised">
       {photo.filename}
     </div>
   );
@@ -89,8 +89,8 @@ export default function AlbumTile({ photo, isSelectionMode, isSelected, onClick,
 
   return (
     <div
-      className={`relative w-full h-full bg-gray-100 dark:bg-gray-700 rounded overflow-hidden cursor-pointer group ${
-        isSelected ? "ring-2 ring-blue-500" : ""
+      className={`relative w-full h-full bg-surface-raised rounded overflow-hidden cursor-pointer group ${
+        isSelected ? "ring-2 ring-accent-500" : ""
       }`}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}

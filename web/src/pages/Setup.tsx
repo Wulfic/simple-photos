@@ -48,25 +48,25 @@ export default function Setup() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen flex items-center justify-center bg-canvas">
       <ThemeToggle />
-      <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow p-8">
+      <div className="card max-w-md w-full p-8">
         <img src="/logo.png" alt="Simple Photos" className="w-14 h-14 mx-auto mb-3" />
         <h1 className="text-2xl font-bold text-center mb-2">Unlock Photos</h1>
-        <p className="text-gray-600 dark:text-gray-400 text-sm text-center mb-6">
+        <p className="text-fg-muted text-sm text-center mb-6">
           Enter your password to unlock your encrypted photos. Your encryption
           key is derived from your password and never stored permanently.
         </p>
         <form onSubmit={handleUnlock} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-sm font-medium text-fg-muted mb-1">
               Password
             </label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="input"
               required
               autoFocus
               autoComplete="current-password"
@@ -81,7 +81,7 @@ export default function Setup() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+            className="btn btn-primary btn-md w-full"
           >
             {loading ? "Deriving key..." : "Unlock"}
           </button>

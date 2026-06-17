@@ -228,7 +228,7 @@ private fun ModeTogglePill(label: String, sub: String, onClick: () -> Unit) {
  * Auto-plays the embedded motion-photo video on top of the still image.
  * Mirrors the web's MotionVideoOverlay.
  */
-@OptIn(UnstableApi::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun MotionPhotoOverlay(
     photo: PhotoEntity,

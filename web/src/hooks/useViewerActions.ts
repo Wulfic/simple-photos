@@ -5,7 +5,7 @@
  * Keeps the Viewer component focused on rendering and state management.
  */
 import { useState, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useAppNavigate } from "./useAppNavigate";
 import { api } from "../api/client";
 import { db, type MediaType } from "../db";
 import { useAuthStore } from "../store/auth";
@@ -26,6 +26,8 @@ interface UseViewerActionsParams {
   filename: string;
   mediaType: MediaType;
   albumId: string | undefined;
+  /** Where back/leave/delete should land — origin-aware (album, secure, gallery). */
+  backTo: string;
   photoIds: string[] | undefined;
   currentIndex: number;
   cropCorners: { x: number; y: number; w: number; h: number };
@@ -53,6 +55,7 @@ export default function useViewerActions({
   filename,
   mediaType,
   albumId,
+  backTo,
   photoIds,
   currentIndex,
   cropCorners,
@@ -73,7 +76,7 @@ export default function useViewerActions({
   setError,
   preloadCache,
 }: UseViewerActionsParams) {
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
 
   const [showLeavePrompt, setShowLeavePrompt] = useState(false);
   const [saveCopySuccess, setSaveCopySuccess] = useState(false);
@@ -322,14 +325,14 @@ export default function useViewerActions({
   const handleLeaveAndSave = useCallback(async () => {
     await handleSaveEdit();
     setShowLeavePrompt(false);
-    navigate("/gallery");
-  }, [handleSaveEdit, navigate]);
+    navigate(backTo);
+  }, [handleSaveEdit, navigate, backTo]);
 
   const handleLeaveAndDiscard = useCallback(() => {
     setEditMode(false);
     setShowLeavePrompt(false);
-    navigate("/gallery");
-  }, [setEditMode, navigate]);
+    navigate(backTo);
+  }, [setEditMode, navigate, backTo]);
 
   const handleDelete = useCallback(async () => {
     const msg = "Move this item to trash? You can restore it within 30 days.";
@@ -382,11 +385,11 @@ export default function useViewerActions({
         });
       }
       await db.photos.delete(id);
-      navigate("/gallery");
+      navigate(backTo);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Delete failed");
     }
-  }, [id, navigate, setError]);
+  }, [id, navigate, backTo, setError]);
 
   const handleRemoveFromAlbum = useCallback(async () => {
     if (!id || !albumId) return;
@@ -423,7 +426,8 @@ export default function useViewerActions({
         const nextId = remaining[nextIdx];
         navigate("/photo/" + nextId, { replace: true, state: { photoIds: remaining, currentIndex: nextIdx, albumId } });
       } else {
-        navigate(`/album/${albumId}`);
+        // Route is /albums/:albumId — the singular "/album/" was a dead route.
+        navigate(`/albums/${albumId}`);
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Remove failed");

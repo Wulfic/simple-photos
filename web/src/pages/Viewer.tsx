@@ -5,8 +5,9 @@
  * photo preloading, crop/brightness/rotation editing, favorites,
  * and prev/next navigation via photoIds passed through location.state.
  */
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useParams, useLocation } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { db } from "../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import PhotoInfoPanel from "../components/viewer/PhotoInfoPanel";
@@ -45,6 +46,8 @@ interface ViewerLocationState {
   albumId?: string;
   /** When true, the photo was opened from a secure gallery — hide all mutating UI */
   secureGallery?: boolean;
+  /** When opened from inside a secure gallery, the gallery id so back returns to it */
+  secureAlbumId?: string;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -52,7 +55,7 @@ interface ViewerLocationState {
 export default function Viewer() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const isBackupServer = useIsBackupServer();
 
   // Destructure navigation context from location.state (passed by Gallery)
@@ -61,8 +64,24 @@ export default function Viewer() {
   const currentIndex = navState.currentIndex ?? 0;
   const albumId = navState.albumId;
   const secureGallery = navState.secureGallery ?? false;
+  const secureAlbumId = navState.secureAlbumId;
   const hasPrev = !!photoIds && currentIndex > 0;
   const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
+  // Only real user-created albums support "remove from album". Smart/special
+  // albums (Photos, Videos, GIFs, Audio, People, Pets, Memories, Trips) all use
+  // a `smart-` id prefix — there the action makes no sense, so show Delete (#1).
+  const canRemoveFromAlbum = !!albumId && !albumId.startsWith("smart-");
+
+  // Origin-aware back target so leaving the viewer returns to where the photo
+  // was opened from — the album, the specific secure gallery, or the main
+  // gallery — instead of always dumping the user on /gallery (#7).
+  const backTo = secureGallery
+    ? secureAlbumId
+      ? `/secure-gallery?album=${secureAlbumId}`
+      : "/secure-gallery"
+    : albumId
+      ? `/albums/${albumId}`
+      : "/gallery";
 
   // ── Favorite state ────────────────────────────────────────────────────────
   const [isFavorite, setIsFavorite] = useState(false);
@@ -79,6 +98,21 @@ export default function Viewer() {
   // ── Full-screen overlay state ──────────────────────────────────────────
   const [showOverlay, setShowOverlay] = useState(true);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
+  // Height of the bottom edit panel, measured live so the media/crop area can
+  // be inset above it in edit mode — otherwise the panel overlaps the lower
+  // part of the photo and the crop region drifts under the bar (#13).
+  const editPanelRef = useRef<HTMLDivElement>(null);
+  const [editPanelHeight, setEditPanelHeight] = useState(0);
+  // Coordinate frame for the crop overlay (border lines + corner handles),
+  // measured AFTER layout settles. Reading getBoundingClientRect()/getMediaRect()
+  // during render returned the pre-commit box — one step behind the
+  // editPanelHeight inset (which lands asynchronously via ResizeObserver after
+  // each tab switch) — so the overlay was permanently offset from where the
+  // photo actually rendered. Measuring in a layout effect keeps the handles
+  // locked to the real photo edges. Bump editLayoutTick to force a re-measure
+  // (e.g. when the full-res image finishes decoding in edit mode).
+  const [cropOverlayRects, setCropOverlayRects] = useState<{ media: DOMRect; container: DOMRect } | null>(null);
+  const [editLayoutTick, setEditLayoutTick] = useState(0);
 
   // ── Photo subtype state (burst, motion, panorama) ─────────────────────
   const [photoSubtype, setPhotoSubtype] = useState<string | undefined>();
@@ -204,12 +238,31 @@ export default function Viewer() {
     showDownloadChoice, setShowDownloadChoice,
   } = useViewerActions({
     id, mediaUrl, filename, mediaType, mimeType,
-    albumId, photoIds, currentIndex,
+    albumId, backTo, photoIds, currentIndex,
     cropCorners, brightness, rotateValue, trimStart, trimEnd, mediaDuration,
     cropData, setCropData, setCropCorners, setBrightness, setRotateValue, setTrimStart, setTrimEnd,
     setEditMode, setError,
     preloadCache,
   });
+
+  // ── Mutually-exclusive top-bar panels (#15) ────────────────────────────────
+  // Info, Tags, and Edit were independent booleans, so opening one stacked it
+  // over the others. Each opener now closes the rest; entering edit closes both
+  // panels. (Toggling a panel off just closes it.)
+  const openInfoPanel = useCallback((next: boolean) => {
+    setShowInfoPanel(next);
+    if (next) { setShowTagPanel(false); setEditMode(false); }
+  }, [setEditMode]);
+  const openTagPanel = useCallback((next: boolean) => {
+    setShowTagPanel(next);
+    if (next) { setShowInfoPanel(false); setEditMode(false); }
+  }, [setEditMode]);
+  const handleToggleEdit = useCallback(() => {
+    if (editMode) { setEditMode(false); return; }
+    setShowInfoPanel(false);
+    setShowTagPanel(false);
+    enterEditMode(mediaType);
+  }, [editMode, setEditMode, enterEditMode, mediaType]);
 
   // ── Load favorite state + info for current photo ──────────────────────────
   useEffect(() => {
@@ -258,9 +311,13 @@ export default function Viewer() {
     const nextId = photoIds[index];
     setSlideDirection(index > currentIndex ? "right" : "left");
     setSlideKey((k) => k + 1);
+    // Intra-viewer photo switch: keep the bespoke slide-in animation and opt
+    // OUT of the route crossfade so the two don't fight each other. (Entering
+    // and leaving the viewer still crossfades via the page view-transition.)
     navigate(`/photo/${nextId}`, {
       replace: true,
-      state: { photoIds, currentIndex: index, albumId, secureGallery } satisfies ViewerLocationState,
+      viewTransition: false,
+      state: { photoIds, currentIndex: index, albumId, secureGallery, secureAlbumId } satisfies ViewerLocationState,
     });
   }, [photoIds, navigate, currentIndex]);
 
@@ -333,7 +390,7 @@ export default function Viewer() {
       if (e.key === "Escape") {
         if (showLeavePrompt) setShowLeavePrompt(false);
         else if (editMode) setShowLeavePrompt(true);
-        else navigate("/gallery");
+        else navigate(backTo);
         return;
       }
       if (editMode) return;
@@ -342,7 +399,48 @@ export default function Viewer() {
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [goPrev, goNext, navigate, editMode, showLeavePrompt]);
+  }, [goPrev, goNext, navigate, backTo, editMode, showLeavePrompt]);
+
+  // ── Measure the edit panel so the media area can sit above it (#13) ─────
+  // The panel height changes with the active tab (crop is short, trim is
+  // tall), so a ResizeObserver keeps the inset accurate without a magic
+  // constant. Reset to 0 when leaving edit mode so normal viewing is full-bleed.
+  useEffect(() => {
+    if (!editMode) { setEditPanelHeight(0); return; }
+    const el = editPanelRef.current;
+    if (!el) return;
+    const update = () => setEditPanelHeight(el.offsetHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [editMode, editTab]);
+
+  // ── Measure the crop overlay's coordinate frame AFTER layout settles ───────
+  // Runs in a layout effect (post-commit, pre-paint) so the photo box reflects
+  // the just-applied editPanelHeight inset and EDIT_CROP_PADDING_SCALE rather
+  // than the stale pre-commit layout a render-time getBoundingClientRect would
+  // see. Re-measures whenever anything that moves the photo changes: the inset
+  // height, the active tab (padding kicks in for crop), rotation, the source,
+  // or a fresh decode (editLayoutTick). A window resize listener keeps it
+  // pinned during viewport changes. Without this the corner handles drifted off
+  // the photo edges and stayed there (#4/#13 follow-up).
+  useLayoutEffect(() => {
+    if (!editMode || editTab !== "crop") {
+      setCropOverlayRects(null);
+      return;
+    }
+    const measure = () => {
+      const container = cropContainerRef.current;
+      if (!container) return;
+      const media = getMediaRect(mediaType);
+      if (!media) return;
+      setCropOverlayRects({ media, container: container.getBoundingClientRect() });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [editMode, editTab, editPanelHeight, rotateValue, mediaType, mediaUrl, slideKey, editLayoutTick, getMediaRect, cropContainerRef]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -357,17 +455,17 @@ export default function Viewer() {
         editMode={editMode}
         showOverlay={showOverlay}
         showInfoPanel={showInfoPanel}
-        setShowInfoPanel={setShowInfoPanel}
+        setShowInfoPanel={openInfoPanel}
         showTagPanel={showTagPanel}
-        setShowTagPanel={setShowTagPanel}
+        setShowTagPanel={openTagPanel}
         mediaType={mediaType}
         mediaUrl={mediaUrl}
         isFavorite={isFavorite}
         isBackupServer={isBackupServer || secureGallery}
         isRenderingVideo={isRenderingVideo}
-        albumId={albumId}
-        onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate(secureGallery ? "/secure-gallery" : "/gallery"); }}
-        onToggleEdit={() => { if (editMode) setEditMode(false); else enterEditMode(mediaType); }}
+        canRemoveFromAlbum={canRemoveFromAlbum}
+        onBack={() => { if (editMode) setShowLeavePrompt(true); else navigate(backTo); }}
+        onToggleEdit={handleToggleEdit}
         onToggleFavorite={onToggleFavorite}
         onDownload={handleDownload}
         onDelete={handleDelete}
@@ -389,10 +487,14 @@ export default function Viewer() {
         </div>
       )}
 
-      {/* Content area — fills entire viewport for true full-screen */}
+      {/* Content area — fills the viewport for true full-screen viewing. In
+          edit mode it is inset below the top bar and above the edit panel so
+          the whole photo (and its crop handles) stays visible and unobstructed
+          (#13); the crop math reads this element's box, so it adapts for free. */}
       <div
         ref={viewerContainerRef}
-        className="absolute inset-0 flex items-center justify-center overflow-hidden"
+        className="absolute left-0 right-0 flex items-center justify-center overflow-hidden"
+        style={editMode ? { top: 56, bottom: editPanelHeight } : { top: 0, bottom: 0 }}
         onClick={(e) => {
           if (swiped.current) return;
           if ((e.target as HTMLElement).closest("button")) return;
@@ -474,7 +576,7 @@ export default function Viewer() {
                   : "w-full h-full object-contain transition-transform duration-150"
                 }
                 draggable={inEdit ? false : undefined}
-                onLoad={inEdit ? undefined : computeCropZoom}
+                onLoad={inEdit ? () => setEditLayoutTick((t) => t + 1) : computeCropZoom}
                 onError={() => {
                   // Surface a decode/render failure instead of silently showing
                   // a broken image (or appearing stuck on the thumbnail) — #7.
@@ -519,23 +621,18 @@ export default function Viewer() {
                   visible={!editMode}
                 />
               )}
-              {inEdit && editTab === "crop" && cropImageRef.current && cropContainerRef.current && (() => {
-                // Use the hook's letterbox-aware visible content rect so
-                // the crop circles, drawn lines, and pointer-event
-                // handlers all share a single coordinate frame.  Falling
-                // back to the IMG element's raw bounding rect (the old
-                // behavior) put the corners on top of the letterbox
-                // padding instead of the photo itself.
-                const mediaRect = getMediaRect(mediaType) ?? cropImageRef.current.getBoundingClientRect();
-                return (
-                  <CropOverlay
-                    mediaRect={mediaRect}
-                    containerRect={cropContainerRef.current.getBoundingClientRect()}
-                    cropCorners={cropCorners}
-                    onCornerPointerDown={handleCornerPointerDown}
-                  />
-                );
-              })()}
+              {inEdit && editTab === "crop" && cropOverlayRects && (
+                // Coordinate frame is measured in a layout effect (see
+                // cropOverlayRects) so the border + handles stay locked to the
+                // photo's settled box instead of the stale pre-commit layout a
+                // render-time getBoundingClientRect would read.
+                <CropOverlay
+                  mediaRect={cropOverlayRects.media}
+                  containerRect={cropOverlayRects.container}
+                  cropCorners={cropCorners}
+                  onCornerPointerDown={handleCornerPointerDown}
+                />
+              )}
             </div>
           );
         })()}
@@ -639,6 +736,8 @@ export default function Viewer() {
                   setMediaDuration(dur);
                   if (trimEnd <= 0 || trimEnd > dur) setTrimEnd(dur);
                   if (trimStart > 0) v.currentTime = trimStart;
+                  // Video dimensions are now known — re-measure the crop frame.
+                  setEditLayoutTick((t) => t + 1);
                 }}
                 onTimeUpdate={(e) => {
                   if (editTab === "trim" && trimEnd > 0 && e.currentTarget.currentTime >= trimEnd) {
@@ -650,17 +749,14 @@ export default function Viewer() {
             </div>
             {/* Custom controls — NOT rotated (sits outside rotation wrapper) */}
             <VideoControls videoRef={videoRef} visible={true} />
-            {editTab === "crop" && videoRef.current && cropContainerRef.current && (() => {
-              const mediaRect = getMediaRect(mediaType) ?? videoRef.current!.getBoundingClientRect();
-              return (
-                <CropOverlay
-                  mediaRect={mediaRect}
-                  containerRect={cropContainerRef.current!.getBoundingClientRect()}
-                  cropCorners={cropCorners}
-                  onCornerPointerDown={handleCornerPointerDown}
-                />
-              );
-            })()}
+            {editTab === "crop" && cropOverlayRects && (
+              <CropOverlay
+                mediaRect={cropOverlayRects.media}
+                containerRect={cropOverlayRects.container}
+                cropCorners={cropCorners}
+                onCornerPointerDown={handleCornerPointerDown}
+              />
+            )}
           </div>
           );
         })()}
@@ -673,7 +769,7 @@ export default function Viewer() {
             </svg>
             <p className="text-gray-300 text-sm mb-1">This video format is not supported by your browser.</p>
             <p className="text-gray-500 text-xs mb-4 px-4 text-center truncate max-w-[80%]">{filename}</p>
-            <button onClick={handleDownload} className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors">Download</button>
+            <button onClick={handleDownload} className="btn btn-primary btn-md">Download</button>
           </div>
         )}
 
@@ -756,9 +852,11 @@ export default function Viewer() {
             onSelectFrame={(frameId) => {
               // Navigate to the selected burst frame
               if (frameId === id) return;
+              // Burst-frame switch is intra-viewer too — skip the crossfade.
               navigate(`/photo/${frameId}`, {
                 replace: true,
-                state: { photoIds, currentIndex, albumId, secureGallery } satisfies ViewerLocationState,
+                viewTransition: false,
+                state: { photoIds, currentIndex, albumId, secureGallery, secureAlbumId } satisfies ViewerLocationState,
               });
             }}
           />
@@ -775,6 +873,7 @@ export default function Viewer() {
           setTrimStart={setTrimStart} setTrimEnd={setTrimEnd} duration={mediaDuration}
           onSave={handleSaveEdit} onSaveCopy={handleSaveCopy}
           onClear={handleClearCrop} onCancel={() => setEditMode(false)}
+          rootRef={editPanelRef}
         />
       )}
 

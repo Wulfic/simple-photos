@@ -5,7 +5,7 @@ import { type PasswordStrength } from "../utils/validation";
 // ── Checkmark ─────────────────────────────────────────────────────────────────
 
 export const Checkmark = ({ ok }: { ok: boolean }) => (
-  <span className={ok ? "text-green-600 dark:text-green-400" : "text-gray-400"}>
+  <span className={ok ? "text-green-600 dark:text-green-400" : "text-fg-muted"}>
     {ok ? "\u2713" : "\u25CB"}
   </span>
 );
@@ -15,7 +15,7 @@ export const Checkmark = ({ ok }: { ok: boolean }) => (
 export const EyeIcon = ({ open }: { open: boolean }) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    className="w-5 h-5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-400 dark:text-gray-400 transition-colors"
+    className="w-5 h-5 text-gray-600 hover:text-gray-600 dark:hover:text-fg-subtle transition-colors"
     fill="none"
     viewBox="0 0 24 24"
     stroke="currentColor"
@@ -61,7 +61,7 @@ export function PasswordField({
 
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+      <label className="block text-sm font-medium text-fg-muted mb-1">
         {label}
       </label>
       <div className="relative">
@@ -69,7 +69,7 @@ export function PasswordField({
           type={show ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 pr-11 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="input pr-11"
           required
           minLength={8}
           maxLength={128}
@@ -88,13 +88,13 @@ export function PasswordField({
       {value.length > 0 && (
         <div className="mt-2">
           <div className="flex items-center gap-2 mb-1">
-            <div className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+            <div className="flex-1 h-1.5 bg-edge-strong rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-300 ${pwData.color}`}
                 style={{ width: `${(pwData.score / pwData.max) * 100}%` }}
               />
             </div>
-            <span className="text-xs font-medium text-gray-600 dark:text-gray-400 w-12 text-right">
+            <span className="text-xs font-medium text-fg-muted w-12 text-right">
               {pwData.label}
             </span>
           </div>
@@ -113,7 +113,7 @@ export function PasswordField({
             </li>
             <li>
               <Checkmark ok={pwData.checks.special} /> Special character
-              <span className="text-gray-400"> (optional)</span>
+              <span className="text-fg-muted"> (optional)</span>
             </li>
           </ul>
         </div>
@@ -137,7 +137,7 @@ export function ConfirmPasswordField({
 
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+      <label className="block text-sm font-medium text-fg-muted mb-1">
         Confirm Password
       </label>
       <div className="relative">
@@ -145,7 +145,7 @@ export function ConfirmPasswordField({
           type={show ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 pr-11 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="input pr-11"
           required
           autoComplete="new-password"
         />

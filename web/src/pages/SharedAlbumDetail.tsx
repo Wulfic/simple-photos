@@ -3,12 +3,14 @@
  * and manages member list (add/remove users).
  */
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
+import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { getErrorMessage } from "../utils/formatters";
+import { toast } from "../store/toast";
 
 type SharedPhoto = {
   id: string;
@@ -28,7 +30,7 @@ import type { ShareUser } from "../types/sharing";
 
 export default function SharedAlbumDetail() {
   const { albumId } = useParams<{ albumId: string }>();
-  const navigate = useNavigate();
+  const navigate = useAppNavigate();
   const gridClasses = useThumbnailSizeStore((s) => s.gridClasses)();
 
   const [albumName, setAlbumName] = useState("");
@@ -37,6 +39,13 @@ export default function SharedAlbumDetail() {
   const [members, setMembers] = useState<AlbumMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Surface errors as a dismissible toast (#8) instead of an inline bar.
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+      setError("");
+    }
+  }, [error]);
   const [showMembers, setShowMembers] = useState(false);
   const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
   const [showSharePicker, setShowSharePicker] = useState(false);
@@ -111,7 +120,7 @@ export default function SharedAlbumDetail() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="min-h-screen bg-canvas">
       <AppHeader />
 
       <main className="p-4">
@@ -120,7 +129,7 @@ export default function SharedAlbumDetail() {
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => navigate("/albums")}
-              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+              className="text-fg-muted hover:text-fg transition-colors shrink-0"
             >
               <AppIcon name="back-arrow" size="w-5 h-5" />
             </button>
@@ -130,7 +139,7 @@ export default function SharedAlbumDetail() {
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setShowMembers(!showMembers)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20 shadow-sm"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
             >
               <AppIcon name="shared" />
               <span>{members.length}</span>
@@ -138,7 +147,7 @@ export default function SharedAlbumDetail() {
             {isOwner && (
               <button
                 onClick={openSharePicker}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-gray-600 dark:text-gray-300 bg-white dark:bg-white/10 border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-white/20 shadow-sm"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z" />
@@ -149,16 +158,14 @@ export default function SharedAlbumDetail() {
           </div>
         </div>
 
-        {error && (
-          <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>
-        )}
+        {/* Errors surface via the global toast host (#8) */}
 
         {/* Members panel */}
         {showMembers && (
-          <div className="mb-4 bg-white dark:bg-gray-800 rounded-lg shadow p-4">
+          <div className="card mb-4 p-4">
             <h3 className="text-sm font-semibold mb-2">Members</h3>
             {members.length === 0 && (
-              <p className="text-sm text-gray-500 dark:text-gray-400">No members yet.</p>
+              <p className="text-sm text-fg-muted">No members yet.</p>
             )}
             <ul className="space-y-1">
               {members.map((m) => (
@@ -180,21 +187,21 @@ export default function SharedAlbumDetail() {
 
         {/* Share picker modal */}
         {showSharePicker && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
+            <div className="card shadow-pop max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
               <h3 className="text-lg font-semibold mb-4">Add Member</h3>
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {shareUsers.map((u) => (
                   <button
                     key={u.id}
                     onClick={() => addMember(u.id)}
-                    className="w-full text-left px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-sm"
+                    className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-sunken dark:hover:bg-white/10 text-sm"
                   >
                     {u.username}
                   </button>
                 ))}
               </div>
-              <button onClick={() => setShowSharePicker(false)} className="mt-4 w-full py-2 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md">
+              <button onClick={() => setShowSharePicker(false)} className="mt-4 w-full py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 rounded-md">
                 Cancel
               </button>
             </div>
@@ -204,19 +211,19 @@ export default function SharedAlbumDetail() {
         {/* Photo grid */}
         <div className={gridClasses}>
           {loading && photos.length === 0 && (
-            <p className="col-span-full text-gray-500 dark:text-gray-400 text-center py-12">
+            <p className="col-span-full text-fg-muted text-center py-12">
               Loading...
             </p>
           )}
           {!loading && photos.length === 0 && (
-            <p className="col-span-full text-gray-500 dark:text-gray-400 text-center py-12">
+            <p className="col-span-full text-fg-muted text-center py-12">
               No photos in this shared album yet.
             </p>
           )}
           {photos.map((photo) => (
             <div
               key={photo.id}
-              className="aspect-square bg-gray-100 dark:bg-gray-700 rounded overflow-hidden relative group"
+              className="aspect-square bg-surface-raised rounded overflow-hidden relative group"
             >
               {photo.ref_type === "photo" ? (
                 <img
@@ -226,7 +233,7 @@ export default function SharedAlbumDetail() {
                   loading="lazy"
                 />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
+                <div className="w-full h-full flex items-center justify-center text-fg-muted text-xs">
                   Encrypted
                 </div>
               )}
