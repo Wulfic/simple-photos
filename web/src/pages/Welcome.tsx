@@ -516,7 +516,7 @@ export default function Welcome() {
 
   if (step === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent-50 dark:from-gray-900 to-indigo-100 dark:to-gray-800">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent-50 dark:from-gray-900 to-accent-100 dark:to-gray-800">
         <ThemeToggle />
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-accent-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
@@ -527,7 +527,7 @@ export default function Welcome() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent-50 dark:from-gray-900 to-indigo-100 dark:to-gray-800 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent-50 dark:from-gray-900 to-accent-100 dark:to-gray-800 p-4">
       <ThemeToggle />
       <div className="max-w-lg w-full">
         <StepIndicator step={step} serverRole={serverRole} installType={installType} />

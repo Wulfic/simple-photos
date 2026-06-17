@@ -13,7 +13,7 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
   return (
     <div className="card overflow-hidden">
       <table className="w-full text-sm">
-        <thead className="bg-canvas border-b dark:border-gray-700">
+        <thead className="bg-canvas border-b border-edge">
           <tr>
             <th className="text-left px-4 py-2 font-medium text-fg-muted">
               File

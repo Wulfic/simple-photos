@@ -359,7 +359,7 @@ export default function Diagnostics() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => navigate("/settings")}
-              className="p-1.5 rounded-md text-gray-700 hover:text-fg-muted dark:hover:text-gray-200 hover:bg-edge dark:hover:bg-white/10 transition-colors"
+              className="p-1.5 rounded-md text-fg-muted hover:text-fg dark:hover:text-gray-200 hover:bg-edge dark:hover:bg-white/10 transition-colors"
               title="Back to Settings"
             >
               <AppIcon name="back-arrow" />
@@ -376,7 +376,7 @@ export default function Diagnostics() {
                     type="checkbox"
                     checked={autoRefresh}
                     onChange={(e) => setAutoRefresh(e.target.checked)}
-                    className="rounded border-gray-300 text-accent-600 focus:ring-accent-500"
+                    className="rounded border-edge-strong text-accent-600 focus:ring-accent-500"
                   />
                   Auto-refresh
                 </label>

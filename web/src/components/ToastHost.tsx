@@ -71,7 +71,7 @@ function ToastItem({ toast }: { toast: Toast }) {
       <p className="flex-1 py-2.5 text-sm text-fg break-words">{toast.message}</p>
       <button
         onClick={() => dismiss(toast.id)}
-        className="p-2.5 text-gray-600 hover:text-fg-muted dark:hover:text-gray-300 transition-colors flex-shrink-0"
+        className="p-2.5 text-fg-subtle hover:text-fg dark:hover:text-gray-300 transition-colors flex-shrink-0"
         aria-label="Dismiss notification"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

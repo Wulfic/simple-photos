@@ -105,7 +105,7 @@ export default function InstallTypeStep({
             setStep("server-role");
             setError("");
           }}
-          className="text-sm text-gray-700 hover:text-fg-muted dark:hover:text-gray-200"
+          className="text-sm text-fg-muted hover:text-fg dark:hover:text-gray-200"
         >
           &larr; Back
         </button>

@@ -964,7 +964,7 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
               <h2 className="text-xl font-semibold truncate capitalize">{clusterName}</h2>
               <button
                 onClick={() => setEditing(true)}
-                className="text-fg-muted hover:text-gray-600 text-sm"
+                className="text-fg-muted hover:text-fg text-sm"
                 title="Rename"
               >
                 ✏️
@@ -1227,7 +1227,7 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
               <h2 className="text-xl font-semibold truncate">{clusterName}</h2>
               <button
                 onClick={() => setEditing(true)}
-                className="text-fg-muted hover:text-gray-600 text-sm"
+                className="text-fg-muted hover:text-fg text-sm"
                 title="Rename"
               >
                 ✏️
