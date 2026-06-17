@@ -224,6 +224,22 @@ export const adminApi = {
   conversionStatus: () =>
     request<{ active: boolean; total: number; done: number }>("/admin/conversion-status"),
 
+  /** Declare an upcoming convertible-upload batch so the conversion banner
+   *  pins its denominator to `total` instead of tracking one ahead (#11).
+   *  Pair every successful call with `conversionBatchEnd()`. */
+  conversionBatchStart: (total: number) =>
+    request<{ active: boolean; total: number; done: number }>(
+      "/admin/conversion-batch/start",
+      { method: "POST", body: JSON.stringify({ total }) },
+    ),
+
+  /** Release the conversion batch pin set by `conversionBatchStart()`. */
+  conversionBatchEnd: () =>
+    request<{ active: boolean; total: number; done: number }>(
+      "/admin/conversion-batch/end",
+      { method: "POST" },
+    ),
+
 
 
   // ── SSL / TLS ──────────────────────────────────────────────────────────

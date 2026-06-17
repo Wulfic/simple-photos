@@ -39,7 +39,7 @@ export default function AccountStep({
       <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
         Create Admin Account
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
         This will be the first account with full admin privileges.
       </p>
 

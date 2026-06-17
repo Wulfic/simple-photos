@@ -93,6 +93,29 @@ function Invoke-FileDownload {
     }
 }
 
+# Pinned, models-only mirror release (issue #5b). The two large buffalo_l face
+# models are hosted here on github.com — NOT on HuggingFace's Xet CDN
+# (cas-bridge.xethub.co), which some install networks can't resolve.
+$ModelMirrorBase = "https://github.com/Wulfic/simple-photos/releases/download/assets-models"
+
+# Download a model from the github.com mirror first, falling back to its
+# upstream source (HuggingFace) only if the mirror is unreachable.
+function Invoke-ModelDownload {
+    param([string]$Name, [string]$FallbackUrl, [string]$Target)
+    $out = Join-Path $Target $Name
+    if ((Test-Path $out) -and (Get-Item $out).Length -gt 0) {
+        Write-Info "[dl] $Name already present — skipping"
+        return
+    }
+    try {
+        Invoke-FileDownload -Url "$ModelMirrorBase/$Name" -OutPath $out
+        return
+    } catch {
+        Write-Warn "[dl] mirror for $Name unavailable — falling back to upstream source"
+    }
+    Invoke-FileDownload -Url $FallbackUrl -OutPath $out
+}
+
 # Download ONNX models for AI face/object recognition.
 # Models: SCRFD face detector, ArcFace embeddings, UltraFace fallback,
 #         MobileNetV2 object classifier (all Apache-2.0 / MIT-licensed).
@@ -100,12 +123,12 @@ function Download-AiModels {
     param([string]$Target)
     if (-not (Test-Path $Target)) { New-Item -ItemType Directory -Path $Target -Force | Out-Null }
 
-    Invoke-FileDownload `
-        -Url "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx" `
-        -OutPath (Join-Path $Target "det_10g.onnx")
-    Invoke-FileDownload `
-        -Url "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx" `
-        -OutPath (Join-Path $Target "w600k_r50.onnx")
+    # buffalo_l models: mirror-first (issue #5b). ultraface + mobilenet already
+    # come from github.com (not Xet-affected), so they fetch directly.
+    Invoke-ModelDownload -Name "det_10g.onnx" -Target $Target `
+        -FallbackUrl "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx"
+    Invoke-ModelDownload -Name "w600k_r50.onnx" -Target $Target `
+        -FallbackUrl "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx"
     Invoke-FileDownload `
         -Url "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-RFB-320.onnx" `
         -OutPath (Join-Path $Target "ultraface-RFB-320.onnx")

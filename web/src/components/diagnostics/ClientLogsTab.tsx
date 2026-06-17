@@ -88,7 +88,7 @@ function ClientLogsTab() {
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
               Search
             </label>
             <input
@@ -100,7 +100,7 @@ function ClientLogsTab() {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
               Level
             </label>
             <select
@@ -116,7 +116,7 @@ function ClientLogsTab() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
               Session
             </label>
             <select
@@ -133,7 +133,7 @@ function ClientLogsTab() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
               Time Range
             </label>
             <select
@@ -150,7 +150,7 @@ function ClientLogsTab() {
             </select>
           </div>
         </div>
-        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+        <div className="mt-2 text-xs text-gray-700 dark:text-gray-400">
           Showing {filtered.length} of {logs.length} entries
         </div>
       </div>
@@ -172,19 +172,19 @@ function ClientLogsTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0 z-10">
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Time
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Level
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Tag
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Message
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Session
                   </th>
                 </tr>
@@ -197,7 +197,7 @@ function ClientLogsTab() {
                   <tr>
                     <td
                       colSpan={5}
-                      className="text-center py-8 text-gray-400 dark:text-gray-500"
+                      className="text-center py-8 text-gray-600 dark:text-gray-500"
                     >
                       No client log entries found
                     </td>
@@ -234,7 +234,7 @@ function ClientLogRow({ log }: { log: ClientLogEntry }) {
         onClick={() => setExpanded((v) => !v)}
       >
         <td
-          className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap"
+          className="px-3 py-2 text-xs text-gray-700 dark:text-gray-400 whitespace-nowrap"
           title={formatDate(log.client_ts)}
         >
           {relativeTime(log.created_at)}
@@ -252,7 +252,7 @@ function ClientLogRow({ log }: { log: ClientLogEntry }) {
         <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-300 max-w-md truncate">
           {log.message}
         </td>
-        <td className="px-3 py-2 text-xs font-mono text-gray-400 max-w-[100px] truncate">
+        <td className="px-3 py-2 text-xs font-mono text-gray-600 dark:text-gray-400 max-w-[100px] truncate">
           {log.session_id.slice(0, 8)}…
         </td>
       </tr>

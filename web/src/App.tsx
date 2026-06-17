@@ -24,6 +24,7 @@ import SavingBanner from "./components/SavingBanner";
 import AiBanner from "./components/AiBanner";
 import GeoBanner from "./components/GeoBanner";
 import ServerOfflineBanner from "./components/ServerOfflineBanner";
+import ToastHost from "./components/ToastHost";
 
 /**
  * Layout route for authenticated pages.
@@ -98,6 +99,7 @@ function ProtectedLayout() {
 
   return (
     <>
+      <ToastHost />
       <ConversionBanner />
       <EncryptionBanner />
       <AiBanner />

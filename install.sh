@@ -89,6 +89,27 @@ _download_file() {
     info "[dl]   → $(du -h "$out" | cut -f1)"
 }
 
+# Pinned, models-only mirror release (issue #5b). The two large buffalo_l face
+# models are hosted here on github.com — NOT on HuggingFace's Xet CDN
+# (cas-bridge.xethub.co), which some install networks can't resolve. Same URL
+# for every version, so it works for tagged and local/unstamped builds alike.
+MODEL_MIRROR_BASE="https://github.com/Wulfic/simple-photos/releases/download/assets-models"
+
+# Download a model from the github.com mirror first, falling back to its
+# upstream source (HuggingFace) only if the mirror is unreachable.
+_download_model() {
+    local out="$1" name="$2" fallback="$3"
+    if [[ -s "$out" ]]; then
+        info "[dl] $name already present — skipping"
+        return 0
+    fi
+    if _download_file "$out" "$MODEL_MIRROR_BASE/$name"; then
+        return 0
+    fi
+    warn "[dl] mirror for $name unavailable — falling back to upstream source"
+    _download_file "$out" "$fallback"
+}
+
 # Download all ONNX models needed for AI face/object recognition.
 # Models: SCRFD face detector, ArcFace embeddings, UltraFace fallback,
 #         MobileNetV2 object classifier (all Apache-2.0 / MIT-licensed).
@@ -96,9 +117,11 @@ download_ai_models() {
     local target="${1:-$SCRIPT_DIR/server/models}"
     mkdir -p "$target"
 
-    _download_file "$target/det_10g.onnx" \
+    # buffalo_l models: mirror-first (issue #5b). ultraface + mobilenet already
+    # come from github.com (not Xet-affected), so they fetch directly.
+    _download_model "$target/det_10g.onnx" "det_10g.onnx" \
         "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx"
-    _download_file "$target/w600k_r50.onnx" \
+    _download_model "$target/w600k_r50.onnx" "w600k_r50.onnx" \
         "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx"
     _download_file "$target/ultraface-RFB-320.onnx" \
         "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-RFB-320.onnx"

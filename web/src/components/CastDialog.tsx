@@ -150,7 +150,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
           </button>
           <button
             onClick={() => setShowTabCastHelp((v) => !v)}
-            className="w-full text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 underline"
+            className="w-full text-xs text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 underline"
           >
             {showTabCastHelp ? "Hide" : "No devices found? Try tab casting"}
           </button>
@@ -174,7 +174,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
             <CastIcon className="w-4 h-4" />
             {busy ? "Opening picker…" : "Choose a device"}
           </button>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-gray-700 dark:text-gray-400">
             Note: the Chromecast loads the receiver page directly from this
             server.  If your TLS certificate is only trusted in the browser
             (not the system trust store), use{" "}
@@ -211,7 +211,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
               <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
                 Casting{device ? ` to ${device}` : ""}
               </p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
+              <p className="text-xs text-gray-700 dark:text-gray-400">
                 Open a photo in the viewer — it will appear on your TV.
               </p>
             </div>
@@ -251,7 +251,7 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
           <button
             onClick={onClose}
             aria-label="Close"
-            className="text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white text-xl leading-none px-1"
+            className="text-gray-700 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white text-xl leading-none px-1"
           >
             ×
           </button>

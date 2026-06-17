@@ -128,7 +128,7 @@ export default function RestoreStep({
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
         Restore from Backup
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
         Find your backup server on the network, then log in with admin
         credentials to verify access. Your photos will be synced after setup
         completes.
@@ -176,7 +176,7 @@ export default function RestoreStep({
                 d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728m-9.9-2.829a5 5 0 010-7.07m7.072 0a5 5 0 010 7.07M13 12a1 1 0 11-2 0 1 1 0 012 0z"
               />
             </svg>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-gray-700 dark:text-gray-400">
               No servers found. Enter the address manually below.
             </p>
           </div>
@@ -215,7 +215,7 @@ export default function RestoreStep({
                     <p className="font-medium text-gray-900 dark:text-white text-sm">
                       {server.name}
                     </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                    <p className="text-xs text-gray-700 dark:text-gray-400 font-mono">
                       {server.address} &middot; v{server.version}
                     </p>
                   </div>
@@ -255,7 +255,7 @@ export default function RestoreStep({
             maxLength={500}
             className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent font-mono"
           />
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+          <p className="text-xs text-gray-600 dark:text-gray-500 mt-1">
             IP address or hostname with port of the backup server
           </p>
         </div>
@@ -266,7 +266,7 @@ export default function RestoreStep({
             <div className="w-full border-t border-gray-200 dark:border-gray-700" />
           </div>
           <div className="relative flex justify-center text-xs">
-            <span className="px-2 bg-white dark:bg-gray-800 text-gray-400">
+            <span className="px-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400">
               admin credentials
             </span>
           </div>
@@ -303,7 +303,7 @@ export default function RestoreStep({
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
               tabIndex={-1}
             >
               {showPassword ? (
@@ -390,7 +390,7 @@ export default function RestoreStep({
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm tracking-widest focus:ring-2 focus:ring-amber-500 focus:border-transparent"
               autoFocus
             />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            <p className="mt-1 text-xs text-gray-700 dark:text-gray-400">
               Enter the 6-digit code from the backup admin&rsquo;s authenticator
               app, or an 8-character backup code.
             </p>

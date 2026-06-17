@@ -197,7 +197,7 @@ export default function PwaInstallInstructionsDialog({
           </h3>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            className="text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
             aria-label="Close"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -213,7 +213,7 @@ export default function PwaInstallInstructionsDialog({
         </ol>
 
         {note && (
-          <p className="mt-3 text-xs text-gray-500 dark:text-gray-400 italic">{note}</p>
+          <p className="mt-3 text-xs text-gray-700 dark:text-gray-400 italic">{note}</p>
         )}
 
         <div className="mt-5 flex justify-end">

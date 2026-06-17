@@ -322,7 +322,7 @@ export default function Trash() {
                 <AppIcon name="trashcan" size="w-7 h-7" />
                 Trash
               </h1>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-sm text-gray-700 dark:text-gray-400 mt-1">
                 {items.length === 0
                   ? "No items in trash"
                   : `${items.length} item${items.length !== 1 ? "s" : ""} · ${formatBytes(totalSize)} · Items are permanently deleted after 30 days`}
@@ -384,7 +384,7 @@ export default function Trash() {
 
         {/* ── Empty State ───────────────────────────────────────────── */}
         {!loading && items.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+          <div className="flex flex-col items-center justify-center py-20 text-gray-600 dark:text-gray-500">
             <AppIcon name="trashcan" size="w-16 h-16" className="mb-4" />
             <p className="text-lg font-medium">Trash is empty</p>
             <p className="text-sm mt-1">Deleted photos will appear here for 30 days</p>
@@ -401,7 +401,7 @@ export default function Trash() {
               {selectedIds.size === items.length ? "Deselect all" : "Select all"}
             </button>
             {selectedIds.size > 0 && (
-              <span className="text-sm text-gray-500 dark:text-gray-400">
+              <span className="text-sm text-gray-700 dark:text-gray-400">
                 {selectedIds.size} selected
               </span>
             )}
@@ -496,7 +496,7 @@ export default function Trash() {
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                   Empty Trash?
                 </h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <p className="text-sm text-gray-700 dark:text-gray-400">
                   This will permanently delete {items.length} item{items.length !== 1 ? "s" : ""} ({formatBytes(totalSize)}).
                   This action cannot be undone.
                 </p>

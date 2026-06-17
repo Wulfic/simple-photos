@@ -327,16 +327,16 @@ export default function CompleteStep({
                 : "Go to Gallery \u2192"}
         </button>
         {loading && serverPort !== originalPort && !restoreStatus && (
-          <p className="text-gray-500 dark:text-gray-400 text-xs animate-pulse">
+          <p className="text-gray-700 dark:text-gray-400 text-xs animate-pulse">
             Waiting for server to restart on port {serverPort}\u2026
           </p>
         )}
         {loading && restoreStatus && (
-          <p className="text-gray-500 dark:text-gray-400 text-xs animate-pulse">
+          <p className="text-gray-700 dark:text-gray-400 text-xs animate-pulse">
             {restoreStatus}
           </p>
         )}
-        <p className="text-gray-400 text-xs">
+        <p className="text-gray-600 dark:text-gray-400 text-xs">
           You can manage users, 2FA, and storage in Settings.
         </p>
       </div>

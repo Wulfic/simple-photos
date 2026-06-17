@@ -128,7 +128,7 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowPassword((s) => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 focus:outline-none"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 focus:outline-none"
                     tabIndex={-1}
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
@@ -167,7 +167,7 @@ export default function Login() {
                 spellCheck={false}
                 inputMode="numeric"
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
                 Enter code from your authenticator app or a backup code
               </p>
             </div>

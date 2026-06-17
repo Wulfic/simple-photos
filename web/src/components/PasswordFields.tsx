@@ -5,7 +5,7 @@ import { type PasswordStrength } from "../utils/validation";
 // ── Checkmark ─────────────────────────────────────────────────────────────────
 
 export const Checkmark = ({ ok }: { ok: boolean }) => (
-  <span className={ok ? "text-green-600 dark:text-green-400" : "text-gray-400"}>
+  <span className={ok ? "text-green-600 dark:text-green-400" : "text-gray-600 dark:text-gray-400"}>
     {ok ? "\u2713" : "\u25CB"}
   </span>
 );
@@ -15,7 +15,7 @@ export const Checkmark = ({ ok }: { ok: boolean }) => (
 export const EyeIcon = ({ open }: { open: boolean }) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
-    className="w-5 h-5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-400 dark:text-gray-400 transition-colors"
+    className="w-5 h-5 text-gray-600 hover:text-gray-600 dark:hover:text-gray-400 dark:text-gray-400 transition-colors"
     fill="none"
     viewBox="0 0 24 24"
     stroke="currentColor"
@@ -113,7 +113,7 @@ export function PasswordField({
             </li>
             <li>
               <Checkmark ok={pwData.checks.special} /> Special character
-              <span className="text-gray-400"> (optional)</span>
+              <span className="text-gray-600 dark:text-gray-400"> (optional)</span>
             </li>
           </ul>
         </div>

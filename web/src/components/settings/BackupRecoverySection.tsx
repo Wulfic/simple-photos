@@ -121,7 +121,7 @@ export default function BackupRecoverySection({
     return (
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Primary Server</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+        <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
           This server is running in <strong>backup mode</strong>. All photos, accounts, and settings are mirrored from the primary server.
         </p>
         <div className="flex items-center gap-3 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
@@ -139,7 +139,7 @@ export default function BackupRecoverySection({
             </p>
           </div>
         </div>
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">
+        <p className="text-xs text-gray-600 dark:text-gray-500 mt-3">
           Changes to photos, users, passwords, and 2FA should be made on the primary server. They will be synced automatically.
         </p>
         <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
@@ -163,7 +163,7 @@ export default function BackupRecoverySection({
             <AppIcon name="reload" size="w-4 h-4" className={forceSyncing ? "animate-spin" : ""} />
             {forceSyncing ? "Requesting Sync…" : "Force Sync from Primary"}
           </button>
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+          <p className="text-xs text-gray-600 dark:text-gray-500 mt-2">
             Request the primary server to immediately push all new photos and data to this backup.
           </p>
         </div>
@@ -175,17 +175,17 @@ export default function BackupRecoverySection({
   return (
     <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">Backup Recovery</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
         Recover photos from a configured backup server. Any photos on the backup
         that don't already exist on this server (by filename) will be downloaded and imported.
       </p>
 
       {!backupLoaded ? (
-        <div className="text-gray-400 text-sm">Loading backup servers…</div>
+        <div className="text-gray-600 dark:text-gray-400 text-sm">Loading backup servers…</div>
       ) : backupServers.length === 0 ? (
         <div className="space-y-3">
           <div className="text-center py-4 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-400 text-sm">No backup servers configured.</p>
+            <p className="text-gray-600 dark:text-gray-400 text-sm">No backup servers configured.</p>
           </div>
 
         </div>
@@ -297,7 +297,7 @@ export default function BackupRecoverySection({
             {/* Discovered servers — shown as suggestions, user adds manually */}
             {discoveredServers.length > 0 && (
               <div className="space-y-2 mt-4">
-                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                <p className="text-xs font-medium text-gray-700 dark:text-gray-400 uppercase tracking-wide">
                   Found on local network
                 </p>
                 {discoveredServers.map((srv) => (
@@ -309,7 +309,7 @@ export default function BackupRecoverySection({
                       <p className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">
                         {srv.name || "Simple Photos"}
                       </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      <p className="text-xs text-gray-700 dark:text-gray-400 truncate">
                         {srv.address} &nbsp;·&nbsp; v{srv.version}
                       </p>
                     </div>

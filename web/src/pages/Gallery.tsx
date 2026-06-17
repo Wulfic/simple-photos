@@ -23,6 +23,7 @@ import { useGalleryUpload } from "../hooks/useGalleryUpload";
 import { useBackupStore } from "../store/backup";
 import { useAuthStore } from "../store/auth";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import { toast } from "../store/toast";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -35,6 +36,15 @@ export default function Gallery() {
     secureBlobIds,
     loadEncryptedPhotos,
   } = useGalleryData();
+
+  // Surface load/upload errors as a dismissible toast popup instead of an
+  // under-navbar red bar (#8). Clearing the source state avoids re-firing.
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+      setError("");
+    }
+  }, [error, setError]);
 
   // ── Backup view mode ────────────────────────────────────────────────────
   const { viewMode, activeBackupServerId, backupServers } = useBackupStore();
@@ -284,7 +294,7 @@ export default function Gallery() {
         {selectionMode && !isBackupView && !isBackupServer && (
           <div className="fixed top-14 left-0 right-0 z-40 flex items-center justify-between bg-gray-200/95 dark:bg-gray-800/95 backdrop-blur px-4 py-2 shadow-sm">
             <div className="flex items-center gap-3">
-              <button onClick={clearSelection} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white transition-colors" aria-label="Cancel selection">
+              <button onClick={clearSelection} className="text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white transition-colors" aria-label="Cancel selection">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
               <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{selectedIds.size} selected</span>
@@ -326,11 +336,16 @@ export default function Gallery() {
           />
         )}
 
-        {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
+        {/* Errors surface via the global toast host (#8) */}
 
-        {/* Floating upload button — hidden when viewing a backup server or when this IS a backup server */}
+        {/* Floating upload button — hidden when viewing a backup server or when this IS a backup server.
+            z-[60] keeps the FAB + its upward-opening menu above the conversion/
+            import banner (z-50), which sits just above it and otherwise overlaps
+            and intercepts taps while convert/import is running (#2). The file
+            inputs gate only on local `uploading`, never on server-side
+            conversion, so manual upload stays available during background work. */}
         {!isBackupView && !isBackupServer && (
-        <div className="fixed bottom-6 right-6 z-50">
+        <div className="fixed bottom-6 right-6 z-[60]">
           {/* Upload menu popover */}
           {showUploadMenu && (
             <>
@@ -399,7 +414,7 @@ export default function Gallery() {
             </div>
 
             {backupLoading && (
-              <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading backup photos…</p>
+              <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading backup photos…</p>
             )}
 
             {backupError && (
@@ -408,8 +423,8 @@ export default function Gallery() {
 
             {!backupLoading && !backupError && backupPhotos?.length === 0 && (
               <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-                <p className="text-gray-500 dark:text-gray-400 mb-2">No media on backup server</p>
-                <p className="text-gray-400 text-sm">
+                <p className="text-gray-700 dark:text-gray-400 mb-2">No media on backup server</p>
+                <p className="text-gray-600 dark:text-gray-400 text-sm">
                   Photos will appear here once the primary server has synced them.
                 </p>
               </div>
@@ -423,7 +438,7 @@ export default function Gallery() {
                     {group.label}
                   </h3>
                   <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
-                  <span className="text-xs text-gray-400 dark:text-gray-500">
+                  <span className="text-xs text-gray-600 dark:text-gray-500">
                     {group.photos.length}
                   </span>
                 </div>
@@ -524,13 +539,13 @@ export default function Gallery() {
           onDrop={handleDrop}
         >
         {loading && !hasContent && (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         )}
 
         {!loading && !hasContent && (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400 mb-2">No media yet</p>
-            <p className="text-gray-400 text-sm">
+            <p className="text-gray-700 dark:text-gray-400 mb-2">No media yet</p>
+            <p className="text-gray-600 dark:text-gray-400 text-sm">
               Place photos in the storage directory or upload them to get started.
             </p>
           </div>
@@ -550,7 +565,7 @@ export default function Gallery() {
                   {group.label}
                 </h3>
                 <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
-                <span className="text-xs text-gray-400 dark:text-gray-500">
+                <span className="text-xs text-gray-600 dark:text-gray-500">
                   {group.photos.length}
                 </span>
                 {/* Select-all-for-day circle. Tapping toggles selection for every

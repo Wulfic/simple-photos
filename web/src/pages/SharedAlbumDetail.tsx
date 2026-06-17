@@ -9,6 +9,7 @@ import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { getErrorMessage } from "../utils/formatters";
+import { toast } from "../store/toast";
 
 type SharedPhoto = {
   id: string;
@@ -37,6 +38,13 @@ export default function SharedAlbumDetail() {
   const [members, setMembers] = useState<AlbumMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Surface errors as a dismissible toast (#8) instead of an inline bar.
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+      setError("");
+    }
+  }, [error]);
   const [showMembers, setShowMembers] = useState(false);
   const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
   const [showSharePicker, setShowSharePicker] = useState(false);
@@ -120,7 +128,7 @@ export default function SharedAlbumDetail() {
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => navigate("/albums")}
-              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             >
               <AppIcon name="back-arrow" size="w-5 h-5" />
             </button>
@@ -149,16 +157,14 @@ export default function SharedAlbumDetail() {
           </div>
         </div>
 
-        {error && (
-          <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>
-        )}
+        {/* Errors surface via the global toast host (#8) */}
 
         {/* Members panel */}
         {showMembers && (
           <div className="mb-4 bg-white dark:bg-gray-800 rounded-lg shadow p-4">
             <h3 className="text-sm font-semibold mb-2">Members</h3>
             {members.length === 0 && (
-              <p className="text-sm text-gray-500 dark:text-gray-400">No members yet.</p>
+              <p className="text-sm text-gray-700 dark:text-gray-400">No members yet.</p>
             )}
             <ul className="space-y-1">
               {members.map((m) => (
@@ -204,12 +210,12 @@ export default function SharedAlbumDetail() {
         {/* Photo grid */}
         <div className={gridClasses}>
           {loading && photos.length === 0 && (
-            <p className="col-span-full text-gray-500 dark:text-gray-400 text-center py-12">
+            <p className="col-span-full text-gray-700 dark:text-gray-400 text-center py-12">
               Loading...
             </p>
           )}
           {!loading && photos.length === 0 && (
-            <p className="col-span-full text-gray-500 dark:text-gray-400 text-center py-12">
+            <p className="col-span-full text-gray-700 dark:text-gray-400 text-center py-12">
               No photos in this shared album yet.
             </p>
           )}
@@ -226,7 +232,7 @@ export default function SharedAlbumDetail() {
                   loading="lazy"
                 />
               ) : (
-                <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
+                <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-400 text-xs">
                   Encrypted
                 </div>
               )}

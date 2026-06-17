@@ -367,7 +367,7 @@ export default function SecureGallery() {
               <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
                 Secure Albums
               </h2>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+              <p className="text-sm text-gray-700 dark:text-gray-400 mt-2">
                 Enter your account password to access your secure albums.
               </p>
             </div>
@@ -465,7 +465,7 @@ export default function SecureGallery() {
               <h2 className="text-xl font-semibold dark:text-white flex items-center gap-2">
                 <span>🔒</span> {selectedGallery.name}
               </h2>
-              <span className="text-gray-400 text-sm">{items.length} items</span>
+              <span className="text-gray-600 dark:text-gray-400 text-sm">{items.length} items</span>
             </div>
             {!showAddPhotos && !isBackupServer && (
               <div className="flex gap-2">
@@ -503,7 +503,7 @@ export default function SecureGallery() {
                 Select photos from your gallery to add ({selectedPhotos.size} selected)
               </p>
               {availablePhotos.length === 0 ? (
-                <p className="text-gray-500 dark:text-gray-400 text-sm">
+                <p className="text-gray-700 dark:text-gray-400 text-sm">
                   {(cachedPhotos?.length ?? 0) === 0
                     ? "No photos in your gallery yet. Upload some photos first."
                     : "All photos are already in this album."}
@@ -574,7 +574,7 @@ export default function SecureGallery() {
           ) : items.length === 0 && !showAddPhotos ? (
             <div className="text-center py-16 border-2 border-dashed border-gray-200 dark:border-gray-600 rounded-lg">
               <span className="text-4xl mb-3 block">🖼️</span>
-              <p className="text-gray-400 text-sm mb-3">This album is empty.</p>
+              <p className="text-gray-600 dark:text-gray-400 text-sm mb-3">This album is empty.</p>
               {!isBackupServer && (
               <button
                 onClick={() => {
@@ -638,7 +638,7 @@ export default function SecureGallery() {
             <h2 className="text-xl font-semibold dark:text-white flex items-center gap-2">
               <span>🔒</span> Secure Albums
             </h2>
-            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+            <p className="text-gray-700 dark:text-gray-400 text-sm mt-1">
               End-to-end encrypted albums for your most private photos.
             </p>
           </div>
@@ -722,10 +722,10 @@ export default function SecureGallery() {
         ) : galleries.length === 0 ? (
           <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-lg shadow">
             <span className="text-4xl mb-3 block">🔒</span>
-            <p className="text-gray-500 dark:text-gray-400 font-medium">
+            <p className="text-gray-700 dark:text-gray-400 font-medium">
               No secure albums yet
             </p>
-            <p className="text-sm text-gray-400 mt-1">
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
               Create an album to store your most private photos securely.
             </p>
             {!showCreate && !isBackupServer && (
@@ -759,7 +759,7 @@ export default function SecureGallery() {
                     <h3 className="font-medium text-gray-900 dark:text-gray-100">
                       {g.name}
                     </h3>
-                    <p className="text-xs text-gray-400 mt-0.5">
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">
                       {g.item_count} item{g.item_count !== 1 ? "s" : ""} · Created{" "}
                       {new Date(g.created_at).toLocaleDateString()}
                     </p>

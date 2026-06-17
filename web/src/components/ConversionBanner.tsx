@@ -94,7 +94,7 @@ export default function ConversionBanner() {
               Converting media… {counts.done}/{counts.total}
             </p>
             {eta && (
-              <span className="text-xs tabular-nums text-gray-500 dark:text-gray-400 ml-2 flex-shrink-0">
+              <span className="text-xs tabular-nums text-gray-700 dark:text-gray-400 ml-2 flex-shrink-0">
                 {eta} remaining
               </span>
             )}
@@ -108,7 +108,7 @@ export default function ConversionBanner() {
         </div>
         <button
           onClick={() => setDismissed(true)}
-          className="p-1 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+          className="p-1 text-gray-600 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
           aria-label="Dismiss"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

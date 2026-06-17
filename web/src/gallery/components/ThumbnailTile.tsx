@@ -118,18 +118,18 @@ export default function ThumbnailTile({
             !source.thumbnailData ? (
               <>
                 <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-500 border-t-blue-500 dark:border-t-blue-400 rounded-full animate-spin" />
-                <span className="text-[10px] font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">Queued</span>
+                <span className="text-[10px] font-medium text-gray-600 dark:text-gray-500 uppercase tracking-wide">Queued</span>
               </>
             ) : (
-              <span className="text-gray-400 text-xs">{filename}</span>
+              <span className="text-gray-600 dark:text-gray-400 text-xs">{filename}</span>
             )
           ) : thumb.state === "error" ? (
-            <div className="text-center text-gray-400">
+            <div className="text-center text-gray-600 dark:text-gray-400">
               <span className="text-2xl block mb-1">🔐</span>
               <span className="text-xs">Encrypted</span>
             </div>
           ) : (
-            <span className="text-gray-400 text-xs">{filename}</span>
+            <span className="text-gray-600 dark:text-gray-400 text-xs">{filename}</span>
           )}
         </div>
       )}

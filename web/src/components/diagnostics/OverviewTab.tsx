@@ -24,8 +24,8 @@ const EVENT_COLORS: Record<string, string> = {
   totp_enabled: "text-indigo-600 dark:text-indigo-400",
   totp_disabled: "text-indigo-600 dark:text-indigo-400",
   backup_code_used: "text-yellow-600 dark:text-yellow-400",
-  token_refresh: "text-gray-500 dark:text-gray-400",
-  logout: "text-gray-500 dark:text-gray-400",
+  token_refresh: "text-gray-700 dark:text-gray-400",
+  logout: "text-gray-700 dark:text-gray-400",
   // Blobs
   blob_upload: "text-cyan-600 dark:text-cyan-400",
   blob_delete: "text-red-500 dark:text-red-400",
@@ -61,7 +61,7 @@ const EVENT_COLORS: Record<string, string> = {
   // Background tasks
   auto_scan_complete: "text-teal-600 dark:text-teal-400",
   trash_purge_complete: "text-orange-600 dark:text-orange-400",
-  housekeeping_complete: "text-gray-500 dark:text-gray-400",
+  housekeeping_complete: "text-gray-700 dark:text-gray-400",
   encryption_migration_complete: "text-emerald-600 dark:text-emerald-400",
   backup_sync_cycle_complete: "text-sky-600 dark:text-sky-400",
   // Admin
@@ -80,8 +80,8 @@ const SYNC_STATUS_COLORS: Record<string, string> = {
   running: "text-blue-600 dark:text-blue-400",
   error: "text-red-600 dark:text-red-400",
   partial: "text-yellow-600 dark:text-yellow-400",
-  "": "text-gray-400",
-  never: "text-gray-400",
+  "": "text-gray-600 dark:text-gray-400",
+  never: "text-gray-600 dark:text-gray-400",
 };
 
 function TimingBar({ label, ms, maxMs }: { label: string; ms: number; maxMs: number }) {
@@ -90,7 +90,7 @@ function TimingBar({ label, ms, maxMs }: { label: string; ms: number; maxMs: num
     ms > 500 ? "bg-red-500" : ms > 100 ? "bg-yellow-500" : "bg-green-500";
   return (
     <div className="flex items-center gap-3 text-xs">
-      <span className="w-24 text-right text-gray-500 dark:text-gray-400 shrink-0 font-medium">
+      <span className="w-24 text-right text-gray-700 dark:text-gray-400 shrink-0 font-medium">
         {label}
       </span>
       <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
@@ -117,7 +117,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
       {/* ── Collection Timings ── */}
       <Section title="Collection Timings">
         <div className="mb-3 flex items-center gap-2">
-          <span className="text-xs text-gray-500 dark:text-gray-400">
+          <span className="text-xs text-gray-700 dark:text-gray-400">
             Total collection time:
           </span>
           <span className={`text-sm font-bold ${
@@ -164,7 +164,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Load averages */}
         {(server.load_average[0] > 0 || server.load_average[1] > 0) && (
           <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
               System Load Average
             </p>
             <div className="flex gap-6">
@@ -177,13 +177,13 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                   }`}>
                     {server.load_average[i].toFixed(2)}
                   </p>
-                  <p className="text-xs text-gray-400">{label}</p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400">{label}</p>
                 </div>
               ))}
             </div>
           </div>
         )}
-        <div className="mt-3 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
+        <div className="mt-3 text-xs text-gray-700 dark:text-gray-400 space-y-0.5">
           <p>
             <span className="font-medium">Storage root:</span>{" "}
             <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">
@@ -232,24 +232,24 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* WAL Checkpoint info */}
         {performance.wal_checkpoint && (
           <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
               WAL Checkpoint Status
             </p>
             <div className="flex gap-6 text-xs">
               <div>
-                <span className="text-gray-500 dark:text-gray-400">Log pages: </span>
+                <span className="text-gray-700 dark:text-gray-400">Log pages: </span>
                 <span className="font-bold text-gray-900 dark:text-white">
                   {performance.wal_checkpoint.log_pages.toLocaleString()}
                 </span>
               </div>
               <div>
-                <span className="text-gray-500 dark:text-gray-400">Checkpointed: </span>
+                <span className="text-gray-700 dark:text-gray-400">Checkpointed: </span>
                 <span className="font-bold text-gray-900 dark:text-white">
                   {performance.wal_checkpoint.checkpointed_pages.toLocaleString()}
                 </span>
               </div>
               <div>
-                <span className="text-gray-500 dark:text-gray-400">Blocked: </span>
+                <span className="text-gray-700 dark:text-gray-400">Blocked: </span>
                 <span className={`font-bold ${
                   performance.wal_checkpoint.busy > 0 ? "text-yellow-600 dark:text-yellow-400" : "text-green-600 dark:text-green-400"
                 }`}>
@@ -262,7 +262,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* SQLite compile options */}
         {performance.compile_options.length > 0 && (
           <details className="mt-3">
-            <summary className="text-xs font-medium text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200">
+            <summary className="text-xs font-medium text-gray-700 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-200">
               SQLite Compile Options ({performance.compile_options.length})
             </summary>
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -300,7 +300,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Disk usage bar */}
         {storage.disk_total_bytes > 0 && (
           <div className="mt-3">
-            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mb-1">
+            <div className="flex justify-between text-xs text-gray-700 dark:text-gray-400 mb-1">
               <span>Disk Usage</span>
               <span>{storage.disk_used_percent.toFixed(1)}%</span>
             </div>
@@ -343,7 +343,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Media type breakdown */}
         {Object.keys(photos.photos_by_media_type).length > 0 && (
           <div className="mt-3">
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
               By Media Type
             </p>
             <div className="flex flex-wrap gap-2">
@@ -355,14 +355,14 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                     className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-xs text-gray-700 dark:text-gray-300"
                   >
                     <span className="font-medium">{type}</span>
-                    <span className="text-gray-400">{count.toLocaleString()}</span>
+                    <span className="text-gray-600 dark:text-gray-400">{count.toLocaleString()}</span>
                   </span>
                 ))}
             </div>
           </div>
         )}
         {/* Date range */}
-        <div className="mt-3 text-xs text-gray-500 dark:text-gray-400 space-y-0.5">
+        <div className="mt-3 text-xs text-gray-700 dark:text-gray-400 space-y-0.5">
           {photos.oldest_photo && (
             <p>
               <span className="font-medium">Oldest:</span> {formatDate(photos.oldest_photo)}
@@ -386,7 +386,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Event type breakdown */}
         {Object.keys(audit.events_by_type).length > 0 && (
           <div className="mt-3">
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
               Events by Type
             </p>
             <div className="flex flex-wrap gap-2">
@@ -428,7 +428,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                         {f.event_type.replace(/_/g, " ")}
                       </td>
                       <td className="px-2 py-1 font-mono">{f.ip_address}</td>
-                      <td className="px-2 py-1 text-gray-500" title={formatDate(f.created_at)}>
+                      <td className="px-2 py-1 text-gray-700 dark:text-gray-500" title={formatDate(f.created_at)}>
                         {relativeTime(f.created_at)}
                       </td>
                     </tr>
@@ -480,12 +480,12 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         {/* Per-server detail cards */}
         {backup.servers.length > 0 && (
           <div className="space-y-3">
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400">
+            <p className="text-xs font-medium text-gray-700 dark:text-gray-400">
               Backup Servers ({backup.servers.length})
             </p>
             {backup.servers.map((srv) => {
               const isExpanded = expandedBackupServer === srv.id;
-              const statusColor = SYNC_STATUS_COLORS[srv.last_sync_status] || "text-gray-500";
+              const statusColor = SYNC_STATUS_COLORS[srv.last_sync_status] || "text-gray-700 dark:text-gray-500";
               const hasRecentDiag = srv.last_diagnostics !== null;
 
               return (
@@ -511,7 +511,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                         <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
                           {srv.name}
                         </p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
+                        <p className="text-xs text-gray-700 dark:text-gray-400 font-mono truncate">
                           {srv.address}
                         </p>
                       </div>
@@ -521,7 +521,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                         <p className={`text-xs font-medium ${statusColor}`}>
                           {srv.last_sync_status || "never synced"}
                         </p>
-                        <p className="text-[10px] text-gray-400">
+                        <p className="text-[10px] text-gray-600 dark:text-gray-400">
                           {srv.last_sync_at ? relativeTime(srv.last_sync_at) : "no sync yet"}
                         </p>
                       </div>
@@ -536,7 +536,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                         </span>
                       )}
                       <svg
-                        className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                        className={`w-4 h-4 text-gray-600 dark:text-gray-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
                         fill="none" stroke="currentColor" viewBox="0 0 24 24"
                       >
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -550,25 +550,25 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                       {/* Server config */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                         <div>
-                          <p className="text-gray-500 dark:text-gray-400">Sync Frequency</p>
+                          <p className="text-gray-700 dark:text-gray-400">Sync Frequency</p>
                           <p className="font-medium text-gray-900 dark:text-white">
                             Every {srv.sync_frequency_hours}h
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500 dark:text-gray-400">Status</p>
+                          <p className="text-gray-700 dark:text-gray-400">Status</p>
                           <p className={`font-medium ${statusColor}`}>
                             {srv.last_sync_status || "Never synced"}
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500 dark:text-gray-400">Last Sync</p>
+                          <p className="text-gray-700 dark:text-gray-400">Last Sync</p>
                           <p className="font-medium text-gray-900 dark:text-white">
                             {srv.last_sync_at ? relativeTime(srv.last_sync_at) : "Never"}
                           </p>
                         </div>
                         <div>
-                          <p className="text-gray-500 dark:text-gray-400">Last Report</p>
+                          <p className="text-gray-700 dark:text-gray-400">Last Report</p>
                           <p className="font-medium text-gray-900 dark:text-white">
                             {srv.last_diagnostics_at ? relativeTime(srv.last_diagnostics_at) : "None"}
                           </p>
@@ -588,7 +588,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                       {/* Backup server diagnostics (pushed by the backup) */}
                       {srv.last_diagnostics && (
                         <div>
-                          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+                          <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
                             Server Health (reported {srv.last_diagnostics_at ? relativeTime(srv.last_diagnostics_at) : "unknown"})
                           </p>
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -627,7 +627,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                       {/* Recent sync logs */}
                       {srv.recent_sync_logs.length > 0 && (
                         <div>
-                          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+                          <p className="text-xs font-medium text-gray-700 dark:text-gray-400 mb-2">
                             Recent Sync History ({srv.recent_sync_logs.length})
                           </p>
                           <div className="max-h-48 overflow-y-auto rounded border border-gray-200 dark:border-gray-700">
@@ -644,7 +644,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                               </thead>
                               <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                                 {srv.recent_sync_logs.map((log) => {
-                                  const logStatusColor = SYNC_STATUS_COLORS[log.status] || "text-gray-500";
+                                  const logStatusColor = SYNC_STATUS_COLORS[log.status] || "text-gray-700 dark:text-gray-500";
                                   let duration = "";
                                   if (log.completed_at && log.started_at) {
                                     const ms = new Date(log.completed_at).getTime() - new Date(log.started_at).getTime();
@@ -655,16 +655,16 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
                                       <td className={`px-2 py-1 font-medium ${logStatusColor}`}>
                                         {log.status}
                                       </td>
-                                      <td className="px-2 py-1 text-gray-500" title={formatDate(log.started_at)}>
+                                      <td className="px-2 py-1 text-gray-700 dark:text-gray-500" title={formatDate(log.started_at)}>
                                         {relativeTime(log.started_at)}
                                       </td>
-                                      <td className="px-2 py-1 font-mono text-gray-500 hidden sm:table-cell">
+                                      <td className="px-2 py-1 font-mono text-gray-700 dark:text-gray-500 hidden sm:table-cell">
                                         {duration || (log.status === "running" ? "in progress" : "-")}
                                       </td>
                                       <td className="px-2 py-1 text-right font-mono text-gray-900 dark:text-white">
                                         {log.photos_synced.toLocaleString()}
                                       </td>
-                                      <td className="px-2 py-1 text-right font-mono text-gray-500 hidden sm:table-cell">
+                                      <td className="px-2 py-1 text-right font-mono text-gray-700 dark:text-gray-500 hidden sm:table-cell">
                                         {log.bytes_synced > 0 ? formatBytes(log.bytes_synced) : "-"}
                                       </td>
                                       <td className="px-2 py-1 text-red-600 dark:text-red-400 max-w-[200px] truncate" title={log.error || ""}>
@@ -681,7 +681,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
 
                       {/* No data state */}
                       {!srv.last_diagnostics && srv.recent_sync_logs.length === 0 && (
-                        <p className="text-xs text-gray-400 dark:text-gray-500 italic">
+                        <p className="text-xs text-gray-600 dark:text-gray-500 italic">
                           No diagnostics reports or sync logs received from this server yet.
                         </p>
                       )}
@@ -694,7 +694,7 @@ function OverviewTab({ metrics }: { metrics: DiagnosticsResponse }) {
         )}
 
         {backup.servers.length === 0 && (
-          <p className="text-xs text-gray-400 dark:text-gray-500 italic">
+          <p className="text-xs text-gray-600 dark:text-gray-500 italic">
             No backup servers configured.
           </p>
         )}

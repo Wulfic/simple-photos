@@ -146,10 +146,10 @@ export default function ExportDownloads() {
           </div>
         ) : files.length === 0 ? (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-8 text-center">
-            <p className="text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-gray-700 dark:text-gray-400 mb-2">
               No export files available.
             </p>
-            <p className="text-sm text-gray-400 dark:text-gray-500">
+            <p className="text-sm text-gray-600 dark:text-gray-500">
               Start an export from the Settings page to generate downloadable zip files.
             </p>
           </div>
@@ -160,7 +160,7 @@ export default function ExportDownloads() {
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4 mb-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                    <p className="text-sm text-gray-700 dark:text-gray-400">
                       Export from {new Date(job.created_at).toLocaleString()}
                     </p>
                     <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -189,7 +189,7 @@ export default function ExportDownloads() {
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                       {file.filename}
                     </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                    <p className="text-xs text-gray-700 dark:text-gray-400">
                       {formatBytes(file.size_bytes)} — {timeRemaining(file.expires_at)}
                     </p>
                   </div>

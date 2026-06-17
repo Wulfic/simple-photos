@@ -17,7 +17,7 @@ export default function WelcomeStep({ setStep, status, error }: WelcomeStepProps
       <p className="text-gray-600 dark:text-gray-400 mb-2">
         Your self-hosted, end-to-end encrypted photo & video library.
       </p>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-8">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-8">
         Let's get you set up. This will only take a minute.
       </p>
 

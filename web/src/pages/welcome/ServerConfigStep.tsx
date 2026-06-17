@@ -257,7 +257,7 @@ export default function ServerConfigStep({
       <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
         Server Configuration
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-5">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-5">
         Configure the server port and choose where your photos
         will be stored.
       </p>
@@ -265,7 +265,7 @@ export default function ServerConfigStep({
       {/* ── Server Port ─────────────────────────────────────────── */}
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
-          <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg className="w-4 h-4 text-gray-700 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z" />
           </svg>
           Server Port
@@ -297,19 +297,19 @@ export default function ServerConfigStep({
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+        <p className="text-xs text-gray-600 dark:text-gray-500 mt-1">
           Range: 1024–65535. Currently running on port {originalPort}.
         </p>
       </div>
 
       {/* ── Storage Location ────────────────────────────────────── */}
       <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
-        <svg className="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <svg className="w-4 h-4 text-gray-700 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
         </svg>
         Photo Storage Location
       </h3>
-      <p className="text-gray-500 dark:text-gray-400 text-xs mb-3">
+      <p className="text-gray-700 dark:text-gray-400 text-xs mb-3">
         Enter the full path to where your photos and videos will be stored.
         This can be a local folder, an external drive, or a network share —
         for SMB, just type{" "}
@@ -366,7 +366,7 @@ export default function ServerConfigStep({
         </button>
       </div>
 
-      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+      <p className="text-xs text-gray-600 dark:text-gray-500 mb-4">
         The directory will be created if it doesn't exist. Must be writable by the server process.
       </p>
 
@@ -427,7 +427,7 @@ export default function ServerConfigStep({
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">
               Connect to network share
             </h3>
-            <p className="font-mono text-xs text-gray-500 dark:text-gray-400 mb-4 break-all">
+            <p className="font-mono text-xs text-gray-700 dark:text-gray-400 mb-4 break-all">
               {pathInput.trim()}
             </p>
 
@@ -472,7 +472,7 @@ export default function ServerConfigStep({
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                  Domain <span className="text-gray-400 font-normal">(optional, AD only)</span>
+                  Domain <span className="text-gray-600 dark:text-gray-400 font-normal">(optional, AD only)</span>
                 </label>
                 <input
                   type="text"
@@ -495,7 +495,7 @@ export default function ServerConfigStep({
               </div>
             )}
 
-            <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-4 leading-snug">
+            <p className="text-[11px] text-gray-600 dark:text-gray-500 mt-4 leading-snug">
               The server stores the password encrypted at rest (AES-GCM keyed off
               the JWT secret) and remounts the share on every restart. Requires{" "}
               <code className="font-mono">cifs-utils</code> on the host.

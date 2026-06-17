@@ -244,11 +244,11 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 dark:border-gray-700 text-left">
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400">Username</th>
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400">Role</th>
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400">2FA</th>
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400">Created</th>
-              <th className="pb-2 font-medium text-gray-500 dark:text-gray-400 text-right">Actions</th>
+              <th className="pb-2 font-medium text-gray-700 dark:text-gray-400">Username</th>
+              <th className="pb-2 font-medium text-gray-700 dark:text-gray-400">Role</th>
+              <th className="pb-2 font-medium text-gray-700 dark:text-gray-400">2FA</th>
+              <th className="pb-2 font-medium text-gray-700 dark:text-gray-400">Created</th>
+              <th className="pb-2 font-medium text-gray-700 dark:text-gray-400 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -287,7 +287,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                     </button>
                   )}
                 </td>
-                <td className="py-2.5 text-xs text-gray-500 dark:text-gray-400">
+                <td className="py-2.5 text-xs text-gray-700 dark:text-gray-400">
                   {new Date(u.created_at).toLocaleDateString()}
                 </td>
                 <td className="py-2.5 text-right">
@@ -295,7 +295,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                     {/* Reset Password */}
                     <button
                       onClick={() => { setResetPwUserId(resetPwUserId === u.id ? null : u.id); setResetPwValue(""); }}
-                      className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+                      className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-400"
                       title="Reset password"
                     >
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -306,7 +306,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                     {u.totp_enabled && (
                       <button
                         onClick={() => handleResetUser2fa(u.id)}
-                        className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+                        className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-400"
                         title="Reset 2FA"
                       >
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -354,7 +354,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
                       </button>
                       <button
                         onClick={() => setConfirmDeleteId(null)}
-                        className="px-2 py-1 rounded text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        className="px-2 py-1 rounded text-xs text-gray-700 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
                       >
                         No
                       </button>
@@ -374,7 +374,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">
               Enable 2FA for {managedUsers.find(u => u.id === setup2faUserId)?.username}
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
               Scan this QR code with an authenticator app (Google Authenticator, Authy, etc.), then enter the 6-digit code to confirm.
             </p>
 
@@ -409,7 +409,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
 
             {setup2faBackupCodes.length > 0 && (
               <details className="mb-4">
-                <summary className="text-xs text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
+                <summary className="text-xs text-gray-700 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
                   Backup codes (save these!)
                 </summary>
                 <div className="mt-2 grid grid-cols-2 gap-1 p-3 bg-gray-50 dark:bg-gray-900 rounded-md font-mono text-xs">

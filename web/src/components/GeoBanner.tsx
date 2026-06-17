@@ -164,7 +164,7 @@ export default function GeoBanner() {
             <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
               Downloading location data…
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5">
               Fetching the GeoNames dataset. Photos with GPS will resolve once
               it finishes.
             </p>
@@ -186,14 +186,14 @@ export default function GeoBanner() {
             <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
               Location data unavailable
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5">
               Reverse geocoding is paused — the GeoNames dataset isn't installed
               on the server. Photos with GPS will resolve once it's available.
             </p>
           </div>
           <button
             onClick={() => setDismissed(true)}
-            className="p-1 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+            className="p-1 text-gray-600 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
             aria-label="Dismiss"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -219,7 +219,7 @@ export default function GeoBanner() {
               Resolving locations… {counts.done}/{counts.total}
             </p>
             {eta && (
-              <span className="text-xs tabular-nums text-gray-500 dark:text-gray-400 ml-2 flex-shrink-0">
+              <span className="text-xs tabular-nums text-gray-700 dark:text-gray-400 ml-2 flex-shrink-0">
                 {eta} remaining
               </span>
             )}
@@ -233,7 +233,7 @@ export default function GeoBanner() {
         </div>
         <button
           onClick={() => setDismissed(true)}
-          className="p-1 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+          className="p-1 text-gray-600 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
           aria-label="Dismiss"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

@@ -20,8 +20,8 @@ const EVENT_COLORS: Record<string, string> = {
   totp_enabled: "text-indigo-600 dark:text-indigo-400",
   totp_disabled: "text-indigo-600 dark:text-indigo-400",
   backup_code_used: "text-yellow-600 dark:text-yellow-400",
-  token_refresh: "text-gray-500 dark:text-gray-400",
-  logout: "text-gray-500 dark:text-gray-400",
+  token_refresh: "text-gray-700 dark:text-gray-400",
+  logout: "text-gray-700 dark:text-gray-400",
   // Blobs
   blob_upload: "text-cyan-600 dark:text-cyan-400",
   blob_delete: "text-red-500 dark:text-red-400",
@@ -57,7 +57,7 @@ const EVENT_COLORS: Record<string, string> = {
   // Background tasks
   auto_scan_complete: "text-teal-600 dark:text-teal-400",
   trash_purge_complete: "text-orange-600 dark:text-orange-400",
-  housekeeping_complete: "text-gray-500 dark:text-gray-400",
+  housekeeping_complete: "text-gray-700 dark:text-gray-400",
   encryption_migration_complete: "text-emerald-600 dark:text-emerald-400",
   backup_sync_cycle_complete: "text-sky-600 dark:text-sky-400",
   // Admin
@@ -195,7 +195,7 @@ function ServerLogsTab() {
         <div className="flex flex-wrap gap-3 items-end">
           {/* Text Search */}
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
               Search
             </label>
             <input
@@ -208,7 +208,7 @@ function ServerLogsTab() {
           </div>
           {/* Event Type */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
               Event Type
             </label>
             <select
@@ -226,7 +226,7 @@ function ServerLogsTab() {
           </div>
           {/* IP Filter */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
               IP Address
             </label>
             <input
@@ -239,7 +239,7 @@ function ServerLogsTab() {
           </div>
           {/* Date Range */}
           <div>
-            <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
               Time Range
             </label>
             <select
@@ -259,7 +259,7 @@ function ServerLogsTab() {
           {/* Source Server Filter */}
           {sourceServers.length > 0 && (
             <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-400 mb-1">
                 Source
               </label>
               <select
@@ -278,7 +278,7 @@ function ServerLogsTab() {
             </div>
           )}
         </div>
-        <div className="mt-2 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+        <div className="mt-2 flex items-center gap-3 text-xs text-gray-700 dark:text-gray-400">
           <span>Showing {filtered.length} of {total.toLocaleString()} entries</span>
           <span className="flex items-center gap-1">
             <span className={`inline-block w-2 h-2 rounded-full ${streaming ? "bg-green-500 animate-pulse" : "bg-gray-400"}`} />
@@ -304,22 +304,22 @@ function ServerLogsTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 dark:bg-gray-700 sticky top-0 z-10">
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Time
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Event
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     User
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Source
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     IP
                   </th>
-                  <th className="text-left px-3 py-2 font-medium text-gray-500 dark:text-gray-400">
+                  <th className="text-left px-3 py-2 font-medium text-gray-700 dark:text-gray-400">
                     Details
                   </th>
                 </tr>
@@ -332,7 +332,7 @@ function ServerLogsTab() {
                   <tr>
                     <td
                       colSpan={6}
-                      className="text-center py-8 text-gray-400 dark:text-gray-500"
+                      className="text-center py-8 text-gray-600 dark:text-gray-500"
                     >
                       No audit log entries found
                     </td>
@@ -368,7 +368,7 @@ function AuditLogRow({ log }: { log: AuditLogEntry }) {
         className="hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer"
         onClick={() => setExpanded((v) => !v)}
       >
-        <td className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap" title={formatDate(log.created_at)}>
+        <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-400 whitespace-nowrap" title={formatDate(log.created_at)}>
           {relativeTime(log.created_at)}
         </td>
         <td className={`px-3 py-2 text-xs font-mono font-medium ${colorClass}`}>
@@ -386,13 +386,13 @@ function AuditLogRow({ log }: { log: AuditLogEntry }) {
               {log.source_server}
             </span>
           ) : (
-            <span className="text-gray-400 dark:text-gray-500">local</span>
+            <span className="text-gray-600 dark:text-gray-500">local</span>
           )}
         </td>
         <td className="px-3 py-2 text-xs font-mono text-gray-600 dark:text-gray-400">
           {log.ip_address}
         </td>
-        <td className="px-3 py-2 text-xs text-gray-500 dark:text-gray-400 max-w-xs truncate">
+        <td className="px-3 py-2 text-xs text-gray-700 dark:text-gray-400 max-w-xs truncate">
           {log.details !== "{}" ? log.details : "—"}
         </td>
       </tr>

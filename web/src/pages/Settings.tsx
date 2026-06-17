@@ -239,7 +239,7 @@ export default function Settings() {
         /* Backup servers mirror accounts from the primary — no local changes */
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-2">Account</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
+          <p className="text-sm text-gray-700 dark:text-gray-400">
             Logged in as <strong>{username}</strong>. Account changes (password, 2FA) are managed on the primary server.
           </p>
         </section>
@@ -252,7 +252,7 @@ export default function Settings() {
       {!isBackupMode && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Library Export</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
             Package your entire media library with metadata into downloadable zip files.
             Files are available for 24 hours after export.
           </p>
@@ -276,7 +276,7 @@ export default function Settings() {
               className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-md text-sm transition-colors ${
                 exportFiles.length > 0
                   ? "bg-green-600 text-white hover:bg-green-700"
-                  : "bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                  : "bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-400 cursor-not-allowed"
               }`}
             >
               Downloads{exportFiles.length > 0 ? ` (${exportFiles.length})` : ""}
@@ -327,7 +327,7 @@ export default function Settings() {
       {backupLoaded && !isBackupMode && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Active Server</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-sm text-gray-700 dark:text-gray-400 mb-3">
             Choose which server to view photos from.
           </p>
           <select
@@ -351,7 +351,7 @@ export default function Settings() {
             ))}
           </select>
           {backupServers.length === 0 && (
-            <p className="text-xs text-gray-400 mt-2">
+            <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
               No backup servers configured. Add one in the Backup Recovery section below.
             </p>
           )}
@@ -366,7 +366,7 @@ export default function Settings() {
             <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Thumbnail Size
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
+            <p className="text-sm text-gray-700 dark:text-gray-400">
               {thumbnailSize === "large"
                 ? "Large — taller rows for bigger photo previews."
                 : "Normal — compact rows showing more photos (default)."}
@@ -376,7 +376,7 @@ export default function Settings() {
             <span className={`text-xs font-medium ${
               thumbnailSize === "normal"
                 ? "text-blue-600 dark:text-blue-400"
-                : "text-gray-400 dark:text-gray-500"
+                : "text-gray-600 dark:text-gray-500"
             }`}>Normal</span>
             <button
               onClick={toggleThumbnailSize}
@@ -399,7 +399,7 @@ export default function Settings() {
             <span className={`text-xs font-medium ${
               thumbnailSize === "large"
                 ? "text-blue-600 dark:text-blue-400"
-                : "text-gray-400 dark:text-gray-500"
+                : "text-gray-600 dark:text-gray-500"
             }`}>Large</span>
           </div>
         </div>
@@ -443,7 +443,7 @@ export default function Settings() {
         <div className="space-y-4">
           <div>
             <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Install Simple Photos</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+            <p className="text-sm text-gray-700 dark:text-gray-400 mb-2">
               Use this site like a native app. Choose <strong>Install App</strong> for a quick web-app install on any device, or <strong>Android App</strong> for automatic phone-photo backup.
             </p>
             <div className="flex flex-wrap gap-2">
@@ -525,28 +525,28 @@ export default function Settings() {
                     <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">1</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Download the APK</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Click the button above or transfer the APK to your phone via USB/email.</p>
+                      <p className="text-xs text-gray-700 dark:text-gray-400">Click the button above or transfer the APK to your phone via USB/email.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
                     <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">2</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Enable "Install unknown apps"</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Go to <strong>Settings → Apps → Special access → Install unknown apps</strong> and enable it for your file manager or browser.</p>
+                      <p className="text-xs text-gray-700 dark:text-gray-400">Go to <strong>Settings → Apps → Special access → Install unknown apps</strong> and enable it for your file manager or browser.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
                     <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">3</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Open the APK</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Tap the downloaded APK file and confirm the installation prompt.</p>
+                      <p className="text-xs text-gray-700 dark:text-gray-400">Tap the downloaded APK file and confirm the installation prompt.</p>
                     </div>
                   </li>
                   <li className="flex gap-3">
                     <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">4</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Connect to your server</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Open the app, enter your server URL:</p>
+                      <p className="text-xs text-gray-700 dark:text-gray-400">Open the app, enter your server URL:</p>
                       <code className="block mt-1 bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded text-xs text-gray-800 dark:text-gray-200 break-all">{window.location.origin}</code>
                     </div>
                   </li>
@@ -554,7 +554,7 @@ export default function Settings() {
                     <span className="flex-shrink-0 w-6 h-6 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full flex items-center justify-center text-xs font-bold">5</span>
                     <div>
                       <p className="font-medium text-gray-700 dark:text-gray-300">Sign in & grant permissions</p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">Log in with your account and allow the app to access your photos and videos for automatic encrypted backup.</p>
+                      <p className="text-xs text-gray-700 dark:text-gray-400">Log in with your account and allow the app to access your photos and videos for automatic encrypted backup.</p>
                     </div>
                   </li>
                 </ol>
@@ -579,7 +579,7 @@ export default function Settings() {
               <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
                 Include Audio in Backups
               </h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-gray-700 dark:text-gray-400">
                 {audioBackupEnabled
                   ? "Audio files (MP3, FLAC, WAV, etc.) are included when syncing to backup servers."
                   : "Audio files are excluded from backup sync. Only photos and videos will be backed up."}
@@ -630,7 +630,7 @@ export default function Settings() {
       {window.location.protocol === "https:" && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Cast</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
             Stream your gallery slideshow to a Chromecast or compatible receiver on your local network.
           </p>
           <button
@@ -655,7 +655,7 @@ export default function Settings() {
       {isAdmin && (
         <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
           <h2 className="text-lg font-semibold mb-3">Server</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
             Restart the server process. The page will automatically reload once the server comes back up.
           </p>
           {restartConfirm ? (
@@ -695,18 +695,18 @@ export default function Settings() {
         <div className="flex flex-col items-center text-center">
           <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mb-3" />
           <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Simple Photos</h3>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
             v1.0.0 — Self-hosted, end-to-end encrypted photo & video library
           </p>
           <hr className="w-full border-gray-100 dark:border-gray-700 mb-4" />
-          <p className="text-xs text-gray-400 mb-2">Developed by</p>
+          <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">Developed by</p>
           <img
             src="/wulfnet.jpg"
             alt="WulfNet Designs"
             className="h-16 mb-1"
           />
           <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">WulfNet Designs</p>
-          <p className="text-xs text-gray-400 mt-3">
+          <p className="text-xs text-gray-600 dark:text-gray-400 mt-3">
             &copy; {new Date().getFullYear()} WulfNet Designs. All rights
             reserved.
           </p>
@@ -721,7 +721,7 @@ export default function Settings() {
             <AppIcon name="star" size="w-5 h-5" />
             <div>
               <p className="text-gray-900 dark:text-gray-100 font-medium">Icons</p>
-              <p className="text-gray-500 dark:text-gray-400">
+              <p className="text-gray-700 dark:text-gray-400">
                 Custom icons by{" "}
                 <a
                   href="https://www.flaticon.com/authors/angus-87"
@@ -748,7 +748,7 @@ export default function Settings() {
             <AppIcon name="shared" size="w-5 h-5" />
             <div>
               <p className="text-gray-900 dark:text-gray-100 font-medium">Source Code</p>
-              <p className="text-gray-500 dark:text-gray-400">
+              <p className="text-gray-700 dark:text-gray-400">
                 <a
                   href="https://github.com/wulfic/simple-photos"
                   target="_blank"

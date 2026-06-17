@@ -24,7 +24,7 @@ export default function StorageStatsSection({
     return (
       <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
         <h2 className="text-lg font-semibold mb-3">Storage</h2>
-        <p className="text-sm text-gray-400 animate-pulse">Loading storage stats…</p>
+        <p className="text-sm text-gray-600 dark:text-gray-400 animate-pulse">Loading storage stats…</p>
       </section>
     );
   }
@@ -100,27 +100,27 @@ export default function StorageStatsSection({
       {/* Detail rows */}
       <div className="border-t border-gray-100 dark:border-gray-700 pt-3 space-y-1.5 text-sm">
         <div className="flex justify-between">
-          <span className="text-gray-500 dark:text-gray-400">Your usage</span>
+          <span className="text-gray-700 dark:text-gray-400">Your usage</span>
           <span className="font-medium text-gray-900 dark:text-gray-100">{formatBytes(stats.user_total_bytes)}</span>
         </div>
         <div className="flex justify-between text-xs">
-          <span className="text-gray-400 dark:text-gray-500 pl-3">Photos &amp; GIFs ({stats.photo_count})</span>
-          <span className="text-gray-500 dark:text-gray-400">{formatBytes(stats.photo_bytes)}</span>
+          <span className="text-gray-600 dark:text-gray-500 pl-3">Photos &amp; GIFs ({stats.photo_count})</span>
+          <span className="text-gray-700 dark:text-gray-400">{formatBytes(stats.photo_bytes)}</span>
         </div>
         <div className="flex justify-between text-xs">
-          <span className="text-gray-400 dark:text-gray-500 pl-3">Videos ({stats.video_count})</span>
-          <span className="text-gray-500 dark:text-gray-400">{formatBytes(stats.video_bytes)}</span>
+          <span className="text-gray-600 dark:text-gray-500 pl-3">Videos ({stats.video_count})</span>
+          <span className="text-gray-700 dark:text-gray-400">{formatBytes(stats.video_bytes)}</span>
         </div>
         <div className="flex justify-between text-xs">
-          <span className="text-gray-400 dark:text-gray-500 pl-3">Thumbnails &amp; manifests ({stats.other_blob_count})</span>
-          <span className="text-gray-500 dark:text-gray-400">{formatBytes(stats.other_blob_bytes)}</span>
+          <span className="text-gray-600 dark:text-gray-500 pl-3">Thumbnails &amp; manifests ({stats.other_blob_count})</span>
+          <span className="text-gray-700 dark:text-gray-400">{formatBytes(stats.other_blob_bytes)}</span>
         </div>
         <div className="flex justify-between pt-1.5 border-t border-gray-100 dark:border-gray-700">
-          <span className="text-gray-500 dark:text-gray-400">Free space</span>
+          <span className="text-gray-700 dark:text-gray-400">Free space</span>
           <span className="font-medium text-green-600 dark:text-green-400">{formatBytes(stats.fs_free_bytes)}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-gray-500 dark:text-gray-400">Total capacity</span>
+          <span className="text-gray-700 dark:text-gray-400">Total capacity</span>
           <span className="font-medium text-gray-900 dark:text-gray-100">{formatBytes(stats.fs_total_bytes)}</span>
         </div>
       </div>

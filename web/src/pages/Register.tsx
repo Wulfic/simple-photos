@@ -98,7 +98,7 @@ export default function Register() {
   }
 
   const Checkmark = ({ ok }: { ok: boolean }) => (
-    <span className={ok ? "text-green-600 dark:text-green-400" : "text-gray-400"}>
+    <span className={ok ? "text-green-600 dark:text-green-400" : "text-gray-600 dark:text-gray-400"}>
       {ok ? "✓" : "○"}
     </span>
   );
@@ -191,11 +191,11 @@ export default function Register() {
                   </li>
                   <li>
                     <Checkmark ok={pw.checks.special} /> Special character
-                    <span className="text-gray-400"> (optional)</span>
+                    <span className="text-gray-600 dark:text-gray-400"> (optional)</span>
                   </li>
                   <li>
                     <Checkmark ok={pw.checks.long} /> 12+ characters
-                    <span className="text-gray-400"> (recommended)</span>
+                    <span className="text-gray-600 dark:text-gray-400"> (recommended)</span>
                   </li>
                 </ul>
               </div>

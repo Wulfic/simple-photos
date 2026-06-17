@@ -72,7 +72,7 @@ export default function AiRecognitionSection({
   return (
     <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">AI Recognition</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
         Automatically detect faces and objects in your photos. Detected people
         are grouped into clusters and objects are tagged for easy searching.
       </p>
@@ -83,7 +83,7 @@ export default function AiRecognitionSection({
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Enable AI Processing
           </h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-gray-700 dark:text-gray-400">
             {status?.enabled
               ? "AI is analysing your photos in the background."
               : "AI processing is disabled."}
@@ -115,38 +115,38 @@ export default function AiRecognitionSection({
             <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
               {status.photos_processed}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Processed</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">Processed</p>
           </div>
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
             <p className="text-xl font-bold text-amber-600 dark:text-amber-400">
               {status.photos_pending}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Pending</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">Pending</p>
           </div>
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
             <p className="text-xl font-bold text-green-600 dark:text-green-400">
               {status.face_clusters}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">People</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">People</p>
           </div>
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
             <p className="text-xl font-bold text-orange-600 dark:text-orange-400">
               {status.pet_clusters ?? 0}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Pets</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">Pets</p>
           </div>
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
             <p className="text-xl font-bold text-purple-600 dark:text-purple-400">
               {status.object_detections}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Objects</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">Objects</p>
           </div>
         </div>
       )}
 
       {/* GPU indicator */}
       {status && (
-        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+        <p className="text-xs text-gray-700 dark:text-gray-400 mb-4">
           Execution: {status.gpu_available ? "GPU (CUDA)" : "CPU"} &middot;{" "}
           {status.face_detections} face detections &middot;{" "}
           {status.pet_detections ?? 0} pet detections

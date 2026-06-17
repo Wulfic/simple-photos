@@ -73,6 +73,22 @@
   animation: slide-in-left 0.25s ease-out;
 }
 
+/* ── Toast popups (#8) ──────────────────────────────────────── */
+@keyframes toast-in {
+  from {
+    transform: translateY(-12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.toast-in {
+  animation: toast-in 0.15s ease-out;
+}
+
 @layer base {
   /* ── Dark-mode defaults ──────────────────────────────────────── */
   .dark {

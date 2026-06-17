@@ -18,6 +18,7 @@ import AddPhotosPanel from "../components/AddPhotosPanel";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
 import { getErrorMessage } from "../utils/formatters";
+import { toast } from "../store/toast";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
 import useSlideshow from "../hooks/useSlideshow";
@@ -148,18 +149,18 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
           </button>
           <h2 className="text-xl font-semibold truncate">{def.label}</h2>
-          <span className="text-gray-400 text-sm shrink-0">{photoCount} items</span>
+          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photoCount} items</span>
           {hasPhotosForSlideshow && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -168,7 +169,7 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -180,10 +181,10 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : photoCount === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No {def.label.toLowerCase()} found</p>
+            <p className="text-gray-700 dark:text-gray-400">No {def.label.toLowerCase()} found</p>
           </div>
         ) : (
           <JustifiedGrid
@@ -246,6 +247,21 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   const [shareUsers, setShareUsers] = useState<ShareUser[]>([]);
   const [shareSuccess, setShareSuccess] = useState("");
   const [secureBlobIds, setSecureBlobIds] = useState<Set<string>>(new Set());
+
+  // Surface errors as a dismissible toast popup instead of an under-navbar bar
+  // (#8). e.g. sharing an album to yourself ("Cannot add yourself as a member").
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+      setError("");
+    }
+  }, [error]);
+  useEffect(() => {
+    if (shareSuccess) {
+      toast.success(shareSuccess);
+      setShareSuccess("");
+    }
+  }, [shareSuccess]);
 
   // Fetch secure blob IDs so secure photos are excluded from regular albums
   useEffect(() => {
@@ -457,7 +473,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   if (!album) {
     return (
       <div className="p-4 text-center py-12">
-        <p className="text-gray-500 dark:text-gray-400">Loading album…</p>
+        <p className="text-gray-700 dark:text-gray-400">Loading album…</p>
       </div>
     );
   }
@@ -478,14 +494,14 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
                   onClick={() => handleShareWithUser(u.id)}
                   className="w-full text-left px-3 py-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-sm flex items-center gap-2"
                 >
-                  <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <svg className="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                   </svg>
                   {u.username}
                 </button>
               ))}
               {shareUsers.length === 0 && (
-                <p className="text-gray-500 text-sm text-center py-4">No other users found</p>
+                <p className="text-gray-700 dark:text-gray-500 text-sm text-center py-4">No other users found</p>
               )}
             </div>
             <button
@@ -500,27 +516,22 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
 
       <main className="p-4">
         {/* Sub-header with album name */}
-        {shareSuccess && (
-          <p className="text-green-600 dark:text-green-400 text-sm mb-4 p-3 bg-green-50 dark:bg-green-900/30 rounded">
-            {shareSuccess}
-          </p>
-        )}
         <div className="flex items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => navigate("/albums")}
-              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
               title="Back to Albums"
             >
               <AppIcon name="back-arrow" size="w-5 h-5" />
             </button>
             <h2 className="text-xl font-semibold truncate">{album.name}</h2>
-            <span className="text-gray-400 text-sm shrink-0">{album.photoBlobIds.length} items</span>
+            <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{album.photoBlobIds.length} items</span>
             {hasPhotosForSlideshow && (
               <>
               <button
                 onClick={() => slideshow.start(0)}
-                className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+                className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
                 title="Start Slideshow"
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -529,7 +540,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
               </button>
               <button
                 onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-                className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+                className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
                 title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
               >
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -570,7 +581,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           )}
         </div>
 
-      {error && <p className="text-red-600 dark:text-red-400 text-sm mb-4">{error}</p>}
+      {/* Errors surface via the global toast host (#8) */}
 
       {/* Add-photos picker */}
       {showAddPhotos && (
@@ -587,7 +598,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           <div className="flex items-center gap-3">
             <button
               onClick={clearSelection}
-              className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+              className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -611,8 +622,8 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
       )}
       {albumPhotos.length === 0 ? (
         <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-          <p className="text-gray-500 dark:text-gray-400 mb-2">This album is empty</p>
-          <p className="text-gray-400 text-sm">
+          <p className="text-gray-700 dark:text-gray-400 mb-2">This album is empty</p>
+          <p className="text-gray-600 dark:text-gray-400 text-sm">
             Click "Add Photos" to add media from your gallery
           </p>
         </div>
@@ -723,7 +734,7 @@ function PeopleView() {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -732,11 +743,11 @@ function PeopleView() {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : clusters.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No faces detected yet</p>
-            <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
+            <p className="text-gray-700 dark:text-gray-400">No faces detected yet</p>
+            <p className="text-gray-600 dark:text-gray-500 text-sm mt-1">
               Enable AI processing in Settings to detect faces
             </p>
           </div>
@@ -756,7 +767,7 @@ function PeopleView() {
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : (
-                    <svg className="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-10 h-10 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
                     </svg>
                   )}
@@ -764,7 +775,7 @@ function PeopleView() {
                 <p className="font-medium text-center text-sm truncate">
                   {cluster.label || "Unknown Person"}
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                <p className="text-xs text-gray-700 dark:text-gray-400 text-center">
                   {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
                 </p>
               </div>
@@ -833,7 +844,7 @@ function PetsView() {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -842,11 +853,11 @@ function PetsView() {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : clusters.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No pets detected yet</p>
-            <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
+            <p className="text-gray-700 dark:text-gray-400">No pets detected yet</p>
+            <p className="text-gray-600 dark:text-gray-500 text-sm mt-1">
               Enable AI processing in Settings to detect pets in your photos
             </p>
           </div>
@@ -866,7 +877,7 @@ function PetsView() {
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : (
-                    <svg className="w-10 h-10 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-10 h-10 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
                     </svg>
                   )}
@@ -874,7 +885,7 @@ function PetsView() {
                 <p className="font-medium text-center text-sm truncate capitalize">
                   {cluster.label || `Unknown ${cluster.species}`}
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
+                <p className="text-xs text-gray-700 dark:text-gray-400 text-center">
                   {cluster.photo_count} photo{cluster.photo_count !== 1 ? "s" : ""}
                 </p>
               </div>
@@ -946,7 +957,7 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums/smart-pets")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to Pets"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -962,33 +973,33 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
                 maxLength={100}
               />
               <button type="submit" className="text-blue-600 text-sm font-medium">Save</button>
-              <button type="button" onClick={() => setEditing(false)} className="text-gray-400 text-sm">Cancel</button>
+              <button type="button" onClick={() => setEditing(false)} className="text-gray-600 dark:text-gray-400 text-sm">Cancel</button>
             </form>
           ) : (
             <>
               <h2 className="text-xl font-semibold truncate capitalize">{clusterName}</h2>
               <button
                 onClick={() => setEditing(true)}
-                className="text-gray-400 hover:text-gray-600 text-sm"
+                className="text-gray-600 dark:text-gray-400 hover:text-gray-600 text-sm"
                 title="Rename"
               >
                 ✏️
               </button>
             </>
           )}
-          <span className="text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1000,10 +1011,10 @@ function PetDetailView({ clusterId }: { clusterId: number }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : photos.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No photos found for this pet</p>
+            <p className="text-gray-700 dark:text-gray-400">No photos found for this pet</p>
           </div>
         ) : (
           <JustifiedGrid
@@ -1109,7 +1120,7 @@ function MemoriesView() {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -1118,11 +1129,11 @@ function MemoriesView() {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : memories.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No memories yet</p>
-            <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
+            <p className="text-gray-700 dark:text-gray-400">No memories yet</p>
+            <p className="text-gray-600 dark:text-gray-500 text-sm mt-1">
               Memories are auto-generated when you have 3+ photos from the same location and day
             </p>
           </div>
@@ -1142,7 +1153,7 @@ function MemoriesView() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-8 h-8 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
                     </svg>
@@ -1150,7 +1161,7 @@ function MemoriesView() {
                 </div>
                 <div className="p-3">
                   <p className="font-medium text-sm truncate">{memory.name}</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                  <p className="text-xs text-gray-700 dark:text-gray-400">
                     {memory.photo_count} photo{memory.photo_count !== 1 ? "s" : ""} · {memory.country}
                   </p>
                 </div>
@@ -1227,7 +1238,7 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums/smart-people")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to People"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -1243,33 +1254,33 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
                 maxLength={100}
               />
               <button type="submit" className="text-blue-600 text-sm font-medium">Save</button>
-              <button type="button" onClick={() => setEditing(false)} className="text-gray-400 text-sm">Cancel</button>
+              <button type="button" onClick={() => setEditing(false)} className="text-gray-600 dark:text-gray-400 text-sm">Cancel</button>
             </form>
           ) : (
             <>
               <h2 className="text-xl font-semibold truncate">{clusterName}</h2>
               <button
                 onClick={() => setEditing(true)}
-                className="text-gray-400 hover:text-gray-600 text-sm"
+                className="text-gray-600 dark:text-gray-400 hover:text-gray-600 text-sm"
                 title="Rename"
               >
                 ✏️
               </button>
             </>
           )}
-          <span className="text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1281,10 +1292,10 @@ function PersonDetailView({ clusterId }: { clusterId: number }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : photos.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No photos found for this person</p>
+            <p className="text-gray-700 dark:text-gray-400">No photos found for this person</p>
           </div>
         ) : (
           <JustifiedGrid
@@ -1392,7 +1403,7 @@ function TripsView() {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to Albums"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
@@ -1401,11 +1412,11 @@ function TripsView() {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : trips.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No trips yet</p>
-            <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">
+            <p className="text-gray-700 dark:text-gray-400">No trips yet</p>
+            <p className="text-gray-600 dark:text-gray-500 text-sm mt-1">
               Trips are auto-generated when you have photos from the same location across multiple days
             </p>
           </div>
@@ -1425,15 +1436,15 @@ function TripsView() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <svg className="w-8 h-8 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" />
                     </svg>
                   )}
                 </div>
                 <div className="p-3">
                   <p className="font-medium text-sm truncate">{trip.city}</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{trip.date_label}</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                  <p className="text-xs text-gray-700 dark:text-gray-400 truncate">{trip.date_label}</p>
+                  <p className="text-xs text-gray-700 dark:text-gray-400">
                     {trip.photo_count} photo{trip.photo_count !== 1 ? "s" : ""} · {trip.day_count} day{trip.day_count !== 1 ? "s" : ""} · {trip.country}
                   </p>
                 </div>
@@ -1543,25 +1554,25 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums/smart-memories")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to Memories"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
           </button>
           <h2 className="text-xl font-semibold truncate">{memoryName}</h2>
-          <span className="text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1573,10 +1584,10 @@ function MemoryDetailView({ memoryId }: { memoryId: string }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : photos.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No photos found for this memory</p>
+            <p className="text-gray-700 dark:text-gray-400">No photos found for this memory</p>
           </div>
         ) : (
           <JustifiedGrid
@@ -1669,25 +1680,25 @@ function TripDetailView({ tripId }: { tripId: string }) {
         <div className="flex items-center gap-3 mb-4">
           <button
             onClick={() => navigate("/albums/smart-trips")}
-            className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
+            className="text-gray-700 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors shrink-0"
             title="Back to Trips"
           >
             <AppIcon name="back-arrow" size="w-5 h-5" />
           </button>
           <h2 className="text-xl font-semibold truncate">{tripName}</h2>
-          <span className="text-gray-400 text-sm shrink-0">{photos.length} photos</span>
+          <span className="text-gray-600 dark:text-gray-400 text-sm shrink-0">{photos.length} photos</span>
           {hasPhotos && (
             <>
             <button
               onClick={() => slideshow.start(0)}
-              className="text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
+              className="text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0"
               title="Start Slideshow"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
             </button>
             <button
               onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
+              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"}`}
               title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1699,10 +1710,10 @@ function TripDetailView({ tripId }: { tripId: string }) {
         </div>
 
         {loading ? (
-          <p className="text-gray-500 dark:text-gray-400 text-center py-12">Loading…</p>
+          <p className="text-gray-700 dark:text-gray-400 text-center py-12">Loading…</p>
         ) : photos.length === 0 ? (
           <div className="text-center py-12 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <p className="text-gray-500 dark:text-gray-400">No photos found for this trip</p>
+            <p className="text-gray-700 dark:text-gray-400">No photos found for this trip</p>
           </div>
         ) : (
           <JustifiedGrid

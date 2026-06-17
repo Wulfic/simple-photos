@@ -335,7 +335,7 @@ export default function Import() {
       <main className="max-w-4xl mx-auto p-4">
         <div className="mb-6">
           <h2 className="text-xl font-semibold dark:text-white">Import Photos</h2>
-          <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+          <p className="text-gray-700 dark:text-gray-400 text-sm mt-1">
             Import from server directory or local files
           </p>
         </div>
@@ -368,7 +368,7 @@ export default function Import() {
         {mode === "server" && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-6">
             <h3 className="font-semibold text-gray-900 dark:text-gray-100 mb-3">Scan Server Directory</h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
               Scan a directory on the server for photos and videos to import. Files are encrypted locally before being stored.
             </p>
             <div className="flex gap-2">
@@ -432,7 +432,7 @@ export default function Import() {
               <p className="text-gray-700 dark:text-gray-300 font-medium mb-1">
                 Drag & drop photos, videos, and JSON metadata files here
               </p>
-              <p className="text-gray-500 dark:text-gray-400 text-sm mb-4">or click to browse</p>
+              <p className="text-gray-700 dark:text-gray-400 text-sm mb-4">or click to browse</p>
               <label className="inline-block bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 cursor-pointer text-sm font-medium transition-colors">
                 Select Files
                 <input
@@ -462,7 +462,7 @@ export default function Import() {
           <div className="flex flex-wrap items-center justify-between bg-white dark:bg-gray-800 rounded-lg shadow p-4 mb-4 gap-3">
             <div className="flex flex-wrap gap-4 text-sm">
               <span className="text-gray-700 dark:text-gray-300"><strong>{items.length}</strong> files</span>
-              <span className="text-gray-500 dark:text-gray-400">{formatBytes(items.reduce((sum, i) => sum + i.size, 0))}</span>
+              <span className="text-gray-700 dark:text-gray-400">{formatBytes(items.reduce((sum, i) => sum + i.size, 0))}</span>
               {withMetadata > 0 && (
                 <span className="text-green-700 dark:text-green-400"><strong>{withMetadata}</strong> with metadata</span>
               )}

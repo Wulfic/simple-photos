@@ -63,11 +63,54 @@ static CONV_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CONV_TOTAL: AtomicI64 = AtomicI64::new(0);
 static CONV_DONE: AtomicI64 = AtomicI64::new(0);
 
-/// Start a new conversion batch (resets counters).
-pub fn progress_start(total: i64) {
+/// When a client has declared the size of an upcoming batch (see
+/// [`batch_start`]), the denominator is *pinned*: per-file (`progress_add`) and
+/// per-pass (`progress_start`) auto-registration no longer mutate the total.
+/// This is what fixes the "3/4, 5/6, 12/13" jitter (#11) — without a pin, each
+/// in-flight file bumps `total` one step ahead of `done`, so the banner never
+/// shows the true batch size.
+static CONV_PINNED: AtomicBool = AtomicBool::new(false);
+
+/// Unconditionally reset and arm the counters. Internal — callers go through
+/// [`progress_start`] (pin-aware) or [`batch_start`] (pin-setting).
+fn raw_start(total: i64) {
     CONV_DONE.store(0, Ordering::Relaxed);
     CONV_TOTAL.store(total, Ordering::Relaxed);
     CONV_ACTIVE.store(true, Ordering::Relaxed);
+}
+
+/// Start a new conversion batch (resets counters).
+///
+/// No-op while a client batch is pinned, so a burst of deferred uploads each
+/// kicking `run_conversion_pass` can't reset the denominator the client
+/// declared mid-flight (#11).
+pub fn progress_start(total: i64) {
+    if CONV_PINNED.load(Ordering::Relaxed) {
+        // Keep the banner visible; ignore the would-be reset.
+        CONV_ACTIVE.store(true, Ordering::Relaxed);
+        return;
+    }
+    raw_start(total);
+}
+
+/// Pin the denominator to a client-declared `total` for the duration of an
+/// upload batch (#11). The web upload loop knows up front how many convertible
+/// files it is about to send, so it declares that count once and the banner
+/// reads `done/total` throughout instead of tracking one ahead per file.
+pub fn batch_start(total: i64) {
+    raw_start(total);
+    CONV_PINNED.store(true, Ordering::Relaxed);
+}
+
+/// Release a client batch pin (paired with [`batch_start`]).
+///
+/// Called when the client's upload loop finishes. By then every inline
+/// conversion for the batch has completed, so we finalize the banner: if the
+/// client slightly over-declared (e.g. a file turned out to be a dedup no-op),
+/// `done` may be below `total` — clear `active` so the banner doesn't hang.
+pub fn batch_end() {
+    CONV_PINNED.store(false, Ordering::Relaxed);
+    CONV_ACTIVE.store(false, Ordering::Relaxed);
 }
 
 /// Increment the done counter by 1.
@@ -91,6 +134,13 @@ pub fn progress_finish() {
 /// `done == total` and `active` flips back to false via
 /// [`progress_finish_one`].
 pub fn progress_add(n: i64) {
+    // While a client batch is pinned the total is fixed — just keep the banner
+    // armed and let `progress_finish_one` advance `done` against the declared
+    // denominator (#11).
+    if CONV_PINNED.load(Ordering::Relaxed) {
+        CONV_ACTIVE.store(true, Ordering::Relaxed);
+        return;
+    }
     CONV_TOTAL.fetch_add(n, Ordering::Relaxed);
     CONV_ACTIVE.store(true, Ordering::Relaxed);
 }
@@ -558,6 +608,50 @@ pub async fn conversion_status(
     }))
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct ConversionBatchStartRequest {
+    /// Number of convertible files the client is about to upload in this batch.
+    pub total: i64,
+}
+
+/// POST /api/admin/conversion-batch/start
+///
+/// Pins the conversion-banner denominator to the client-declared batch size so
+/// it reads `n/total` throughout a multi-file upload instead of tracking one
+/// ahead (#11). Paired with `conversion-batch/end`.
+pub async fn conversion_batch_start(
+    _auth: AuthUser,
+    Json(req): Json<ConversionBatchStartRequest>,
+) -> Result<Json<ConversionStatusResponse>, AppError> {
+    if req.total <= 0 {
+        return Err(AppError::BadRequest(
+            "batch total must be positive".to_string(),
+        ));
+    }
+    batch_start(req.total);
+    let (active, total, done) = progress_snapshot();
+    Ok(Json(ConversionStatusResponse {
+        active,
+        total,
+        done,
+    }))
+}
+
+/// POST /api/admin/conversion-batch/end
+///
+/// Releases the pin set by `conversion-batch/start` and finalizes the banner.
+pub async fn conversion_batch_end(
+    _auth: AuthUser,
+) -> Result<Json<ConversionStatusResponse>, AppError> {
+    batch_end();
+    let (active, total, done) = progress_snapshot();
+    Ok(Json(ConversionStatusResponse {
+        active,
+        total,
+        done,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +665,41 @@ mod tests {
         assert!(
             conversion_priority(MediaCategory::Audio) < conversion_priority(MediaCategory::Video)
         );
+    }
+
+    #[test]
+    fn pinned_batch_keeps_denominator_stable() {
+        // Simulate the web upload loop declaring a 4-file convertible batch and
+        // the inline upload path converting them one at a time. The denominator
+        // must stay at 4 the whole way (#11), never tracking one ahead.
+        batch_start(4);
+        let (active, total, done) = progress_snapshot();
+        assert!(active);
+        assert_eq!(total, 4);
+        assert_eq!(done, 0);
+
+        for expected_done in 1..=4 {
+            // Each inline conversion would self-register +1; while pinned this
+            // must NOT grow the total.
+            progress_add(1);
+            assert_eq!(progress_snapshot().1, 4, "total must stay pinned at 4");
+            progress_finish_one();
+            assert_eq!(progress_snapshot().2, expected_done);
+        }
+
+        // A background pass firing mid-batch must not reset the denominator.
+        progress_start(99);
+        assert_eq!(progress_snapshot().1, 4, "progress_start ignored while pinned");
+
+        batch_end();
+        let (active, _, _) = progress_snapshot();
+        assert!(!active, "batch_end finalizes the banner");
+
+        // After unpin, the normal per-pass path works again.
+        progress_start(7);
+        assert_eq!(progress_snapshot().1, 7);
+        progress_finish();
+        assert!(!progress_snapshot().0);
     }
 
     #[test]

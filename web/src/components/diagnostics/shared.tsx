@@ -41,12 +41,12 @@ export function StatCard({
 
   return (
     <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
-      <p className="text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+      <p className="text-xs text-gray-700 dark:text-gray-400 mb-0.5">
         {label}
       </p>
       <p className={`text-sm font-bold ${colorClass}`}>{value}</p>
       {subtitle && (
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+        <p className="text-xs text-gray-600 dark:text-gray-500 mt-0.5">
           {subtitle}
         </p>
       )}

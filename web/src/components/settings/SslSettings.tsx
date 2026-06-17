@@ -249,7 +249,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
   return (
     <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
       <h2 className="text-lg font-semibold mb-1">SSL / TLS</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
         Serve your photos over HTTPS. Toggling this saves immediately;
         a server restart is required for the change to take effect.
       </p>
@@ -258,7 +258,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
       <div className="flex items-center justify-between mb-4">
         <div>
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Enable TLS</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-gray-700 dark:text-gray-400">
             {sslEnabled ? "HTTPS is enabled." : "Running on plain HTTP."}
           </p>
         </div>
@@ -326,7 +326,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "letsencrypt" ? null : "letsencrypt")
           }
         >
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-gray-700 dark:text-gray-400 mb-3">
             Requires a public DNS name pointing at this server and inbound
             port {leChallengePort || "80"} reachable from the internet.
           </p>
@@ -448,7 +448,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "local_ca" ? null : "local_ca")
           }
         >
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-gray-700 dark:text-gray-400 mb-3">
             Install the public root on each device using the bundled scripts
             and you'll get a real, trusted HTTPS connection on your LAN —
             no Let's Encrypt, no public DNS, no inbound firewall rules.
@@ -525,7 +525,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
                 className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 disabled={lcGenerating}
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
                 Localhost, the server hostname, and detected LAN IPs are added
                 automatically.
               </p>
@@ -558,7 +558,7 @@ export default function SslSettings({ setError, setSuccess }: SslSettingsProps) 
             setOpenMethod(openMethod === "manual" ? null : "manual")
           }
         >
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          <p className="text-xs text-gray-700 dark:text-gray-400 mb-3">
             Use this if you have a certificate from another provider (corporate
             CA, Cloudflare Origin, etc.). Both files must be PEM-encoded and
             readable by the server process.
@@ -655,12 +655,12 @@ function Disclosure({
               </span>
             )}
           </div>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+          <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5 truncate">
             {subtitle}
           </p>
         </div>
         <svg
-          className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`w-4 h-4 text-gray-600 dark:text-gray-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"

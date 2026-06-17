@@ -126,7 +126,7 @@ export default function GeolocationSection({
   return (
     <section className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-4">
       <h2 className="text-lg font-semibold mb-3">Geolocation</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+      <p className="text-sm text-gray-700 dark:text-gray-400 mb-4">
         Automatically resolve GPS coordinates into city, state, and country
         names. Browse photos by location or timeline.
       </p>
@@ -137,7 +137,7 @@ export default function GeolocationSection({
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Enable Geolocation
           </h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-gray-700 dark:text-gray-400">
             {status?.enabled
               ? "Location resolution is active."
               : "Geolocation processing is disabled."}
@@ -168,7 +168,7 @@ export default function GeolocationSection({
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Remove GPS from New Uploads
           </h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-gray-700 dark:text-gray-400">
             {status?.scrub_on_upload
               ? "New uploads will have GPS coordinates removed before saving."
               : "New uploads will keep their original GPS coordinates."}
@@ -192,7 +192,7 @@ export default function GeolocationSection({
           />
         </button>
       </div>
-      <p className="text-xs text-gray-400 dark:text-gray-500 mb-4 ml-1">
+      <p className="text-xs text-gray-600 dark:text-gray-500 mb-4 ml-1">
         This only affects future uploads — photos already in your library are not changed.
         Use &quot;Scrub All&quot; below to remove GPS from existing photos.
       </p>
@@ -203,7 +203,7 @@ export default function GeolocationSection({
           <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
             Precise Street Addresses
           </h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-gray-700 dark:text-gray-400">
             {status?.precise_enabled
               ? "Resolving house-number/street addresses (e.g. memories like “86 Nelson Blvd”)."
               : "City-level only. Turn on to resolve full street addresses."}
@@ -239,25 +239,25 @@ export default function GeolocationSection({
             <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
               {status.photos_with_location}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">With Location</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">With Location</p>
           </div>
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
             <p className="text-xl font-bold text-amber-600 dark:text-amber-400">
               {status.photos_without_location}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">No Location</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">No Location</p>
           </div>
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
             <p className="text-xl font-bold text-green-600 dark:text-green-400">
               {status.unique_countries}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Countries</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">Countries</p>
           </div>
           <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-3 text-center">
             <p className="text-xl font-bold text-purple-600 dark:text-purple-400">
               {status.unique_cities}
             </p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Cities</p>
+            <p className="text-xs text-gray-700 dark:text-gray-400">Cities</p>
           </div>
         </div>
       )}
@@ -270,7 +270,7 @@ export default function GeolocationSection({
       >
         {scrubbing ? "Scrubbing..." : "Scrub All Location Data"}
       </button>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+      <p className="text-xs text-gray-700 dark:text-gray-400 mt-2">
         Permanently remove all GPS coordinates and resolved location data from your photos.
       </p>
     </section>

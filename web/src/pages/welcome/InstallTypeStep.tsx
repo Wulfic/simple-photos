@@ -27,7 +27,7 @@ export default function InstallTypeStep({
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
         Installation Type
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
         Is this a brand new installation, or are you restoring from an existing
         backup server?
       </p>
@@ -58,7 +58,7 @@ export default function InstallTypeStep({
               <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                 Fresh Install
               </p>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+              <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">
                 Start from scratch with a new, empty photo library.
               </p>
             </div>
@@ -90,7 +90,7 @@ export default function InstallTypeStep({
               <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
                 Restore from Backup
               </p>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+              <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">
                 Recover your photos from an existing Simple Photos backup
                 server on your network.
               </p>
@@ -105,7 +105,7 @@ export default function InstallTypeStep({
             setStep("server-role");
             setError("");
           }}
-          className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          className="text-sm text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
         >
           &larr; Back
         </button>

@@ -47,7 +47,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
       <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
         Set Up Android App
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
         Install the Simple Photos app on your Android device for
         automatic photo backup.
       </p>
@@ -77,7 +77,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 <p className="font-medium text-gray-700 dark:text-gray-300">
                   Download the APK
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-gray-700 dark:text-gray-400">
                   Click the button above or transfer the APK to your
                   phone via USB/email.
                 </p>
@@ -91,7 +91,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 <p className="font-medium text-gray-700 dark:text-gray-300">
                   Enable "Install unknown apps"
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-gray-700 dark:text-gray-400">
                   Go to{" "}
                   <strong>
                     Settings → Apps → Special access → Install unknown
@@ -109,7 +109,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 <p className="font-medium text-gray-700 dark:text-gray-300">
                   Open the APK
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-gray-700 dark:text-gray-400">
                   Tap the downloaded APK file and confirm the
                   installation prompt.
                 </p>
@@ -123,7 +123,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 <p className="font-medium text-gray-700 dark:text-gray-300">
                   Connect to your server
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-gray-700 dark:text-gray-400">
                   Open the app, enter your server URL:
                 </p>
                 <code className="block mt-1 bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded text-xs text-gray-800 dark:text-gray-200 break-all">
@@ -139,7 +139,7 @@ export default function AndroidStep({ setStep, setError }: AndroidStepProps) {
                 <p className="font-medium text-gray-700 dark:text-gray-300">
                   Sign in & grant permissions
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
+                <p className="text-xs text-gray-700 dark:text-gray-400">
                   Log in with your account and allow the app to access
                   your photos and videos for automatic encrypted backup.
                 </p>

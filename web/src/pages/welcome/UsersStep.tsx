@@ -49,7 +49,7 @@ export default function UsersStep({
       <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
         Additional Users
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-4">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-4">
         Create accounts for family members or other users. You can always
         add more later in Settings.
       </p>
@@ -146,7 +146,7 @@ export default function UsersStep({
                 />
                 <span className="text-sm">
                   <span className="font-medium">User</span>
-                  <span className="text-gray-500 dark:text-gray-400">
+                  <span className="text-gray-700 dark:text-gray-400">
                     {" "}
                     — Upload & view own photos
                   </span>
@@ -163,7 +163,7 @@ export default function UsersStep({
                 />
                 <span className="text-sm">
                   <span className="font-medium">Admin</span>
-                  <span className="text-gray-500 dark:text-gray-400">
+                  <span className="text-gray-700 dark:text-gray-400">
                     {" "}
                     — Full control
                   </span>
@@ -209,7 +209,7 @@ export default function UsersStep({
             setShowUserForm(true);
             setError("");
           }}
-          className="w-full border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg py-3 text-gray-500 dark:text-gray-400 hover:border-blue-400 dark:hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors text-sm font-medium"
+          className="w-full border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg py-3 text-gray-700 dark:text-gray-400 hover:border-blue-400 dark:hover:border-blue-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors text-sm font-medium"
         >
           + Add a user
         </button>

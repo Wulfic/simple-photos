@@ -52,13 +52,13 @@ export default function FolderBrowserModal({
             <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
               Choose Storage Folder
             </h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5">
               Navigate to the folder where photos will be stored
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            className="p-1.5 rounded-md text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
             aria-label="Close"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -69,7 +69,7 @@ export default function FolderBrowserModal({
 
         {/* Current path breadcrumb */}
         <div className="bg-gray-50 dark:bg-gray-900 px-5 py-2.5 flex items-center gap-2 border-b border-gray-200 dark:border-gray-700">
-          <svg className="w-4 h-4 text-gray-500 dark:text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg className="w-4 h-4 text-gray-700 dark:text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
           </svg>
           <span className="font-mono text-xs text-gray-700 dark:text-gray-300 truncate flex-1">
@@ -99,13 +99,13 @@ export default function FolderBrowserModal({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
               </svg>
               <span className="text-blue-600 dark:text-blue-400 font-medium">..</span>
-              <span className="text-gray-400 text-xs ml-auto">Parent folder</span>
+              <span className="text-gray-600 dark:text-gray-400 text-xs ml-auto">Parent folder</span>
             </button>
           )}
 
           {/* Empty state */}
           {browseDirs.length === 0 && !browseLoading && (
-            <div className="px-5 py-10 text-center text-gray-400 text-sm">
+            <div className="px-5 py-10 text-center text-gray-600 dark:text-gray-400 text-sm">
               No subdirectories
             </div>
           )}

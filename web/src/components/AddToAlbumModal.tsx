@@ -3,10 +3,11 @@
  * lets them pick one to add the currently-selected blob IDs to. Reuses the
  * same manifest re-upload pattern as `AlbumDetail.addPhotos`.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { db, type CachedAlbum } from "../db";
 import { encrypt, sha256Hex } from "../crypto/crypto";
 import { api } from "../api/client";
+import { randomUuid } from "../utils/uuid";
 
 interface AddToAlbumModalProps {
   blobIds: string[];
@@ -18,6 +19,10 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
   const [albums, setAlbums] = useState<CachedAlbum[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [creatingBusy, setCreatingBusy] = useState(false);
+  const newNameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -26,6 +31,10 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
     });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (creating) newNameInputRef.current?.focus();
+  }, [creating]);
 
   async function pickAlbum(album: CachedAlbum) {
     if (busyId) return;
@@ -68,6 +77,48 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
     }
   }
 
+  async function createAndAdd(e: React.FormEvent) {
+    e.preventDefault();
+    const name = newName.trim();
+    if (!name || creatingBusy || busyId) return;
+    setCreatingBusy(true);
+    setError("");
+    try {
+      const albumId = randomUuid();
+      const createdAt = Date.now();
+      const photoBlobIds = [...new Set(blobIds)];
+      const coverPhotoBlobId = photoBlobIds[0] || undefined;
+
+      const payload = JSON.stringify({
+        v: 1,
+        album_id: albumId,
+        name,
+        created_at: new Date(createdAt).toISOString(),
+        cover_photo_blob_id: coverPhotoBlobId || null,
+        photo_blob_ids: photoBlobIds,
+      });
+      const encrypted = await encrypt(new TextEncoder().encode(payload));
+      const hash = await sha256Hex(new Uint8Array(encrypted));
+      const res = await api.blobs.upload(encrypted, "album_manifest", hash);
+
+      const stored: CachedAlbum = {
+        albumId,
+        manifestBlobId: res.blob_id,
+        name,
+        createdAt,
+        coverPhotoBlobId,
+        photoBlobIds,
+      };
+      await db.albums.put(stored);
+      onAdded(stored, photoBlobIds.length);
+    } catch (err: unknown) {
+      console.error("[AddToAlbumModal] create-and-add failed", err);
+      setError(err instanceof Error ? err.message : "Failed to create album");
+    } finally {
+      setCreatingBusy(false);
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4"
@@ -83,7 +134,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
           </h3>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white"
+            className="text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white"
             aria-label="Close"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -92,13 +143,56 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
           </button>
         </div>
 
+        {/* Create-new-album affordance — sticky at the top of the picker */}
+        <div className="border-b border-gray-200 dark:border-gray-700">
+          {creating ? (
+            <form onSubmit={createAndAdd} className="flex items-center gap-2 px-4 py-3">
+              <input
+                ref={newNameInputRef}
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="New album name"
+                disabled={creatingBusy}
+                className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-1.5 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              />
+              <button
+                type="submit"
+                disabled={!newName.trim() || creatingBusy}
+                className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {creatingBusy ? "Creating…" : "Create & add"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setCreating(false); setNewName(""); }}
+                disabled={creatingBusy}
+                className="shrink-0 rounded-lg px-2 py-1.5 text-sm text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <button
+              onClick={() => setCreating(true)}
+              disabled={busyId !== null}
+              className="w-full flex items-center gap-2 px-4 py-3 text-left text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              New album
+            </button>
+          )}
+        </div>
+
         <div className="flex-1 overflow-y-auto">
           {albums === null && (
-            <p className="text-center text-sm text-gray-500 dark:text-gray-400 py-8">Loading albums…</p>
+            <p className="text-center text-sm text-gray-700 dark:text-gray-400 py-8">Loading albums…</p>
           )}
           {albums?.length === 0 && (
-            <p className="text-center text-sm text-gray-500 dark:text-gray-400 py-8">
-              No albums yet. Create one from the Albums page first.
+            <p className="text-center text-sm text-gray-700 dark:text-gray-400 py-8">
+              No albums yet. Use “New album” above to create one.
             </p>
           )}
           {albums && albums.length > 0 && (
@@ -111,7 +205,7 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
                     className="w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center justify-between disabled:opacity-50"
                   >
                     <span className="text-sm font-medium text-gray-800 dark:text-gray-100">{a.name}</span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                    <span className="text-xs text-gray-700 dark:text-gray-400">
                       {busyId === a.albumId ? "Adding…" : `${a.photoBlobIds.length} items`}
                     </span>
                   </button>

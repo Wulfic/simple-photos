@@ -34,27 +34,26 @@ dl() {
     mv "$out.part" "$out"
 }
 
-# Face models are mirrored on the GitHub release (github.com) so the install
-# does NOT depend on HuggingFace's Xet CDN (cas-bridge.xethub.co), which some
-# networks can't resolve. Try the release asset first (by exact name), then
-# fall back to the original HuggingFace source when no release version is
-# stamped (local build) or the release lacks the asset.
+# Face models live on a pinned, version-independent "assets-models" GitHub
+# release (github.com) so the install does NOT depend on HuggingFace's Xet CDN
+# (cas-bridge.xethub.co), which some networks can't resolve (issue #5b). The
+# fixed tag works for every build, including local/unstamped ones. Try the
+# mirror first (by exact name), then fall back to the HuggingFace source.
+MODEL_MIRROR_BASE="https://github.com/Wulfic/simple-photos/releases/download/assets-models"
+
 dl_model() {
     local out="$1" name="$2" fallback="$3"
     if [ -s "$out" ]; then
         echo "[skip] $name already present"
         return 0
     fi
-    if [ -n "$SP_APK_VERSION" ] && [ "$SP_APK_VERSION" != "@SP_VERSION@" ]; then
-        local rel="https://github.com/Wulfic/simple-photos/releases/download/v${SP_APK_VERSION}/${name}"
-        echo "[get]  $name (release mirror)"
-        if curl -fL --retry 3 --output "$out.part" "$rel"; then
-            mv "$out.part" "$out"
-            return 0
-        fi
-        rm -f "$out.part"
-        echo "[warn] release mirror for $name unavailable — falling back to HuggingFace"
+    echo "[get]  $name (models mirror)"
+    if curl -fL --retry 5 --retry-all-errors --output "$out.part" "$MODEL_MIRROR_BASE/$name"; then
+        mv "$out.part" "$out"
+        return 0
     fi
+    rm -f "$out.part"
+    echo "[warn] models mirror for $name unavailable — falling back to HuggingFace"
     echo "[get]  $name (source)"
     curl -fL --retry 3 --output "$out.part" "$fallback"
     mv "$out.part" "$out"

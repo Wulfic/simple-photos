@@ -43,7 +43,7 @@ export default function TwoFactorStep({
       <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-1">
         Two-Factor Authentication
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
         {step === "admin-2fa"
           ? "Secure your admin account with 2FA. Highly recommended."
           : `Set up 2FA for ${pendingTotpUser?.username ?? "the new user"}. Each user can also do this later in Settings.`}
@@ -106,7 +106,7 @@ export default function TwoFactorStep({
               />
             </div>
           </div>
-          <details className="text-xs text-gray-500 dark:text-gray-400">
+          <details className="text-xs text-gray-700 dark:text-gray-400">
             <summary className="cursor-pointer hover:text-gray-700 dark:hover:text-gray-300 dark:text-gray-300">
               Can't scan? Enter manually
             </summary>

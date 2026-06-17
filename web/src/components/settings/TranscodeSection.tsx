@@ -26,7 +26,7 @@ export default function TranscodeSection() {
       <h2 className="text-lg font-semibold mb-3">Video Transcoding</h2>
 
       {loading && (
-        <p className="text-sm text-gray-500 dark:text-gray-400">Loading...</p>
+        <p className="text-sm text-gray-700 dark:text-gray-400">Loading...</p>
       )}
 
       {status && (
@@ -65,7 +65,7 @@ export default function TranscodeSection() {
       )}
 
       {!loading && !status && (
-        <p className="text-sm text-gray-500 dark:text-gray-400">
+        <p className="text-sm text-gray-700 dark:text-gray-400">
           Unable to fetch transcode status.
         </p>
       )}

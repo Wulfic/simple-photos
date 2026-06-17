@@ -244,7 +244,7 @@ export default function AccountSection({
                   Cancel
                 </button>
               </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
+              <p className="text-xs text-gray-700 dark:text-gray-400">
                 Changing your password will sign you out of all other sessions.
               </p>
             </form>

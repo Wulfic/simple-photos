@@ -18,11 +18,16 @@ criteria**. Do not "done" anything without unit + manual verification.
 - **Session A — Data integrity:** #3 (trash re-add) ✅, #10 (Windows convert stall) 🟡 mitigated+instrumented — *complete 2026-06-16*
 - **Session B — Editing:** #4 (crop apply/thumb) ✅, #13 (crop UI overlap) ✅ — *complete 2026-06-16 (FE unit-test runner is a follow-up)*
 - **Session C — Navigation & panels:** #7 (back context audit) ✅, #15 (overlapping menus) ✅ — *complete 2026-06-16*
-- **Session D — Notifications/UX correctness:** #8 (toast system) 🟠, #12 (audio-policy error) 🟠, #11 (convert counter) 🟡, #2 (upload button) 🟠
-- **Session E — Albums:** #6 (create-album in popup) 🟠
-- **Session F — Visual polish:** #9 (light-mode contrast) 🟠, #14 (button/card facelift) 🟡
-- **Session G — Packaging/infra:** #1 (bundled installers) 🟠, #5 (geo on Ubuntu + onnx off release) 🟠
-
+- **Session D — Notifications/UX correctness:** #8 (toast system) ✅, #12 (audio-policy error) ✅, #11 (convert counter) ✅, #2 (upload button) ✅ — *complete 2026-06-16 (FE has no unit-test runner; server pin covered by Rust test)*
+- **Session E — Albums:** #6 (create-album in popup) ✅ — *complete 2026-06-16 (FE has no unit-test runner; manual verification pending)*
+- **Session F — Visual polish:** #9 (light-mode contrast) ✅ *complete 2026-06-16*, #14 (button/card facelift) 🟡 will need alot of user input.
+- **Session G — Packaging/infra:** #5b (onnx off release) ✅ *complete 2026-06-16 (CI/installer change; can't run CI/affected-network from here)* · #5a (geo on Ubuntu) 🟡 root cause found + fix shipped, pending Ubuntu repro to confirm full closure · #1 (bundled installers) 🟠 **deferred** — needs a <2 GB size budget (GitHub release asset cap) before building the offline variant
+**Session H - Deprecated android code** - Task :app:compileDebugKotlin
+w: file:///C:/Users/tyler/Repos/simple-photos/android/app/src/main/kotlin/com/simplephotos/data/remote/ServerDiscovery.kt:346:45 'val connectionInfo: WifiInfo!' is deprecated. Deprecated in Java.
+w: file:///C:/Users/tyler/Repos/simple-photos/android/app/src/main/kotlin/com/simplephotos/data/remote/ServerDiscovery.kt:347:39 'val ipAddress: Int' is deprecated. Deprecated in Java.
+w: file:///C:/Users/tyler/Repos/simple-photos/android/app/src/main/kotlin/com/simplephotos/sync/BackupWorker.kt:276:76 Condition is always 'false'.
+w: file:///C:/Users/tyler/Repos/simple-photos/android/app/src/main/kotlin/com/simplephotos/sync/BackupWorker.kt:486:52 Condition is always 'false'.
+w: file:///C:/Users/tyler/Repos/simple-photos/android/app/src/main/kotlin/com/simplephotos/ui/screens/viewer/PhotoSpecialOverlays.kt:231:1 Annotation 'androidx.media3.common.util.UnstableApi' is not an opt-in requirement marker; therefore, its usage in @OptIn is ignored.
 ---
 
 ## 🔴 #3 — Auto-scan re-adds trashed photos  ✅ DONE (2026-06-16)
@@ -306,7 +311,20 @@ the others). Entering edit mode should close info/tags.
 
 ---
 
-## 🟠 #8 — Errors shown under the navbar; use a toast/popup instead
+## 🟠 #8 — Errors shown under the navbar; use a toast/popup instead  ✅ DONE (2026-06-16)
+
+**Fix shipped:** new global toast system — `store/toast.ts` (zustand stack with
+de-dupe + per-kind auto-dismiss) + `components/ToastHost.tsx` (top-center,
+`z-[100]`, dismissible, `toast-in` keyframe), mounted once in
+`ProtectedLayout`. Pages bridge their existing `error`/`success` state to the
+host via a `useEffect(() => { if (error) { toast.error(error); setError(""); } })`
+shim and drop the inline `<p>` bar — no churn at every `setError` call site.
+Migrated the cited surfaces and all three share-to-self entry points: `Gallery`,
+`AlbumDetail` (also `shareSuccess` → `toast.success`), `Albums`,
+`SharedAlbumDetail`. *Follow-up:* the remaining ~47 pages still render inline
+bars; migrate incrementally with the same shim. `tsc -b` + `vite build` clean.
+
+<details><summary>original analysis</summary>
 
 **Symptom:** errors render as a red line under the navbar (e.g. sharing an album
 to yourself: "Cannot add yourself as a member").
@@ -326,10 +344,21 @@ incremental migration of pages currently rendering `error` inline.
 
 **Acceptance:** triggering the share-to-self error shows a dismissible popup,
 not an under-navbar bar; no layout shift.
+</details>
 
 ---
 
-## 🟠 #12 — "Audio backup is disabled by server policy" shown as a gallery error
+## 🟠 #12 — "Audio backup is disabled by server policy" shown as a gallery error  ✅ DONE (2026-06-16)
+
+**Fix shipped:** the Gallery upload loop (`useGalleryUpload.ts`) now matches the
+known policy rejection (`/audio backup is disabled/i`) in its per-file catch and
+**skips it silently** — `console.warn` for browser diagnostics, no `firstError`,
+so no toast/error bar. The server already logs the rejection at `info`
+(`upload.rs:228`) and `scan.rs` pre-filters audio when disabled, so the skip is
+visible only in logs/diagnostics. Other upload errors still surface (now via the
+#8 toast). `tsc -b` clean.
+
+<details><summary>original analysis</summary>
 
 **Symptom (Windows):** gallery shows an error `kalimb.aac: Audio backup is
 disabled by server policy` — correct policy, but it shouldn't surface as a UI
@@ -353,10 +382,28 @@ import filtering.
 
 **Acceptance:** with audio backup disabled, importing audio shows no error bar;
 the skip is visible only in diagnostics/logs.
+</details>
 
 ---
 
-## 🟡 #11 — Conversion banner counter reads "3/4, 5/6, 12/13" (never "4/15")
+## 🟡 #11 — Conversion banner counter reads "3/4, 5/6, 12/13" (never "4/15")  ✅ DONE (2026-06-16)
+
+**Fix shipped:** added a client-declared **batch pin** to the conversion
+progress module. New `batch_start(total)` / `batch_end()` (+ routes
+`/admin/conversion-batch/{start,end}`) pin the denominator; while pinned,
+`progress_add` (inline per-file +1) and `progress_start` (background passes) no
+longer mutate `total` — only `progress_finish_one`/`progress_tick` advance
+`done`. The Gallery upload loop computes the convertible count up front (regex
+mirroring `conversion_target`'s extension list) and calls `conversionBatchStart`
+before the loop / `conversionBatchEnd` in `finally`, so the inline path now reads
+`n/total` throughout instead of tracking one ahead. Rust unit test
+`pinned_batch_keeps_denominator_stable` (3/3 conversion tests green).
+**Scope note:** the fix targets the **inline** path (Gallery upload). The Import
+page defers conversion to the background `run_conversion_pass`, which already
+seeds `progress_start(candidates.len())` and runs *after* the upload loop — so it
+must NOT be pinned (batch_end would fire before conversion starts); left as-is.
+
+<details><summary>original analysis</summary>
 
 **Symptom:** the converting-media banner denominator tracks just ahead of the
 numerator instead of the true batch total.
@@ -378,10 +425,23 @@ seeded with the known total) so the denominator reflects the whole batch.
 `server/src/photos/upload.rs`, import handlers.
 
 **Acceptance:** importing 15 convertible files shows `n/15` throughout.
+</details>
 
 ---
 
-## 🟠 #2 — Upload "+" button unusable during convert/import
+## 🟠 #2 — Upload "+" button unusable during convert/import  ✅ DONE (2026-06-16)
+
+**Fix shipped:** confirmed the file `<input>`s gate only on the local `uploading`
+flag (correct — it just prevents launching a *second* local upload), never on
+server-side conversion/import, so manual upload is functionally available during
+background work. The real blocker was stacking: the FAB + its **upward-opening**
+menu (`absolute bottom-16`) sit in the same band as the conversion/import banner
+(`fixed bottom-20 z-50`), whose inner card is `pointer-events-auto` and overlaps
+on narrow screens, intercepting taps. Raised the FAB container to `z-[60]` so the
+whole FAB subtree (button + menu + backdrop) stacks above the z-50 banner.
+Toast host is `z-[100]`, above both. `tsc -b` clean.
+
+<details><summary>original analysis</summary>
 
 **Symptom:** can't use the upload "+" FAB while converting or importing is
 running.
@@ -401,10 +461,28 @@ the server conversion queue). If it's overlap, fix stacking/pointer-events.
 `web/src/components/ConversionBanner.tsx`, `web/src/hooks/useGalleryUpload.ts`.
 
 **Acceptance:** while conversion/import runs, the "+" opens and accepts files.
+</details>
 
 ---
 
-## 🟠 #6 — Add-to-album popup needs "Create new album" + bounded scroll
+## 🟠 #6 — Add-to-album popup needs "Create new album" + bounded scroll  ✅ DONE (2026-06-16)
+
+**Fix shipped:** `AddToAlbumModal` now has a sticky "New album" affordance at the
+top of the picker (outside the scroll area, so it stays visible with many
+albums). Clicking it reveals an inline name input; `createAndAdd` builds the
+album manifest **with the selected blob IDs already included** (cover = first
+selected), encrypts + uploads it, stores the `CachedAlbum` locally, and fires the
+existing `onAdded(album, count)` callback — so the selection lands in the new
+album in one step with no extra round-trip. The duplicated `crypto.randomUUID`
+HTTP-fallback (Albums.tsx + here) was extracted to `web/src/utils/uuid.ts`
+(`randomUuid`) and reused. Bounded scroll already worked (`max-h-[80vh]` +
+`flex-1 overflow-y-auto`); the stale "create one from the Albums page first"
+empty-state copy now points at the in-modal button. Error path logs
+(`console.error`) + surfaces via the modal error bar. `tsc -b` + `vite build`
+clean. *Caveat:* FE has no unit-test runner — manual verification (create from
+popup → selection lands in new album; list scrolls with many albums) pending.
+
+<details><summary>original analysis</summary>
 
 **Symptom (screenshot 4):** the "Add N items to album" popup lists albums but
 has no way to create a new album; needs to stay scrollable/size-limited with
@@ -424,10 +502,36 @@ Optionally tighten the list cap (e.g. `max-h-[60vh]`).
 
 **Acceptance:** create an album from the popup and the selection lands in it;
 list scrolls with many albums; modal never exceeds the cap.
+</details>
 
 ---
 
-## 🟠 #9 — Light mode text contrast too low (don't touch dark mode)
+## 🟠 #9 — Light mode text contrast too low (don't touch dark mode)  ✅ DONE (2026-06-16)
+
+**Fix shipped (two-pass codemod, dark mode provably untouched):**
+- **Pass 1 — paired tokens (323):** on every line carrying a `dark:text-gray`
+  pair, darkened the light token only: `text-gray-500`→`text-gray-700`,
+  `text-gray-400`→`text-gray-600`. The `dark:` variant on the line is left as-is
+  (the managed `bg-white dark:bg-gray-800` surfaces).
+- **Pass 2 — bare base tokens (86):** un-prefixed light tokens with no `dark:`
+  pair are *shared* by both themes, so they were **split** to pin dark mode to
+  its current value: `text-gray-400`→`text-gray-600 dark:text-gray-400`,
+  `text-gray-500`→`text-gray-700 dark:text-gray-500`. Only base (un-prefixed)
+  tokens were split; `hover:`/`dark:` variants untouched.
+- **Excluded the always-dark viewer overlays** (`pages/Viewer.tsx`,
+  `components/viewer/*`): they're black via literal `bg-black`, *not* the `dark:`
+  variant, so their `text-gray-400` is light-on-black in *both* themes —
+  darkening (or adding a `dark:` pin) would have made them invisible.
+- **Verification:** token-level invariant proven — **zero** `dark:text-gray-N`
+  counts decreased (only 91 new `dark:` pins added). `tsc -b` + `vite build`
+  clean. WCAG AA: light secondary text now `gray-600` (7.0:1) / `gray-700`
+  (10.3:1) on white, both ≥ AA (was `gray-400` 2.8:1 / `gray-500` 4.6:1).
+  *Caveat:* FE has no unit-test runner — covered by the build + the dark-token
+  invariant, not a committed test; eyeball a light/dark toggle in the running
+  app. A few icon buttons now have base==hover gray-600 (lost light-mode hover
+  feedback, not a contrast regression) — left as-is.
+
+<details><summary>original analysis</summary>
 
 **Symptom:** light-mode text is hard to read (insufficient contrast).
 
@@ -466,7 +570,20 @@ no regressions in dark mode.
 
 ---
 
-## 🟠 #1 — Bundle dependencies into installers; offer bundled vs slim
+## 🟠 #1 — Bundle dependencies into installers; offer bundled vs slim  ⏸ DEFERRED (Session G, 2026-06-16)
+
+**Decisions captured (2026-06-16):** the offline/bundled variant should bake in
+**ONNX AI models (~225 MB)**, the **GeoNames dataset (~25 MB)**, **FFmpeg**, and
+**NVIDIA driver/runtime libs**. **Hard gate before building it:** the resulting
+release artifact must stay **under 2 GB** — that is the largest single asset
+GitHub Releases accepts. The ONNX models + GeoNames + ffmpeg are well within
+budget; **bundling NVIDIA driver/CUDA runtime is the size risk** (CUDA runtime
+libs alone can run 1–2 GB) and needs a measured size budget per platform before
+committing. Next step: prototype the bundled artifact sizes (deb/exe) and decide
+naming (`*-offline` vs slim) + how the release carries the larger artifact, only
+if it fits under 2 GB.
+
+<details><summary>original analysis</summary>
 
 **Symptom/ask:** offer installers with all dependencies bundled (for
 offline/airgapped installs) as an option alongside the current network-fetch
@@ -489,12 +606,65 @@ slim), and how releases carry the larger artifact.
 
 **Acceptance:** an offline installer variant installs with no network access;
 the slim variant still works as today.
+</details>
 
 ---
 
 ## 🟠 #5 — Geolocation/precise location fails on Ubuntu; pull ONNX from source (off release)
 
-**Two parts:**
+### 5b — ONNX models off the release page  ✅ DONE (2026-06-16)
+
+**Fix shipped (strategy: pinned models-only mirror, off the main release):**
+- **CI (`pipeline.yml`):** replaced the per-release `.onnx` mirror step with an
+  idempotent "ensure `assets-models` release" step that hosts the two buffalo_l
+  models (`det_10g.onnx`, `w600k_r50.onnx`) on a fixed, version-independent tag.
+  It only downloads from HuggingFace + uploads when an asset is missing, so
+  routine builds don't re-push ~225 MB. Dropped `dist/*.onnx` from the main
+  release `files:` and the checksum line, so the user-facing Releases page no
+  longer carries `.onnx`. Taught `cleanup-releases` to preserve the
+  `assets-models` tag (the orphan-tag sweep already ignores it — non-semver).
+- **All four installer fetchers** now pull the two models from the fixed
+  `releases/download/assets-models/<name>` mirror first, with HuggingFace as
+  fallback: `packaging/debian/fetch-assets.sh` + `packaging/windows/fetch-assets.ps1`
+  (switched from the per-version `v<ver>` mirror to the fixed tag, so it also
+  works for local/unstamped builds) and `install.sh` + `install.ps1` (which
+  previously fetched HF-direct only — a pre-existing Xet-DNS gap on the
+  native/bare-metal path, now closed).
+- **Verified locally:** `bash -n` (both .sh), PS parser (both .ps1), and YAML
+  parse all clean. **Cannot verify from here:** the CI run itself and the
+  originally-failing networks; the mirror release is created on the next CI
+  publish.
+
+### 5a — Geo fails on Ubuntu  🟡 ROOT CAUSE FOUND + FIX SHIPPED (pending Ubuntu repro)
+
+**Root cause (CONFIRMED by inspection):** path mismatch on the `.deb`.
+`GeoConfig::default_dataset_path()` is the **relative** `"data/cities500.txt"`
+(`server/src/config.rs:522`), which resolves against the service's
+`WorkingDirectory=/var/lib/simple-photos` →
+`/var/lib/simple-photos/data/cities500.txt`. But `packaging/debian/fetch-assets.sh`
+downloads the dataset to `/var/lib/simple-photos/cities500.txt` (no `data/`
+subdir), and the `.deb` `config.toml` shipped **no `[geo]` section** to override
+the default — so the server looks in `data/` and never finds the install-time
+download. (Windows already avoids this: its config writes an explicit absolute
+`dataset_path` matching where it downloads.)
+
+**Fix shipped:** added a `[geo]` section to `packaging/debian/config.toml` with
+an **absolute** `dataset_path = "/var/lib/simple-photos/cities500.txt"` matching
+the fetch script. This also fixes the runtime self-heal target (it now writes to
+the path the server reads).
+
+**Why not closed:** the runtime self-heal (`geo/processor.rs` → `dataset.rs`)
+re-downloads the dataset into `data/` when runtime egress works, which can mask
+the mismatch (at the cost of a redundant ~25 MB fetch) — so the path bug bites
+hardest when egress is blocked at runtime. Full closure of "geo fails on Ubuntu"
+still needs an actual Ubuntu repro to rule out sandbox/egress/precise-provider
+factors. The native `install.sh` path is NOT affected (its `data/cities500.txt`
+correctly resolves under `server/`). **Upgrade caveat:** existing installs whose
+`config.toml` was already JWT-sed'd by postinst won't auto-pick-up the new
+`[geo]` block (Debian conffile handling); a config-migration in postinst
+(mirroring Windows' `Update-ExistingToml`) is a follow-up.
+
+<details><summary>original analysis</summary>
 
 ### 5a — Geo fails on Ubuntu (VERIFY)
 **Symptom:** geolocation + precise location still failing on Ubuntu.
@@ -528,6 +698,7 @@ alternate mirror, or a non-Xet URL) so installs don't regress.
 **Acceptance:** release page has no `.onnx` assets; fresh installs still fetch
 models reliably from source on networks that previously failed; Ubuntu geo
 resolves precise locations.
+</details>
 
 ---
 
@@ -537,6 +708,17 @@ resolves precise locations.
       lost context (#7) and the singular `/album/` route typo. *(done 2026-06-16
       — viewer now origin-aware; remaining hardcoded navigates verified correct;
       Search→gallery left as a known non-scope gap.)*
-- [ ] Establish the toast system (#8) before migrating per-page error bars.
+- [x] Establish the toast system (#8) before migrating per-page error bars.
+      *(done 2026-06-16 — `store/toast.ts` + `ToastHost`; Gallery/AlbumDetail/
+      Albums/SharedAlbumDetail migrated. ~47 pages still render inline bars —
+      migrate incrementally with the `useEffect`→`toast.error` shim.)*
 - [ ] Per AGENTS.md: unit + manual/E2E verification and error-path logging on
       every fix; no `as any` / `@ts-ignore` / empty catches introduced.
+- [ ] Debian postinst config migration (#5a follow-up): existing installs won't
+      pick up the new `[geo]` section because the conffile was JWT-sed'd at
+      install. Add a postinst patcher that appends missing sections (mirror
+      Windows `fetch-assets.ps1` `Update-ExistingToml`).
+- [ ] Confirm #5a on a real Ubuntu `.deb` install (geo banner reaches
+      available; precise location resolves) and verify the next CI publish
+      creates the `assets-models` mirror release + the main release has no
+      `.onnx` (#5b).

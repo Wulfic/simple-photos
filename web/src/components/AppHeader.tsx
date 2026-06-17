@@ -170,7 +170,7 @@ export default function AppHeader({
                   ${
                     isActive
                       ? "bg-gray-200 text-gray-900 dark:bg-white/15 dark:text-white shadow-inner"
-                      : "text-gray-500 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-white/10"
+                      : "text-gray-700 hover:text-gray-900 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:hover:bg-white/10"
                   }
                 `}
               >
@@ -194,7 +194,7 @@ export default function AppHeader({
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen((v) => !v)}
-                className="flex items-center gap-2 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white text-xs transition-colors"
+                className="flex items-center gap-2 text-gray-700 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white text-xs transition-colors"
               >
                 <div className={`w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold uppercase shrink-0${hasActivity ? " processing-ring" : ""}`}>
                   {username.charAt(0)}

@@ -49,15 +49,15 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
                   </span>
                 </div>
               </td>
-              <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400">
+              <td className="px-4 py-2.5 text-gray-700 dark:text-gray-400">
                 {formatBytes(item.size)}
               </td>
-              <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 text-xs">
+              <td className="px-4 py-2.5 text-gray-700 dark:text-gray-400 text-xs">
                 {item.mimeType?.split("/")[1]?.toUpperCase() || "\u2014"}
               </td>
               <td className="px-4 py-2.5">
                 {item.status === "pending" && (
-                  <span className="text-gray-500 dark:text-gray-400 text-xs">
+                  <span className="text-gray-700 dark:text-gray-400 text-xs">
                     Pending
                   </span>
                 )}
@@ -86,7 +86,7 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
                   item.status !== "done" && (
                     <button
                       onClick={() => removeItem(i)}
-                      className="text-gray-400 hover:text-red-500 dark:hover:text-red-400 text-xs"
+                      className="text-gray-600 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 text-xs"
                     >
                       {"\u2715"}
                     </button>

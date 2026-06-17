@@ -27,7 +27,7 @@ export default function ServerRoleStep({
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
         Server Role
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
         Is this the primary server that stores your photos, or a backup that
         mirrors another Simple Photos instance?
       </p>
@@ -58,7 +58,7 @@ export default function ServerRoleStep({
               <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
                 Primary Server
               </p>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+              <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">
                 This is the main server where you upload and manage your photos.
                 You can optionally add backup targets later.
               </p>
@@ -91,7 +91,7 @@ export default function ServerRoleStep({
               <p className="font-semibold text-gray-900 dark:text-white text-base group-hover:text-green-600 dark:group-hover:text-green-400 transition-colors">
                 Backup Server
               </p>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+              <p className="text-sm text-gray-700 dark:text-gray-400 mt-0.5">
                 This server will mirror an existing Simple Photos instance.
                 You'll pair with the primary server and log in with its admin
                 credentials.
@@ -107,7 +107,7 @@ export default function ServerRoleStep({
             setStep("welcome");
             setError("");
           }}
-          className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          className="text-sm text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
         >
           &larr; Back
         </button>

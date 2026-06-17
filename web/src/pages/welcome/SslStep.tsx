@@ -203,7 +203,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           </svg>
         </div>
         <h2 className="text-xl font-bold">SSL / TLS</h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 text-center mt-1">
+        <p className="text-sm text-gray-700 dark:text-gray-400 text-center mt-1">
           Secure your server with HTTPS.  When TLS is on, plain-HTTP requests
           are automatically redirected to HTTPS.  You can skip this and
           configure it later in Settings.
@@ -244,7 +244,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             />
             <div>
               <span className="font-medium text-sm">{label}</span>
-              <p className="text-xs text-gray-500 dark:text-gray-400">{desc}</p>
+              <p className="text-xs text-gray-700 dark:text-gray-400">{desc}</p>
             </div>
           </label>
         ))}
@@ -315,7 +315,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               disabled={leProvisioning}
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
               Must resolve to this server's public IP. Wildcards and raw IPs are not supported.
             </p>
           </div>
@@ -332,7 +332,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               disabled={leProvisioning}
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
               Used by Let's Encrypt for renewal reminders only.
             </p>
           </div>
@@ -350,7 +350,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
                 className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 disabled={leProvisioning}
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
                 Default 80. Forward port 80 → here if the server runs unprivileged.
               </p>
             </div>
@@ -364,7 +364,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               />
               <span className="text-gray-700 dark:text-gray-300">
                 Use staging directory
-                <span className="block text-xs text-gray-500 dark:text-gray-400">
+                <span className="block text-xs text-gray-700 dark:text-gray-400">
                   Test only — issues untrusted certs with relaxed rate limits.
                 </span>
               </span>
@@ -431,7 +431,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
           </p>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Friendly label <span className="text-gray-400 font-normal">(optional)</span>
+              Friendly label <span className="text-gray-600 dark:text-gray-400 font-normal">(optional)</span>
             </label>
             <input
               type="text"
@@ -442,13 +442,13 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               disabled={lcGenerating}
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
               Shown in your browser / OS as the certificate’s common name.
             </p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Extra hostnames / IPs <span className="text-gray-400 font-normal">(optional)</span>
+              Extra hostnames / IPs <span className="text-gray-600 dark:text-gray-400 font-normal">(optional)</span>
             </label>
             <input
               type="text"
@@ -458,7 +458,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
               className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               disabled={lcGenerating}
             />
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <p className="text-xs text-gray-700 dark:text-gray-400 mt-1">
               Comma- or space-separated. Up to 32 entries. Each must be a DNS
               label or an IP address (no wildcards).
             </p>
@@ -526,7 +526,7 @@ export default function SslStep({ setStep, setError, error, serverRole }: SslSte
             setError("");
             setStep("storage");
           }}
-          className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 text-sm"
+          className="text-gray-700 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 text-sm"
           disabled={leProvisioning || lcGenerating}
         >
           ← Back

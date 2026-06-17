@@ -88,13 +88,13 @@ function ExternalApiSection() {
             <h2 className="text-base font-semibold text-gray-900 dark:text-white">
               External API
             </h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5">
               Integrate diagnostics into your monitoring or other servers via HTTP Basic Auth
             </p>
           </div>
         </div>
         <svg
-          className={`w-5 h-5 text-gray-400 transition-transform ${
+          className={`w-5 h-5 text-gray-600 dark:text-gray-400 transition-transform ${
             expanded ? "rotate-180" : ""
           }`}
           fill="none"
@@ -138,7 +138,7 @@ function ExternalApiSection() {
                       {ep.path}
                     </code>
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  <p className="text-xs text-gray-700 dark:text-gray-400 mb-2">
                     {ep.description}
                   </p>
                   <div className="flex items-center gap-2">
@@ -147,7 +147,7 @@ function ExternalApiSection() {
                     </code>
                     <button
                       onClick={() => copyToClipboard(curlCmd, ep.id)}
-                      className="shrink-0 p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                      className="shrink-0 p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
                       title="Copy curl command"
                     >
                       {copied === ep.id ? (
@@ -358,7 +358,7 @@ export default function Diagnostics() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => navigate("/settings")}
-              className="p-1.5 rounded-md text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              className="p-1.5 rounded-md text-gray-700 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
               title="Back to Settings"
             >
               <AppIcon name="back-arrow" />
@@ -414,7 +414,7 @@ export default function Diagnostics() {
                     Server Diagnostics
                   </h2>
                 </div>
-                <p className="text-sm text-gray-500 dark:text-gray-400 ml-5.5">
+                <p className="text-sm text-gray-700 dark:text-gray-400 ml-5.5">
                   {diagnosticsEnabled
                     ? "Collecting server metrics, database stats, storage analysis, and performance data."
                     : "Disabled to save server resources. Enable to view full system metrics and performance data."}
@@ -445,7 +445,7 @@ export default function Diagnostics() {
                     <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
                       Client Diagnostics
                     </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    <p className="text-xs text-gray-700 dark:text-gray-400 mt-0.5">
                       Collect diagnostic logs from web and mobile clients (errors, performance, API timing)
                     </p>
                   </div>
@@ -485,7 +485,7 @@ export default function Diagnostics() {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-12 text-center">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-100 dark:bg-gray-700 mb-4">
               <svg
-                className="w-8 h-8 text-gray-400"
+                className="w-8 h-8 text-gray-600 dark:text-gray-400"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -501,13 +501,13 @@ export default function Diagnostics() {
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
               Diagnostics Collection Disabled
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md mx-auto mb-1">
+            <p className="text-sm text-gray-700 dark:text-gray-400 max-w-md mx-auto mb-1">
               Server diagnostics are disabled by default to conserve resources.
               Enable above to view detailed system metrics, database statistics,
               storage analysis, and performance monitoring.
             </p>
             {disabledInfo && (
-              <p className="text-xs text-gray-400 dark:text-gray-500 mt-3">
+              <p className="text-xs text-gray-600 dark:text-gray-500 mt-3">
                 Server v{disabledInfo.version} &middot; Uptime{" "}
                 {formatUptime(disabledInfo.uptime_seconds)}
               </p>

@@ -32,7 +32,7 @@ export function ThumbnailImg({ photo }: { photo: CachedPhoto }) {
   }
 
   return (
-    <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center bg-gray-100 dark:bg-gray-700">
+    <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-400 text-xs px-1 text-center bg-gray-100 dark:bg-gray-700">
       {photo.filename}
     </div>
   );

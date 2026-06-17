@@ -281,7 +281,7 @@ export default function Search() {
           {query && (
             <button
               onClick={() => { setQuery(""); setResults([]); setSearched(false); inputRef.current?.focus(); }}
-              className="absolute inset-y-0 right-3 flex items-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              className="absolute inset-y-0 right-3 flex items-center text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
             >
               ✕
             </button>
@@ -305,8 +305,8 @@ export default function Search() {
         {/* No results */}
         {searched && !loading && results.length === 0 && (
           <div className="text-center py-12">
-            <p className="text-gray-500 dark:text-gray-400">No results found for "{query}"</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
+            <p className="text-gray-700 dark:text-gray-400">No results found for "{query}"</p>
+            <p className="text-sm text-gray-600 dark:text-gray-500 mt-1">
               Try a tag, filename, date (e.g. "2024"), or type (e.g. "video")
             </p>
           </div>
@@ -315,7 +315,7 @@ export default function Search() {
         {/* Results grid */}
         {results.length > 0 && (
           <>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+            <p className="text-sm text-gray-700 dark:text-gray-400 mb-3">
               {results.length} result{results.length !== 1 ? "s" : ""}
             </p>
             <JustifiedGrid
@@ -343,8 +343,8 @@ export default function Search() {
         {!query && (
           <div className="text-center py-16">
             <AppIcon name="magnify-glass" size="w-12 h-12" className="mx-auto mb-4 opacity-30" />
-            <p className="text-gray-500 dark:text-gray-400 mb-1">Search your library</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500">
+            <p className="text-gray-700 dark:text-gray-400 mb-1">Search your library</p>
+            <p className="text-sm text-gray-600 dark:text-gray-500">
               Search by tags, filenames, dates, or media types
             </p>
           </div>
@@ -438,7 +438,7 @@ function SearchResultTile({
           loading="lazy"
         />
       ) : (
-        <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs px-1 text-center">
+        <div className="w-full h-full flex items-center justify-center text-gray-600 dark:text-gray-400 text-xs px-1 text-center">
           {result.filename}
         </div>
       )}

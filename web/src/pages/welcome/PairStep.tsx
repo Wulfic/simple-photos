@@ -173,7 +173,7 @@ export default function PairStep({
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
         Pair with Primary Server
       </h2>
-      <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+      <p className="text-gray-700 dark:text-gray-400 text-sm mb-6">
         Find your primary Simple Photos server on the network or enter its
         address manually, then log in with its admin credentials.
       </p>
@@ -210,7 +210,7 @@ export default function PairStep({
             <svg className="w-8 h-8 mx-auto text-gray-300 dark:text-gray-600 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.7L5.737 5.1a3.375 3.375 0 012.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 01.9 2.7m0 0a3 3 0 01-3 3m0 3h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008zm-3 6h.008v.008h-.008v-.008zm0-6h.008v.008h-.008v-.008z" />
             </svg>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <p className="text-xs text-gray-700 dark:text-gray-400">
               No servers found. Enter the address manually below.
             </p>
           </div>
@@ -239,7 +239,7 @@ export default function PairStep({
                     <p className="font-medium text-gray-900 dark:text-white text-sm">
                       {server.name}
                     </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                    <p className="text-xs text-gray-700 dark:text-gray-400 font-mono">
                       {server.address} · v{server.version}
                     </p>
                   </div>
@@ -269,7 +269,7 @@ export default function PairStep({
             maxLength={500}
             className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
           />
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+          <p className="text-xs text-gray-600 dark:text-gray-500 mt-1">
             IP address or hostname (DNS name) with port of the primary server
           </p>
         </div>
@@ -296,7 +296,7 @@ export default function PairStep({
                 maxLength={500}
                 className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono"
               />
-              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+              <p className="text-xs text-gray-600 dark:text-gray-500 mt-1">
                 The URL the <strong>primary</strong> server will use to push
                 photos to this backup. The primary must be able to reach this
                 URL over the network.
@@ -358,7 +358,7 @@ export default function PairStep({
             <div className="w-full border-t border-gray-200 dark:border-gray-700" />
           </div>
           <div className="relative flex justify-center text-xs">
-            <span className="px-2 bg-white dark:bg-gray-800 text-gray-400">
+            <span className="px-2 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400">
               admin credentials
             </span>
           </div>
@@ -395,7 +395,7 @@ export default function PairStep({
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
               tabIndex={-1}
             >
               {showPassword ? (

@@ -44,7 +44,7 @@ export default function AddPhotosPanel({ photos, onAdd, onCancel }: AddPhotosPan
       </div>
 
       {photos.length === 0 ? (
-        <p className="text-gray-500 dark:text-gray-400 text-sm">
+        <p className="text-gray-700 dark:text-gray-400 text-sm">
           All photos are already in this album.
         </p>
       ) : (
