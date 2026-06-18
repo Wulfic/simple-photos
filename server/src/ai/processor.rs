@@ -679,6 +679,30 @@ async fn run_clustering(
         }
     }
 
+    // Recompute photo_count authoritatively as the number of DISTINCT photos
+    // in each affected cluster. The provisional `count` written above counts
+    // face *detections*, which over-counts whenever a single photo (e.g. a
+    // collage / movie-poster montage) contains multiple faces of the same
+    // person — that is the "33 photos but only 6 in the album" bug. This must
+    // run AFTER the loop above so newly-created clusters have their detections
+    // assigned. Mirrors the COUNT(DISTINCT photo_id) rule used by the
+    // merge/split handlers.
+    let affected_clusters: std::collections::HashSet<i64> =
+        cluster_id_map.values().copied().collect();
+    for db_cluster_id in &affected_clusters {
+        sqlx::query(
+            "UPDATE face_clusters SET photo_count = (\
+                 SELECT COUNT(DISTINCT photo_id) FROM face_detections \
+                 WHERE cluster_id = ?1 AND user_id = ?2\
+             ), updated_at = datetime('now') \
+             WHERE id = ?1 AND user_id = ?2",
+        )
+        .bind(db_cluster_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    }
+
     // Apply face tags for all clustered faces
     for (face_id, _) in &assignments {
         let face_info: Option<(String, i64, String)> = sqlx::query_as(
@@ -877,6 +901,25 @@ async fn run_pet_clustering(
 
                 total_assigned += 1;
             }
+        }
+
+        // Recompute photo_count as DISTINCT photos, not pet detections — same
+        // over-count bug as faces when one photo holds several crops of the
+        // same animal. Runs after assignment so new clusters are populated.
+        let affected: std::collections::HashSet<i64> =
+            cluster_id_map.values().copied().collect();
+        for db_cluster_id in &affected {
+            sqlx::query(
+                "UPDATE pet_clusters SET photo_count = (\
+                     SELECT COUNT(DISTINCT photo_id) FROM pet_detections \
+                     WHERE cluster_id = ?1 AND user_id = ?2\
+                 ), updated_at = datetime('now') \
+                 WHERE id = ?1 AND user_id = ?2",
+            )
+            .bind(db_cluster_id)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
         }
 
         let _ = existing; // suppress unused warning
