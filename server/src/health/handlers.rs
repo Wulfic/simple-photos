@@ -132,8 +132,45 @@ pub async fn activity_status(
     .await
     .unwrap_or(0);
 
+    // Precise (street-level) scope: photos already coarse-resolved (real
+    // geo_city, not the '' sentinel) that belong to a user who opted into
+    // precise geocoding. Strictly per-user opt-in — never config-defaulted,
+    // because precise lookups send coordinates to a third party.
+    let precise_total: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM photos p \
+             WHERE p.user_id = ?1 \
+             AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
+             AND p.geo_city IS NOT NULL AND p.geo_city != '' \
+             AND EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id \
+                         AND us.key = 'geo_precise_enabled' AND us.value = 'true')",
+    )
+    .bind(&auth.user_id)
+    .fetch_one(&state.read_pool)
+    .await
+    .unwrap_or(0);
+
+    // Pending = opted-in coarse-resolved photos not yet attempted for a street
+    // address (geo_precise_status IS NULL; 'ok'/'' are both terminal states).
+    let precise_pending: i64 = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM photos p \
+             WHERE p.user_id = ?1 \
+             AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL \
+             AND p.geo_city IS NOT NULL AND p.geo_city != '' \
+             AND p.geo_precise_status IS NULL \
+             AND EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = p.user_id \
+                         AND us.key = 'geo_precise_enabled' AND us.value = 'true')",
+    )
+    .bind(&auth.user_id)
+    .fetch_one(&state.read_pool)
+    .await
+    .unwrap_or(0);
+
     let ai_done = (ai_total - ai_pending_count).max(0);
     let geo_done = (geo_total - geo_pending_count).max(0);
+    let precise_done = (precise_total - precise_pending).max(0);
+    // Precise enrichment runs inside the geo processor's cycle, so `geo_running`
+    // covers "actively working"; pending>0 keeps the banner up between cycles.
+    let precise_active = geo_running || precise_pending > 0;
     let ai_active = ai_running || ai_pending_count > 0;
     // When the dataset can't load, pending coordinates can never resolve, so
     // don't report geo as "active" — that would spin the client banner
@@ -166,6 +203,17 @@ pub async fn activity_status(
             // runtime (self-healing a failed install); the client shows a
             // "downloading location data…" notice rather than "unavailable".
             "downloading": geo_dataset_downloading,
+        },
+        // Opt-in street-level (precise) resolution progress.  Zeroed unless the
+        // user enabled "Precise Street Addresses", so the dedicated banner stays
+        // hidden for everyone else.  Lets the client show that precise lookups
+        // (network-bound, ~1/sec) are actually happening instead of silently.
+        "precise_progress": {
+            "running": geo_running,
+            "active": precise_active,
+            "total": precise_total,
+            "done": precise_done,
+            "pending": precise_pending,
         },
     }))
 }

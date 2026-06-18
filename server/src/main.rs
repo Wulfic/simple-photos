@@ -181,6 +181,9 @@ async fn main() -> anyhow::Result<()> {
     // "unavailable" flash on boot before the first poll cycle.
     let geo_dataset_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let geo_dataset_downloading = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Lets handlers (settings toggle, upload) and the auto-scan task wake the
+    // geo processor on demand rather than waiting for its next 5-min poll tick.
+    let geo_trigger = Arc::new(tokio::sync::Notify::new());
     tasks::spawn_all(
         &pool,
         &config,
@@ -192,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
         &geo_active,
         &geo_dataset_available,
         &geo_dataset_downloading,
+        &geo_trigger,
     );
 
     // Probe GPU hardware acceleration for video transcoding.
@@ -231,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
         geo_active,
         geo_dataset_available,
         geo_dataset_downloading,
+        geo_trigger,
     };
 
     let mut app = Router::new()

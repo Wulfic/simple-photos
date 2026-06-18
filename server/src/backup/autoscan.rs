@@ -39,6 +39,7 @@ pub async fn background_auto_scan_task(
     interval_secs: u64,
     scan_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
     jwt_secret: String,
+    geo_trigger: Arc<tokio::sync::Notify>,
 ) {
     if interval_secs == 0 {
         tracing::info!("Background auto-scan disabled (interval = 0)");
@@ -67,6 +68,9 @@ pub async fn background_auto_scan_task(
             crate::audit::AuditEvent::AutoScanComplete,
             Some(serde_json::json!({"trigger": "startup", "new_count": count})),
         );
+        // Newly registered files may carry GPS — wake the geo processor now
+        // instead of leaving them for its next (≤5-min) poll tick.
+        geo_trigger.notify_one();
     }
 
     // After startup scan, trigger encryption then conversion ingest engine.
@@ -113,6 +117,9 @@ pub async fn background_auto_scan_task(
                 crate::audit::AuditEvent::AutoScanComplete,
                 Some(serde_json::json!({"trigger": "interval", "new_count": count})),
             );
+            // Newly registered files may carry GPS — wake the geo processor now
+            // instead of leaving them for its next (≤5-min) poll tick.
+            geo_trigger.notify_one();
         }
 
         // Trigger encryption then conversion ingest engine.

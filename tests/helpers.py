@@ -878,22 +878,25 @@ def generate_random_bytes(size: int = 1024) -> bytes:
     return os.urandom(size)
 
 
-def generate_test_jpeg_with_gps(lat: float, lon: float,
-                                date_str: str = "2024:07:15 10:30:00",
-                                width: int = 4, height: int = 4) -> bytes:
-    """Generate a JPEG with EXIF GPS coordinates and DateTimeOriginal.
+def build_gps_exif_app1(lat: float, lon: float,
+                        date_str: Optional[str] = "2024:07:15 10:30:00") -> bytes:
+    """Build a JPEG APP1 (EXIF) marker segment carrying GPS coordinates and,
+    when ``date_str`` is given, a DateTimeOriginal tag.
 
-    Builds a manual APP1 EXIF segment with GPS IFD entries.
+    Returns just the marker segment (``FF E1 <len> Exif\\0\\0 <TIFF...>``);
+    splice it in right after the SOI marker: ``jpeg[:2] + app1 + jpeg[2:]``.
+
+    Pass ``date_str=None`` to embed GPS WITHOUT a date — this exercises the
+    "has location but no timestamp" edge case: such photos resolve a city
+    (so they appear in the map / locations) but never form a trip or memory,
+    both of which require ``taken_at IS NOT NULL``.
+
+    The dated layout is byte-for-byte identical to the original generator the
+    E2E suite already relies on; the no-date branch simply drops the Exif
+    sub-IFD and its IFD0 pointer.
     """
-    from PIL import Image as _PILImage
-    import io as _io, struct
+    import struct
 
-    img = _PILImage.new("RGB", (width, height), (64, 128, 32))
-    jpeg_buf = _io.BytesIO()
-    img.save(jpeg_buf, format="JPEG", quality=95)
-    jpeg_data = jpeg_buf.getvalue()
-
-    # ── Build EXIF APP1 with GPS + DateTimeOriginal ──────────────────
     def _dms_rationals(decimal_degrees: float):
         dd = abs(decimal_degrees)
         d = int(dd)
@@ -906,64 +909,105 @@ def generate_test_jpeg_with_gps(lat: float, lon: float,
     lat_ref = b"S\x00" if lat < 0 else b"N\x00"
     lon_ref = b"W\x00" if lon < 0 else b"E\x00"
 
-    # TIFF header (little-endian)
+    include_date = date_str is not None
+
+    # TIFF header (little-endian), IFD0 at offset 8.
     tiff_hdr = b"II" + struct.pack("<HI", 42, 8)
 
-    # IFD0: 2 entries -> ExifIFD pointer + GPSInfo pointer
-    ifd0_count = 2
+    # IFD0 always carries a GPSInfo pointer; when dated it also carries an
+    # Exif sub-IFD pointer (for DateTimeOriginal).
+    ifd0_count = 2 if include_date else 1
     ifd0_size = 2 + ifd0_count * 12 + 4
 
-    ifd0_start = 8
-    exif_ifd_offset = ifd0_start + ifd0_size
-    exif_ifd_count = 1
-    exif_ifd_size = 2 + exif_ifd_count * 12 + 4
+    cursor = 8 + ifd0_size
+    if include_date:
+        exif_ifd_offset = cursor
+        cursor += 2 + 1 * 12 + 4
+    gps_ifd_offset = cursor
+    cursor += 2 + 4 * 12 + 4
 
-    gps_ifd_offset = exif_ifd_offset + exif_ifd_size
-    gps_ifd_count = 4
-    gps_ifd_size = 2 + gps_ifd_count * 12 + 4
+    if include_date:
+        dto_bytes = date_str.encode("ascii") + b"\x00"
+        dto_offset = cursor
+        cursor += len(dto_bytes)
 
-    data_offset = gps_ifd_offset + gps_ifd_size
+    lat_data_offset = cursor
+    lat_data = b"".join(struct.pack("<II", n, d) for n, d in lat_dms)
+    cursor += len(lat_data)
+    lon_data_offset = cursor
+    lon_data = b"".join(struct.pack("<II", n, d) for n, d in lon_dms)
 
-    dto_bytes = date_str.encode("ascii") + b"\x00"
-    dto_offset = data_offset
-    data_offset += len(dto_bytes)
-
-    lat_data_offset = data_offset
-    lat_data = b""
-    for num, den in lat_dms:
-        lat_data += struct.pack("<II", num, den)
-    data_offset += len(lat_data)
-
-    lon_data_offset = data_offset
-    lon_data = b""
-    for num, den in lon_dms:
-        lon_data += struct.pack("<II", num, den)
-    data_offset += len(lon_data)
-
-    # Build IFD0
+    # IFD0
     ifd0 = struct.pack("<H", ifd0_count)
-    ifd0 += struct.pack("<HHII", 0x8769, 4, 1, exif_ifd_offset)  # ExifIFD
-    ifd0 += struct.pack("<HHII", 0x8825, 4, 1, gps_ifd_offset)   # GPSInfo
+    if include_date:
+        ifd0 += struct.pack("<HHII", 0x8769, 4, 1, exif_ifd_offset)  # ExifIFD
+    ifd0 += struct.pack("<HHII", 0x8825, 4, 1, gps_ifd_offset)       # GPSInfo
     ifd0 += struct.pack("<I", 0)
 
-    # Build Exif sub-IFD
-    exif_ifd = struct.pack("<H", exif_ifd_count)
-    exif_ifd += struct.pack("<HHII", 0x9003, 2, len(dto_bytes), dto_offset)
-    exif_ifd += struct.pack("<I", 0)
+    body = tiff_hdr + ifd0
 
-    # Build GPS IFD
-    gps_ifd = struct.pack("<H", gps_ifd_count)
+    if include_date:
+        exif_ifd = struct.pack("<H", 1)
+        exif_ifd += struct.pack("<HHII", 0x9003, 2, len(dto_bytes), dto_offset)
+        exif_ifd += struct.pack("<I", 0)
+        body += exif_ifd
+
+    # GPS IFD: LatRef, Lat, LonRef, Lon
+    gps_ifd = struct.pack("<H", 4)
     gps_ifd += struct.pack("<HHI", 1, 2, 2) + lat_ref + b"\x00\x00"  # LatRef
-    gps_ifd += struct.pack("<HHII", 2, 5, 3, lat_data_offset)         # Lat
+    gps_ifd += struct.pack("<HHII", 2, 5, 3, lat_data_offset)        # Lat
     gps_ifd += struct.pack("<HHI", 3, 2, 2) + lon_ref + b"\x00\x00"  # LonRef
-    gps_ifd += struct.pack("<HHII", 4, 5, 3, lon_data_offset)         # Lon
+    gps_ifd += struct.pack("<HHII", 4, 5, 3, lon_data_offset)        # Lon
     gps_ifd += struct.pack("<I", 0)
+    body += gps_ifd
 
-    tiff_body = tiff_hdr + ifd0 + exif_ifd + gps_ifd + dto_bytes + lat_data + lon_data
+    if include_date:
+        body += dto_bytes
+    body += lat_data + lon_data
 
-    app1_payload = b"Exif\x00\x00" + tiff_body
-    app1 = struct.pack(">HH", 0xFFE1, len(app1_payload) + 2) + app1_payload
+    app1_payload = b"Exif\x00\x00" + body
+    return struct.pack(">HH", 0xFFE1, len(app1_payload) + 2) + app1_payload
 
+
+def build_datetime_exif_app1(date_str: str = "2020:06:15 10:30:00") -> bytes:
+    """Build a JPEG APP1 (EXIF) segment carrying only DateTimeOriginal (no GPS).
+
+    Splice after the SOI marker like :func:`build_gps_exif_app1`.  Used for the
+    "has a date but no location" edge case (timeline only — no location album).
+    """
+    import struct
+
+    dto_bytes = date_str.encode("ascii") + b"\x00"
+    tiff_hdr = b"II" + struct.pack("<HI", 42, 8)
+    exif_ifd_off = 8 + 2 + 12 + 4
+    ifd0 = struct.pack("<H", 1)
+    ifd0 += struct.pack("<HHII", 0x8769, 4, 1, exif_ifd_off)
+    ifd0 += struct.pack("<I", 0)
+    dto_off = exif_ifd_off + 2 + 12 + 4
+    exif_ifd = struct.pack("<H", 1)
+    exif_ifd += struct.pack("<HHII", 0x9003, 2, len(dto_bytes), dto_off)
+    exif_ifd += struct.pack("<I", 0)
+    body = tiff_hdr + ifd0 + exif_ifd + dto_bytes
+    app1_payload = b"Exif\x00\x00" + body
+    return struct.pack(">HH", 0xFFE1, len(app1_payload) + 2) + app1_payload
+
+
+def generate_test_jpeg_with_gps(lat: float, lon: float,
+                                date_str: str = "2024:07:15 10:30:00",
+                                width: int = 4, height: int = 4) -> bytes:
+    """Generate a JPEG with EXIF GPS coordinates and DateTimeOriginal.
+
+    Thin wrapper: render a solid JPEG, then splice in the GPS EXIF segment
+    built by :func:`build_gps_exif_app1`.
+    """
+    from PIL import Image as _PILImage
+    import io as _io
+
+    img = _PILImage.new("RGB", (width, height), (64, 128, 32))
+    jpeg_buf = _io.BytesIO()
+    img.save(jpeg_buf, format="JPEG", quality=95)
+    jpeg_data = jpeg_buf.getvalue()
+    app1 = build_gps_exif_app1(lat, lon, date_str)
     return jpeg_data[:2] + app1 + jpeg_data[2:]
 
 
@@ -1032,7 +1076,6 @@ def generate_test_tiff_with_exif(exif_date: str = "2020:06:15 10:30:00") -> byte
     """
     from PIL import Image
     import io
-    import struct
 
     # Step 1: Create a small JPEG
     img = Image.new("RGB", (4, 4), (255, 0, 0))
@@ -1040,29 +1083,8 @@ def generate_test_tiff_with_exif(exif_date: str = "2020:06:15 10:30:00") -> byte
     img.save(jpeg_buf, format="JPEG", quality=95)
     jpeg_data = jpeg_buf.getvalue()
 
-    # Step 2: Build an APP1 EXIF segment with DateTimeOriginal
-    dto_bytes = exif_date.encode("ascii") + b"\x00"
-
-    # TIFF header (little-endian): magic + IFD0 at offset 8
-    tiff_hdr = b"II" + struct.pack("<HI", 42, 8)
-
-    # IFD0: single entry pointing to Exif sub-IFD
-    exif_ifd_off = 8 + 2 + 12 + 4  # after tiff_hdr + count + entry + next_ifd
-    ifd0 = struct.pack("<H", 1)
-    ifd0 += struct.pack("<HHII", 0x8769, 4, 1, exif_ifd_off)
-    ifd0 += struct.pack("<I", 0)
-
-    # Exif sub-IFD: DateTimeOriginal (0x9003) as ASCII
-    dto_off = exif_ifd_off + 2 + 12 + 4
-    exif_ifd = struct.pack("<H", 1)
-    exif_ifd += struct.pack("<HHII", 0x9003, 2, len(dto_bytes), dto_off)
-    exif_ifd += struct.pack("<I", 0)
-
-    tiff_body = tiff_hdr + ifd0 + exif_ifd + dto_bytes
-    app1_payload = b"Exif\x00\x00" + tiff_body
-    app1 = struct.pack(">HH", 0xFFE1, len(app1_payload) + 2) + app1_payload
-
-    # Step 3: Insert APP1 right after SOI marker
+    # Step 2+3: splice in a DateTimeOriginal-only EXIF segment after the SOI.
+    app1 = build_datetime_exif_app1(exif_date)
     return jpeg_data[:2] + app1 + jpeg_data[2:]
 
 

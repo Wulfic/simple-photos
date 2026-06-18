@@ -175,6 +175,16 @@ pub async fn update_geo_settings(
         )
         .await?;
     }
+
+    // If the user just turned geolocation (or precise street addresses) ON,
+    // kick the background processor so resolution starts within moments instead
+    // of waiting up to `geo.poll_interval_secs` (5 min) for the next poll tick.
+    // The wait was the root cause of "I enabled geo and nothing happened".
+    if body.enabled == Some(true) || body.precise_enabled == Some(true) {
+        tracing::debug!(user_id = %auth.user_id, "geo settings enabled — waking geo processor");
+        state.geo_trigger.notify_one();
+    }
+
     Ok(StatusCode::OK)
 }
 
