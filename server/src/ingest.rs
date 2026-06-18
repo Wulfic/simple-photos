@@ -32,6 +32,64 @@ fn conversion_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Pure decision for [`ingest_pipeline_busy`], split out so the phase-ordering
+/// invariant can be unit-tested without a live database or running migration.
+///
+/// The pipeline is "busy" (and downstream AI / geo work must wait) while:
+///   * an encryption migration is running, OR
+///   * a conversion pass is converting / encrypting non-native files, OR
+///   * native files are registered but not yet encrypted — *but only when an
+///     encryption key actually exists*.  Without that guard, a no-key install
+///     (no client has ever logged in to provide the key) would report "busy"
+///     forever and permanently starve the AI / geo processors.
+fn pipeline_busy_decision(
+    migration_running: bool,
+    conversion_running: bool,
+    has_key: bool,
+    pending_unencrypted: bool,
+) -> bool {
+    migration_running || conversion_running || (has_key && pending_unencrypted)
+}
+
+/// Returns `true` while the import → encrypt → convert pipeline still has work
+/// in flight.  The background AI and geo processors poll this and defer their
+/// batches until it clears, implementing the intended phase order:
+/// **import + encrypt everything → convert what needs it → then AI + geo**.
+///
+/// Without this gate the three pipelines run concurrently and contend for the
+/// CPU and SQLite's single writer lock, which is the "jumping between encrypt,
+/// AI and geo one photo at a time" stall seen on large imports.
+pub async fn ingest_pipeline_busy(pool: &sqlx::SqlitePool) -> bool {
+    // Cheap, lock-free signals first.
+    if crate::photos::server_migrate::migration_active().await {
+        return true;
+    }
+    if crate::conversion::progress_snapshot().0 {
+        return true;
+    }
+
+    // Only treat "files awaiting encryption" as busy when a key exists to
+    // encrypt them — otherwise nothing will ever clear it (see the guard note
+    // on `pipeline_busy_decision`).
+    let has_key: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM server_settings WHERE key = 'encryption_key_wrapped'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+
+    let pending_unencrypted: bool = if has_key {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM photos WHERE encrypted_blob_id IS NULL)")
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    pipeline_busy_decision(false, false, has_key, pending_unencrypted)
+}
+
 /// Run a conversion pass: discover non-native files, convert, register, encrypt.
 ///
 /// Called AFTER `auto_migrate_after_scan()` completes so that native files

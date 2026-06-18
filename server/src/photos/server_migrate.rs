@@ -241,6 +241,21 @@ async fn count_migratable(pool: &sqlx::SqlitePool) -> Result<i64, sqlx::Error> {
         .await
 }
 
+/// Returns `true` while a server-side encryption migration is actively running.
+///
+/// Used by the background AI and geo processors to defer their heavy work
+/// until the import → encrypt phase has drained.  Running face/object
+/// inference or geocoding concurrently with encryption thrashes the CPU and
+/// serializes behind SQLite's single writer, which is what makes a large
+/// import appear to crawl one photo at a time through every stage.
+pub async fn migration_active() -> bool {
+    let guard = progress_store().read().await;
+    guard
+        .as_ref()
+        .map(|p| p.running.load(Ordering::Acquire))
+        .unwrap_or(false)
+}
+
 /// Start encryption migration for all unencrypted photos.
 /// Called after autoscan and on startup.
 ///

@@ -906,8 +906,7 @@ async fn run_pet_clustering(
         // Recompute photo_count as DISTINCT photos, not pet detections — same
         // over-count bug as faces when one photo holds several crops of the
         // same animal. Runs after assignment so new clusters are populated.
-        let affected: std::collections::HashSet<i64> =
-            cluster_id_map.values().copied().collect();
+        let affected: std::collections::HashSet<i64> = cluster_id_map.values().copied().collect();
         for db_cluster_id in &affected {
             sqlx::query(
                 "UPDATE pet_clusters SET photo_count = (\
