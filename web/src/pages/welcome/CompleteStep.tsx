@@ -246,17 +246,29 @@ export default function CompleteStep({
                 console.error("[Setup] Encryption key missing in memory! Key derivation may have failed or the page was refreshed mid-wizard.");
               }
               if (keyHex) {
-                await api.encryption.storeKey(keyHex);
-              }
-
-              // Trigger an immediate auto-scan so pre-existing media files in
-              // the storage directory are registered before the gallery loads.
-              // (The background autoscan's startup pass runs before the admin
-              // account exists, so it finds 0 files on fresh install.)
-              // Skip during restore — the recovery push-sync handles all files
-              // and a post-recovery scan runs automatically when it finishes.
-              if (!isRestore) {
-                await api.backup.triggerAutoScan().catch((err: unknown) => {
+                // FIRE-AND-FORGET — do NOT await. The store-key handler doesn't
+                // just persist the key: server-side it runs a FULL storage scan
+                // (hash + metadata + thumbnail per file) and then spawns the
+                // encryption migration. On a large import that scan alone is
+                // tens of seconds, and awaiting it traps the user on the
+                // wizard's "Loading…" screen until it finishes — exactly the
+                // bug we're fixing. The gallery doesn't need the server-stored
+                // key to render (it decrypts client-side with the in-memory
+                // key), so we kick this off and navigate immediately. The SPA
+                // route change keeps the request's connection alive; the
+                // gallery re-syncs every ~2s (see usePhotoSync) and fills in as
+                // files are registered/encrypted. This mirrors Login.tsx, which
+                // already fires storeKey without awaiting.
+                api.encryption.storeKey(keyHex).catch((e) => {
+                  console.error("Failed to store encryption key:", e);
+                });
+              } else if (!isRestore) {
+                // No key in memory to store — fall back to a plain auto-scan so
+                // pre-existing media files still get registered. Also
+                // fire-and-forget for the same reason as above. Skipped during
+                // restore (the recovery push-sync handles all files and a
+                // post-recovery scan runs automatically when it finishes).
+                api.backup.triggerAutoScan().catch((err: unknown) => {
                   console.warn("Post-setup auto-scan failed:", err);
                 });
               }
