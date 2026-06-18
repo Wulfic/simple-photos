@@ -91,6 +91,17 @@ pub fn spawn_geo_processor(
                 tracing::warn!(error = %e, "Year/month backfill cycle failed");
             }
 
+            // Defer the expensive geocoding backfill while the import → encrypt
+            // → convert pipeline is busy, mirroring the AI processor so the two
+            // don't contend with it for the CPU and SQLite's single writer lock.
+            // The cheap year/month backfill above still runs every cycle because
+            // timeline albums depend on it independently of geocoding.
+            if crate::ingest::ingest_pipeline_busy(&pool).await {
+                tracing::debug!("geo processor: ingest pipeline busy, deferring geocoding");
+                active.store(false, Ordering::Relaxed);
+                continue;
+            }
+
             // ── Decide whether we need the geocoder this cycle ──────────
             // Skip the expensive dataset load on hosts where nobody wants
             // geocoding.  We re-check every cycle so flipping the toggle

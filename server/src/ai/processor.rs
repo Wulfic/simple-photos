@@ -80,6 +80,17 @@ pub fn spawn_ai_processor(
         );
 
         loop {
+            // Defer AI work while the import → encrypt → convert pipeline is
+            // still in flight, so we don't contend with it for CPU and SQLite's
+            // single writer lock — the "jumping between encrypt, AI and geo one
+            // photo at a time" stall. Re-check at the normal cadence until it
+            // clears.
+            if crate::ingest::ingest_pipeline_busy(&pool).await {
+                tracing::debug!("AI processor: ingest pipeline busy, deferring batch");
+                time::sleep(interval).await;
+                continue;
+            }
+
             // Run a batch with the activity flag held high so the web client
             // can spin its profile-avatar indicator while AI work is in progress.
             active.store(true, Ordering::Relaxed);
