@@ -42,6 +42,7 @@ pub fn spawn_geo_processor(
     active: Arc<AtomicBool>,
     dataset_available: Arc<AtomicBool>,
     dataset_downloading: Arc<AtomicBool>,
+    trigger: Arc<tokio::sync::Notify>,
 ) {
     tokio::spawn(async move {
         let batch_size = config.batch_size as i64;
@@ -63,7 +64,21 @@ pub fn spawn_geo_processor(
         // shorten this so newly uploaded photos are picked up promptly).
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(poll_secs));
         loop {
-            interval.tick().await;
+            // Wake on whichever happens first: the periodic tick, or an
+            // explicit `trigger` fired by a handler (geolocation just enabled,
+            // a GPS photo uploaded) or the auto-scan (new files registered).
+            // Without the trigger arm, those actions would sit idle for up to
+            // `poll_secs` (5 min) before anything resolved — which is exactly
+            // what made enabling geo look like a hang.  The first `tick()`
+            // returns immediately, so the startup backfill still runs at once.
+            tokio::select! {
+                _ = interval.tick() => {
+                    tracing::debug!("geo processor: periodic poll tick");
+                }
+                _ = trigger.notified() => {
+                    tracing::debug!("geo processor: woken early by trigger");
+                }
+            }
 
             // Mark geo as active while we run a backfill cycle so the web
             // client can spin the profile avatar indicator.
@@ -76,11 +91,27 @@ pub fn spawn_geo_processor(
                 tracing::warn!(error = %e, "Year/month backfill cycle failed");
             }
 
+            // Defer the expensive geocoding backfill while the import → encrypt
+            // → convert pipeline is busy, mirroring the AI processor so the two
+            // don't contend with it for the CPU and SQLite's single writer lock.
+            // The cheap year/month backfill above still runs every cycle because
+            // timeline albums depend on it independently of geocoding.
+            if crate::ingest::ingest_pipeline_busy(&pool).await {
+                tracing::debug!("geo processor: ingest pipeline busy, deferring geocoding");
+                active.store(false, Ordering::Relaxed);
+                continue;
+            }
+
             // ── Decide whether we need the geocoder this cycle ──────────
             // Skip the expensive dataset load on hosts where nobody wants
             // geocoding.  We re-check every cycle so flipping the toggle
             // at runtime brings the loader online without a restart.
             let needs_geo = geo_resolution_needed(&pool, config.enabled).await;
+            tracing::debug!(
+                needs_geo,
+                dataset_path = %config.dataset_path,
+                "geo processor: resolution-needed probe"
+            );
 
             if needs_geo {
                 // Lazy-load on first need.  If the dataset file is missing,
@@ -124,6 +155,10 @@ pub fn spawn_geo_processor(
                 // GeoBanner spins indefinitely.
                 let loaded = geocoder.as_ref().map(|gc| gc.is_loaded()).unwrap_or(false);
                 dataset_available.store(loaded, Ordering::Relaxed);
+                tracing::debug!(
+                    geocoder_loaded = loaded,
+                    "geo processor: geocoder state before backfill"
+                );
 
                 if let Some(gc) = &geocoder {
                     if gc.is_loaded() {

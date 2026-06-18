@@ -30,6 +30,7 @@ pub fn spawn_all(
     geo_active: &Arc<AtomicBool>,
     geo_dataset_available: &Arc<AtomicBool>,
     geo_dataset_downloading: &Arc<AtomicBool>,
+    geo_trigger: &Arc<tokio::sync::Notify>,
 ) {
     spawn_housekeeping(pool.clone());
     spawn_trash_purge(pool.clone(), config.storage.root.clone());
@@ -57,6 +58,7 @@ pub fn spawn_all(
         config.scan.auto_scan_interval_secs,
         scan_lock.clone(),
         config.auth.jwt_secret.clone(),
+        geo_trigger.clone(),
     );
     spawn_encryption_migration(
         pool.clone(),
@@ -81,6 +83,7 @@ pub fn spawn_all(
         geo_active.clone(),
         geo_dataset_available.clone(),
         geo_dataset_downloading.clone(),
+        geo_trigger.clone(),
     );
 }
 
@@ -239,6 +242,7 @@ fn spawn_auto_scan(
     interval_secs: u64,
     scan_lock: Arc<tokio::sync::Mutex<()>>,
     jwt_secret: String,
+    geo_trigger: Arc<tokio::sync::Notify>,
 ) {
     tokio::spawn(async move {
         crate::backup::autoscan::background_auto_scan_task(
@@ -247,6 +251,7 @@ fn spawn_auto_scan(
             interval_secs,
             scan_lock,
             jwt_secret,
+            geo_trigger,
         )
         .await;
     });

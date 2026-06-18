@@ -15,7 +15,7 @@ export default function SavingBanner() {
   // Spinner-only (no pct, not dismissible) — the render is a single opaque job.
   return (
     <ProgressBanner
-      position="bottom-20"
+      id="saveCopy"
       tone="accent"
       label="Rendering edited copy…"
     />

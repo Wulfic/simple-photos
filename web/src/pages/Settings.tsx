@@ -234,10 +234,14 @@ export default function Settings() {
         </p>
       )}
 
-      {/* Masonry card layout: two columns when there's room, single column
-          (the original look) on narrow screens. break-inside-avoid keeps each
-          card whole; the cards' own mb-4 provides vertical rhythm. */}
-      <div className="lg:columns-2 gap-4 [&>*]:break-inside-avoid">
+      {/* Two explicit columns (stacked on narrow screens). Flexbox — not CSS
+          multi-column — so each column stretches to equal height and the blank
+          filler card at the bottom of the shorter column can flex-grow to fill
+          the dead space, leaving both columns level. `[&>section]:mb-0` cancels
+          each card's own mb-4 so gap-4 is the single source of vertical rhythm. */}
+      <div className="flex flex-col lg:flex-row gap-4 items-stretch">
+      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex flex-col gap-4 [&>section]:mb-0">
 
       {!isBackupMode ? (
         <AccountSection username={username ?? ""} error={error} setError={setError} success={success} setSuccess={setSuccess} loading={loading} setLoading={setLoading} />
@@ -413,6 +417,17 @@ export default function Settings() {
           setSuccess={setSuccess}
         />
       )}
+
+      </div>{/* end column 1 card stack */}
+      {/* Blank filler — flush sibling of the card stack (no gap), so the taller
+          column ends exactly at its last card while the shorter column's filler
+          grows to fill the dead space. Borderless so it leaves no line when it
+          collapses to zero height. */}
+      <div className="bg-surface/60 rounded-xl hidden lg:block lg:flex-1" aria-hidden="true" />
+      </div>{/* end column 1 */}
+
+      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex flex-col gap-4 [&>section]:mb-0">
 
       {/* ── Geolocation (primary only — backups receive geo data via sync) ── */}
       {!isBackupMode && (
@@ -668,34 +683,48 @@ export default function Settings() {
         </section>
       )}
 
+      </div>{/* end column 2 card stack */}
+      {/* Blank filler — see column 1. */}
+      <div className="bg-surface/60 rounded-xl hidden lg:block lg:flex-1" aria-hidden="true" />
+      </div>{/* end column 2 */}
+      </div>{/* end two-column config cards */}
+
+      {/* ── About & Credits — pulled out of the columns so they always sit at
+          the bottom. Full-width stacked cards whose content runs horizontally
+          to use the extra width. mt-4 keeps them clear of the cards above. ── */}
+      <div className="mt-4 space-y-4">
+
       {/* ── About ───────────────────────────────────────────────────────────── */}
-      <section className="card p-6 mb-4">
+      <section className="card p-6">
         <h2 className="text-lg font-semibold mb-4">About</h2>
-        <div className="flex flex-col items-center text-center">
-          <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mb-3" />
-          <h3 className="text-xl font-bold text-fg">Simple Photos</h3>
-          <p className="text-sm text-fg-muted mb-4">
-            v1.0.0 — Self-hosted, end-to-end encrypted photo & video library
-          </p>
-          <hr className="w-full border-edge mb-4" />
-          <p className="text-xs text-fg-muted mb-2">Developed by</p>
-          <img
-            src="/wulfnet.jpg"
-            alt="WulfNet Designs"
-            className="h-16 mb-1"
-          />
-          <p className="text-sm font-semibold text-fg-muted">WulfNet Designs</p>
-          <p className="text-xs text-fg-muted mt-3">
-            &copy; {new Date().getFullYear()} WulfNet Designs. All rights
-            reserved.
-          </p>
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-6 sm:gap-12">
+          {/* App */}
+          <div className="flex flex-col items-center text-center">
+            <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mb-3" />
+            <h3 className="text-xl font-bold text-fg">Simple Photos</h3>
+            <p className="text-sm text-fg-muted">
+              v1.0.0 — Self-hosted, end-to-end encrypted photo &amp; video library
+            </p>
+          </div>
+          {/* Divider — vertical on wide screens, horizontal when stacked */}
+          <div className="hidden sm:block self-stretch w-px bg-edge" />
+          <hr className="sm:hidden w-24 border-edge" />
+          {/* Developer */}
+          <div className="flex flex-col items-center text-center">
+            <p className="text-xs text-fg-muted mb-2">Developed by</p>
+            <img src="/wulfnet.jpg" alt="WulfNet Designs" className="h-16 mb-1" />
+            <p className="text-sm font-semibold text-fg-muted">WulfNet Designs</p>
+          </div>
         </div>
+        <p className="text-xs text-fg-muted text-center mt-6">
+          &copy; {new Date().getFullYear()} WulfNet Designs. All rights reserved.
+        </p>
       </section>
 
       {/* ── Credits & Links ─────────────────────────────────────────────────── */}
-      <section className="card p-6 mb-4">
+      <section className="card p-6">
         <h2 className="text-lg font-semibold mb-4">Credits &amp; Links</h2>
-        <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8 text-sm">
           <div className="flex items-center gap-3">
             <AppIcon name="star" size="w-5 h-5" />
             <div>
@@ -722,7 +751,6 @@ export default function Settings() {
               </p>
             </div>
           </div>
-          <hr className="border-edge" />
           <div className="flex items-center gap-3">
             <AppIcon name="shared" size="w-5 h-5" />
             <div>
@@ -741,7 +769,7 @@ export default function Settings() {
           </div>
         </div>
       </section>
-      </div>{/* end masonry card layout */}
+      </div>{/* end About & Credits footer */}
       </main>
     </div>
   );

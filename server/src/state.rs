@@ -88,6 +88,14 @@ pub struct AppState {
     /// `GET /api/status/activity` so the client shows "downloading location
     /// data…" instead of the static "unavailable" notice.
     pub geo_dataset_downloading: Arc<AtomicBool>,
+    /// Wakes the background geo processor *immediately* instead of waiting for
+    /// its next poll tick (up to `geo.poll_interval_secs`, 5 min by default).
+    ///
+    /// Fired whenever new work appears that the user expects to see resolve
+    /// promptly: enabling geolocation, uploading a GPS photo, or an auto-scan
+    /// registering new files. Without this, flipping the toggle (or importing)
+    /// sat idle for minutes with a frozen "0/N" banner that looked like a hang.
+    pub geo_trigger: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {

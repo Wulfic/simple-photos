@@ -22,6 +22,7 @@ import type { ImportItem, ServerFile, GooglePhotosMetadata } from "../utils/impo
 import {
   guessMimeFromName,
   matchMetadataToFiles,
+  dedupeGooglePhotosEdits,
 } from "../utils/media";
 import { formatBytes } from "../utils/formatters";
 import ImportFileList from "./import/ImportFileList";
@@ -38,6 +39,7 @@ export default function Import() {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [dragOver, setDragOver] = useState(false);
 
   // Server scan state
@@ -149,7 +151,12 @@ export default function Import() {
     }
 
     Promise.all(jsonReadPromises).then(() => {
-      const matched = matchMetadataToFiles(mediaFiles, jsonFiles);
+      // Collapse Google Photos original/"-edited" pairs to the edited copy
+      // BEFORE matching metadata, so the surviving file inherits the
+      // original's sidecar (Google names the sidecar after the original).
+      const dedupedMedia = dedupeGooglePhotosEdits(mediaFiles);
+      const skippedDupes = mediaFiles.length - dedupedMedia.length;
+      const matched = matchMetadataToFiles(dedupedMedia, jsonFiles);
       if (matched.length === 0 && jsonFiles.size > 0) {
         setError("Only metadata JSON files found. Please also select the photo/video files.");
         return;
@@ -160,6 +167,11 @@ export default function Import() {
       }
       setItems((prev) => [...prev, ...matched]);
       setError("");
+      setNotice(
+        skippedDupes > 0
+          ? `Skipped ${skippedDupes} unedited Google Photos original${skippedDupes === 1 ? "" : "s"} — keeping the edited copy with its metadata.`
+          : ""
+      );
     });
   }, []);
 
@@ -303,6 +315,7 @@ export default function Import() {
   function clearAll() {
     setItems([]);
     setProgress({ done: 0, total: 0 });
+    setNotice("");
   }
 
   function retryFailed() {
@@ -410,6 +423,10 @@ export default function Import() {
                   <code className="bg-accent-100 dark:bg-accent-900/40 px-1 rounded">.json</code>{" "}
                   metadata files from Google Takeout
                 </li>
+                <li>
+                  Edited Google Photos are de-duplicated automatically — the
+                  edited copy is kept and the unedited original is skipped
+                </li>
                 <li>Click <strong>Import</strong> to encrypt and upload</li>
               </ol>
             </div>
@@ -454,6 +471,12 @@ export default function Import() {
         {error && (
           <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 rounded-lg p-3 mb-4 text-sm">
             {error}
+          </div>
+        )}
+
+        {notice && (
+          <div className="bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800 text-accent-800 dark:text-accent-300 rounded-lg p-3 mb-4 text-sm">
+            {notice}
           </div>
         )}
 

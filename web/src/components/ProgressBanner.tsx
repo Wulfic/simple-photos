@@ -5,12 +5,15 @@
  * Unifies what were five near-identical hand-rolled cards onto the `#14`
  * facelift design language: the `card shadow-card-hover` surface, a tinted
  * spinner, an optional ETA, an optional progress bar, and the standard
- * `icon-btn` dismiss button. Banners stack at the bottom-right via the
- * `position` prop (a Tailwind bottom-* utility).
+ * `icon-btn` dismiss button. Positioning + the bottom-anchored, gap-free
+ * stacking animation are owned by {@link BannerSlot}; callers just pass an
+ * `id` and the slot is assigned dynamically from the set of visible banners.
  *
  * Pass `pct` for a determinate bar; omit it for a spinner-only notice. Pass
  * `onDismiss` to render the dismiss button; omit it for non-dismissible ones.
  */
+import { BannerSlot } from "./BannerSlot";
+import { BANNERS, BannerId } from "../store/bannerStack";
 
 export type ProgressTone = "accent" | "orange" | "purple" | "emerald";
 
@@ -43,8 +46,8 @@ const TONE: Record<ProgressTone, ToneClasses> = {
 };
 
 export interface ProgressBannerProps {
-  /** Tailwind bottom-* utility controlling the stack slot, e.g. "bottom-6". */
-  position: string;
+  /** Which banner this is — drives its slot in the bottom-anchored stack. */
+  id: BannerId;
   tone?: ProgressTone;
   /** Primary status line. */
   label: string;
@@ -59,7 +62,7 @@ export interface ProgressBannerProps {
 }
 
 export function ProgressBanner({
-  position,
+  id,
   tone = "accent",
   label,
   description,
@@ -70,7 +73,7 @@ export function ProgressBanner({
   const t = TONE[tone];
 
   return (
-    <div className={`fixed ${position} left-4 right-4 z-50 pointer-events-none`}>
+    <BannerSlot id={id} priority={BANNERS[id]}>
       <div className="card shadow-card-hover pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
         <div
           className={`w-5 h-5 border-2 border-edge-strong ${t.spinner} rounded-full animate-spin flex-shrink-0`}
@@ -108,6 +111,6 @@ export function ProgressBanner({
           </button>
         )}
       </div>
-    </div>
+    </BannerSlot>
   );
 }

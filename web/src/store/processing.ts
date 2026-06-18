@@ -23,6 +23,7 @@ const TASK_LABELS: Record<string, string> = {
   // or geo backfill on the user's behalf.
   ai: "AI processing",
   geo: "Resolving locations",
+  geoPrecise: "Resolving street addresses",
 };
 
 interface ProcessingState {

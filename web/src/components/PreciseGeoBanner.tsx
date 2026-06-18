@@ -1,13 +1,14 @@
-/** Global AI-processing progress banner.
+/** Street-level (precise) geo-resolution progress banner.
  *
- *  Polls `/api/status/activity` for the authenticated user's AI work
- *  (face / object detection, clustering).  Same UX pattern as the
- *  encryption and conversion banners — a dismissible card with a spinner,
- *  a `done/total` counter, an ETA, and a progress bar.
+ *  Companion to {@link GeoBanner}. That banner tracks the offline city/country
+ *  pass; this one tracks the *opt-in* street-address pass that calls an external
+ *  geocoder (Nominatim/Photon) at ~1 request/second. Because precise lookups are
+ *  slow and network-bound, without a dedicated banner there was no way to tell
+ *  whether they were running at all.
  *
- *  Drives `useProcessingStore` so the profile-avatar spinner in the
- *  nav bar reflects whether the server is actively working on this user's
- *  AI backlog. */
+ *  Polls `/api/status/activity` for `precise_progress`, which the server zeroes
+ *  out unless the user enabled "Precise Street Addresses" — so this banner stays
+ *  hidden for everyone else. Stacks directly above GeoBanner (`bottom-56`). */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { request } from "../api/core";
 import { useAuthStore } from "../store/auth";
@@ -15,7 +16,12 @@ import { useProcessingStore } from "../store/processing";
 import { ProgressBanner } from "./ProgressBanner";
 
 interface ActivityResponse {
-  ai_progress?: { active: boolean; total: number; done: number; pending: number };
+  precise_progress?: {
+    active: boolean;
+    total: number;
+    done: number;
+    pending: number;
+  };
 }
 
 /** Format seconds as HH:MM:SS, clamped to 0. */
@@ -27,7 +33,7 @@ function formatEta(seconds: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
-export default function AiBanner() {
+export default function PreciseGeoBanner() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [dismissed, setDismissed] = useState(false);
   const [counts, setCounts] = useState<{ total: number; done: number } | null>(null);
@@ -35,7 +41,9 @@ export default function AiBanner() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { startTask, endTask } = useProcessingStore();
 
-  // Batch tracking (mirrors EncryptionBanner).
+  // Track the pending queue across polls so we can render "this batch" progress
+  // (0 → N) instead of an absolute count that would start mid-way for users who
+  // already had some addresses resolved. Mirrors GeoBanner's approach.
   const batchSizeRef = useRef(0);
   const prevPendingRef = useRef(0);
   const batchStartRef = useRef(0);
@@ -43,21 +51,20 @@ export default function AiBanner() {
   const poll = useCallback(async () => {
     try {
       const res = await request<ActivityResponse>("/status/activity");
-      const ai = res.ai_progress;
-      if (!ai) {
-        endTask("ai");
+      const precise = res.precise_progress;
+      if (!precise) {
+        endTask("geoPrecise");
         return;
       }
-      const pending = Math.max(0, ai.pending);
+      const pending = Math.max(0, precise.pending);
 
       if (pending === 0) {
-        // Idle — clear banner and stop the spinner immediately.
         batchSizeRef.current = 0;
         prevPendingRef.current = 0;
         batchStartRef.current = 0;
         setCounts(null);
         setEta(null);
-        endTask("ai");
+        endTask("geoPrecise");
         return;
       }
 
@@ -67,10 +74,12 @@ export default function AiBanner() {
         prevPendingRef.current = pending;
         setCounts({ total: pending, done: 0 });
         setEta(null);
-        startTask("ai");
+        startTask("geoPrecise");
         return;
       }
 
+      // The queue can grow mid-batch as the coarse pass resolves more cities
+      // (precise only becomes eligible once geo_city is filled in).
       if (pending > prevPendingRef.current) {
         const added = pending - prevPendingRef.current;
         batchSizeRef.current += added;
@@ -79,7 +88,7 @@ export default function AiBanner() {
 
       const batchDone = batchSizeRef.current - pending;
       setCounts({ total: batchSizeRef.current, done: batchDone });
-      startTask("ai");
+      startTask("geoPrecise");
 
       if (batchDone > 0 && batchStartRef.current > 0) {
         const elapsedMs = Date.now() - batchStartRef.current;
@@ -101,19 +110,21 @@ export default function AiBanner() {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
-      endTask("ai");
+      endTask("geoPrecise");
     };
   }, [isAuthenticated, poll, endTask]);
 
-  if (dismissed || !counts || counts.total === 0) return null;
+  if (dismissed) return null;
+  if (!counts || counts.total === 0) return null;
 
   const pct = counts.total > 0 ? (counts.done / counts.total) * 100 : 0;
 
   return (
     <ProgressBanner
-      id="ai"
+      id="geoPrecise"
       tone="purple"
-      label={`AI processing… ${counts.done}/${counts.total}`}
+      label={`Resolving street addresses… ${counts.done}/${counts.total}`}
+      description="Looking up precise locations via OpenStreetMap (~1/sec)."
       eta={eta}
       pct={pct}
       onDismiss={() => setDismissed(true)}

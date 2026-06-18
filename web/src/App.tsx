@@ -30,6 +30,7 @@ import ConversionBanner from "./components/ConversionBanner";
 import SavingBanner from "./components/SavingBanner";
 import AiBanner from "./components/AiBanner";
 import GeoBanner from "./components/GeoBanner";
+import PreciseGeoBanner from "./components/PreciseGeoBanner";
 import ServerOfflineBanner from "./components/ServerOfflineBanner";
 import ToastHost from "./components/ToastHost";
 
@@ -111,6 +112,7 @@ function ProtectedLayout() {
       <EncryptionBanner />
       <AiBanner />
       <GeoBanner />
+      <PreciseGeoBanner />
       <SavingBanner />
       {/* Route-content wrapper carries `view-transition-name: page` so only
           the page body crossfades on navigation (see index.css). The fixed

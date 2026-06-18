@@ -80,7 +80,6 @@ pub async fn import_scan(
     }
 
     let mut files = Vec::new();
-    let mut total_size: u64 = 0;
 
     // Recursively scan directories for media files
     let mut queue = vec![canonical.clone()];
@@ -116,7 +115,6 @@ pub async fn import_scan(
                         mime_from_extension(&name).to_string()
                     };
 
-                    total_size += size;
                     files.push(MediaFileEntry {
                         name,
                         path: full_path,
@@ -128,6 +126,12 @@ pub async fn import_scan(
             }
         }
     }
+
+    // Google Photos Takeout ships both the unedited original and a baked-in
+    // "-edited" copy for every edited photo. Drop the original when its edited
+    // sibling is present so the scan doesn't surface duplicates to import.
+    let mut files = dedupe_google_photos_edits(files);
+    let total_size: u64 = files.iter().map(|f| f.size).sum();
 
     files.sort_by_key(|a| a.name.to_lowercase());
 
@@ -216,4 +220,107 @@ pub async fn import_file(
         .header("Cache-Control", HeaderValue::from_static("no-store"))
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))
+}
+
+// ── Google Photos "-edited" de-duplication ───────────────────────────────────
+
+/// If `name` is a Google Photos Takeout "-edited" variant, return the original
+/// filename it derives from (`IMG_1234.jpg` for `IMG_1234-edited.jpg`). Returns
+/// `None` for anything that isn't an edited variant. The suffix match is
+/// case-insensitive and must sit immediately before the extension.
+fn original_name_for_edited(name: &str) -> Option<String> {
+    const SUFFIX: &str = "-edited";
+    let (stem, ext) = name.rsplit_once('.')?;
+    let cut = stem.len().checked_sub(SUFFIX.len())?;
+    // `get` returns None on a non-char-boundary, keeping this panic-free for
+    // multibyte filenames.
+    if stem.get(cut..)?.eq_ignore_ascii_case(SUFFIX) {
+        Some(format!("{}.{}", &stem[..cut], ext))
+    } else {
+        None
+    }
+}
+
+/// Drop each unedited original whose baked-in "-edited" sibling is also present,
+/// so Google Photos Takeout imports don't create duplicates. The edited copy
+/// (with the user's edits applied) is kept. Mirrors the client-side
+/// `web/src/utils/media.ts::dedupeGooglePhotosEdits`.
+fn dedupe_google_photos_edits(files: Vec<MediaFileEntry>) -> Vec<MediaFileEntry> {
+    let originals_with_edit: std::collections::HashSet<String> = files
+        .iter()
+        .filter_map(|f| original_name_for_edited(&f.name))
+        .map(|o| o.to_lowercase())
+        .collect();
+    if originals_with_edit.is_empty() {
+        return files;
+    }
+    files
+        .into_iter()
+        .filter(|f| !originals_with_edit.contains(&f.name.to_lowercase()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str) -> MediaFileEntry {
+        MediaFileEntry {
+            name: name.to_string(),
+            path: format!("/x/{name}"),
+            size: 10,
+            mime_type: "image/jpeg".into(),
+            modified: None,
+        }
+    }
+
+    fn names(files: Vec<MediaFileEntry>) -> Vec<String> {
+        files.into_iter().map(|f| f.name).collect()
+    }
+
+    #[test]
+    fn original_name_for_edited_recovers_base() {
+        assert_eq!(
+            original_name_for_edited("IMG_1234-edited.jpg").as_deref(),
+            Some("IMG_1234.jpg")
+        );
+        // Suffix match is case-insensitive; the base keeps its original casing.
+        assert_eq!(
+            original_name_for_edited("photo-EDITED.JPG").as_deref(),
+            Some("photo.JPG")
+        );
+        // Plain originals are not edited variants.
+        assert_eq!(original_name_for_edited("IMG_1234.jpg"), None);
+        // "-edited" must sit right before the extension, not mid-name.
+        assert_eq!(original_name_for_edited("my-edited-photo.jpg"), None);
+        // No extension → no match (and no panic).
+        assert_eq!(original_name_for_edited("noext-edited"), None);
+    }
+
+    #[test]
+    fn dedupe_drops_original_when_edited_present() {
+        let files = vec![
+            entry("IMG_1.jpg"),
+            entry("IMG_1-edited.jpg"),
+            entry("IMG_2.jpg"),
+        ];
+        let kept = names(dedupe_google_photos_edits(files));
+        assert!(kept.contains(&"IMG_1-edited.jpg".to_string()));
+        assert!(!kept.contains(&"IMG_1.jpg".to_string()));
+        assert!(kept.contains(&"IMG_2.jpg".to_string()));
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn dedupe_keeps_edited_without_original_sibling() {
+        let files = vec![entry("solo-edited.jpg"), entry("plain.jpg")];
+        assert_eq!(dedupe_google_photos_edits(files).len(), 2);
+    }
+
+    #[test]
+    fn dedupe_matches_original_case_insensitively() {
+        let files = vec![entry("Photo.JPG"), entry("photo-edited.jpg")];
+        let kept = names(dedupe_google_photos_edits(files));
+        assert_eq!(kept, vec!["photo-edited.jpg".to_string()]);
+    }
 }

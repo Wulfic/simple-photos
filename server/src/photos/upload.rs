@@ -509,6 +509,12 @@ pub async fn upload_photo(
     let _ =
         crate::geo::processor::set_photo_year_month(&state.pool, &photo_id, &final_taken_at).await;
 
+    // A GPS photo just landed — wake the geo processor so its city/country
+    // resolves within moments rather than on the next 5-min poll tick.
+    if resolved_lat.is_some() {
+        state.geo_trigger.notify_one();
+    }
+
     // ── Extract and store motion video blob ─────────────────────────────
     // If the photo is a motion photo with an embedded MP4 trailer, extract it
     // and store it as a separate blob for efficient serving.
