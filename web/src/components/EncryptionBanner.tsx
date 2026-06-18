@@ -135,7 +135,7 @@ export default function EncryptionBanner() {
 
   return (
     <ProgressBanner
-      position="bottom-6"
+      id="encryption"
       tone="accent"
       label={`Encrypting photos… ${counts.batchDone}/${counts.batchTotal}`}
       eta={eta}

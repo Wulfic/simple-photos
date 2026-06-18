@@ -121,7 +121,7 @@ export default function PreciseGeoBanner() {
 
   return (
     <ProgressBanner
-      position="bottom-56"
+      id="geoPrecise"
       tone="purple"
       label={`Resolving street addresses… ${counts.done}/${counts.total}`}
       description="Looking up precise locations via OpenStreetMap (~1/sec)."

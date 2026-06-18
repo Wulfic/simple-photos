@@ -223,7 +223,7 @@ export default function Settings() {
     <div className="min-h-screen bg-canvas">
       <AppHeader />
 
-      <main className="max-w-5xl mx-auto p-4">
+      <main className="max-w-5xl 2xl:max-w-[1600px] mx-auto p-4">
 
       {error && (
         <p className="text-red-600 dark:text-red-400 text-sm mb-4 p-3 bg-red-50 dark:bg-red-900/30 rounded">{error}</p>
@@ -234,10 +234,11 @@ export default function Settings() {
         </p>
       )}
 
-      {/* Masonry card layout: two columns when there's room, single column
-          (the original look) on narrow screens. break-inside-avoid keeps each
-          card whole; the cards' own mb-4 provides vertical rhythm. */}
-      <div className="lg:columns-2 gap-4 [&>*]:break-inside-avoid">
+      {/* Masonry card layout: single column on narrow screens (the original
+          look), two columns when there's room, and three on very wide screens
+          to make use of the space. break-inside-avoid keeps each card whole;
+          the cards' own mb-4 provides vertical rhythm. */}
+      <div className="lg:columns-2 2xl:columns-3 gap-4 [&>*]:break-inside-avoid">
 
       {!isBackupMode ? (
         <AccountSection username={username ?? ""} error={error} setError={setError} success={success} setSuccess={setSuccess} loading={loading} setLoading={setLoading} />
@@ -668,6 +669,13 @@ export default function Settings() {
         </section>
       )}
 
+      </div>{/* end masonry config cards */}
+
+      {/* ── About & Credits — pulled out of the masonry so they always sit at
+          the bottom of the page. Side-by-side on wide screens, stacked when
+          narrow; items-start keeps each card at its natural height. ───────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+
       {/* ── About ───────────────────────────────────────────────────────────── */}
       <section className="card p-6 mb-4">
         <h2 className="text-lg font-semibold mb-4">About</h2>
@@ -741,7 +749,7 @@ export default function Settings() {
           </div>
         </div>
       </section>
-      </div>{/* end masonry card layout */}
+      </div>{/* end About & Credits footer row */}
       </main>
     </div>
   );

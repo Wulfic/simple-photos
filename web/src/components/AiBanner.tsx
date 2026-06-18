@@ -111,7 +111,7 @@ export default function AiBanner() {
 
   return (
     <ProgressBanner
-      position="bottom-32"
+      id="ai"
       tone="purple"
       label={`AI processing… ${counts.done}/${counts.total}`}
       eta={eta}

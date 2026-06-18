@@ -87,7 +87,7 @@ export default function ConversionBanner() {
 
   return (
     <ProgressBanner
-      position="bottom-20"
+      id="conversion"
       tone="orange"
       label={`Converting media… ${counts.done}/${counts.total}`}
       eta={eta}
