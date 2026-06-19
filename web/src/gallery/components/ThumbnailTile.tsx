@@ -8,11 +8,11 @@
  * Uses the `useThumbnailLoader` hook for decrypted/server thumbnail resolution
  * and `useGifAutoplay` for large GIF full-blob loading.
  */
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback, type CSSProperties } from "react";
 import useLongPress from "../../hooks/useLongPress";
 import { useThumbnailLoader } from "../hooks/useThumbnailLoader";
 import { useGifAutoplay } from "../hooks/useGifAutoplay";
-import { getThumbnailStyle } from "../../utils/thumbnailCss";
+import { getThumbnailStyle, computeCropCoverTransform, getCropFillStyle, CROP_DEBUG, croplog } from "../../utils/thumbnailCss";
 import { formatDuration } from "../../utils/gallery";
 import type { ThumbnailTileProps } from "../types";
 
@@ -21,6 +21,8 @@ export default function ThumbnailTile({
   mediaType,
   filename,
   cropData,
+  width,
+  height,
   duration,
   photoSubtype,
   burstCount,
@@ -36,6 +38,11 @@ export default function ThumbnailTile({
   // Blur-up / fade-in: the image starts transparent over the neutral tile
   // background and fades in once decoded, instead of popping in.
   const [decoded, setDecoded] = useState(false);
+  // Crop transform computed from MEASURED tile + image sizes (ground truth),
+  // so the crop fills the tile regardless of stored-dimension errors or the
+  // grid's aspect clamp. Null until measured → falls back to the pure
+  // stored-dims transform for the first paint.
+  const [measuredCropStyle, setMeasuredCropStyle] = useState<CSSProperties | null>(null);
 
   const isGif = mediaType === "gif";
   const hasAnimatedThumb = isGif && source.thumbnailMimeType === "image/gif";
@@ -88,6 +95,95 @@ export default function ThumbnailTile({
     }
   }, [displayUrl]);
 
+  // ── Measured crop transform ─────────────────────────────────────────────
+  // Compute the crop transform from the REAL tile + image sizes so a crop
+  // always fills its tile, even when the photo's stored dimensions are wrong
+  // (which would otherwise leave a gap / mis-position the crop vertically).
+  const measureCrop = useCallback(() => {
+    if (!cropData || isGif) { setMeasuredCropStyle(null); return; }
+    const tile = tileRef.current;
+    const img = imgRef.current;
+    croplog("[CROPDBG:measure]", {
+      filename,
+      tileNull: !tile, imgNull: !img,
+      tileW: tile?.clientWidth, tileH: tile?.clientHeight,
+      natW: img?.naturalWidth, natH: img?.naturalHeight,
+      storedW: width, storedH: height,
+      storedAR: width && height ? +(width / height).toFixed(3) : null,
+      natAR: img?.naturalWidth ? +(img.naturalWidth / img.naturalHeight).toFixed(3) : null,
+      cropData,
+    });
+    if (!tile || !img || img.naturalWidth === 0) {
+      croplog("[CROPDBG:measure] EARLY RETURN", {
+        filename,
+        reason: !tile ? "no tile ref" : !img ? "no img ref" : "img.naturalWidth===0 (not decoded)",
+      });
+      return;
+    }
+    if (tile.clientWidth === 0 || tile.clientHeight === 0) {
+      croplog("[CROPDBG:measure] ⚠️ TILE NOT LAID OUT (0 size) — cover falls back to natural-dims getThumbnailStyle", {
+        filename, tileW: tile.clientWidth, tileH: tile.clientHeight,
+      });
+    }
+    const style = computeCropCoverTransform(
+      cropData,
+      tile.clientWidth,
+      tile.clientHeight,
+      img.naturalWidth,
+      img.naturalHeight,
+    );
+    croplog("[CROPDBG:measure] → setMeasuredCropStyle", { filename, style: style as Record<string, unknown> });
+    setMeasuredCropStyle(style);
+  }, [cropData, isGif, filename, width, height]);
+
+  // Reset + re-measure whenever the crop or the displayed image changes.
+  useEffect(() => { setMeasuredCropStyle(null); measureCrop(); }, [cropData, displayUrl, measureCrop]);
+
+  // Re-measure on tile resize (window resize / layout changes re-flow the grid,
+  // changing the tile's clamped aspect). Only cropped, non-GIF tiles need this.
+  useEffect(() => {
+    if (!cropData || isGif) return;
+    const tile = tileRef.current;
+    if (!tile) return;
+    const ro = new ResizeObserver(() => measureCrop());
+    ro.observe(tile);
+    return () => ro.disconnect();
+  }, [cropData, isGif, measureCrop]);
+
+  // ── [CROPDBG] Trace which style actually wins (measured vs stored fallback) ──
+  useEffect(() => {
+    if (!CROP_DEBUG || !cropData || isGif) return;
+    const tile = tileRef.current;
+    const img = imgRef.current;
+    const fallback = getThumbnailStyle(cropData, width, height);
+    croplog("[CROPDBG:applied]", {
+      filename,
+      usingMeasured: !!measuredCropStyle,
+      applied: (measuredCropStyle ?? fallback) as Record<string, unknown>,
+      measuredCropStyle: measuredCropStyle as Record<string, unknown> | null,
+      storedFallback: fallback as Record<string, unknown>,
+      storedW: width, storedH: height,
+      liveTileW: tile?.clientWidth, liveTileH: tile?.clientHeight,
+      liveNatW: img?.naturalWidth, liveNatH: img?.naturalHeight,
+    });
+  }, [measuredCropStyle, cropData, isGif, filename, width, height]);
+
+  // Crop rendering: size the FULL image and offset it so the crop fills the
+  // tile, instead of transforming an object-cover image (which clips the crop's
+  // overflow pixels before the transform — the metadata-crop "gap" bug). Null
+  // for uncropped/rotated/GIF → keep the object-cover path.
+  const cropFill = isGif ? null : getCropFillStyle(cropData);
+
+  // Final style applied to the <img>. cropFill (pure rot=0 crop) wins first,
+  // then the measured transform (rot=0 cover crop OR the rotated fill branch),
+  // then the stored-dims fallback for the first paint. Any style that sizes &
+  // positions the image absolutely is a "fill" style — those must NOT also get
+  // object-cover (which would re-clip and fight the manual sizing).
+  const appliedCropStyle: CSSProperties | undefined = isGif
+    ? undefined
+    : (cropFill ?? measuredCropStyle ?? getThumbnailStyle(cropData, width, height));
+  const usesFill = appliedCropStyle?.position === "absolute";
+
   // Long press for selection mode
   const longPress = useLongPress(() => onLongPress?.(), 500);
 
@@ -112,17 +208,28 @@ export default function ThumbnailTile({
             ref={imgRef}
             src={displayUrl}
             alt={filename}
-            className={`w-full h-full object-cover transition-opacity duration-500 ease-out motion-reduce:transition-none ${decoded ? "opacity-100" : "opacity-0"}`}
+            className={`${usesFill ? "" : "w-full h-full object-cover"} transition-opacity duration-500 ease-out motion-reduce:transition-none ${decoded ? "opacity-100" : "opacity-0"}`}
             loading="lazy"
-            style={isGif ? undefined : getThumbnailStyle(cropData)}
+            style={appliedCropStyle}
             onLoad={(e) => {
               setDecoded(true);
+              measureCrop();
               if (onDimensionMismatch) {
                 const img = e.currentTarget;
                 const nw = img.naturalWidth;
                 const nh = img.naturalHeight;
-                // Self-heal: if thumbnail orientation disagrees with stored dimensions
-                if (nw > 0 && nh > 0 && nw !== nh && !cropData) {
+                // Self-heal: if the thumbnail's orientation disagrees with the
+                // stored dimensions, push the corrected dims (the parent only
+                // applies them on an *exact* w↔h swap, so false positives are
+                // impossible). This MUST also run for cropped photos: a
+                // metadata-only crop never regenerates the thumbnail, so the
+                // thumbnail is still the full image and its natural dims are
+                // exactly what getEffectiveAspectRatio needs to size the tile.
+                // Skipping it left a crop on a photo with swapped stored dims
+                // sized to the wrong tile aspect, so the (otherwise correct)
+                // getThumbnailStyle transform mismatched the tile and produced
+                // a zoomed/garbled thumbnail.
+                if (nw > 0 && nh > 0 && nw !== nh) {
                   onDimensionMismatch(nw, nh);
                 }
               }

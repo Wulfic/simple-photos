@@ -6,6 +6,7 @@
  */
 import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { useThumbnailSizeStore } from "../../store/thumbnailSize";
+import { clampTileAspect } from "../../utils/thumbnailCss";
 
 export interface JustifiedGridProps<T> {
   /** Items to lay out. */
@@ -111,9 +112,9 @@ export default function JustifiedGrid<T>({
   // Pre-compute aspect ratios
   const aspectRatios = useMemo(
     () => items.map((item) => {
-      const ar = getAspectRatio(item);
-      // Clamp extreme ratios to avoid degenerate rows
-      return Math.max(0.3, Math.min(ar, 4));
+      // Clamp extreme ratios to avoid degenerate rows. MUST match the clamp in
+      // getThumbnailStyle so the crop transform targets the rendered tile.
+      return clampTileAspect(getAspectRatio(item));
     }),
     [items, getAspectRatio],
   );

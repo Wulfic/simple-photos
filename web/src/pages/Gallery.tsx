@@ -18,6 +18,7 @@ import AddToAlbumModal from "../components/AddToAlbumModal";
 import { ThumbnailTile, type ThumbnailSource, applyDimensionCorrection, correctDimensionsFromThumbnail } from "../gallery";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { GallerySkeleton } from "../components/skeletons";
+import DebugCropOverlay from "../components/DebugCropOverlay";
 import { getEffectiveAspectRatio } from "../utils/thumbnailCss";
 import { useGalleryData } from "../hooks/useGalleryData";
 import { useGalleryUpload } from "../hooks/useGalleryUpload";
@@ -288,6 +289,7 @@ export default function Gallery() {
 
   return (
     <div className="min-h-screen bg-canvas">
+      <DebugCropOverlay />
       <AppHeader />
 
       <main className={`p-4 ${selectionMode && !isBackupView && !isBackupServer ? "pt-16" : ""}`}>
@@ -613,6 +615,8 @@ export default function Gallery() {
                       mediaType={photo.mediaType}
                       filename={photo.filename}
                       cropData={photo.cropData}
+                      width={photo.width}
+                      height={photo.height}
                       duration={photo.duration}
                       photoSubtype={photo.photoSubtype}
                       burstCount={(photo as CachedPhoto & { _burstCount?: number })._burstCount}

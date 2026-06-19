@@ -25,7 +25,7 @@ import useZoomPan from "../hooks/useZoomPan";
 import usePhotoPreload from "../hooks/usePhotoPreload";
 import useViewerMedia from "../hooks/useViewerMedia";
 import useViewerActions from "../hooks/useViewerActions";
-import useViewerEdit, { EDIT_CROP_PADDING_SCALE } from "../hooks/useViewerEdit";
+import useViewerEdit, { EDIT_CROP_PADDING_SCALE, cropFitStyle } from "../hooks/useViewerEdit";
 import useSwipeNavigation from "../hooks/useSwipeNavigation";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import useSlideshow from "../hooks/useSlideshow";
@@ -134,6 +134,7 @@ export default function Viewer() {
     cropZoomStyle,
     cropImageRef, cropContainerRef, audioRef, videoRef, viewImgRef,
     resetEditState,
+    rotateBy,
     computeRotationScale,
     computeCropZoom,
     enterEditMode,
@@ -586,12 +587,31 @@ export default function Viewer() {
                 style={{
                   imageRendering: mediaType === "gif" ? "auto" : undefined,
                   ...(inEdit ? (() => {
-                    // Compose rotation + edit-mode padding inset.  The
-                    // padding scale shrinks the photo away from the
-                    // viewport edges so the corner grab-handles aren't
-                    // crushed against the screen border.  Applied only
-                    // while the crop tab is active — other tabs preview
-                    // the full-size image.
+                    // On every tab EXCEPT crop, a cropped photo previews the
+                    // *cropped result* (with the live rotation + brightness
+                    // applied), not the whole image — you only see the full
+                    // frame when you switch to the Crop tab to re-adjust.
+                    const isCropped = cropCorners.x > 0.001 || cropCorners.y > 0.001 ||
+                                      cropCorners.w < 0.999 || cropCorners.h < 0.999;
+                    const img = cropImageRef.current;
+                    const container = cropContainerRef.current;
+                    if (editTab !== "crop" && isCropped && img && container && img.naturalWidth > 0) {
+                      const cW = container.clientWidth, cH = container.clientHeight;
+                      const aspect = img.naturalWidth / img.naturalHeight;
+                      let elW: number, elH: number;
+                      if (aspect > cW / cH) { elW = cW; elH = cW / aspect; }
+                      else { elH = cH; elW = cH * aspect; }
+                      if (elW > 0 && elH > 0 && cW > 0 && cH > 0) {
+                        return cropFitStyle(
+                          { x: cropCorners.x, y: cropCorners.y, w: cropCorners.w, h: cropCorners.h },
+                          rot, brightness || undefined, elW, elH, cW, cH,
+                        );
+                      }
+                    }
+
+                    // Crop tab (or no crop): show the full image. The padding
+                    // scale shrinks the photo away from the viewport edges so
+                    // the corner grab-handles aren't crushed against the border.
                     const editScale = editTab === "crop" ? EDIT_CROP_PADDING_SCALE : 1;
                     const rotScale = isSwapped
                       ? computeRotationScale(cropImageRef.current, cropContainerRef.current)
@@ -868,7 +888,7 @@ export default function Viewer() {
         <ViewerEditPanel
           editTab={editTab} setEditTab={setEditTab}
           mediaType={mediaType} brightness={brightness} setBrightness={setBrightness}
-          rotateValue={rotateValue} setRotateValue={setRotateValue}
+          rotateValue={rotateValue} onRotate={rotateBy}
           cropData={cropData} trimStart={trimStart} trimEnd={trimEnd}
           setTrimStart={setTrimStart} setTrimEnd={setTrimEnd} duration={mediaDuration}
           onSave={handleSaveEdit} onSaveCopy={handleSaveCopy}

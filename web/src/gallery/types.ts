@@ -51,6 +51,10 @@ export interface ThumbnailTileProps {
   filename: string;
   /** Crop/edit metadata JSON string */
   cropData?: string | null;
+  /** Stored pixel dimensions of the ORIGINAL (uncropped) image. Needed so the
+   *  crop transform can be computed against the tile's clamped aspect ratio. */
+  width?: number | null;
+  height?: number | null;
   /** Video/audio duration in seconds */
   duration?: number;
   /** Photo subtype: "burst", "motion", "panorama", "equirectangular", "hdr" */
