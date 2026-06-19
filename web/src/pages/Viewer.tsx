@@ -898,7 +898,22 @@ export default function Viewer() {
       )}
 
       {/* Photo info panel */}
-      <PhotoInfoPanel show={showInfoPanel} onClose={() => setShowInfoPanel(false)} photoId={id} photoInfo={photoInfo} />
+      <PhotoInfoPanel
+        show={showInfoPanel}
+        onClose={() => setShowInfoPanel(false)}
+        photoId={id}
+        photoInfo={photoInfo}
+        onSubtypeChange={(subtype) => {
+          setPhotoSubtype(subtype === "none" ? undefined : subtype);
+          if (
+            (subtype === "panorama" || subtype === "equirectangular") &&
+            photoInfo?.width &&
+            photoInfo?.height
+          ) {
+            setPanoImageDims({ width: photoInfo.width, height: photoInfo.height });
+          }
+        }}
+      />
 
       {/* Tag panel */}
       <TagPanel show={showTagPanel} onClose={() => setShowTagPanel(false)} photoId={id} />
