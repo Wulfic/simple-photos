@@ -1,8 +1,9 @@
 import type { CSSProperties } from "react";
 
-/** TEMP crop-thumbnail tracing. Flip to false (or delete the gated logs) once
- *  the metadata-crop thumbnail bug is root-caused. */
-export const CROP_DEBUG = true;
+/** Crop-thumbnail tracing. Disabled — the rotated-crop bugs are fixed. Flip to
+ *  `true` to re-enable the on-page DebugCropOverlay panel, the [CROPDBG] console
+ *  logs, and the window.__CROPLOG buffer if a crop/rotation regression shows up. */
+export const CROP_DEBUG = false;
 
 /**
  * TEMP: log to console AND stash into `window.__CROPLOG` so the whole trace can
