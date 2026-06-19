@@ -324,6 +324,14 @@ pub async fn upload_photo(
     // dimensions that ignore non-square pixels, leading to squished display).
     // When the file was converted, also extract from the original upload bytes
     // for EXIF dates/GPS/camera, since conversion strips EXIF from the output.
+    // Preserve the ORIGINAL bytes for XMP subtype detection below. Conversion
+    // (e.g. HEIC→JPEG) strips GPano/GCamera/hdrgm markers, so reading the
+    // converted output would silently lose motion/panorama/360/HDR/burst
+    // classification. Mirrors scan.rs / ingest.rs, which always scan the
+    // original file prefix.
+    let original_xmp_bytes: Option<Vec<u8>> =
+        original_upload.as_ref().map(|(orig_bytes, _)| orig_bytes.clone());
+
     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
         if let Some((orig_bytes, orig_filename)) = original_upload {
             let (_, _, orig_cam, orig_lat, orig_lon, orig_taken) =
@@ -343,9 +351,13 @@ pub async fn upload_photo(
         };
 
     // ── XMP subtype detection ───────────────────────────────────────────
-    // Read original file bytes to detect motion photo, panorama, 360, HDR,
-    // or burst subtype from embedded XMP metadata.
-    let xmp_data = tokio::fs::read(&file_path).await.unwrap_or_default();
+    // Detect motion photo, panorama, 360, HDR, or burst subtype from embedded
+    // XMP. For converted uploads we MUST scan the original bytes (the converted
+    // output has no XMP); for native uploads the on-disk file IS the original.
+    let xmp_data: Vec<u8> = match original_xmp_bytes {
+        Some(bytes) => bytes,
+        None => tokio::fs::read(&file_path).await.unwrap_or_default(),
+    };
     let mut subtype_info = extract_xmp_subtype(&xmp_data);
 
     // ── Aspect-ratio fallback ───────────────────────────────────────────

@@ -238,6 +238,8 @@ export default function Albums() {
   // Compute encrypted smart album counts + first thumbnails from IndexedDB
   const encryptedPhotoCounts = encryptedPhotos ? {
     all: encryptedPhotos.length,
+    // "Recently Added" is capped at the 100 most-recently-imported items.
+    recent: Math.min(encryptedPhotos.length, 100),
     favorites: encryptedPhotos.filter(p => !!p.isFavorite).length,
     photos: encryptedPhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
     gifs: encryptedPhotos.filter(p => p.mediaType === "gif").length,
@@ -251,7 +253,16 @@ export default function Albums() {
     return encryptedPhotos.find(p => filter(p) && p.thumbnailData);
   }
 
+  // Cover for "Recently Added" = the most-recently-imported item with a
+  // thumbnail (by addedAt, falling back to takenAt for un-backfilled entries).
+  const recentCover = encryptedPhotos
+    ? [...encryptedPhotos]
+        .sort((a, b) => (b.addedAt ?? b.takenAt ?? 0) - (a.addedAt ?? a.takenAt ?? 0))
+        .find(p => p.thumbnailData)
+    : undefined;
+
   const smartAlbumCovers = {
+    recent: recentCover,
     favorites: findCoverPhoto(p => !!p.isFavorite),
     photos: findCoverPhoto(p => p.mediaType === "photo" || p.mediaType === "gif"),
     gifs: findCoverPhoto(p => p.mediaType === "gif"),
@@ -436,6 +447,12 @@ export default function Albums() {
 
       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
         {/* ── Smart albums pinned at top ────────────────────────────────── */}
+        <SmartAlbumCard
+          label="Recently Added"
+          count={encryptedPhotoCounts?.recent ?? 0}
+          coverPhoto={smartAlbumCovers.recent}
+          onClick={() => navigate("/albums/smart-recent")}
+        />
         <SmartAlbumCard
           label="Favorites"
           count={encryptedPhotoCounts?.favorites ?? 0}

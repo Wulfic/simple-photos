@@ -29,7 +29,23 @@ import Slideshow from "../components/viewer/Slideshow";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
-const SMART_ALBUM_DEFS: Record<string, { label: string; filterEncrypted: (p: CachedPhoto) => boolean }> = {
+type SmartAlbumDef = {
+  label: string;
+  filterEncrypted: (p: CachedPhoto) => boolean;
+  /** When set, override the default takenAt-desc ordering. "addedAt" sorts by
+   *  library import order (falls back to takenAt when addedAt is absent). */
+  sortBy?: "addedAt";
+  /** When set, cap the album to the N most-recent items after sorting. */
+  limit?: number;
+};
+
+const SMART_ALBUM_DEFS: Record<string, SmartAlbumDef> = {
+  "smart-recent": {
+    label: "Recently Added",
+    filterEncrypted: () => true,
+    sortBy: "addedAt",
+    limit: 100,
+  },
   "smart-favorites": {
     label: "Favorites",
     filterEncrypted: (p) => !!p.isFavorite,
@@ -118,9 +134,19 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
 
   const filteredEncrypted = useMemo(() => {
     if (!allEncryptedPhotos) return prevFilteredRef.current;
-    const next = allEncryptedPhotos
+    let next = allEncryptedPhotos
       .filter((p) => !secureBlobIds.has(p.blobId))
       .filter(def.filterEncrypted);
+    // "Recently Added" sorts by import order (addedAt), newest first, and caps
+    // to def.limit. allEncryptedPhotos arrives takenAt-desc, so re-sort here.
+    if (def.sortBy === "addedAt") {
+      next = [...next].sort(
+        (a, b) => (b.addedAt ?? b.takenAt ?? 0) - (a.addedAt ?? a.takenAt ?? 0),
+      );
+    }
+    if (def.limit !== undefined) {
+      next = next.slice(0, def.limit);
+    }
     // Fast equality check on blob IDs to avoid spurious re-renders
     const key = next.map((p) => p.blobId).join(",");
     if (key === prevIdsRef.current) return prevFilteredRef.current;

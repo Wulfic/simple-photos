@@ -306,6 +306,11 @@ export default function ThumbnailTile({
           {photoSubtype === "equirectangular" ? "360°" : "PANO"}
         </div>
       )}
+      {photoSubtype === "hdr" && (
+        <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-bold px-1.5 py-0.5 rounded tracking-wide">
+          HDR
+        </div>
+      )}
 
       {/* Selection indicator — hidden by default; appears on hover (desktop)
           or once selection mode is active (e.g. via long-press on touch).
