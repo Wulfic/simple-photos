@@ -8,6 +8,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
+import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { encrypt, sha256Hex } from "../crypto/crypto";
 import { db, type CachedPhoto } from "../db";
@@ -66,6 +67,10 @@ export default function SecureGallery() {
   // Gallery items state
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
+
+  // Preserve scroll position per secure album when opening a photo and
+  // returning. Keyed by the selected gallery so each album restores its own.
+  useScrollMemory(`secure-gallery:${selectedGallery?.id ?? ""}`, items.length > 0);
 
   // Create album state
   const [showCreate, setShowCreate] = useState(false);

@@ -6,8 +6,9 @@
  * and sharing controls.
  */
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useLocation } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
+import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex, hasCryptoKey } from "../crypto/crypto";
 import { db, type CachedPhoto, type CachedAlbum } from "../db";
@@ -295,12 +296,16 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
     db.photos.orderBy("takenAt").reverse().toArray()
   );
 
+  // Preserve scroll position when opening a photo and returning to the album.
+  const { pathname } = useLocation();
   // Photos that belong to this album (excluding any in secure galleries)
   const albumPhotos = useMemo(() => {
     if (!album || !allPhotos) return [];
     const idSet = new Set(album.photoBlobIds);
     return allPhotos.filter((p) => idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
   }, [album, allPhotos, secureBlobIds]);
+
+  useScrollMemory(pathname, albumPhotos.length > 0);
 
   // Photos NOT in this album (for "add photos" view), also excluding secure photos
   const availablePhotos = useMemo(() => {

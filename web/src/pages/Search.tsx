@@ -3,7 +3,9 @@
  * (local IndexedDB) and server, with unified results.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
+import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db } from "../db";
@@ -81,6 +83,10 @@ export default function Search() {
   const [searched, setSearched] = useState(false);
   const [searchError, setSearchError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Preserve scroll position when opening a result and returning.
+  const { pathname } = useLocation();
+  useScrollMemory(pathname, results.length > 0);
 
   // ── Multi-select (parity with the main gallery; #2) ─────────────────────
   const { selectionMode, selectedIds, enter, toggle, setAll, clear: clearSelection } = usePhotoSelection();

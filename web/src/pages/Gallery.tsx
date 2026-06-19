@@ -9,7 +9,9 @@
  * displays it as a read-only grid.
  */
 import { useState, useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
+import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { type CachedPhoto, ACCEPTED_MIME_TYPES, db } from "../db";
 import AppHeader from "../components/AppHeader";
@@ -286,6 +288,14 @@ export default function Gallery() {
 
   const activeBackupServer = backupServers.find((s) => s.id === activeBackupServerId);
   const hasContent = collapsedPhotos && collapsedPhotos.length > 0;
+
+  // Preserve scroll position when opening a photo and returning, so the user
+  // doesn't lose their place after scrolling through a large library.
+  const { pathname } = useLocation();
+  useScrollMemory(
+    pathname,
+    Boolean(hasContent) || (backupPhotos?.length ?? 0) > 0,
+  );
 
   return (
     <div className="min-h-screen bg-canvas">

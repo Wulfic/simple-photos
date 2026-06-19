@@ -7,7 +7,9 @@
  * memories, trips), so the select circle now actually works there (#2).
  */
 import { useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAppNavigate } from "../../hooks/useAppNavigate";
+import { useScrollMemory } from "../../hooks/useScrollMemory";
 import type { CachedPhoto } from "../../db";
 import JustifiedGrid from "./JustifiedGrid";
 import AlbumTile from "../AlbumTile";
@@ -36,6 +38,10 @@ export default function SelectablePhotoGrid({
   allowDelete = true,
 }: SelectablePhotoGridProps) {
   const navigate = useAppNavigate();
+  const { pathname, search } = useLocation();
+  // Remember scroll position so returning from the viewer keeps the user's
+  // place in this grid (smart albums, people/pet/memory/trip detail views).
+  useScrollMemory(`${pathname}${search}`, photos.length > 0);
   const { selectionMode, selectedIds, enter, toggle, setAll, clear: clearSelection } = usePhotoSelection();
   const [showAddToAlbum, setShowAddToAlbum] = useState(false);
   const [deleting, setDeleting] = useState(false);
