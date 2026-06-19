@@ -89,6 +89,30 @@ class PhotoRepository @Inject constructor(
     private fun computeContentHash(data: ByteArray): String =
         crypto.sha256Hex(data).take(12)
 
+    /**
+     * Read camera make/model from EXIF, formatted to match the server's
+     * `metadata::extract_media_metadata` (model alone when it already starts
+     * with the make, else "Make Model"). Used server-side to timestamp-group
+     * bursts; returns null when no camera info is present.
+     */
+    private fun extractCameraModel(data: ByteArray): String? {
+        return try {
+            val exif = androidx.exifinterface.media.ExifInterface(data.inputStream())
+            val make = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE)?.trim()
+            val model = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MODEL)?.trim()
+            when {
+                !make.isNullOrEmpty() && !model.isNullOrEmpty() ->
+                    if (model.startsWith(make)) model else "$make $model"
+                !model.isNullOrEmpty() -> model
+                !make.isNullOrEmpty() -> make
+                else -> null
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PhotoRepository", "extractCameraModel failed: ${e.message}")
+            null
+        }
+    }
+
     fun getAllPhotos(): Flow<List<PhotoEntity>> = db.photoDao().getAllPhotos()
 
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
@@ -233,6 +257,23 @@ class PhotoRepository @Inject constructor(
             val photoRes = api.uploadBlob(photoBody, mediaBlobType, encryptedPhoto.size.toString(), photoHash, contentHash)
             android.util.Log.d("PhotoRepository", "uploadPhoto: media uploaded, blobId=${photoRes.blobId}")
 
+            // ── Special-photo subtype detection (client-side) ────────────────
+            // The server only ever sees the encrypted blob, so it cannot scan
+            // XMP to classify motion/panorama/360/HDR/burst photos. Detect here
+            // from the plaintext bytes and ship the result with registration.
+            // camera_model lets the server timestamp-group bursts that carry no
+            // XMP BurstID (Samsung et al.) via burst::detect_bursts_for_user.
+            val detected = if (photo.mediaType == "photo") {
+                com.simplephotos.data.media.MediaSubtypeDetector.detect(photoData, photo.width, photo.height)
+            } else {
+                com.simplephotos.data.media.MediaSubtype()
+            }
+            val cameraModel = if (photo.mediaType == "photo") extractCameraModel(photoData) else null
+            if (detected.photoSubtype != null || detected.burstId != null || cameraModel != null) {
+                android.util.Log.d("PhotoRepository",
+                    "uploadPhoto: detected subtype=${detected.photoSubtype} burstId=${detected.burstId} camera=$cameraModel for ${photo.filename}")
+            }
+
             // Register the encrypted photo on the server to create a photos row
             val regReq = com.simplephotos.data.remote.dto.RegisterEncryptedPhotoRequest(
                 filename = photo.filename,
@@ -246,12 +287,20 @@ class PhotoRepository @Inject constructor(
                 longitude = photo.longitude,
                 encryptedBlobId = photoRes.blobId,
                 encryptedThumbBlobId = thumbBlobId,
-                photoHash = contentHash
+                photoHash = contentHash,
+                photoSubtype = detected.photoSubtype,
+                burstId = detected.burstId,
+                cameraModel = cameraModel
             )
             val regRes = api.registerEncryptedPhoto(regReq)
             android.util.Log.d("PhotoRepository", "uploadPhoto: registered photo, serverPhotoId=${regRes.photoId}, duplicate=${regRes.duplicate}")
 
             db.photoDao().markSynced(photo.localId, regRes.photoId, photoRes.blobId, thumbBlobId, contentHash)
+            // Persist locally too so the device gallery badges it immediately
+            // (server timestamp-burst grouping is reflected on the next sync).
+            if (detected.photoSubtype != null || detected.burstId != null) {
+                db.photoDao().backfillSubtypeFields(regRes.photoId, detected.photoSubtype, detected.burstId, null)
+            }
 
             // Cache uploaded thumbnail locally
             if (thumbnailData != null && thumbnailData.isNotEmpty()) {

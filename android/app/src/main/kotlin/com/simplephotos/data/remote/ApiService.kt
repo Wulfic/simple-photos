@@ -88,6 +88,14 @@ interface ApiService {
     @DELETE("api/photos/{id}")
     suspend fun deletePhoto(@Path("id") photoId: String): Response<Unit>
 
+    /**
+     * Trigger server-side timestamp-based burst grouping for the current user.
+     * Called after a backup batch so bursts that carry no XMP BurstID (Samsung
+     * et al.) get stacked once all their frames have been registered.
+     */
+    @POST("api/photos/detect-bursts")
+    suspend fun detectBursts(): DetectBurstsResponse
+
     // ── Encrypted Blobs ──────────────────────────────────────────────────
     @POST("api/blobs")
     suspend fun uploadBlob(

@@ -38,7 +38,14 @@ data class RegisterEncryptedPhotoRequest(
     val longitude: Double? = null,
     @SerializedName("encrypted_blob_id") val encryptedBlobId: String,
     @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
-    @SerializedName("photo_hash") val photoHash: String? = null
+    @SerializedName("photo_hash") val photoHash: String? = null,
+    // Special-photo classification detected client-side from the plaintext
+    // bytes (the server only ever sees the encrypted blob and can't scan XMP).
+    @SerializedName("photo_subtype") val photoSubtype: String? = null,
+    @SerializedName("burst_id") val burstId: String? = null,
+    // Camera make/model from EXIF. Required server-side for timestamp-based
+    // burst grouping of cameras (e.g. Samsung) that don't write an XMP BurstID.
+    @SerializedName("camera_model") val cameraModel: String? = null
 )
 
 data class RegisterEncryptedPhotoResponse(

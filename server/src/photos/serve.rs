@@ -637,8 +637,8 @@ pub async fn serve_motion_video(
     }
 
     // Check that the photo exists, belongs to user, and is a motion photo
-    let row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT file_path, motion_video_blob_id, photo_subtype \
+    let row: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT file_path, motion_video_blob_id, photo_subtype, encrypted_blob_id \
          FROM photos WHERE id = ? AND user_id = ?",
     )
     .bind(&photo_id)
@@ -646,7 +646,7 @@ pub async fn serve_motion_video(
     .fetch_optional(&state.read_pool)
     .await?;
 
-    let (file_path, motion_blob_id, subtype) = row.ok_or(AppError::NotFound)?;
+    let (file_path, motion_blob_id, subtype, enc_blob_id) = row.ok_or(AppError::NotFound)?;
 
     // Secure-album gate (see `serve_photo`).
     crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
@@ -695,18 +695,58 @@ pub async fn serve_motion_video(
         }
     }
 
-    // Extract on-the-fly from the JPEG file using XMP offset
+    // Extract on-the-fly from the original JPEG bytes using the XMP offset.
+    //
+    // For encrypted backups (Android), the photo has no plaintext file on disk
+    // (`file_path` is empty) — the bytes live in an encrypted blob. The server
+    // holds the wrapped key for serving, so decrypt the photo blob and unwrap
+    // the JSON envelope to recover the JPEG, then extract the MP4 trailer just
+    // like the plaintext path. No separate motion_video blob is needed.
     let storage_root = (**state.storage_root.load()).clone();
-    let full_path = storage_root.join(&file_path);
+    let data: Vec<u8> = if !file_path.is_empty() {
+        let full_path = storage_root.join(&file_path);
+        tokio::fs::read(&full_path).await.map_err(|e| {
+            AppError::Internal(format!("Failed to read photo file for motion video: {e}"))
+        })?
+    } else if let Some(blob_id) = enc_blob_id.filter(|s| !s.is_empty()) {
+        let key = crate::crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
+            .await
+            .map_err(|e| AppError::Internal(format!("Key load: {e}")))?
+            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+        let (blob_storage_path,): (String,) =
+            sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
+                .bind(&blob_id)
+                .bind(&auth.user_id)
+                .fetch_optional(&state.read_pool)
+                .await?
+                .ok_or(AppError::NotFound)?;
+        let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
+        let plaintext = tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
+            .await
+            .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+            .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
+        let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
+            .map_err(|e| AppError::Internal(format!("Blob envelope JSON: {e}")))?;
+        let data_b64 = envelope["data"]
+            .as_str()
+            .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
+        base64::engine::general_purpose::STANDARD
+            .decode(data_b64)
+            .map_err(|e| AppError::Internal(format!("Base64 decode: {e}")))?
+    } else {
+        return Err(AppError::NotFound);
+    };
 
-    let data = tokio::fs::read(&full_path).await.map_err(|e| {
-        AppError::Internal(format!("Failed to read photo file for motion video: {e}"))
-    })?;
-
+    // Offset resolution mirrors `motion::extract_and_store_motion_video`:
+    // Pixel/Google declare it in XMP; Samsung carries no XMP offset and instead
+    // ends with a `MotionPhoto_Data` SEF trailer located by a byte scan.
     let subtype_info = super::metadata::extract_xmp_subtype(&data);
     let offset = subtype_info
         .motion_video_offset
-        .ok_or_else(|| AppError::BadRequest("Motion video offset not found in XMP".to_string()))?;
+        .or_else(|| super::motion::find_samsung_motion_offset(&data))
+        .ok_or_else(|| {
+            AppError::BadRequest("Motion video offset not found (no XMP offset, no Samsung trailer)".to_string())
+        })?;
 
     let video_bytes = super::metadata::extract_motion_video(&data, offset).ok_or_else(|| {
         AppError::Internal("Failed to extract motion video from JPEG".to_string())

@@ -27,13 +27,32 @@ interface LayoutRow {
   height: number;
 }
 
+/** Row height for a run of items that must fill `containerWidth` exactly. */
+function fittedRowHeight(
+  aspectSum: number,
+  itemCount: number,
+  containerWidth: number,
+  gap: number,
+): number {
+  const availableWidth = containerWidth - (itemCount - 1) * gap;
+  return availableWidth / aspectSum;
+}
+
 /**
- * Compute justified rows using a greedy algorithm.
+ * Compute justified rows using a greedy algorithm with look-back.
  *
  * For each row the total "natural width at targetHeight" of accumulated items
  * is tracked.  Once it exceeds `containerWidth` the row is closed and its
- * actual height shrunk so everything fits exactly.  The last row keeps the
- * target height and is left-aligned.
+ * actual height shrunk so everything fits exactly.
+ *
+ * When the item that overshoots is very wide (e.g. a panorama, clamped to
+ * {@link clampTileAspect}'s max), naively including it would collapse the row
+ * height — `rowHeight = availableWidth / rowAspectSum` — and crush every other
+ * photo on the row down to a sliver.  To avoid that we compare the resulting
+ * row height *with* vs *without* the overshooting item and keep whichever lands
+ * closer to `targetRowHeight`.  A superwide shot therefore drops onto its own
+ * (or a sparser) row at a sensible height instead of shrinking its neighbours.
+ * The last row keeps the target height and is left-aligned.
  */
 function computeRows(
   aspectRatios: number[],
@@ -54,12 +73,31 @@ function computeRows(
     const naturalWidth = rowAspectSum * targetRowHeight + totalGap;
 
     if (naturalWidth >= containerWidth) {
-      // Row is full — compute exact height so items fill containerWidth
-      const availableWidth = containerWidth - totalGap;
-      const rowHeight = availableWidth / rowAspectSum;
-      rows.push({ startIdx: rowStart, count: itemCount, height: rowHeight });
-      rowStart = i + 1;
-      rowAspectSum = 0;
+      // Adding item i overshot the container width. With more than one item on
+      // the row, decide whether to include i or defer it to the next row by
+      // whichever choice yields a row height closest to the target — this keeps
+      // a wide panorama from collapsing the height of its neighbours.
+      const heightWith = fittedRowHeight(rowAspectSum, itemCount, containerWidth, gap);
+      const sumWithout = rowAspectSum - aspectRatios[i];
+      const heightWithout =
+        itemCount > 1
+          ? fittedRowHeight(sumWithout, itemCount - 1, containerWidth, gap)
+          : Infinity;
+
+      if (
+        itemCount > 1 &&
+        Math.abs(heightWithout - targetRowHeight) <= Math.abs(heightWith - targetRowHeight)
+      ) {
+        // Close the row before i; i becomes the start of the next row.
+        rows.push({ startIdx: rowStart, count: itemCount - 1, height: heightWithout });
+        rowStart = i;
+        rowAspectSum = aspectRatios[i];
+      } else {
+        // Include i and close the row.
+        rows.push({ startIdx: rowStart, count: itemCount, height: heightWith });
+        rowStart = i + 1;
+        rowAspectSum = 0;
+      }
     }
   }
 
