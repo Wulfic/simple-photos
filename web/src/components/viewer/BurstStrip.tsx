@@ -82,6 +82,35 @@ export default function BurstStrip({ burstId, currentPhotoId, onSelectFrame, vis
     activeEl?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
   }, [currentPhotoId, frames]);
 
+  // Translate vertical mouse-wheel into horizontal scroll. The scrollbar is
+  // hidden, and on a desktop with only a vertical wheel a large burst (e.g. 46
+  // frames) was un-scrollable. A JSX onWheel isn't enough: React registers
+  // wheel as a *passive* listener (so preventDefault is a no-op) and the
+  // viewer's own wheel/zoom handler competes. Attach a NON-passive native
+  // listener so we can preventDefault and own the gesture over the strip.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      // Honour horizontal-capable input (trackpads) directly; otherwise map
+      // the dominant vertical delta onto the horizontal axis.
+      let delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (delta === 0) return;
+      if (el.scrollWidth <= el.clientWidth) return; // nothing to scroll
+      // Normalise delta to pixels. Many desktop mice report deltaMode=1
+      // (lines, deltaY≈±3) rather than pixels (±100): scrolling by 3px/notch
+      // felt like "it doesn't scroll". Convert lines→px and pages→px, then
+      // apply a small multiplier so one notch advances ~a frame or two.
+      if (e.deltaMode === 1) delta *= 16;
+      else if (e.deltaMode === 2) delta *= el.clientWidth;
+      e.preventDefault();
+      e.stopPropagation();
+      el.scrollLeft += delta * 1.5;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [frames]);
+
   if (!visible || frames.length <= 1) return null;
 
   return (

@@ -7,6 +7,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.FaceCluster
@@ -59,6 +60,9 @@ class AlbumViewModel @Inject constructor(
 
     /** Photo counts for smart/default albums */
     var totalCount by mutableStateOf(0)
+        private set
+    /** Count for the "Recently Added" smart album (capped at 100, like web). */
+    var recentCount by mutableStateOf(0)
         private set
     var favoritesCount by mutableStateOf(0)
         private set
@@ -132,6 +136,10 @@ class AlbumViewModel @Inject constructor(
                     photoRepository.getAllPhotos().first()
                 }
                 totalCount = allPhotos.size
+                // "Recently Added" mirrors the web smart album: capped at 100,
+                // with bursts collapsed so a burst counts as one item (the
+                // detail list does the same — see AlbumDetailViewModel).
+                recentCount = minOf(allPhotos.collapseBursts().size, 100)
                 favoritesCount = allPhotos.count { it.isFavorite }
                 photosCount = allPhotos.count { it.mediaType == "photo" || it.mediaType == "gif" }
                 gifsCount = allPhotos.count { it.mediaType == "gif" }
@@ -141,6 +149,8 @@ class AlbumViewModel @Inject constructor(
                 // Load cover photos for smart albums (most recent photo matching each filter)
                 val sorted = allPhotos.sortedByDescending { it.takenAt }
                 val covers = mutableMapOf<String, PhotoEntity>()
+                // "Recently Added" cover = the most recently imported item (by createdAt).
+                allPhotos.maxByOrNull { it.createdAt }?.let { covers["smart-recents"] = it }
                 sorted.firstOrNull { it.isFavorite }?.let { covers["smart-favorites"] = it }
                 sorted.firstOrNull { it.mediaType == "photo" || it.mediaType == "gif" }?.let { covers["smart-photos"] = it }
                 sorted.firstOrNull { it.mediaType == "gif" }?.let { covers["smart-gifs"] = it }

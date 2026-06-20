@@ -139,6 +139,7 @@ fun AlbumListScreen(
             // the web behaviour (web/src/pages/Albums.tsx renders the Audio card
             // only when encryptedPhotoCounts.audio > 0).
             val smartAlbumEntries = buildList {
+                add(Triple("smart-recents", "Recently Added", viewModel.recentCount))
                 add(Triple("smart-favorites", "Favorites", viewModel.favoritesCount))
                 add(Triple("smart-photos", "Photos", viewModel.photosCount))
                 add(Triple("smart-gifs", "GIFs", viewModel.gifsCount))
@@ -288,45 +289,9 @@ fun AlbumListScreen(
                 )
             }
 
-            // Always show the 4-card icon shortcut row (matches the web's
-            // "open the dedicated screen" affordance even when no clusters
-            // exist yet).
-            if (!anyDiscover) {
-                Spacer(Modifier.height(16.dp))
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                )
-                Text(
-                    "Discover",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                )
-                val discoverEntries = listOf<Triple<String, Int, () -> Unit>>(
-                    Triple("People", com.simplephotos.R.drawable.ic_shared, onPeople),
-                    Triple("Pets", com.simplephotos.R.drawable.ic_image, onPets),
-                    Triple("Memories", com.simplephotos.R.drawable.ic_star, onMemories),
-                    Triple("Trips", com.simplephotos.R.drawable.ic_folder, onTrips),
-                )
-                discoverEntries.chunked(2).forEach { rowItems ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        rowItems.forEach { (label, iconRes, onClick) ->
-                            Box(modifier = Modifier.weight(1f)) {
-                                DiscoverCard(label = label, iconRes = iconRes, onClick = onClick)
-                            }
-                        }
-                        if (rowItems.size == 1) {
-                            Spacer(Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
+            // People / Pets / Memories / Trips sections only render when they
+            // actually have content (handled above, each gated on isNotEmpty),
+            // matching the web Albums page. No empty placeholder row.
 
             // ── Shared Albums section (mirrors the web Albums page layout) ──
             Spacer(Modifier.height(24.dp))
@@ -691,63 +656,6 @@ private fun SharedAlbumCard(
                     if (album.isOwner) "You" else album.ownerUsername,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-/**
- * Renders a "Discover" smart-section card (People, Pets, Things, Map, etc.)
- * Tapping the card navigates into the corresponding library sub-screen.
- */
-@Composable
-private fun DiscoverCard(
-    label: String,
-    iconRes: Int,
-    onClick: () -> Unit = {}
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = MaterialTheme.shapes.medium
-    ) {
-        Column {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f),
-                color = Color.Transparent,
-                shape = MaterialTheme.shapes.small
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    Color(0xFF8B5CF6).copy(alpha = 0.15f),
-                                    Color(0xFF3B82F6).copy(alpha = 0.15f)
-                                )
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = androidx.compose.ui.res.painterResource(iconRes),
-                        contentDescription = label,
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-            Column(modifier = Modifier.padding(8.dp)) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
                 )
             }
         }

@@ -19,14 +19,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.exoplayer.ExoPlayer
@@ -40,6 +46,15 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 
+/**
+ * Max decode dimension (px) for wide panoramas / 360 photos.  Capping the
+ * longest side keeps the decoded bitmap ≤ 4096×4096×4 = 64 MB — safely under
+ * the ~100 MB hardware-Canvas draw limit and within the GPU max-texture size.
+ * Decoding these at ORIGINAL crashed with "Canvas: trying to draw too large
+ * bitmap" for full-resolution panos (e.g. a 17000×2540 image ≈ 160 MB).
+ */
+internal const val MAX_PANO_DECODE_PX = 4096
+
 // Parsed crop metadata for zoom/brightness/rotation transforms
 internal data class CropInfo(
     val x: Float,
@@ -49,6 +64,93 @@ internal data class CropInfo(
     val brightness: Float,
     val rotate: Int = 0
 )
+
+/** Result of [cropFit]: the graphicsLayer transform + the crop-rect clip insets
+ *  (left/top/right/bottom, in container px) that confine the visible content to
+ *  the crop rectangle. */
+internal data class CropFit(
+    val scale: Float,
+    val tx: Float,
+    val ty: Float,
+    val rot: Float,
+    val insL: Float,
+    val insT: Float,
+    val insR: Float,
+    val insB: Float,
+)
+
+/**
+ * Kotlin port of the web viewer's `cropFitStyle` (web/src/hooks/useViewerEdit.ts).
+ *
+ * The crop fractions (x,y,w,h) are in the *rotated* frame (the frame the user
+ * draws on). We fit the crop footprint to the viewport, translate the crop
+ * centre to the container centre (transform-origin = container centre), and
+ * return inset clip bounds for the crop rect in the un-rotated element's local
+ * space. Clipping is what the old Android code lacked — without it a full-width
+ * or full-height crop showed the whole image (scale resolved to 1, no zoom).
+ *
+ * `elW`/`elH` = the contain-fit size of the FULL (un-rotated) image inside the
+ * container (= what ContentScale.Fit renders). Verified for 0/90/180/270.
+ */
+internal fun cropFit(
+    cx0: Float, cy0: Float, cw: Float, ch: Float, rotate: Int,
+    elW: Float, elH: Float, containerW: Float, containerH: Float,
+): CropFit {
+    val rot = ((rotate % 360) + 360) % 360
+    val isSwapped = rot == 90 || rot == 270
+    val cp = cx0 + cw / 2f
+    val cq = cy0 + ch / 2f
+
+    // Crop footprint AFTER rotation, in element px → fit-to-viewport scale.
+    val footW = if (isSwapped) cw * elH else cw * elW
+    val footH = if (isSwapped) ch * elW else ch * elH
+    val scale = minOf(containerW / footW, containerH / footH)
+
+    // (a,b) = crop centre and [aMin,aMax]×[bMin,bMax] = crop rect, both in the
+    // UN-rotated element's 0–1 space (per rotation).
+    val a: Float; val b: Float
+    val aMin: Float; val aMax: Float; val bMin: Float; val bMax: Float
+    when (rot) {
+        90 -> { a = cq; b = 1f - cp; aMin = cy0; aMax = cy0 + ch; bMin = 1f - (cx0 + cw); bMax = 1f - cx0 }
+        180 -> { a = 1f - cp; b = 1f - cq; aMin = 1f - (cx0 + cw); aMax = 1f - cx0; bMin = 1f - (cy0 + ch); bMax = 1f - cy0 }
+        270 -> { a = 1f - cq; b = cp; aMin = 1f - (cy0 + ch); aMax = 1f - cy0; bMin = cx0; bMax = cx0 + cw }
+        else -> { a = cp; b = cq; aMin = cx0; aMax = cx0 + cw; bMin = cy0; bMax = cy0 + ch }
+    }
+
+    val contentX = (containerW - elW) / 2f
+    val contentY = (containerH - elH) / 2f
+
+    // Translate the crop centre to the container centre (transform-origin centre).
+    val pcx = (a - 0.5f) * elW
+    val pcy = (b - 0.5f) * elH
+    val rad = Math.toRadians(rot.toDouble())
+    val cos = kotlin.math.cos(rad).toFloat()
+    val sin = kotlin.math.sin(rad).toFloat()
+    val tx = -scale * (cos * pcx - sin * pcy)
+    val ty = -scale * (sin * pcx + cos * pcy)
+
+    // Clip to the crop rect in the element's LOCAL (un-rotated) space, applied
+    // before the transform so off-crop pixels are removed, not merely shifted.
+    val insL = maxOf(0f, contentX + aMin * elW)
+    val insT = maxOf(0f, contentY + bMin * elH)
+    val insR = maxOf(0f, containerW - (contentX + aMax * elW))
+    val insB = maxOf(0f, containerH - (contentY + bMax * elH))
+
+    return CropFit(scale, tx, ty, rot.toFloat(), insL, insT, insR, insB)
+}
+
+/** Rectangular clip shape inset from each edge by the given px amounts. Used to
+ *  confine the cropped image to its crop rect (the element fills the container,
+ *  so the insets are in container px). */
+internal class CropInsetShape(
+    private val insL: Float,
+    private val insT: Float,
+    private val insR: Float,
+    private val insB: Float,
+) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+        Outline.Rectangle(Rect(insL, insT, size.width - insR, size.height - insB))
+}
 
 // ---------------------------------------------------------------------------
 // Per-page content — each page independently loads and renders its photo
@@ -81,6 +183,10 @@ internal fun PhotoPageContent(
     intrinsicWidth: Float = -1f,
     intrinsicHeight: Float = -1f,
     onPanoLiveModeChange: ((Boolean) -> Unit)? = null,
+    // Single-tap on the media toggles the viewer chrome (top bar / controls).
+    // Handled here inside detectTapGestures because a child tap detector
+    // consumes the tap before any parent .clickable can see it.
+    onToggleControls: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -261,6 +367,7 @@ internal fun PhotoPageContent(
             }
             .pointerInput(Unit) {
                 detectTapGestures(
+                    onTap = { onToggleControls() },
                     onDoubleTap = {
                         if (zoomScale > 1f) {
                             zoomScale = 1f
@@ -286,12 +393,10 @@ internal fun PhotoPageContent(
             !editMode && cropInfo != null && baseW > 0 && baseH > 0 &&
             containerW > 0 && containerH > 0
         ) {
-            // When rotated 90/270, the image's effective dimensions are swapped
-            val rot = cropInfo.rotate % 360
-            val isSwapped = rot == 90 || rot == 270 || rot == -90 || rot == -270
-            val effW = if (isSwapped) baseH else baseW
-            val effH = if (isSwapped) baseW else baseH
-            val imgAspect = effW / effH
+            // Contain-fit size of the FULL (un-rotated) image inside the
+            // container — the element the crop fractions are measured against
+            // (= what ContentScale.Fit renders; web: elW/elH).
+            val imgAspect = baseW / baseH
             val containerAspect = containerW / containerH
             val rendW: Float
             val rendH: Float
@@ -300,41 +405,25 @@ internal fun PhotoPageContent(
             } else {
                 rendH = containerH; rendW = containerH * imgAspect
             }
-            val letterboxX = (containerW - rendW) / 2f
-            val letterboxY = (containerH - rendH) / 2f
-            val cx = cropInfo.x + cropInfo.width / 2f
-            val cy = cropInfo.y + cropInfo.height / 2f
-            val containerCX = (letterboxX + cx * rendW) / containerW
-            val containerCY = (letterboxY + cy * rendH) / containerH
-            val cropPixW = cropInfo.width * rendW
-            val cropPixH = cropInfo.height * rendH
-            val scale = minOf(containerW / cropPixW, containerH / cropPixH)
-            val tx = containerW * (0.5f - containerCX)
-            val ty = containerH * (0.5f - containerCY)
-
-            // Extra scale needed to shrink the original (un-rotated) image so
-            // that after rotation it fits within the container
-            val rotScale = if (isSwapped && baseW > 0 && baseH > 0) {
-                val origAspect = baseW / baseH
-                val origRendW: Float; val origRendH: Float
-                if (origAspect > containerAspect) {
-                    origRendW = containerW; origRendH = containerW / origAspect
-                } else {
-                    origRendH = containerH; origRendW = containerH * origAspect
-                }
-                // After rotating the original rendered rect, its bounding box is swapped
-                val rotatedBoundsW = origRendH
-                val rotatedBoundsH = origRendW
-                minOf(containerW / rotatedBoundsW, containerH / rotatedBoundsH)
-            } else 1f
-
+            // Fit the crop rect to the viewport, centre it, and CLIP to it (the
+            // old code skipped the clip — full-width/height crops then showed the
+            // whole image). Handles 0/90/180/270. See [cropFit].
+            val cf = cropFit(
+                cropInfo.x, cropInfo.y, cropInfo.width, cropInfo.height, cropInfo.rotate,
+                rendW, rendH, containerW, containerH
+            )
             Modifier.graphicsLayer {
-                scaleX = scale * rotScale
-                scaleY = scale * rotScale
-                transformOrigin = TransformOrigin(containerCX, containerCY)
-                translationX = tx
-                translationY = ty
-                rotationZ = cropInfo.rotate.toFloat()
+                scaleX = cf.scale
+                scaleY = cf.scale
+                translationX = cf.tx
+                translationY = cf.ty
+                rotationZ = cf.rot
+                transformOrigin = TransformOrigin(0.5f, 0.5f)
+                // Clip is applied in the layer's pre-transform (local) space, so
+                // it confines the image to the crop rect before the fit transform
+                // runs — off-crop pixels are removed, not just shifted.
+                clip = true
+                shape = CropInsetShape(cf.insL, cf.insT, cf.insR, cf.insB)
             }
         } else if (!editMode && rotationDegrees != 0f) {
             // No crop but has saved rotation — scale so rotated image fits container
@@ -438,7 +527,8 @@ internal fun PhotoPageContent(
                         photoWidth = if (intrinsicWidth > 0f) intrinsicWidth.toInt() else photo.width,
                         photoHeight = if (intrinsicHeight > 0f) intrinsicHeight.toInt() else photo.height,
                         playerError = playerError,
-                        onMediaSizeLoaded = onMediaSizeLoaded
+                        onMediaSizeLoaded = onMediaSizeLoaded,
+                        onToggleControls = onToggleControls
                     )
                 } else if (mediaUri == null) {
                     Text("Media not available", color = Color.White)
@@ -488,7 +578,8 @@ internal fun PhotoPageContent(
                                 .data(Uri.parse(photo.localPath))
                                 .apply {
                                     if (isWidePano) {
-                                        size(coil.size.Size.ORIGINAL)
+                                        // Capped decode (NOT ORIGINAL) — see MAX_PANO_DECODE_PX.
+                                        size(MAX_PANO_DECODE_PX)
                                         allowHardware(false)
                                     }
                                 }
@@ -537,7 +628,8 @@ internal fun PhotoPageContent(
                                 .data(imageData)
                                 .apply {
                                     if (isWidePano) {
-                                        size(coil.size.Size.ORIGINAL)
+                                        // Capped decode (NOT ORIGINAL) — see MAX_PANO_DECODE_PX.
+                                        size(MAX_PANO_DECODE_PX)
                                         allowHardware(false)
                                     }
                                 }
@@ -570,7 +662,10 @@ internal fun PhotoPageContent(
         if (isActivePage && !decryptLoading && decryptError == null) {
             val sub = photo.photoSubtype
             val isPano = sub == "panorama" || sub == "equirectangular"
-            val isMotionPhoto = photo.motionVideoBlobId != null && photo.mediaType != "video"
+            // Motion photos are identified by subtype (matching the web + the
+            // server's /motion-video endpoint, which requires subtype=="motion").
+            // The video is fetched by serverPhotoId, so it must be present.
+            val isMotionPhoto = sub == "motion" && photo.serverPhotoId != null && photo.mediaType != "video"
 
             if (isPano) {
                 val panoData: Any? = when {
@@ -589,8 +684,7 @@ internal fun PhotoPageContent(
             } else if (isMotionPhoto) {
                 MotionPhotoOverlay(
                     photo = photo,
-                    serverBaseUrl = serverBaseUrl,
-                    okHttpClient = okHttpClient,
+                    viewModel = viewModel,
                 )
             }
         }

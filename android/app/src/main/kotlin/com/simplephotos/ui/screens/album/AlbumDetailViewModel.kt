@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.repository.AlbumRepository
@@ -33,6 +34,7 @@ class AlbumDetailViewModel @Inject constructor(
 
     /** Human-readable label for smart albums */
     val smartAlbumLabel: String = when (albumId) {
+        "smart-recents" -> "Recently Added"
         "smart-favorites" -> "Favorites"
         "smart-photos" -> "Photos"
         "smart-gifs" -> "GIFs"
@@ -76,6 +78,10 @@ class AlbumDetailViewModel @Inject constructor(
             try {
                 val all = photoRepository.getAllPhotos().first()
                 photos = when (albumId) {
+                    // Collapse bursts BEFORE capping so a 46-shot burst counts
+                    // as one item toward the 100-item recents window (matching
+                    // the gallery, which renders the burst as a single tile).
+                    "smart-recents" -> all.sortedByDescending { it.createdAt }.collapseBursts().take(100)
                     "smart-favorites" -> all.filter { it.isFavorite }
                     "smart-photos" -> all.filter { it.mediaType == "photo" || it.mediaType == "gif" }
                     "smart-gifs" -> all.filter { it.mediaType == "gif" }

@@ -33,6 +33,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -322,10 +323,10 @@ fun GalleryScreen(
 
                     com.simplephotos.ui.components.JustifiedGrid(
                         items = photoItems,
-                        getAspectRatio = { p ->
-                            if (p.width > 0 && p.height > 0) p.width.toFloat() / p.height.toFloat()
-                            else 1f
-                        },
+                        // Crop-effective aspect so cropped tiles are laid out at the
+                        // shape they actually display (port of web getEffectiveAspectRatio).
+                        // The grid clamps to [0.3, 4] internally.
+                        getAspectRatio = { p -> effectiveAspectRatio(p) },
                         getKey = { it.localId },
                         targetRowHeight = targetRowHeight,
                         gap = 2.dp,
@@ -532,6 +533,29 @@ private fun AlbumPickerDialog(
     )
 }
 
+/**
+ * Visual (width/height) aspect ratio of a photo, accounting for a saved crop and
+ * rotation in cropMetadata. 90°/270° rotations swap the raw dims first, then the
+ * crop fractions scale them. Used to lay each tile out at the shape it actually
+ * displays. Port of web getEffectiveAspectRatio. Returns 1 when dims unknown.
+ */
+private fun effectiveAspectRatio(photo: PhotoEntity): Float {
+    if (photo.width <= 0 || photo.height <= 0) return 1f
+    var w = photo.width.toFloat()
+    var h = photo.height.toFloat()
+    val crop = photo.cropMetadata ?: return w / h
+    try {
+        val c = org.json.JSONObject(crop)
+        val cropW = c.optDouble("width", 1.0).toFloat().let { if (it <= 0f) 1f else it }
+        val cropH = c.optDouble("height", 1.0).toFloat().let { if (it <= 0f) 1f else it }
+        val rot = ((c.optInt("rotate", 0) % 360) + 360) % 360
+        if (rot % 180 != 0) { val t = w; w = h; h = t }
+        w *= cropW
+        h *= cropH
+    } catch (_: Exception) { /* malformed JSON — ignore, fall back to raw dims */ }
+    return if (h > 0f) w / h else 1f
+}
+
 // ── Media Tile ──────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -570,7 +594,7 @@ private fun MediaTile(
         }
 
         if (imageModel != null) {
-            // Parse cropMetadata for thumbnail transforms (rotation + brightness)
+            // Parse cropMetadata for thumbnail transforms (crop rect + rotation + brightness)
             val cropMeta = remember(photo.cropMetadata) {
                 photo.cropMetadata?.let {
                     try { org.json.JSONObject(it) } catch (_: Exception) { null }
@@ -578,16 +602,70 @@ private fun MediaTile(
             }
             val rot = ((cropMeta?.optInt("rotate", 0) ?: 0) % 360 + 360) % 360
             val brightness = (cropMeta?.optDouble("brightness", 0.0) ?: 0.0).toFloat()
+            val cw = (cropMeta?.optDouble("width", 1.0) ?: 1.0).toFloat().let { if (it <= 0f) 1f else it }
+            val ch = (cropMeta?.optDouble("height", 1.0) ?: 1.0).toFloat().let { if (it <= 0f) 1f else it }
+            val x0 = (cropMeta?.optDouble("x", 0.0) ?: 0.0).toFloat()
+            val y0 = (cropMeta?.optDouble("y", 0.0) ?: 0.0).toFloat()
+            val cropped = cw < 0.999f || ch < 0.999f
 
-            val thumbModifier = if (rot != 0) {
-                Modifier.fillMaxSize().graphicsLayer { rotationZ = rot.toFloat() }
-            } else {
-                Modifier.fillMaxSize()
-            }
             val brightnessFilter = if (brightness != 0f) {
                 val b = 1f + brightness / 100f
                 ColorFilter.colorMatrix(ColorMatrix().apply { setToScale(b, b, b, 1f) })
             } else null
+
+            // A metadata crop is rendered by drawing the *whole* image oversized so
+            // its crop sub-rect exactly fills the tile, then offsetting/rotating so
+            // that sub-rect lands at the tile origin. The root Box's clip discards
+            // the overflow. Port of web computeCropCoverTransform / getCropFillStyle —
+            // rot==0 is just the non-swapped case of the same formula. FillBounds is
+            // exact because the tile is laid out at the crop-effective aspect.
+            val thumbModifier: Modifier
+            val thumbScale: ContentScale
+            when {
+                cropped && rot == 0 -> {
+                    // Fill the tile with only the crop sub-rect. The image is laid
+                    // out at the tile size (FillBounds) and a draw-time graphicsLayer
+                    // scales it up about the top-left (1/cw, 1/ch) then translates so
+                    // the crop origin lands at (0,0). Same proven technique as the
+                    // viewer cropFit — no layout overflow (requiredSize+offset does
+                    // not overflow-and-clip reliably inside a fixed-size Box).
+                    thumbModifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            transformOrigin = TransformOrigin(0f, 0f)
+                            scaleX = 1f / cw
+                            scaleY = 1f / ch
+                            translationX = -(x0 / cw) * size.width
+                            translationY = -(y0 / ch) * size.height
+                        }
+                    thumbScale = ContentScale.FillBounds
+                }
+                cropped -> {
+                    // Rotated crop (90/180/270): scale the crop rect to fill the tile
+                    // about the top-left, then rotate about the tile centre.
+                    val swapped = rot == 90 || rot == 270
+                    thumbModifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            rotationZ = rot.toFloat()
+                            // After rotation the long axis maps to the other tile
+                            // dimension; scale so the crop rect covers the tile.
+                            transformOrigin = TransformOrigin(0.5f, 0.5f)
+                            scaleX = if (swapped) 1f / ch else 1f / cw
+                            scaleY = if (swapped) 1f / cw else 1f / ch
+                        }
+                    thumbScale = ContentScale.FillBounds
+                }
+                else -> {
+                    // Uncropped (incl. full-frame rotation): cover-fit the tile.
+                    thumbModifier = if (rot != 0) {
+                        Modifier.fillMaxSize().graphicsLayer { rotationZ = rot.toFloat() }
+                    } else {
+                        Modifier.fillMaxSize()
+                    }
+                    thumbScale = ContentScale.Crop
+                }
+            }
 
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
@@ -600,7 +678,7 @@ private fun MediaTile(
                     }
                     .build(),
                 contentDescription = photo.filename,
-                contentScale = ContentScale.Crop,
+                contentScale = thumbScale,
                 modifier = thumbModifier,
                 colorFilter = brightnessFilter
             )

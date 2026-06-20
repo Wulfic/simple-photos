@@ -64,7 +64,10 @@ internal fun VideoPlayerPage(
     photoWidth: Int = 0,
     photoHeight: Int = 0,
     playerError: String?,
-    onMediaSizeLoaded: ((Float, Float) -> Unit)? = null
+    onMediaSizeLoaded: ((Float, Float) -> Unit)? = null,
+    // Toggles the viewer's top bar (edit/download/trash) in addition to the
+    // in-player controls, so the chrome is reachable on video pages too.
+    onToggleControls: () -> Unit = {}
 ) {
     // When this page becomes active, notify the screen to load our URI
     // into the shared player.
@@ -326,7 +329,10 @@ internal fun VideoPlayerPage(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
-                    ) { showControls = !showControls }
+                    ) {
+                        showControls = !showControls
+                        onToggleControls()
+                    }
             )
 
             // Custom controls overlay — NOT rotated

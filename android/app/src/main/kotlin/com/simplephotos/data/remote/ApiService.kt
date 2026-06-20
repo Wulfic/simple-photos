@@ -78,6 +78,18 @@ interface ApiService {
     @Streaming
     suspend fun photoFile(@Path("id") photoId: String): ResponseBody
 
+    /**
+     * Serve the embedded motion-photo video as a ready-to-play MP4. The server
+     * resolves it by photo id + subtype=="motion": it serves a separately
+     * stored motion blob if present, otherwise extracts the MP4 trailer from
+     * the (server-side-decrypted) photo on the fly. Returns decrypted
+     * `video/mp4` — no client-side decryption required. Mirrors the web's
+     * `api.photos.motionVideoUrl`.
+     */
+    @GET("api/photos/{id}/motion-video")
+    @Streaming
+    suspend fun serveMotionVideo(@Path("id") photoId: String): ResponseBody
+
     @POST("api/photos/upload")
     suspend fun uploadPhoto(
         @Body body: RequestBody,

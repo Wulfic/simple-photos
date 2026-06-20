@@ -54,6 +54,8 @@ android/keystore/
 android/signing.properties
 android/google-services.json   # if ever added
 
+.device-test/
+
 # ── IDE & Editor ─────────────────────────────────────────────────────────────
 .idea/
 .vscode/settings.json

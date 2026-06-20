@@ -319,6 +319,22 @@ class PhotoRepository @Inject constructor(
     }
 
     /**
+     * Stream the embedded motion-photo video for [photoId] to [outputFile].
+     *
+     * Hits `GET /api/photos/{id}/motion-video`, which returns a ready-to-play
+     * MP4 (the server extracts/decrypts the trailer). No client-side decryption
+     * — unlike photo/video blobs, this is already plaintext `video/mp4`.
+     */
+    suspend fun downloadMotionVideoToFile(photoId: String, outputFile: File) {
+        val response = api.serveMotionVideo(photoId)
+        response.byteStream().use { input ->
+            outputFile.outputStream().buffered().use { output ->
+                input.copyTo(output, bufferSize = 8192)
+            }
+        }
+    }
+
+    /**
      * Download and decrypt a blob from the server.
      */
     suspend fun downloadAndDecryptBlob(blobId: String): ByteArray {
@@ -684,6 +700,12 @@ class PhotoRepository @Inject constructor(
                     thumbnailBlobId = thumbBlobId,
                     filename = photo.filename,
                     takenAt = takenAtMs,
+                    // Library import order — mirror the server's created_at (the
+                    // web stores this as `addedAt`). Without this, createdAt
+                    // defaulted to the LOCAL insert time, so "Recently Added"
+                    // reflected device-sync order instead of server-add order
+                    // and never matched the web/server recents list.
+                    createdAt = parseIsoToEpochMs(photo.createdAt),
                     mimeType = photo.mimeType,
                     mediaType = photo.mediaType,
                     width = w,

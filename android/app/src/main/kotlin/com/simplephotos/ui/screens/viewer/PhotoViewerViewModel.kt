@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.repository.AlbumRepository
@@ -54,9 +55,22 @@ class PhotoViewerViewModel @Inject constructor(
     /** Album context — non-null when viewer was opened from an album. */
     val albumId: String? = savedStateHandle["albumId"]
 
-    /** Full photo list for paging (matches gallery order). */
+    /**
+     * Burst-COLLAPSED photo list used for horizontal paging — one entry per
+     * burst group (the first frame / cover), exactly like the gallery grid.
+     * This is what the pager swipes through, so a 46-shot burst occupies a
+     * single page instead of hijacking 46 swipes. Individual frames are
+     * browsed via the in-viewer burst filmstrip ([burstFramesFor]).
+     */
     var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
         private set
+
+    /**
+     * Full, UN-collapsed photo list (every burst frame present). Source of
+     * truth; [allPhotos] is derived from this. Used to resolve burst frames
+     * for the filmstrip without an extra network round-trip.
+     */
+    private var allPhotosRaw: List<PhotoEntity> = emptyList()
 
     /** Index of the photo that was tapped in the gallery. */
     var initialPage by mutableStateOf(0)
@@ -109,9 +123,19 @@ class PhotoViewerViewModel @Inject constructor(
                         photoRepository.getAllPhotos().first()
                     }
                 }
-                allPhotos = photos
-                initialPage = photos.indexOfFirst { it.localId == initialPhotoId }
-                    .coerceAtLeast(0)
+                setRawPhotos(photos)
+                // Locate the tapped photo in the COLLAPSED list. If the user
+                // somehow deep-linked to a non-cover burst frame, fall back to
+                // that frame's burst cover so the page still resolves.
+                initialPage = run {
+                    val direct = allPhotos.indexOfFirst { it.localId == initialPhotoId }
+                    if (direct >= 0) return@run direct
+                    val frame = photos.firstOrNull { it.localId == initialPhotoId }
+                    val bid = frame?.burstId
+                    if (!bid.isNullOrEmpty()) {
+                        allPhotos.indexOfFirst { it.burstId == bid }.coerceAtLeast(0)
+                    } else 0
+                }
             } catch (e: Exception) {
                 error = e.message
             } finally {
@@ -119,6 +143,26 @@ class PhotoViewerViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * Set the raw (un-collapsed) photo list and recompute the burst-collapsed
+     * [allPhotos] from it. Collapsing keeps only the FIRST frame of each
+     * burstId — identical to the gallery grid's collapse — so the pager swipes
+     * burst-by-burst, not frame-by-frame.
+     */
+    private fun setRawPhotos(photos: List<PhotoEntity>) {
+        allPhotosRaw = photos
+        allPhotos = photos.collapseBursts()
+    }
+
+    /**
+     * All frames belonging to [burstId], ordered oldest-first (taken_at ASC,
+     * matching the server's `GET /api/photos/burst/{id}` ordering and the web
+     * BurstStrip). Resolved entirely from the locally-loaded list — no network.
+     */
+    fun burstFramesFor(burstId: String): List<PhotoEntity> =
+        allPhotosRaw.filter { it.burstId == burstId }
+            .sortedBy { it.takenAt }
 
     /**
      * Download and decrypt an encrypted blob, returning the raw media bytes.
@@ -153,6 +197,16 @@ class PhotoViewerViewModel @Inject constructor(
         photoRepository.downloadAndDecryptBlobToFile(blobId, outputFile)
     }
 
+    /**
+     * Download the embedded motion-photo video for [photoId] to [outputFile].
+     * The server returns a ready-to-play MP4 (extracted/decrypted server-side),
+     * so this is a plain stream-to-file — no decryption. See
+     * [PhotoRepository.downloadMotionVideoToFile].
+     */
+    suspend fun downloadMotionVideoToFile(photoId: String, outputFile: java.io.File) = withContext(Dispatchers.IO) {
+        photoRepository.downloadMotionVideoToFile(photoId, outputFile)
+    }
+
     fun deletePhoto(photo: PhotoEntity, onDeleted: () -> Unit) {
         viewModelScope.launch {
             try {
@@ -176,7 +230,7 @@ class PhotoViewerViewModel @Inject constructor(
                     } catch (_: Exception) {}
                 }
                 // Remove from in-memory list and navigate
-                allPhotos = allPhotos.filter { it.localId != photo.localId }
+                setRawPhotos(allPhotosRaw.filter { it.localId != photo.localId })
                 onRemoved()
             } catch (e: Exception) {
                 error = e.message
@@ -250,11 +304,11 @@ class PhotoViewerViewModel @Inject constructor(
                 isFavorite = response.isFavorite
                 // Update the local allPhotos list so loadFavoriteForPhoto()
                 // returns the correct value when the user swipes away and back.
-                val idx = allPhotos.indexOfFirst { it.serverPhotoId == photoId }
+                val idx = allPhotosRaw.indexOfFirst { it.serverPhotoId == photoId }
                 if (idx >= 0) {
-                    allPhotos = allPhotos.toMutableList().also {
+                    setRawPhotos(allPhotosRaw.toMutableList().also {
                         it[idx] = it[idx].copy(isFavorite = response.isFavorite)
-                    }
+                    })
                 }
             } catch (_: Exception) {}
         }
@@ -273,11 +327,11 @@ class PhotoViewerViewModel @Inject constructor(
                 }
                 Log.d(TAG, "[EDIT:saveEdit] Local DB updated for ${photo.localId}")
                 // Update in-memory list
-                val idx = allPhotos.indexOfFirst { it.localId == photo.localId }
+                val idx = allPhotosRaw.indexOfFirst { it.localId == photo.localId }
                 if (idx >= 0) {
-                    allPhotos = allPhotos.toMutableList().also {
+                    setRawPhotos(allPhotosRaw.toMutableList().also {
                         it[idx] = it[idx].copy(cropMetadata = metadata)
-                    }
+                    })
                 }
                 // Sync to server so web and other clients see the edit
                 photo.serverPhotoId?.let { serverId ->

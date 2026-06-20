@@ -18,7 +18,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -125,7 +124,26 @@ fun PhotoViewerScreen(
         pageCount = { viewModel.allPhotos.size }
     )
 
-    val currentPhoto = viewModel.allPhotos.getOrNull(pagerState.currentPage)
+    // ── Burst frame selection ────────────────────────────────────────────
+    // The pager swipes between burst COVERS (one page per burst). To let the
+    // user step through the frames of a burst without each frame becoming its
+    // own page, we track which frame is selected per cover. The selected frame
+    // is rendered in place of the cover on that page.
+    var burstSelections by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+
+    // Resolve the photo actually displayed for a burst cover: the chosen frame
+    // when one is selected, otherwise the cover itself. Non-burst photos pass
+    // through unchanged.
+    fun resolveDisplayPhoto(cover: PhotoEntity?): PhotoEntity? {
+        if (cover == null) return null
+        val bid = cover.burstId
+        if (bid.isNullOrEmpty()) return cover
+        val selId = burstSelections[cover.localId] ?: return cover
+        return viewModel.burstFramesFor(bid).firstOrNull { it.localId == selId } ?: cover
+    }
+
+    val currentCover = viewModel.allPhotos.getOrNull(pagerState.currentPage)
+    val currentPhoto = resolveDisplayPhoto(currentCover)
     val context = LocalContext.current
 
     // ── Single shared ExoPlayer ──────────────────────────────────────
@@ -253,11 +271,12 @@ fun PhotoViewerScreen(
     var mediaIntrinsicWidth by remember { mutableStateOf(-1f) }
     var mediaIntrinsicHeight by remember { mutableStateOf(-1f) }
 
-    // Load saved trim values when page changes (for non-edit mode playback)
-    LaunchedEffect(pagerState.currentPage) {
+    // Load saved trim values when the displayed photo changes (page swipe OR
+    // burst-frame switch — keyed on the resolved photo id, not the page index).
+    LaunchedEffect(currentPhoto?.localId) {
         mediaIntrinsicWidth = -1f
         mediaIntrinsicHeight = -1f
-        val photo = viewModel.allPhotos.getOrNull(pagerState.currentPage)
+        val photo = currentPhoto
 
         // Sync favorite state from the local entity
         viewModel.loadFavoriteForPhoto(photo)
@@ -417,10 +436,19 @@ fun PhotoViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(editMode) {
+            .pointerInput(editMode, panoLiveActive) {
                 // Detect vertical swipes: up → info panel, down → close viewer
-                // Only at the top level so it doesn't conflict with zoom panning
-                if (editMode) return@pointerInput
+                // Only at the top level so it doesn't conflict with zoom panning.
+                //
+                // Disabled in edit mode AND while a panorama / 360° sphere is in
+                // live mode. The 360 sphere's GLSurfaceView (and the flat pano's
+                // own pan handler) need the vertical drag to look up/down; because
+                // this gesture reads on the Initial (tunneling) pass and consumes
+                // vertical-dominant drags, it would otherwise steal the drag and
+                // dismiss the viewer instead of panning. Mirrors the
+                // HorizontalPager userScrollEnabled = !editMode && !panoLiveActive
+                // guard just below.
+                if (editMode || panoLiveActive) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalY = 0f
@@ -488,7 +516,9 @@ fun PhotoViewerScreen(
             userScrollEnabled = !editMode && !panoLiveActive,
             key = { viewModel.allPhotos.getOrNull(it)?.localId ?: it }
         ) { page ->
-            val photo = viewModel.allPhotos.getOrNull(page)
+            // Page is keyed by burst cover; render the selected burst frame
+            // (or the cover) in its place.
+            val photo = resolveDisplayPhoto(viewModel.allPhotos.getOrNull(page))
             if (photo == null) {
                 Box(
                     modifier = Modifier.fillMaxSize().background(Color.Black),
@@ -499,14 +529,10 @@ fun PhotoViewerScreen(
                 return@HorizontalPager
             }
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                    ) { showOverlay = !showOverlay }
+                modifier = Modifier.fillMaxSize()
             ) {
                 PhotoPageContent(
+                    onToggleControls = { showOverlay = !showOverlay },
                     photo = photo,
                     serverBaseUrl = viewModel.serverBaseUrl,
                     viewModel = viewModel,
@@ -944,6 +970,24 @@ fun PhotoViewerScreen(
             onDismiss = { showTagPanel = false },
             modifier = Modifier.align(Alignment.BottomCenter)
         )
+
+        // ── Burst filmstrip (scroll through the frames of a burst) ────────
+        currentCover?.let { cover ->
+            val bid = cover.burstId
+            if (!bid.isNullOrEmpty() && !editMode) {
+                val frames = remember(bid, viewModel.allPhotos) { viewModel.burstFramesFor(bid) }
+                BurstStripOverlay(
+                    frames = frames,
+                    currentPhotoId = currentPhoto?.localId ?: cover.localId,
+                    visible = showOverlay,
+                    onSelectFrame = { fid ->
+                        burstSelections = burstSelections.toMutableMap().apply {
+                            put(cover.localId, fid)
+                        }
+                    }
+                )
+            }
+        }
 
         // ── Edit mode panel (bottom) ──────────────────────────────────
         ViewerEditPanel(

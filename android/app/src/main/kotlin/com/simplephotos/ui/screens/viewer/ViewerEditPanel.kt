@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import com.simplephotos.R
 import com.simplephotos.data.local.entities.PhotoEntity
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ViewerEditPanel(
     visible: Boolean,
@@ -360,10 +361,13 @@ fun ViewerEditPanel(
 
                 Spacer(Modifier.height(8.dp))
 
-                // Action buttons — matches web: Save, Save Copy, Reset, Cancel
-                Row(
+                // Action buttons — matches web: Save, Save Copy, Reset, Cancel.
+                // FlowRow so the 4th button (Cancel, when Reset is also present)
+                // wraps to a second line instead of being pushed off-screen.
+                FlowRow(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.Center
+                    horizontalArrangement = Arrangement.Center,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
                         onClick = onSave,

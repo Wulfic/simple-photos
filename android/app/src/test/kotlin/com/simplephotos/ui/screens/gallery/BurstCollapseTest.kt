@@ -1,5 +1,6 @@
 package com.simplephotos.ui.screens.gallery
 
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import org.junit.Assert.assertEquals
@@ -12,9 +13,11 @@ import org.junit.Test
  * groups render as a single tile (matching the web behaviour) and that the
  * per-group frame counts feed the "BURST N" badge correctly.
  *
- * The collapse logic lives inline in [GalleryScreen] — this test reproduces
- * the exact sequence so a regression that swaps `collapsedPhotos` back to
- * `visiblePhotos` (the bug fixed in 1.1.5) is caught immediately.
+ * The collapse logic now lives in the shared [collapseBursts] extension
+ * (com.simplephotos.data) used by the gallery, viewer, and smart-album view
+ * models — this test pins that single source of truth so a regression that
+ * swaps `collapsedPhotos` back to `visiblePhotos` (the bug fixed in 1.1.5) is
+ * caught immediately.
  */
 class BurstCollapseTest {
 
@@ -36,13 +39,9 @@ class BurstCollapseTest {
         burstId = burstId,
     )
 
-    private fun collapseBursts(photos: List<PhotoEntity>): List<PhotoEntity> {
-        val seen = HashSet<String>()
-        return photos.filter { p ->
-            val bid = p.burstId
-            if (bid.isNullOrEmpty()) true else seen.add(bid)
-        }
-    }
+    // Exercises the shared production extension, not a local copy.
+    private fun collapseBursts(photos: List<PhotoEntity>): List<PhotoEntity> =
+        photos.collapseBursts()
 
     private fun burstCounts(photos: List<PhotoEntity>): Map<String, Int> =
         photos.asSequence()
