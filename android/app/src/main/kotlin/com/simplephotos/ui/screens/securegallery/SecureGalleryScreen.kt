@@ -117,7 +117,8 @@ fun SecureGalleryScreen(
         onBack = onBack,
         onGalleryClick = { viewModel.selectGallery(it) },
         onCreateGallery = { viewModel.createGallery(it) },
-        onDeleteGallery = { viewModel.deleteGallery(it) }
+        onDeleteGallery = { viewModel.deleteGallery(it) },
+        viewModel = viewModel
     )
 }
 

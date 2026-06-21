@@ -37,6 +37,7 @@ export type { GifAutoplayState, GifAutoplayResult } from "./hooks/useGifAutoplay
 export { default as ThumbnailTile } from "./components/ThumbnailTile";
 export { default as PickerThumbnail } from "./components/PickerThumbnail";
 export { default as SecureGalleryItem } from "./components/SecureGalleryItem";
+export { default as SecureAlbumCover } from "./components/SecureAlbumCover";
 
 // Thumbnail generation & GIF detection
 export {

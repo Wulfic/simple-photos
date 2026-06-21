@@ -11,11 +11,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import com.simplephotos.ui.components.SpButton
+import com.simplephotos.ui.components.SpButtonVariant
+import com.simplephotos.ui.theme.LocalSpColors
+import com.simplephotos.ui.theme.SpDarkColors
+import com.simplephotos.ui.theme.Violet
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -64,6 +70,9 @@ fun ViewerEditPanel(
         val showRotate = isPhoto || isVideo
         val showTrim = isVideo || isAudio
 
+        // The viewer is always dark, so neutral SpButton variants must read the
+        // dark token set regardless of the app's light/dark mode.
+        CompositionLocalProvider(LocalSpColors provides SpDarkColors) {
         Surface(
             color = Color(0xE6111827),
             modifier = Modifier.fillMaxWidth()
@@ -72,11 +81,11 @@ fun ViewerEditPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
             ) {
                 // Tab selector — only show tabs available for this media type
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -154,7 +163,7 @@ fun ViewerEditPanel(
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
 
                 when (editTab) {
                     "brightness" -> {
@@ -165,8 +174,8 @@ fun ViewerEditPanel(
                             valueRange = -100f..100f,
                             modifier = Modifier.fillMaxWidth(),
                             colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFF60A5FA),
-                                activeTrackColor = Color(0xFF3B82F6)
+                                thumbColor = Violet.v400,
+                                activeTrackColor = Violet.v500
                             )
                         )
                     }
@@ -260,7 +269,7 @@ fun ViewerEditPanel(
                                         .offset(x = with(density) { (startFrac * trackW).toDp() })
                                         .width(with(density) { ((endFrac - startFrac) * trackW).toDp() })
                                         .clip(RoundedCornerShape(50))
-                                        .background(Color(0xFF3B82F6).copy(alpha = 0.6f))
+                                        .background(Violet.v500.copy(alpha = 0.6f))
                                 )
 
                                 // Start thumb
@@ -275,7 +284,7 @@ fun ViewerEditPanel(
                                         .then(
                                             Modifier.drawBehind {
                                                 drawCircle(
-                                                    color = Color(0xFF3B82F6),
+                                                    color = Violet.v500,
                                                     radius = size.minDimension / 2f,
                                                     style = Stroke(width = 2.dp.toPx())
                                                 )
@@ -305,7 +314,7 @@ fun ViewerEditPanel(
                                         .then(
                                             Modifier.drawBehind {
                                                 drawCircle(
-                                                    color = Color(0xFF3B82F6),
+                                                    color = Violet.v500,
                                                     radius = size.minDimension / 2f,
                                                     style = Stroke(width = 2.dp.toPx())
                                                 )
@@ -359,53 +368,26 @@ fun ViewerEditPanel(
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
 
                 // Action buttons — matches web: Save, Save Copy, Reset, Cancel.
                 // FlowRow so the 4th button (Cancel, when Reset is also present)
                 // wraps to a second line instead of being pushed off-screen.
                 FlowRow(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Button(
-                        onClick = onSave,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text("Save", color = Color.White, fontSize = 14.sp)
-                    }
-                    Button(
-                        onClick = onSaveCopy,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF16A34A)),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text("Save Copy", color = Color.White, fontSize = 14.sp)
-                    }
+                    SpButton("Save", onClick = onSave, variant = SpButtonVariant.Primary, fontSize = 14)
+                    SpButton("Save Copy", onClick = onSaveCopy, variant = SpButtonVariant.Success, fontSize = 14)
                     if (currentPhoto?.cropMetadata != null) {
-                        Button(
-                            onClick = onReset,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4B5563)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        ) {
-                            Text("Reset", color = Color.White, fontSize = 14.sp)
-                        }
+                        SpButton("Reset", onClick = onReset, variant = SpButtonVariant.Secondary, fontSize = 14)
                     }
-                    Button(
-                        onClick = onCancel,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF374151)),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text("Cancel", color = Color.White, fontSize = 14.sp)
-                    }
+                    SpButton("Cancel", onClick = onCancel, variant = SpButtonVariant.Secondary, fontSize = 14)
                 }
             }
         }
+        } // CompositionLocalProvider (dark tokens)
     }
 }
 

@@ -780,14 +780,39 @@ pub async fn list_gallery_items(
         ));
     }
 
-    let items: Vec<(String, String, String, Option<String>, Option<i64>, Option<i64>, Option<String>)> = sqlx::query_as(
+    // The subtype/burst/duration/motion fields live on the ORIGINAL photo
+    // (`op`, joined via original_blob_id) — `add_gallery_item` does not copy
+    // them onto the server-side clone row (`p`), so COALESCE falls through to
+    // `op`. These let the Android secure viewer render videos, panoramas/360,
+    // motion (LIVE) photos and collapse bursts the same way the main gallery
+    // does.
+    #[derive(FromRow)]
+    struct GalleryItemRow {
+        id: String,
+        blob_id: String,
+        added_at: String,
+        encrypted_thumb_blob_id: Option<String>,
+        width: Option<i64>,
+        height: Option<i64>,
+        media_type: Option<String>,
+        photo_subtype: Option<String>,
+        burst_id: Option<String>,
+        duration_secs: Option<f64>,
+        motion_video_blob_id: Option<String>,
+    }
+
+    let items = sqlx::query_as::<_, GalleryItemRow>(
         "SELECT gi.id, \
                 COALESCE(gi.encrypted_blob_id, p.encrypted_blob_id, gi.blob_id) as blob_id, \
                 gi.added_at, \
                 COALESCE(gi.encrypted_thumb_blob_id, p.encrypted_thumb_blob_id, op.encrypted_thumb_blob_id) as encrypted_thumb_blob_id, \
                 COALESCE(p.width, op.width) as width, \
                 COALESCE(p.height, op.height) as height, \
-                COALESCE(p.media_type, op.media_type) as media_type \
+                COALESCE(p.media_type, op.media_type) as media_type, \
+                COALESCE(p.photo_subtype, op.photo_subtype) as photo_subtype, \
+                COALESCE(p.burst_id, op.burst_id) as burst_id, \
+                COALESCE(p.duration_secs, op.duration_secs) as duration_secs, \
+                COALESCE(p.motion_video_blob_id, op.motion_video_blob_id) as motion_video_blob_id \
          FROM encrypted_gallery_items gi \
          LEFT JOIN photos p ON p.id = gi.blob_id AND p.encrypted_blob_id IS NOT NULL \
          LEFT JOIN photos op ON op.id = gi.original_blob_id \
@@ -800,19 +825,21 @@ pub async fn list_gallery_items(
 
     let items_json: Vec<serde_json::Value> = items
         .iter()
-        .map(
-            |(id, blob_id, added_at, encrypted_thumb_blob_id, width, height, media_type)| {
-                serde_json::json!({
-                    "id": id,
-                    "blob_id": blob_id,
-                    "added_at": added_at,
-                    "encrypted_thumb_blob_id": encrypted_thumb_blob_id,
-                    "width": width,
-                    "height": height,
-                    "media_type": media_type,
-                })
-            },
-        )
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "blob_id": r.blob_id,
+                "added_at": r.added_at,
+                "encrypted_thumb_blob_id": r.encrypted_thumb_blob_id,
+                "width": r.width,
+                "height": r.height,
+                "media_type": r.media_type,
+                "photo_subtype": r.photo_subtype,
+                "burst_id": r.burst_id,
+                "duration_secs": r.duration_secs,
+                "motion_video_blob_id": r.motion_video_blob_id,
+            })
+        })
         .collect();
 
     Ok(Json(serde_json::json!({ "items": items_json })))

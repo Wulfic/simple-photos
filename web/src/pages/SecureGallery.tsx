@@ -10,18 +10,16 @@ import { useSearchParams } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
 import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
-import { encrypt, sha256Hex } from "../crypto/crypto";
-import { db, type CachedPhoto } from "../db";
-import { useLiveQuery } from "dexie-react-hooks";
+import { db } from "../db";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
 import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getErrorMessage } from "../utils/formatters";
-import { diagnosticLogger } from "../utils/diagnosticLogger";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
-import { setGalleryToken as persistGalleryToken } from "../utils/galleryToken";
-import { SecureGalleryItem, PickerThumbnail, type ThumbnailSource } from "../gallery";
+import { setGalleryToken as persistGalleryToken, getGalleryToken } from "../utils/galleryToken";
+import { useSecureAdd } from "../store/secureAdd";
+import { SecureGalleryItem, SecureAlbumCover } from "../gallery";
 import { GallerySkeleton, AlbumGridSkeleton } from "../components/skeletons";
 
 interface Gallery {
@@ -39,6 +37,10 @@ interface GalleryItem {
   width?: number | null;
   height?: number | null;
   media_type?: string | null;
+  photo_subtype?: string | null;
+  burst_id?: string | null;
+  duration_secs?: number | null;
+  motion_video_blob_id?: string | null;
 }
 
 /**
@@ -51,10 +53,16 @@ export default function SecureGallery() {
   const navigate = useAppNavigate();
   const [searchParams] = useSearchParams();
   const isBackupServer = useIsBackupServer();
+  const startSecureAdd = useSecureAdd((s) => s.start);
 
-  // Auth gate state
-  const [authenticated, setAuthenticated] = useState(false);
-  const [galleryToken, setGalleryToken] = useState("");
+  // Auth gate state. Restore from the session unlock token so returning from
+  // the photo viewer (which remounts this page) lands back IN the secure album
+  // instead of the password gate — and, combined with the ?album auto-select
+  // effect below, restores the exact album you were viewing (#6: closing a
+  // secure photo dumped you out of the secure gallery).
+  const persistedToken = getGalleryToken();
+  const [authenticated, setAuthenticated] = useState(!!persistedToken);
+  const [galleryToken, setGalleryToken] = useState(persistedToken ?? "");
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
@@ -77,19 +85,9 @@ export default function SecureGallery() {
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
 
-  // Add photos state
-  const [showAddPhotos, setShowAddPhotos] = useState(false);
-  const [selectedPhotos, setSelectedPhotos] = useState<Set<string>>(new Set());
-  const [addingPhotos, setAddingPhotos] = useState(false);
-
   // Error / success
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-
-  // Cached photos from IndexedDB for photo picker
-  const cachedPhotos = useLiveQuery(() =>
-    db.photos.orderBy("takenAt").reverse().toArray()
-  );
 
   // A ref so the URL-sync effect can read the current gallery without being
   // in its dependency array (avoids infinite-loop risk).
@@ -102,10 +100,20 @@ export default function SecureGallery() {
     if (!searchParams.get("album") && selectedGalleryRef.current !== null) {
       setSelectedGallery(null);
       setItems([]);
-      setShowAddPhotos(false);
-      setSelectedPhotos(new Set());
     }
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-select the album named in ?album=… once galleries are loaded. This
+  // restores the album detail view when returning from the photo viewer (the
+  // page remounted with selectedGallery=null but the URL still points at the
+  // album).
+  useEffect(() => {
+    const albumId = searchParams.get("album");
+    if (authenticated && albumId && !selectedGallery && galleries.length > 0) {
+      const g = galleries.find((x) => x.id === albumId);
+      if (g) setSelectedGallery(g);
+    }
+  }, [authenticated, searchParams, galleries, selectedGallery]);
 
   // Load galleries after auth
   const loadGalleries = useCallback(async () => {
@@ -224,140 +232,19 @@ export default function SecureGallery() {
     }
   }
 
-  // Toggle photo selection for adding to album
-  function togglePhotoSelection(blobId: string) {
-    setSelectedPhotos((prev) => {
-      const next = new Set(prev);
-      if (next.has(blobId)) next.delete(blobId);
-      else next.add(blobId);
-      return next;
-    });
+  // Collapse burst stacks → one tile / viewer page per burst (the album still
+  // physically holds every frame). Counts come from the full list for the badge.
+  const secureBurstCounts = new Map<string, number>();
+  for (const it of items) {
+    if (it.burst_id) secureBurstCounts.set(it.burst_id, (secureBurstCounts.get(it.burst_id) ?? 0) + 1);
   }
-
-  // Add selected photos to the current album
-  async function handleAddSelectedPhotos() {
-    if (!selectedGallery || selectedPhotos.size === 0) return;
-    setAddingPhotos(true);
-    setError("");
-    try {
-      const addedOriginalIds: string[] = [];
-      for (const blobId of selectedPhotos) {
-        diagnosticLogger.debug("SECURE_ADD", `Adding photo ${blobId} to secure gallery ${selectedGallery.id}`);
-        const response = await api.secureGalleries.addItem(selectedGallery.id, blobId);
-        diagnosticLogger.debug("SECURE_ADD", `Server response: item_id=${response.item_id}, new_blob_id=${response.new_blob_id}`);
-        // The server creates a physical copy of the blob under a new ID.
-        // Duplicate the IDB cache entry to the cloned blob ID so that
-        // ItemTile (which uses the server's blob_id) can display the thumbnail.
-        if (response.new_blob_id) {
-          const originalCached = await db.photos.get(blobId);
-          if (originalCached) {
-            // Clone the IDB entry for the new blob ID.
-            // Keep serverSide + serverPhotoId pointing to the cloned photos row
-            // (the server creates a photos row for server-side clones).
-            // Set the new_blob_id as the serverPhotoId so the viewer can
-            // use /api/photos/{id}/file for server-side items.
-            const cloneEntry = {
-              ...originalCached,
-              blobId: response.new_blob_id,
-              // For server-side photos, the server created a photos row with id = new_blob_id
-              serverPhotoId: originalCached.serverSide ? response.new_blob_id : originalCached.serverPhotoId,
-              // Clear storageBlobId — the clone is its own blob
-              storageBlobId: undefined,
-            };
-            diagnosticLogger.debug("SECURE_ADD", `Creating IDB clone entry`, { blobId: cloneEntry.blobId, serverSide: cloneEntry.serverSide, serverPhotoId: cloneEntry.serverPhotoId });
-            await db.photos.put(cloneEntry);
-          } else {
-            diagnosticLogger.warn("SECURE_ADD", `Original cached photo not found in IDB for ${blobId}`);
-          }
-          addedOriginalIds.push(blobId);
-        }
-      }
-
-      // ── Remove original photos from IDB ──────────────────────────────────
-      // Delete the original IDB entries so they disappear from the main gallery
-      // immediately (the server's secureBlobIds endpoint also hides them, but
-      // that depends on polling and may have a delay).
-      for (const origId of addedOriginalIds) {
-        diagnosticLogger.debug("SECURE_ADD", `Deleting original IDB entry: ${origId}`);
-        await db.photos.delete(origId);
-      }
-
-      // ── Remove photos from regular albums ────────────────────────────────
-      // When a photo is moved to a secure album it should no longer appear
-      // in any regular (non-secure) album.
-      await removePhotosFromRegularAlbums(selectedPhotos);
-
-      setSuccess(`${selectedPhotos.size} photo${selectedPhotos.size !== 1 ? "s" : ""} added to album.`);
-      setSelectedPhotos(new Set());
-      setShowAddPhotos(false);
-      await loadItems(selectedGallery.id);
-      await loadGalleries();
-    } catch (err: unknown) {
-      setError(getErrorMessage(err));
-    } finally {
-      setAddingPhotos(false);
-    }
-  }
-
-  /**
-   * Remove a set of blob IDs from every regular album and update the
-   * corresponding album manifests on the server + local IndexedDB.
-   * Also clears the albumIds on the photo records themselves.
-   */
-  async function removePhotosFromRegularAlbums(blobIds: Set<string>) {
-    const allAlbums = await db.albums.toArray();
-
-    for (const album of allAlbums) {
-      const before = album.photoBlobIds.length;
-      const updated = album.photoBlobIds.filter((id) => !blobIds.has(id));
-      if (updated.length === before) continue; // nothing to change
-
-      // Determine cover: clear it if the cover photo was removed
-      const cover = album.coverPhotoBlobId && blobIds.has(album.coverPhotoBlobId)
-        ? updated[0] || undefined
-        : album.coverPhotoBlobId;
-
-      // Delete old manifest blob from server
-      if (album.manifestBlobId) {
-        try { await api.blobs.delete(album.manifestBlobId); } catch { /* ok */ }
-      }
-
-      // Upload a new manifest with the blob IDs removed
-      const payload = JSON.stringify({
-        v: 1,
-        album_id: album.albumId,
-        name: album.name,
-        created_at: new Date(album.createdAt).toISOString(),
-        cover_photo_blob_id: cover || null,
-        photo_blob_ids: updated,
-      });
-      const encrypted = await encrypt(new TextEncoder().encode(payload));
-      const hash = await sha256Hex(new Uint8Array(encrypted));
-      const res = await api.blobs.upload(encrypted, "album_manifest", hash);
-
-      // Update local cache
-      await db.albums.put({
-        ...album,
-        photoBlobIds: updated,
-        coverPhotoBlobId: cover,
-        manifestBlobId: res.blob_id,
-      });
-    }
-
-    // Clear albumIds on each photo so the gallery / album views stay consistent
-    for (const blobId of blobIds) {
-      const photo = await db.photos.get(blobId);
-      if (photo && photo.albumIds.length > 0) {
-        await db.photos.update(blobId, { albumIds: [] });
-      }
-    }
-  }
-
-  // Get blob IDs already in this album (to filter from picker).
-  const albumBlobIds = new Set(items.map((i) => i.blob_id));
-  const availablePhotos = (cachedPhotos || []).filter(
-    (p) => !albumBlobIds.has(p.blobId)
-  );
+  const seenBursts = new Set<string>();
+  const displayItems = items.filter((it) => {
+    if (!it.burst_id) return true;
+    if (seenBursts.has(it.burst_id)) return false;
+    seenBursts.add(it.burst_id);
+    return true;
+  });
 
   // ── Password Gate ───────────────────────────────────────────────────────────
 
@@ -430,27 +317,6 @@ export default function SecureGallery() {
       <div className="min-h-screen bg-canvas">
         <AppHeader />
         <main className="p-4">
-          {/* Add photos action bar */}
-          {showAddPhotos && (
-            <div className="flex justify-end gap-2 mb-4">
-              <button
-                onClick={handleAddSelectedPhotos}
-                disabled={selectedPhotos.size === 0 || addingPhotos}
-                className="btn btn-primary btn-md inline-flex items-center"
-              >
-                {addingPhotos ? "Adding…" : `Add (${selectedPhotos.size})`}
-              </button>
-              <button
-                onClick={() => {
-                  setShowAddPhotos(false);
-                  setSelectedPhotos(new Set());
-                }}
-                className="btn btn-secondary btn-md inline-flex items-center"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
           {/* Back + title + actions */}
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
@@ -458,8 +324,6 @@ export default function SecureGallery() {
                 onClick={() => {
                   setSelectedGallery(null);
                   setItems([]);
-                  setShowAddPhotos(false);
-                  setSelectedPhotos(new Set());
                   // Replace the current history entry so the browser Back
                   // button returns to the album list, not an orphaned URL.
                   navigate("/secure-gallery", { replace: true });
@@ -472,14 +336,17 @@ export default function SecureGallery() {
               <h2 className="text-xl font-semibold dark:text-white flex items-center gap-2">
                 <span>🔒</span> {selectedGallery.name}
               </h2>
-              <span className="text-fg-muted text-sm">{items.length} items</span>
+              <span className="text-fg-muted text-sm">{displayItems.length} items</span>
             </div>
-            {!showAddPhotos && !isBackupServer && (
+            {!isBackupServer && (
               <div className="flex gap-2">
                 <button
                   onClick={() => {
-                    setShowAddPhotos(true);
-                    setSelectedPhotos(new Set());
+                    // Browse your regular/smart albums to pick photos, instead
+                    // of scrolling one giant flat master list. The secure-add
+                    // session lets every album grid offer an "Add to 🔒" action.
+                    startSecureAdd(selectedGallery.id, selectedGallery.name);
+                    navigate("/albums");
                   }}
                   className="btn btn-primary btn-md inline-flex items-center"
                 >
@@ -503,88 +370,17 @@ export default function SecureGallery() {
             </p>
           )}
 
-          {/* Add photos picker */}
-          {showAddPhotos && (
-            <div className="mb-6 p-4 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
-              <p className="text-sm font-medium text-accent-800 dark:text-accent-300 mb-3">
-                Select photos from your gallery to add ({selectedPhotos.size} selected)
-              </p>
-              {availablePhotos.length === 0 ? (
-                <p className="text-fg-muted text-sm">
-                  {(cachedPhotos?.length ?? 0) === 0
-                    ? "No photos in your gallery yet. Upload some photos first."
-                    : "All photos are already in this album."}
-                </p>
-              ) : (
-                // Use a JustifiedGrid so the picker matches the rest of the
-                // gallery's layout (variable aspect ratios, no square crop).
-                <div className="max-h-[60vh] overflow-y-auto pr-1">
-                  <JustifiedGrid
-                    items={availablePhotos}
-                    getAspectRatio={(p) =>
-                      p.width && p.height ? p.width / p.height : 1
-                    }
-                    getKey={(p) => p.blobId}
-                    renderItem={(photo) => {
-                      const isSelected = selectedPhotos.has(photo.blobId);
-                      return (
-                        <div
-                          className={`relative w-full h-full rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
-                            isSelected
-                              ? "border-accent-600 ring-2 ring-accent-400"
-                              : "border-transparent hover:border-edge-strong"
-                          }`}
-                          onClick={() => togglePhotoSelection(photo.blobId)}
-                        >
-                          <PickerThumbnail
-                            source={{
-                              blobId: photo.blobId,
-                              storageBlobId: photo.storageBlobId,
-                              serverPhotoId: photo.serverPhotoId,
-                              serverSide: photo.serverSide,
-                              thumbnailData: photo.thumbnailData,
-                              thumbnailMimeType: photo.thumbnailMimeType,
-                            }}
-                            filename={photo.filename}
-                          />
-                          {/* Selection circle in top-right */}
-                          <div
-                            className={`absolute top-1.5 right-1.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
-                              isSelected
-                                ? "bg-accent-600 border-accent-600"
-                                : "bg-white/70 border-gray-400 dark:bg-gray-800/70 dark:border-gray-500"
-                            }`}
-                          >
-                            {isSelected && (
-                              <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                                <path
-                                  fillRule="evenodd"
-                                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                                  clipRule="evenodd"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-
           {itemsLoading ? (
             <GallerySkeleton />
-          ) : items.length === 0 && !showAddPhotos ? (
+          ) : items.length === 0 ? (
             <div className="text-center py-16 border-2 border-dashed border-edge rounded-lg">
               <span className="text-4xl mb-3 block">🖼️</span>
               <p className="text-fg-muted text-sm mb-3">This album is empty.</p>
               {!isBackupServer && (
               <button
                 onClick={() => {
-                  setShowAddPhotos(true);
-                  setSelectedPhotos(new Set());
+                  startSecureAdd(selectedGallery.id, selectedGallery.name);
+                  navigate("/albums");
                 }}
                 className="btn btn-primary btn-md"
               >
@@ -592,19 +388,20 @@ export default function SecureGallery() {
               </button>
               )}
             </div>
-          ) : !showAddPhotos ? (
+          ) : (
             <JustifiedGrid
-              items={items}
+              items={displayItems}
               getAspectRatio={(item) => (item.width && item.height) ? item.width / item.height : 1}
               getKey={(item) => item.id}
               renderItem={(item, idx) => (
                 <div className="group relative w-full h-full">
                   <SecureGalleryItem
                     item={item}
+                    burstCount={item.burst_id ? secureBurstCounts.get(item.burst_id) : undefined}
                     onClick={() =>
                       navigate(`/photo/${item.blob_id}`, {
                         state: {
-                          photoIds: items.map((i) => i.blob_id),
+                          photoIds: displayItems.map((i) => i.blob_id),
                           currentIndex: idx,
                           secureGallery: true,
                           secureAlbumId: selectedGallery?.id,
@@ -625,7 +422,7 @@ export default function SecureGallery() {
                 </div>
               )}
             />
-          ) : null}
+          )}
         </main>
       </div>
     );
@@ -755,8 +552,12 @@ export default function SecureGallery() {
                 }}
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-accent-100 dark:bg-accent-900/30 rounded-lg flex items-center justify-center">
-                    <span className="text-xl">🔒</span>
+                  <div className="w-12 h-12 bg-accent-100 dark:bg-accent-900/30 rounded-lg flex items-center justify-center overflow-hidden">
+                    <SecureAlbumCover
+                      galleryId={g.id}
+                      galleryToken={galleryToken}
+                      itemCount={g.item_count}
+                    />
                   </div>
                   <div>
                     <h3 className="font-medium text-fg">

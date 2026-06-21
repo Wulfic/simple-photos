@@ -27,6 +27,8 @@ import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
 import useSlideshow from "../hooks/useSlideshow";
 import Slideshow from "../components/viewer/Slideshow";
+import { useSecureAdd } from "../store/secureAdd";
+import { addPhotosToSecureGallery } from "../utils/secureAdd";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
@@ -145,6 +147,23 @@ function SmartAlbumView({ albumId }: { albumId: string }) {
         (a, b) => (b.addedAt ?? b.takenAt ?? 0) - (a.addedAt ?? a.takenAt ?? 0),
       );
     }
+    // Collapse burst stacks → one tile per burst (keep the first/newest frame in
+    // the current order), so bursts STACK like the main gallery instead of
+    // listing every frame. Done before the limit so "Recently Added" counts
+    // bursts as one. _burstCount feeds the stack badge.
+    const burstCounts = new Map<string, number>();
+    for (const p of next) {
+      if (p.burstId) burstCounts.set(p.burstId, (burstCounts.get(p.burstId) ?? 0) + 1);
+    }
+    const seenBursts = new Set<string>();
+    next = next
+      .filter((p) => {
+        if (!p.burstId) return true;
+        if (seenBursts.has(p.burstId)) return false;
+        seenBursts.add(p.burstId);
+        return true;
+      })
+      .map((p) => (p.burstId ? { ...p, _burstCount: burstCounts.get(p.burstId) } : p));
     if (def.limit !== undefined) {
       next = next.slice(0, def.limit);
     }
@@ -344,6 +363,29 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const isSelectionMode = selectedIds.size > 0;
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Secure-add flow: when active, this album offers "Add to 🔒 <name>" and
+  // tapping a tile toggles selection (instead of opening the viewer).
+  const secureAddTarget = useSecureAdd((s) => s.target);
+  const cancelSecureAdd = useSecureAdd((s) => s.cancel);
+  const [addingSecure, setAddingSecure] = useState(false);
+
+  async function addSelectedToSecure() {
+    if (!secureAddTarget || selectedIds.size === 0 || addingSecure) return;
+    setAddingSecure(true);
+    try {
+      const count = await addPhotosToSecureGallery(secureAddTarget.galleryId, [...selectedIds]);
+      toast.success(`Added ${count} photo${count !== 1 ? "s" : ""} to ${secureAddTarget.galleryName}`);
+      clearSelection();
+      const target = secureAddTarget.galleryId;
+      cancelSecureAdd();
+      navigate(`/secure-gallery?album=${target}`);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
+    } finally {
+      setAddingSecure(false);
+    }
+  }
 
   function enterSelectionMode(blobId: string) {
     setSelectedIds(new Set([blobId]));
@@ -608,7 +650,7 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
       )}
 
       {/* Album photo grid */}
-      {isSelectionMode && (
+      {(isSelectionMode || secureAddTarget) && (
         <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
           <div className="flex items-center gap-3">
             <button
@@ -619,7 +661,9 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <span className="text-sm font-medium">{selectedIds.size} selected</span>
+            <span className="text-sm font-medium">
+              {secureAddTarget ? `${selectedIds.size} selected to add to 🔒 ${secureAddTarget.galleryName}` : `${selectedIds.size} selected`}
+            </span>
             <button
               onClick={selectAll}
               className="text-accent-600 dark:text-accent-400 text-sm hover:underline"
@@ -627,12 +671,24 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
               Select All
             </button>
           </div>
-          <button
-            onClick={removeSelected}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm"
-          >
-            Remove ({selectedIds.size})
-          </button>
+          {secureAddTarget ? (
+            <button
+              onClick={addSelectedToSecure}
+              disabled={selectedIds.size === 0 || addingSecure}
+              className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+              title={`Add to ${secureAddTarget.galleryName}`}
+            >
+              <span>🔒</span>
+              {addingSecure ? "Adding…" : `Add to album (${selectedIds.size})`}
+            </button>
+          ) : (
+            <button
+              onClick={removeSelected}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 shadow-sm"
+            >
+              Remove ({selectedIds.size})
+            </button>
+          )}
         </div>
       )}
       {albumPhotos.length === 0 ? (
@@ -650,10 +706,10 @@ function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
           renderItem={(photo, idx) => (
             <AlbumTile
               photo={photo}
-              isSelectionMode={isSelectionMode}
+              isSelectionMode={isSelectionMode || !!secureAddTarget}
               isSelected={selectedIds.has(photo.blobId)}
               onClick={() => {
-                if (isSelectionMode) {
+                if (isSelectionMode || secureAddTarget) {
                   toggleSelect(photo.blobId);
                 } else {
                   navigate(`/photo/${photo.blobId}`, {

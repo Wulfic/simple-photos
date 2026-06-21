@@ -16,6 +16,7 @@ import { randomUuid } from "../utils/uuid";
 import { toast } from "../store/toast";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
+import { useSecureAdd } from "../store/secureAdd";
 import type { FaceCluster, PetCluster } from "../api/ai";
 
 type SharedAlbumInfo = {
@@ -47,6 +48,8 @@ export default function Albums() {
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
   const navigate = useAppNavigate();
+  const secureAddTarget = useSecureAdd((s) => s.target);
+  const cancelSecureAdd = useSecureAdd((s) => s.cancel);
 
   // Shared albums state
   const [sharedAlbums, setSharedAlbums] = useState<SharedAlbumInfo[]>([]);
@@ -407,6 +410,25 @@ export default function Albums() {
       <AppHeader />
 
       <main className="p-4">
+        {/* Secure-add banner: shown while picking photos to move into a secure
+            album. Open any album below to multi-select, then "Add to 🔒". */}
+        {secureAddTarget && (
+          <div className="flex items-center justify-between gap-3 mb-4 p-3 rounded-lg bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800">
+            <span className="text-sm font-medium text-accent-800 dark:text-accent-200">
+              🔒 Open an album to pick photos to add to <strong>{secureAddTarget.galleryName}</strong>
+            </span>
+            <button
+              onClick={() => {
+                const target = secureAddTarget.galleryId;
+                cancelSecureAdd();
+                navigate(`/secure-gallery?album=${target}`);
+              }}
+              className="btn btn-secondary btn-md shrink-0"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         {/* ── User Albums ────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-fg-muted uppercase tracking-wider">Albums</h2>

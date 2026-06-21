@@ -182,7 +182,7 @@ internal fun PhotoPageContent(
     onMediaSizeLoaded: ((Float, Float) -> Unit)? = null,
     intrinsicWidth: Float = -1f,
     intrinsicHeight: Float = -1f,
-    onPanoLiveModeChange: ((Boolean) -> Unit)? = null,
+    onPanoLiveModeChange: ((live: Boolean, usesVerticalDrag: Boolean) -> Unit)? = null,
     // Single-tap on the media toggles the viewer chrome (top bar / controls).
     // Handled here inside detectTapGestures because a child tap detector
     // consumes the tap before any parent .clickable can see it.
@@ -524,6 +524,12 @@ internal fun PhotoPageContent(
                         editRotation = editRotation,
                         savedBrightness = cropInfo?.brightness ?: 0f,
                         savedRotation = cropInfo?.rotate ?: 0,
+                        // Saved metadata crop — applied to the playing video so a
+                        // cropped video displays its crop rect (not the full frame).
+                        savedCropX = cropInfo?.x ?: 0f,
+                        savedCropY = cropInfo?.y ?: 0f,
+                        savedCropW = cropInfo?.width ?: 1f,
+                        savedCropH = cropInfo?.height ?: 1f,
                         photoWidth = if (intrinsicWidth > 0f) intrinsicWidth.toInt() else photo.width,
                         photoHeight = if (intrinsicHeight > 0f) intrinsicHeight.toInt() else photo.height,
                         playerError = playerError,
@@ -679,7 +685,7 @@ internal fun PhotoPageContent(
                     intrinsicHeight = if (intrinsicHeight > 0f) intrinsicHeight else photo.height.toFloat(),
                     is360 = sub == "equirectangular",
                     contentDescription = photo.filename,
-                    onLiveModeChange = { live -> onPanoLiveModeChange?.invoke(live) },
+                    onLiveModeChange = { live, usesVert -> onPanoLiveModeChange?.invoke(live, usesVert) },
                 )
             } else if (isMotionPhoto) {
                 MotionPhotoOverlay(

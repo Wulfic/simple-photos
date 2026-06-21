@@ -162,6 +162,23 @@ class SecureGalleryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Fetch a cover thumbnail (most-recent item) for a gallery, for the
+     * album-list preview. Lazy + per-card: each card calls this in a
+     * LaunchedEffect so only visible galleries fetch. Returns the decrypted
+     * thumbnail bytes, or null if the gallery is empty / fetch fails.
+     */
+    suspend fun fetchGalleryCover(galleryId: String): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            val res = secureGalleryRepository.listItems(galleryId, galleryToken)
+            val first = res.items.firstOrNull() ?: return@withContext null
+            downloadThumb(first.blobId, first.encryptedThumbBlobId)
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchGalleryCover failed for $galleryId", e)
+            null
+        }
+    }
+
     fun createGallery(name: String) {
         viewModelScope.launch {
             try {
@@ -240,6 +257,32 @@ class SecureGalleryViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * Decrypt a secure blob to a fresh temp file and return it (kept on disk).
+     *
+     * Videos and motion-photo trailers can't be handed to ExoPlayer as a
+     * ByteArray — it needs a file/URI — and streaming the decrypt to disk
+     * avoids holding a whole video in heap (OOM). The caller MUST delete the
+     * returned file when done (e.g. in a DisposableEffect) so the decrypted
+     * plaintext doesn't linger in the cache dir (confidentiality).
+     */
+    suspend fun downloadAndDecryptToFile(blobId: String, suffix: String): File = withContext(Dispatchers.IO) {
+        Log.d(TAG, "downloadAndDecryptToFile: blobId=$blobId suffix=$suffix")
+        val out = File.createTempFile("secure_play_", ".$suffix", photoRepository.getCacheDir())
+        try {
+            photoRepository.downloadAndDecryptBlobToFile(blobId, out)
+            Log.d(TAG, "downloadAndDecryptToFile: blobId=$blobId → ${out.length()} bytes")
+            out
+        } catch (e: Exception) {
+            Log.e(TAG, "downloadAndDecryptToFile failed: blobId=$blobId", e)
+            out.delete()
+            throw e
+        }
+    }
+
+    /** Cache dir for ephemeral decrypted media (motion-video trailers, etc.). */
+    fun cacheDir(): File = photoRepository.getCacheDir()
 
     /**
      * Download and decrypt an encrypted blob, returning the raw image bytes.

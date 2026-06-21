@@ -16,6 +16,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.simplephotos.data.remote.dto.*
+import com.simplephotos.ui.components.SpButton
+import com.simplephotos.ui.components.SpButtonVariant
 
 // ── Reusable settings card ──────────────────────────────────────────────────
 
@@ -135,9 +137,13 @@ internal fun AccountChangePasswordSection(viewModel: SettingsViewModel) {
     Spacer(Modifier.height(8.dp))
 
     if (!expanded) {
-        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("Change Password")
-        }
+        SpButton(
+            "Change Password",
+            onClick = { expanded = true },
+            variant = SpButtonVariant.Secondary,
+            fontSize = 14,
+            modifier = Modifier.fillMaxWidth()
+        )
     } else {
         OutlinedTextField(
             value = currentPassword,
@@ -189,13 +195,19 @@ internal fun AccountChangePasswordSection(viewModel: SettingsViewModel) {
 
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                expanded = false
-                currentPassword = ""
-                newPassword = ""
-                confirmPassword = ""
-            }) { Text("Cancel") }
-            Button(
+            SpButton(
+                "Cancel",
+                onClick = {
+                    expanded = false
+                    currentPassword = ""
+                    newPassword = ""
+                    confirmPassword = ""
+                },
+                variant = SpButtonVariant.Secondary,
+                fontSize = 14
+            )
+            SpButton(
+                "Update",
                 onClick = {
                     if (newPassword != confirmPassword) {
                         viewModel.error = "Passwords do not match"
@@ -208,8 +220,11 @@ internal fun AccountChangePasswordSection(viewModel: SettingsViewModel) {
                         }
                     }
                 },
-                enabled = currentPassword.isNotEmpty() && newPassword.isNotEmpty() && confirmPassword.isNotEmpty() && !viewModel.loading
-            ) { Text("Update") }
+                variant = SpButtonVariant.Primary,
+                fontSize = 14,
+                enabled = currentPassword.isNotEmpty() && newPassword.isNotEmpty() && confirmPassword.isNotEmpty() && !viewModel.loading,
+                loading = viewModel.loading
+            )
         }
     }
 }

@@ -91,6 +91,12 @@ interface PhotoDao {
     @Query("UPDATE photos SET cropMetadata = :metadata WHERE localId = :id")
     suspend fun updateCropMetadata(id: String, metadata: String?)
 
+    /** Persist a manual photo-subtype correction (Info-panel edit) WITHOUT
+     *  clobbering the burst/motion fields that [backfillSubtypeFields] also
+     *  writes. Matched by serverPhotoId so it lines up with the edit API. */
+    @Query("UPDATE photos SET photoSubtype = :subtype WHERE serverPhotoId = :serverPhotoId")
+    suspend fun updatePhotoSubtype(serverPhotoId: String, subtype: String?)
+
     @Query("SELECT * FROM photos WHERE serverBlobId = :blobId LIMIT 1")
     suspend fun getByServerBlobId(blobId: String): PhotoEntity?
 

@@ -140,8 +140,10 @@ class AlbumViewModel @Inject constructor(
                 // with bursts collapsed so a burst counts as one item (the
                 // detail list does the same — see AlbumDetailViewModel).
                 recentCount = minOf(allPhotos.collapseBursts().size, 100)
-                favoritesCount = allPhotos.count { it.isFavorite }
-                photosCount = allPhotos.count { it.mediaType == "photo" || it.mediaType == "gif" }
+                // Counts match the collapsed grids (Favorites/Photos collapse
+                // bursts in getAlbumPhotos) so the card count equals the tiles.
+                favoritesCount = allPhotos.filter { it.isFavorite }.collapseBursts().size
+                photosCount = allPhotos.filter { it.mediaType == "photo" || it.mediaType == "gif" }.collapseBursts().size
                 gifsCount = allPhotos.count { it.mediaType == "gif" }
                 videosCount = allPhotos.count { it.mediaType == "video" }
                 audioCount = allPhotos.count { it.mediaType == "audio" }

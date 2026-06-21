@@ -6,7 +6,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.repository.AlbumRepository
@@ -76,19 +75,8 @@ class AlbumDetailViewModel @Inject constructor(
         viewModelScope.launch {
             loading = true
             try {
-                val all = photoRepository.getAllPhotos().first()
-                photos = when (albumId) {
-                    // Collapse bursts BEFORE capping so a 46-shot burst counts
-                    // as one item toward the 100-item recents window (matching
-                    // the gallery, which renders the burst as a single tile).
-                    "smart-recents" -> all.sortedByDescending { it.createdAt }.collapseBursts().take(100)
-                    "smart-favorites" -> all.filter { it.isFavorite }
-                    "smart-photos" -> all.filter { it.mediaType == "photo" || it.mediaType == "gif" }
-                    "smart-gifs" -> all.filter { it.mediaType == "gif" }
-                    "smart-videos" -> all.filter { it.mediaType == "video" }
-                    "smart-audio" -> all.filter { it.mediaType == "audio" }
-                    else -> all
-                }
+                // Shared resolver — same source the viewer pager uses.
+                photos = photoRepository.getAlbumPhotos(albumId)
             } catch (e: Exception) {
                 error = e.message
             } finally {
@@ -102,10 +90,9 @@ class AlbumDetailViewModel @Inject constructor(
             loading = true
             try {
                 album = albumRepository.getAlbum(albumId)
-                val photoIds = albumRepository.getPhotoIdsForAlbum(albumId)
-                photos = photoIds.mapNotNull { id ->
-                    photoRepository.getPhoto(id)
-                }
+                // Shared resolver — same source the viewer pager uses, so the
+                // tapped tile and the viewer's initial page always agree.
+                photos = photoRepository.getAlbumPhotos(albumId)
             } catch (e: Exception) {
                 error = e.message
             } finally {

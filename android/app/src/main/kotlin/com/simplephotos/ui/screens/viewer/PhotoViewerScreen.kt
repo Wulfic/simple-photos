@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import com.simplephotos.ui.theme.Violet
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -250,6 +251,12 @@ fun PhotoViewerScreen(
     // Panorama / 360 live-pan state — hoisted from PanoramaOverlay so we can
     // disable HorizontalPager paging while the user is panning the image.
     var panoLiveActive by remember { mutableStateOf(false) }
+    // True only when the active live view consumes the VERTICAL drag axis (360
+    // sphere or a tall/vertical flat pano). Wide flat panos pan horizontally and
+    // leave vertical free, so they keep swipe-DOWN-to-dismiss. This gates ONLY
+    // the dismiss gesture; the pager stays gated on panoLiveActive (any live
+    // pano consumes its own pan axis). See android-pano-pending-2026-06-20 #3.
+    var liveVerticalDragActive by remember { mutableStateOf(false) }
 
     // ── Info panel state ─────────────────────────────────────────────
     var showInfoPanel by remember { mutableStateOf(false) }
@@ -296,6 +303,15 @@ fun PhotoViewerScreen(
             trimEnd = 0f
         }
         mediaDuration = photo?.durationSecs ?: 0f
+    }
+
+    // Load full metadata (+ EXIF) for the Info panel when it's open or the photo
+    // changes while open. Cleared on photo change so stale EXIF never lingers.
+    LaunchedEffect(currentPhoto?.serverPhotoId, showInfoPanel) {
+        viewModel.clearFullMetadata()
+        if (showInfoPanel) {
+            currentPhoto?.serverPhotoId?.let { viewModel.loadFullMetadata(it) }
+        }
     }
 
     // Initialize edit mode from existing crop metadata
@@ -436,19 +452,25 @@ fun PhotoViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(editMode, panoLiveActive) {
+            .pointerInput(editMode, liveVerticalDragActive, showInfoPanel) {
                 // Detect vertical swipes: up → info panel, down → close viewer
                 // Only at the top level so it doesn't conflict with zoom panning.
                 //
-                // Disabled in edit mode AND while a panorama / 360° sphere is in
-                // live mode. The 360 sphere's GLSurfaceView (and the flat pano's
-                // own pan handler) need the vertical drag to look up/down; because
-                // this gesture reads on the Initial (tunneling) pass and consumes
-                // vertical-dominant drags, it would otherwise steal the drag and
-                // dismiss the viewer instead of panning. Mirrors the
-                // HorizontalPager userScrollEnabled = !editMode && !panoLiveActive
-                // guard just below.
-                if (editMode || panoLiveActive) return@pointerInput
+                // Disabled in edit mode AND while a live view that consumes the
+                // VERTICAL axis is active — the 360° sphere (GLSurfaceView) and
+                // tall/vertical flat panos need the vertical drag to look up/down,
+                // and since this gesture reads on the Initial (tunneling) pass and
+                // consumes vertical-dominant drags it would otherwise steal them
+                // and dismiss instead of panning. A WIDE flat pano pans
+                // horizontally, so it stays dismissable (its own pan handler only
+                // consumes the horizontal axis). See android-pano-pending #3.
+                //
+                // ALSO disabled while the info/edit panel is open: it reads on the
+                // Initial (tunneling) pass, so otherwise it swallows the panel's own
+                // vertical scroll drags (the long Edit Metadata form could not be
+                // scrolled). The panel has its own ✕ to close. See
+                // android-scroll-in-capped-column-2026-06-21.
+                if (editMode || liveVerticalDragActive || showInfoPanel) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalY = 0f
@@ -547,8 +569,11 @@ fun PhotoViewerScreen(
                     activeVideoUri = activeVideoUri,
                     intrinsicWidth = if (pagerState.currentPage == page) mediaIntrinsicWidth else -1f,
                     intrinsicHeight = if (pagerState.currentPage == page) mediaIntrinsicHeight else -1f,
-                    onPanoLiveModeChange = { live ->
-                        if (pagerState.currentPage == page) panoLiveActive = live
+                    onPanoLiveModeChange = { live, usesVert ->
+                        if (pagerState.currentPage == page) {
+                            panoLiveActive = live
+                            liveVerticalDragActive = live && usesVert
+                        }
                     },
                     onVideoUriReady = { uri, filename ->
                         // Load the new media item into the shared player.
@@ -789,7 +814,7 @@ fun PhotoViewerScreen(
                             Icon(
                                 imageVector = Icons.Default.Info,
                                 contentDescription = "Info",
-                                tint = if (showInfoPanel) Color(0xFF60A5FA) else Color.White,
+                                tint = if (showInfoPanel) Violet.v400 else Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -804,7 +829,7 @@ fun PhotoViewerScreen(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_tag),
                                     contentDescription = "Tags",
-                                    tint = if (showTagPanel) Color(0xFF60A5FA) else Color.White,
+                                    tint = if (showTagPanel) Violet.v400 else Color.White,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -824,7 +849,7 @@ fun PhotoViewerScreen(
                             ) {
                                 Text(
                                     if (editMode) "Done" else "Edit",
-                                    color = if (editMode) Color(0xFF60A5FA) else Color.White,
+                                    color = if (editMode) Violet.v400 else Color.White,
                                     fontSize = 14.sp
                                 )
                             }
@@ -834,6 +859,61 @@ fun PhotoViewerScreen(
                             val photo = currentPhoto ?: return@IconButton
                             scope.launch {
                                 try {
+                                    // AVIF/HEIC/HEIF have poor cross-app support; transcode to
+                                    // JPEG on download so the saved file opens in any gallery
+                                    // app (the "convert AVIF to JPEG" ask). Falls back to saving
+                                    // the original bytes if decode isn't available on this device.
+                                    val srcExt = photo.filename.substringAfterLast('.', "").lowercase()
+                                    if (srcExt == "avif" || srcExt == "heic" || srcExt == "heif") {
+                                        val tempFile = java.io.File.createTempFile("save_", ".$srcExt", context.cacheDir)
+                                        val staged = try {
+                                            if (photo.localPath != null) {
+                                                context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
+                                                    tempFile.outputStream().use { input.copyTo(it) }
+                                                }
+                                                tempFile.length() > 0
+                                            } else {
+                                                viewModel.downloadPhotoToFile(photo, tempFile)
+                                            }
+                                        } catch (_: Exception) { false }
+                                        if (!staged) {
+                                            tempFile.delete(); downloadMessage = "Download failed"; return@launch
+                                        }
+                                        val jpegBytes = viewModel.transcodeToJpegIfNeeded(tempFile, photo.filename)
+                                        val baseName = if (photo.filename.contains('.'))
+                                            photo.filename.substringBeforeLast('.') else photo.filename
+                                        val outName = baseName + if (jpegBytes != null) ".jpg" else ".$srcExt"
+                                        val outMime = when {
+                                            jpegBytes != null -> "image/jpeg"
+                                            srcExt == "avif" -> "image/avif"
+                                            else -> "image/heif"
+                                        }
+                                        val values = ContentValues().apply {
+                                            put(MediaStore.MediaColumns.DISPLAY_NAME, outName)
+                                            put(MediaStore.MediaColumns.MIME_TYPE, outMime)
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                                            }
+                                        }
+                                        val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                                        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                                        val destUri = context.contentResolver.insert(collectionUri, values)
+                                        if (destUri == null) {
+                                            tempFile.delete(); downloadMessage = "Download failed"; return@launch
+                                        }
+                                        val ok = try {
+                                            context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                                if (jpegBytes != null) output.write(jpegBytes)
+                                                else tempFile.inputStream().buffered().use { it.copyTo(output) }
+                                            }
+                                            true
+                                        } catch (_: Exception) { false }
+                                        tempFile.delete()
+                                        downloadMessage = if (ok) "Saved to Downloads" else "Download failed"
+                                        return@launch
+                                    }
+
                                     val values = ContentValues().apply {
                                         put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
                                         put(MediaStore.MediaColumns.MIME_TYPE, when {
@@ -953,7 +1033,16 @@ fun PhotoViewerScreen(
         ViewerInfoPanel(
             visible = showInfoPanel,
             photo = currentPhoto,
+            fullMeta = viewModel.fullMetadata,
+            saving = viewModel.metadataSaving,
+            error = viewModel.metadataError,
             onDismiss = { showInfoPanel = false },
+            onSave = { req, newSub ->
+                currentPhoto?.serverPhotoId?.let { viewModel.saveMetadata(it, req, newSub) }
+            },
+            onWriteExif = {
+                currentPhoto?.serverPhotoId?.let { viewModel.writeExif(it) }
+            },
             modifier = Modifier.align(Alignment.BottomCenter)
         )
 

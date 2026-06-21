@@ -17,6 +17,8 @@ import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -72,16 +74,26 @@ fun PanoramaOverlay(
     intrinsicHeight: Float,
     is360: Boolean,
     contentDescription: String,
-    onLiveModeChange: (Boolean) -> Unit = {},
+    onLiveModeChange: (live: Boolean, usesVerticalDrag: Boolean) -> Unit = { _, _ -> },
 ) {
     if (imageData == null) return
     var liveMode by remember { mutableStateOf(false) }
 
+    // Whether the LIVE view consumes the VERTICAL drag axis. The 360 sphere
+    // (yaw + pitch) and tall/vertical flat panoramas (pan up/down) do; a normal
+    // wide flat panorama pans horizontally and leaves the vertical axis free.
+    // PhotoViewerScreen uses this to keep swipe-DOWN-to-dismiss working on wide
+    // panos while still disabling it for 360 / vertical panos (which need the
+    // vertical drag to look around). See android-pano-pending-2026-06-20 #3.
+    val aspect = if (intrinsicWidth > 0 && intrinsicHeight > 0)
+        intrinsicWidth / intrinsicHeight else 2f
+    val usesVerticalDrag = is360 || aspect < 1f
+
     // Notify caller (PhotoViewerScreen) so it can disable HorizontalPager
     // paging while the user is panning the panorama / 360 image.
-    LaunchedEffect(liveMode) { onLiveModeChange(liveMode) }
+    LaunchedEffect(liveMode) { onLiveModeChange(liveMode, usesVerticalDrag) }
     DisposableEffect(Unit) {
-        onDispose { onLiveModeChange(false) }
+        onDispose { onLiveModeChange(false, false) }
     }
 
     if (!liveMode) {
@@ -119,8 +131,7 @@ fun PanoramaOverlay(
     var containerSize by remember { mutableStateOf(Size.Zero) }
     var pan by remember { mutableStateOf(0f) }
 
-    val aspect = if (intrinsicWidth > 0 && intrinsicHeight > 0)
-        intrinsicWidth / intrinsicHeight else 2f
+    // `aspect` / `usesVerticalDrag` are computed once at the top of the overlay.
     val horizontal = aspect >= 1f
 
     // Rendered dimensions: the short axis fills the viewport, the long axis
@@ -148,26 +159,31 @@ fun PanoramaOverlay(
                 // parent HorizontalPager (in PhotoViewerScreen) does not see it
                 // and try to flip pages.
                 //
-                // CRITICAL: only consume a change when it carries an actual
-                // positionChange. The DOWN and UP events have a zero
-                // positionChange — consuming those swallows taps and makes the
-                // "Full View" toggle pill un-clickable.
-                awaitPointerEventScope {
+                // TOUCH SLOP (android-pano-pending-2026-06-20 #4): a real finger
+                // tap carries sub-pixel jitter, so the old "consume any non-zero
+                // delta" rule swallowed taps and made the "Full View" pill
+                // un-clickable. Now we accumulate the pan-axis delta and only
+                // start consuming once it crosses the slop threshold — pre-slop
+                // jitter is left free so the pill's clickable press survives.
+                // (adb `input tap` is jitter-free and never reproduced this; only
+                // a human finger / tiny-move tap does.)
+                val slop = 8.dp.toPx() // PointerInputScope is a Density
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    var accum = 0f
+                    var panning = false
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
-                        var d = 0f
-                        event.changes.forEach { change ->
-                            if (change.pressed) {
-                                val delta = if (horizontalState.value)
-                                    change.positionChange().x else change.positionChange().y
-                                if (delta != 0f) {
-                                    d += delta
-                                    change.consume()
-                                }
-                            }
+                        val change = event.changes.firstOrNull { it.pressed } ?: break
+                        val delta = if (horizontalState.value)
+                            change.positionChange().x else change.positionChange().y
+                        if (!panning) {
+                            accum += delta
+                            if (kotlin.math.abs(accum) > slop) panning = true
                         }
-                        if (d != 0f) {
-                            pan = (pan - d).coerceIn(0f, maxPanState.value)
+                        if (panning && delta != 0f) {
+                            pan = (pan - delta).coerceIn(0f, maxPanState.value)
+                            change.consume()
                         }
                     }
                 }

@@ -8,6 +8,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import com.simplephotos.crypto.CryptoManager
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
@@ -15,7 +16,11 @@ import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
 import com.simplephotos.data.remote.dto.DuplicatePhotoResponse
 import com.simplephotos.data.remote.dto.FavoriteToggleResponse
+import com.simplephotos.data.remote.dto.FullMetadataResponse
+import com.simplephotos.data.remote.dto.MetadataUpdateRequest
+import com.simplephotos.data.remote.dto.MetadataUpdateResponse
 import com.simplephotos.data.remote.dto.SetCropRequest
+import com.simplephotos.data.remote.dto.WriteExifResponse
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -116,6 +121,41 @@ class PhotoRepository @Inject constructor(
     fun getAllPhotos(): Flow<List<PhotoEntity>> = db.photoDao().getAllPhotos()
 
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
+
+    /**
+     * Resolve the ordered photo list for an album — handles BOTH virtual
+     * "smart" albums (favorites/photos/gifs/videos/audio/recents) AND
+     * user-created albums (photo↔album xref).
+     *
+     * Shared by the album-detail grid ([AlbumDetailViewModel]) and the
+     * full-screen pager ([PhotoViewerViewModel]). They MUST use the same
+     * source so the viewer pages in the exact order the grid shows; otherwise
+     * the tapped index lands on the wrong photo. Smart albums were previously
+     * only resolved by the grid, so opening one in the viewer found zero
+     * photos → "Photo not found".
+     */
+    suspend fun getAlbumPhotos(albumId: String): List<PhotoEntity> {
+        if (albumId.startsWith("smart-")) {
+            val all = getAllPhotos().first()
+            return when (albumId) {
+                // Collapse bursts BEFORE capping so a 46-shot burst counts as
+                // one item toward the 100-item recents window (matching grid).
+                "smart-recents" -> all.sortedByDescending { it.createdAt }.collapseBursts().take(100)
+                // Collapse bursts so a burst stack counts/renders as one item,
+                // matching the main gallery and the web (which collapses bursts
+                // everywhere it lists photos). collapseBursts is a no-op for
+                // media without a burstId, so videos/gifs/audio are unaffected.
+                "smart-favorites" -> all.filter { it.isFavorite }.collapseBursts()
+                "smart-photos" -> all.filter { it.mediaType == "photo" || it.mediaType == "gif" }.collapseBursts()
+                "smart-gifs" -> all.filter { it.mediaType == "gif" }
+                "smart-videos" -> all.filter { it.mediaType == "video" }
+                "smart-audio" -> all.filter { it.mediaType == "audio" }
+                else -> all
+            }
+        }
+        val photoIds = db.albumDao().getPhotoIdsForAlbum(albumId)
+        return photoIds.mapNotNull { id -> getPhoto(id) }
+    }
 
     suspend fun getPhotosByServerPhotoIds(ids: List<String>): List<PhotoEntity> =
         db.photoDao().getByServerPhotoIds(ids)
@@ -860,6 +900,27 @@ class PhotoRepository @Inject constructor(
     suspend fun setCropOnServer(photoId: String, cropMetadata: String?) {
         android.util.Log.d(TAG, "[setCrop] photoId=$photoId, meta=$cropMetadata")
         api.setCrop(photoId, SetCropRequest(cropMetadata))
+    }
+
+    // ── Metadata edit (full EXIF view + edit + write-back) ───────────────
+    // Mirrors web/src/api/metadata.ts; used by PhotoViewerViewModel/ViewerInfoPanel.
+
+    /** Fetch the full metadata + raw EXIF tags for the Info panel. */
+    suspend fun getFullMetadata(photoId: String): FullMetadataResponse =
+        api.getFullMetadata(photoId)
+
+    /** PATCH only the changed metadata fields (nulls omitted by Gson). */
+    suspend fun updateMetadata(photoId: String, request: MetadataUpdateRequest): MetadataUpdateResponse =
+        api.updateMetadata(photoId, request)
+
+    /** Write the current DB metadata back to the file's EXIF (jpeg/tiff). */
+    suspend fun writeExif(photoId: String): WriteExifResponse =
+        api.writeExif(photoId)
+
+    /** Persist a manual photo-subtype correction to the local cache so the
+     *  pano/360 viewer switches immediately (the periodic resync would lag). */
+    suspend fun updateLocalSubtype(serverPhotoId: String, subtype: String?) {
+        db.photoDao().updatePhotoSubtype(serverPhotoId, subtype)
     }
 
     /** Create a server-side duplicate of a photo ("Save Copy"). */
