@@ -14,8 +14,8 @@ android {
         applicationId = "com.simplephotos"
         minSdk = 26
         targetSdk = 34
-        versionCode = 129
-        versionName = "1.4.90"
+        versionCode = 130
+        versionName = "1.4.91"
         testInstrumentationRunner = "com.simplephotos.HiltTestRunner"
     }
 
