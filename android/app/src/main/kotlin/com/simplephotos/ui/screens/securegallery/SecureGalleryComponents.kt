@@ -8,13 +8,13 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items as lazyItems
+import androidx.compose.foundation.lazy.grid.items as lazyGridItems
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -30,9 +30,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import com.simplephotos.ui.theme.Violet
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -44,9 +46,23 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simplephotos.R
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.SecureGallery
 import com.simplephotos.data.remote.dto.SecureGalleryItem
+import com.simplephotos.ui.screens.viewer.MAX_PANO_DECODE_PX
+import com.simplephotos.ui.screens.viewer.PanoramaOverlay
+import com.simplephotos.ui.screens.viewer.describeImageBytes
+import android.net.Uri
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Password Gate
@@ -202,7 +218,8 @@ internal fun GalleryListView(
     onBack: () -> Unit,
     onGalleryClick: (SecureGallery) -> Unit,
     onCreateGallery: (String) -> Unit,
-    onDeleteGallery: (SecureGallery) -> Unit
+    onDeleteGallery: (SecureGallery) -> Unit,
+    viewModel: SecureGalleryViewModel
 ) {
     var showCreate by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
@@ -309,42 +326,39 @@ internal fun GalleryListView(
                     }
                 }
             } else {
-                LazyColumn(
+                // 2-column card grid mirroring the regular Albums screen, with
+                // the delete action tucked inside each card (top-right) the way
+                // the album cards present their in-card actions.
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    lazyItems(galleries, key = { it.id }) { gallery ->
+                    lazyGridItems(galleries, key = { it.id }) { gallery ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onGalleryClick(gallery) },
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    modifier = Modifier.size(48.dp),
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.ic_locks),
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                }
-                                Spacer(Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
+                            Box {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    GalleryCoverThumbnail(
+                                        galleryId = gallery.id,
+                                        itemCount = gallery.itemCount,
+                                        viewModel = viewModel,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(1f)
+                                    )
+                                    Spacer(Modifier.height(8.dp))
                                     Text(
                                         gallery.name,
                                         style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Medium
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1
                                     )
                                     Text(
                                         "${gallery.itemCount} item${if (gallery.itemCount != 1) "s" else ""}",
@@ -352,7 +366,7 @@ internal fun GalleryListView(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                IconButton(
+                                Surface(
                                     onClick = {
                                         if (confirmDeleteId == gallery.id) {
                                             onDeleteGallery(gallery)
@@ -360,16 +374,26 @@ internal fun GalleryListView(
                                         } else {
                                             confirmDeleteId = gallery.id
                                         }
-                                    }
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(8.dp)
+                                        .size(32.dp),
+                                    shape = CircleShape,
+                                    color = Color.Black.copy(alpha = 0.45f)
                                 ) {
-                                    Icon(
-                                        Icons.Default.Delete,
-                                        contentDescription = "Delete",
-                                        tint = if (confirmDeleteId == gallery.id)
-                                            MaterialTheme.colorScheme.error
-                                        else
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = if (confirmDeleteId == gallery.id)
+                                                "Tap again to confirm delete" else "Delete",
+                                            tint = if (confirmDeleteId == gallery.id)
+                                                MaterialTheme.colorScheme.error
+                                            else
+                                                Color.White,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -390,7 +414,6 @@ internal fun GalleryDetailView(
     gallery: SecureGallery,
     items: List<SecureGalleryItem>,
     itemsLoading: Boolean,
-    allPhotos: List<PhotoEntity>,
     error: String?,
     onBack: () -> Unit,
     onAddPhotos: (List<String>) -> Unit,
@@ -402,14 +425,30 @@ internal fun GalleryDetailView(
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
 
     val albumBlobIds = remember(items) { items.map { it.blobId }.toSet() }
-    val availablePhotos = remember(allPhotos, albumBlobIds) {
-        allPhotos.filter { it.serverBlobId != null && it.serverBlobId !in albumBlobIds }
+    // Picker source: full library ("all") or a specific album / smart album.
+    val pickerPhotos = viewModel.pickerPhotos
+    val pickerAlbums = viewModel.pickerAlbums
+    val pickerSourceId = viewModel.pickerSourceId
+    // Picker excludes anything already in the album, then collapses bursts so
+    // the user picks one tile per burst (matching the main gallery picker).
+    val availablePhotos = remember(pickerPhotos, albumBlobIds) {
+        pickerPhotos.filter { it.serverBlobId != null && it.serverBlobId !in albumBlobIds }
+            .collapseBursts()
+    }
+
+    // Collapse burst stacks → one tile / pager page per burst. The album still
+    // physically holds every frame; we just display the cover. Counts come from
+    // the FULL list so the tile can badge "BURST n".
+    val displayItems = remember(items) { collapseSecureBursts(items) }
+    val burstCounts = remember(items) {
+        items.mapNotNull { it.burstId }.filter { it.isNotEmpty() }
+            .groupingBy { it }.eachCount()
     }
 
     // Full-screen viewer for secure items only
     if (viewerIndex != null) {
         SecurePhotoViewer(
-            items = items,
+            items = displayItems,
             initialIndex = viewerIndex!!,
             viewModel = viewModel,
             onBack = { viewerIndex = null },
@@ -428,7 +467,7 @@ internal fun GalleryDetailView(
                     Column {
                         Text(gallery.name, maxLines = 1)
                         Text(
-                            "${items.size} items",
+                            "${displayItems.size} items",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -441,7 +480,11 @@ internal fun GalleryDetailView(
                 },
                 actions = {
                     if (!showAddPhotos) {
-                        IconButton(onClick = { showAddPhotos = true; selectedBlobIds = emptySet() }) {
+                        IconButton(onClick = {
+                            showAddPhotos = true
+                            selectedBlobIds = emptySet()
+                            viewModel.selectPickerSource("all")
+                        }) {
                             Icon(Icons.Default.Add, contentDescription = "Add Photos")
                         }
                     }
@@ -480,7 +523,9 @@ internal fun GalleryDetailView(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
-                                onAddPhotos(selectedBlobIds.toList())
+                                // Expand burst representatives to their full stack
+                                // (pickerPhotos is the un-collapsed source).
+                                onAddPhotos(expandBurstBlobIds(selectedBlobIds, pickerPhotos))
                                 showAddPhotos = false
                                 selectedBlobIds = emptySet()
                             },
@@ -490,6 +535,31 @@ internal fun GalleryDetailView(
                             showAddPhotos = false
                             selectedBlobIds = emptySet()
                         }) { Text("Cancel") }
+                    }
+                }
+
+                // Source selector — pick from the whole library or a specific
+                // album / smart album (parity with the web album-based flow).
+                if (pickerAlbums.isNotEmpty()) {
+                    androidx.compose.foundation.lazy.LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = pickerSourceId == "all",
+                                onClick = { viewModel.selectPickerSource("all") },
+                                label = { Text("All Photos") }
+                            )
+                        }
+                        lazyItems(pickerAlbums) { (id, name) ->
+                            FilterChip(
+                                selected = pickerSourceId == id,
+                                onClick = { viewModel.selectPickerSource(id) },
+                                label = { Text(name, maxLines = 1) }
+                            )
+                        }
                     }
                 }
 
@@ -507,25 +577,33 @@ internal fun GalleryDetailView(
                         )
                     }
                 } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(80.dp),
-                        contentPadding = PaddingValues(4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        items(availablePhotos, key = { it.localId }) { photo ->
-                            val blobId = photo.serverBlobId ?: return@items
-                            val isSelected = blobId in selectedBlobIds
+                    // Aspect-correct justified grid (matches the album/gallery grids)
+                    // instead of fixed squares, so wide/tall photos read correctly
+                    // while picking. Wrapped in a weighted Box so the grid's
+                    // LazyColumn fills the space under the "Select photos" bar.
+                    Box(modifier = Modifier.weight(1f)) {
+                        com.simplephotos.ui.components.JustifiedGrid(
+                            items = availablePhotos,
+                            getAspectRatio = { p ->
+                                if (p.width > 0 && p.height > 0) p.width.toFloat() / p.height.toFloat() else 1f
+                            },
+                            getKey = { it.localId },
+                            targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight(),
+                            gap = 2.dp,
+                        ) { photo, widthDp, heightDp ->
+                            val blobId = photo.serverBlobId
+                            val isSelected = blobId != null && blobId in selectedBlobIds
                             Box(
                                 modifier = Modifier
-                                    .aspectRatio(1f)
+                                    .size(widthDp, heightDp)
                                     .clip(RoundedCornerShape(4.dp))
-                                    .clickable {
-                                        selectedBlobIds = if (isSelected)
-                                            selectedBlobIds - blobId
-                                        else
-                                            selectedBlobIds + blobId
+                                    .clickable(enabled = blobId != null) {
+                                        if (blobId != null) {
+                                            selectedBlobIds = if (isSelected)
+                                                selectedBlobIds - blobId
+                                            else
+                                                selectedBlobIds + blobId
+                                        }
                                     }
                             ) {
                                 PhotoThumbnail(photo)
@@ -533,7 +611,7 @@ internal fun GalleryDetailView(
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .background(Color(0xFF3B82F6).copy(alpha = 0.3f))
+                                            .background(Violet.v500.copy(alpha = 0.3f))
                                     )
                                     Surface(
                                         modifier = Modifier
@@ -541,7 +619,7 @@ internal fun GalleryDetailView(
                                             .padding(4.dp)
                                             .size(20.dp),
                                         shape = androidx.compose.foundation.shape.CircleShape,
-                                        color = Color(0xFF3B82F6)
+                                        color = Violet.v600
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
                                             Text("✓", color = Color.White, fontSize = 12.sp)
@@ -569,42 +647,96 @@ internal fun GalleryDetailView(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("This album is empty.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
-                            Button(onClick = { showAddPhotos = true; selectedBlobIds = emptySet() }) {
+                            Button(onClick = {
+                                showAddPhotos = true
+                                selectedBlobIds = emptySet()
+                                viewModel.selectPickerSource("all")
+                            }) {
                                 Text("Add Photos")
                             }
                         }
                     }
                 } else {
                     com.simplephotos.ui.components.JustifiedGrid(
-                        items = items,
+                        items = displayItems,
                         getAspectRatio = { it ->
                             val w = it.width ?: 0
                             val h = it.height ?: 0
                             if (w > 0 && h > 0) w.toFloat() / h.toFloat() else 1f
                         },
                         getKey = { it.id },
-                        targetRowHeight = 130.dp,
+                        targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight(),
                         gap = 2.dp,
                     ) { item, widthDp, heightDp ->
+                        val openViewer = {
+                            val idx = displayItems.indexOfFirst { it.id == item.id }
+                            viewerIndex = idx.coerceAtLeast(0)
+                        }
                         Box(
                             modifier = Modifier
                                 .size(widthDp, heightDp)
-                                .clickable {
-                                    val idx = items.indexOfFirst { it.blobId == item.blobId }
-                                    viewerIndex = idx.coerceAtLeast(0)
-                                }
+                                .clickable { openViewer() }
                         ) {
                             SecureItemTile(
                                 item = item,
-                                onClick = {
-                                    val idx = items.indexOfFirst { it.blobId == item.blobId }
-                                    viewerIndex = idx.coerceAtLeast(0)
-                                },
+                                burstCount = item.burstId?.let { burstCounts[it] } ?: 0,
+                                onClick = openViewer,
                                 viewModel = viewModel
                             )
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gallery Cover Thumbnail — decrypted preview of a secure album's newest item
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+internal fun GalleryCoverThumbnail(
+    galleryId: String,
+    itemCount: Int,
+    viewModel: SecureGalleryViewModel,
+    modifier: Modifier = Modifier.size(48.dp)
+) {
+    var bitmap by remember(galleryId) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    // Fetch the newest item's decrypted thumbnail as the album cover. Lazy:
+    // only galleries actually rendered (and non-empty) trigger a fetch.
+    LaunchedEffect(galleryId, itemCount) {
+        if (itemCount > 0 && bitmap == null) {
+            val data = viewModel.fetchGalleryCover(galleryId)
+            if (data != null) {
+                bitmap = try {
+                    BitmapFactory.decodeByteArray(data, 0, data.size)
+                } catch (_: Exception) { null }
+            }
+        }
+    }
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        val bmp = bitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = "Album cover",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_locks),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }
@@ -618,7 +750,8 @@ internal fun GalleryDetailView(
 internal fun SecureItemTile(
     item: SecureGalleryItem,
     onClick: () -> Unit,
-    viewModel: SecureGalleryViewModel
+    viewModel: SecureGalleryViewModel,
+    burstCount: Int = 0
 ) {
     var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
     var gifBytes by remember(item.blobId) { mutableStateOf<ByteArray?>(null) }
@@ -647,7 +780,10 @@ internal fun SecureItemTile(
 
     Box(
         modifier = Modifier
-            .aspectRatio(1f)
+            // Fill the JustifiedGrid cell (which is already aspect-sized) instead
+            // of forcing a square — a square inside a wide/tall cell left gaps and
+            // made the grid look "scattered". Crop fills it cleanly.
+            .fillMaxSize()
             .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick),
@@ -688,6 +824,48 @@ internal fun SecureItemTile(
                 }
             }
         }
+
+        // ── Subtype / media badges (mirror the main gallery tiles) ──────────
+        val sub = item.photoSubtype
+        val durLabel = item.durationSecs?.let { d ->
+            val m = (d / 60).toInt(); val s = (d % 60).toInt(); "$m:${s.toString().padStart(2, '0')}"
+        }
+        when (item.mediaType) {
+            "video" -> SecureTileBadge("▶" + (durLabel?.let { " $it" } ?: ""), Alignment.BottomStart)
+            "gif" -> SecureTileBadge("GIF", Alignment.BottomStart)
+            "audio" -> SecureTileBadge("♫" + (durLabel?.let { " $it" } ?: ""), Alignment.BottomStart)
+        }
+        val topLabel = when {
+            sub == "equirectangular" -> "360°"
+            sub == "panorama" -> "PANO"
+            sub == "motion" -> "LIVE"
+            burstCount > 1 -> "BURST $burstCount"
+            !item.burstId.isNullOrEmpty() -> "BURST"
+            else -> null
+        }
+        if (topLabel != null) SecureTileBadge(topLabel, Alignment.TopStart, bold = true)
+    }
+}
+
+/** Small translucent badge used on secure tiles (matches the gallery style). */
+@Composable
+private fun BoxScope.SecureTileBadge(
+    text: String,
+    alignment: Alignment,
+    bold: Boolean = false
+) {
+    Surface(
+        modifier = Modifier.align(alignment).padding(4.dp),
+        shape = MaterialTheme.shapes.extraSmall,
+        color = Color.Black.copy(alpha = 0.6f)
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = if (bold) 9.sp else 10.sp,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+        )
     }
 }
 
@@ -758,6 +936,11 @@ internal fun SecurePhotoViewer(
         pageCount = { items.size }
     )
     var confirmRemove by remember { mutableStateOf(false) }
+    // When a panorama / 360 page enters Live (pan) mode we must stop the pager
+    // from stealing the horizontal drag (otherwise panning flips pages). Reset
+    // whenever the page changes so a swipe away always re-enables paging.
+    var panoLive by remember { mutableStateOf(false) }
+    LaunchedEffect(pagerState.currentPage) { panoLive = false }
 
     if (confirmRemove) {
         val current = items.getOrNull(pagerState.currentPage)
@@ -784,56 +967,16 @@ internal fun SecurePhotoViewer(
     ) {
         HorizontalPager(
             state = pagerState,
+            userScrollEnabled = !panoLive,
             modifier = Modifier.fillMaxSize()
         ) { page ->
-            val item = items[page]
-            var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
-            var gifBytes by remember(item.blobId) { mutableStateOf<ByteArray?>(null) }
-            var loading by remember(item.blobId) { mutableStateOf(true) }
-
-            LaunchedEffect(item.blobId) {
-                loading = true
-                try {
-                    val data = viewModel.downloadAndDecrypt(item.blobId)
-                    val isGif = data.size > 3 &&
-                        data[0] == 0x47.toByte() && data[1] == 0x49.toByte() && data[2] == 0x46.toByte()
-                    if (isGif) {
-                        gifBytes = data
-                    } else {
-                        bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("SecurePhotoViewer", "Failed to decrypt blobId=${item.blobId}", e)
-                    bitmap = null
-                    gifBytes = null
-                } finally {
-                    loading = false
+            SecureMediaPage(
+                item = items[page],
+                viewModel = viewModel,
+                onPanoLiveModeChange = { live ->
+                    if (pagerState.currentPage == page) panoLive = live
                 }
-            }
-
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                when {
-                    loading -> CircularProgressIndicator(color = Color.White)
-                    gifBytes != null -> AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(java.nio.ByteBuffer.wrap(gifBytes!!))
-                            .build(),
-                        contentDescription = "Secure photo",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
-                    bitmap != null -> Image(
-                        bitmap = bitmap!!.asImageBitmap(),
-                        contentDescription = "Secure photo",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
-                    else -> Text("Failed to decrypt", color = Color.White)
-                }
-            }
+            )
         }
 
         // Back button overlay
@@ -868,4 +1011,315 @@ internal fun SecurePhotoViewer(
             }
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Secure media page — type-aware renderer for one pager page
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Renders one secure item full-screen, branching on its type so the secure
+ * viewer matches the main gallery:
+ *   - video    → decrypt to a temp file, play with ExoPlayer + controls
+ *   - pano/360 → still image + interactive [PanoramaOverlay] (reused from viewer)
+ *   - motion   → still image + LIVE overlay (embedded MP4 extracted client-side)
+ *   - photo/gif→ Coil image (Coil sniffs GIF / AVIF / etc.)
+ *
+ * Image types are decrypted to a ByteArray and handed to Coil, which downsamples
+ * safely (panoramas capped to [MAX_PANO_DECODE_PX] to dodge the "too large
+ * bitmap" crash). Videos / motion trailers go to disk and are wiped on dispose
+ * so the decrypted plaintext doesn't linger in the cache.
+ */
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun SecureMediaPage(
+    item: SecureGalleryItem,
+    viewModel: SecureGalleryViewModel,
+    onPanoLiveModeChange: (Boolean) -> Unit,
+) {
+    val sub = item.photoSubtype
+    val isVideo = item.mediaType == "video"
+    val isPano = sub == "panorama" || sub == "equirectangular"
+    val isMotion = sub == "motion" && !isVideo
+
+    if (isVideo) {
+        SecureVideoPage(item, viewModel)
+        return
+    }
+
+    val context = LocalContext.current
+    var decrypted by remember(item.blobId) { mutableStateOf<ByteArray?>(null) }
+    var loading by remember(item.blobId) { mutableStateOf(true) }
+    var failed by remember(item.blobId) { mutableStateOf(false) }
+    // Coil decode error (distinct from a decrypt failure). Previously a decode
+    // failure on the base image was swallowed → pure black. Surface it so a
+    // black 360/pano can be diagnosed instead of looking like a blank page.
+    var imageError by remember(item.blobId) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(item.blobId) {
+        loading = true; failed = false
+        try {
+            val data = viewModel.downloadAndDecrypt(item.blobId)
+            android.util.Log.d(
+                "SecureMediaPage",
+                "decrypted blobId=${item.blobId} sub=$sub → ${describeImageBytes(data)}"
+            )
+            // AVIF/HEIF are handled by the app's AvifCoilDecoder (libavif), so the
+            // raw decrypted bytes can go straight to Coil — no temp file / no
+            // plaintext on disk.
+            decrypted = data
+        } catch (e: Exception) {
+            android.util.Log.e("SecureMediaPage", "decrypt failed blobId=${item.blobId}", e)
+            failed = true
+        } finally {
+            loading = false
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        when {
+            loading -> CircularProgressIndicator(color = Color.White)
+            failed || decrypted == null -> Text("Failed to decrypt", color = Color.White)
+            else -> {
+                val data = decrypted!!
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(data)
+                        .apply {
+                            // Capped decode (NOT ORIGINAL) for wide panos/360 — see MAX_PANO_DECODE_PX.
+                            if (isPano) { size(MAX_PANO_DECODE_PX); allowHardware(false) }
+                        }
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "Secure photo",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                    onState = { state ->
+                        if (state is AsyncImagePainter.State.Error) {
+                            val t = state.result.throwable
+                            android.util.Log.w(
+                                "SecureMediaPage",
+                                "Coil decode failed blobId=${item.blobId} sub=$sub: ${t.message}",
+                                t
+                            )
+                            imageError = "Unable to display this image"
+                        } else if (state is AsyncImagePainter.State.Success) {
+                            imageError = null
+                        }
+                    }
+                )
+
+                // Visible fallback for a base-image decode failure (was: black).
+                if (imageError != null) {
+                    Text(imageError!!, color = Color.White)
+                }
+
+                if (isPano) {
+                    PanoramaOverlay(
+                        imageData = data,
+                        intrinsicWidth = (item.width ?: 0).toFloat(),
+                        intrinsicHeight = (item.height ?: 0).toFloat(),
+                        is360 = sub == "equirectangular",
+                        contentDescription = "Secure panorama",
+                        onLiveModeChange = { live, _ -> onPanoLiveModeChange(live) },
+                    )
+                } else if (isMotion) {
+                    SecureMotionOverlay(jpegBytes = decrypted!!, blobKey = item.blobId)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Plays a decrypted secure video. The blob is streamed-decrypted to a temp file
+ * (ExoPlayer needs a file/URI, not a ByteArray) and deleted on dispose.
+ */
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun SecureVideoPage(
+    item: SecureGalleryItem,
+    viewModel: SecureGalleryViewModel,
+) {
+    val context = LocalContext.current
+    var videoFile by remember(item.blobId) { mutableStateOf<File?>(null) }
+    var loading by remember(item.blobId) { mutableStateOf(true) }
+    var failed by remember(item.blobId) { mutableStateOf(false) }
+
+    LaunchedEffect(item.blobId) {
+        loading = true; failed = false
+        try {
+            videoFile = viewModel.downloadAndDecryptToFile(item.blobId, "mp4")
+        } catch (e: Exception) {
+            android.util.Log.e("SecureVideoPage", "decrypt video failed blobId=${item.blobId}", e)
+            failed = true
+        } finally {
+            loading = false
+        }
+    }
+
+    // Wipe the decrypted plaintext when leaving the page (confidentiality).
+    DisposableEffect(videoFile) {
+        val f = videoFile
+        onDispose { f?.delete() }
+    }
+
+    val player = remember(videoFile) {
+        videoFile?.let { f ->
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(Uri.fromFile(f)))
+                prepare()
+                playWhenReady = false
+            }
+        }
+    }
+    DisposableEffect(player) { onDispose { player?.release() } }
+
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        when {
+            loading -> CircularProgressIndicator(color = Color.White)
+            failed || player == null -> Text("Unable to play this video", color = Color.White)
+            else -> AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        this.player = player
+                        useController = true
+                    }
+                }
+            )
+        }
+    }
+}
+
+/**
+ * Plays the motion-photo trailer embedded inside a decrypted JPEG, muted and
+ * looping, on top of the still. The MP4 is extracted client-side (the secure
+ * clone has no separate motion-video blob) and wiped on dispose. Renders
+ * nothing extra if no embedded video is found — the still already shows.
+ */
+@androidx.annotation.OptIn(UnstableApi::class)
+@Composable
+private fun SecureMotionOverlay(
+    jpegBytes: ByteArray,
+    blobKey: String,
+) {
+    val context = LocalContext.current
+    var videoFile by remember(blobKey) { mutableStateOf<File?>(null) }
+    var available by remember(blobKey) { mutableStateOf(true) }
+    var playing by remember(blobKey) { mutableStateOf(true) }
+
+    LaunchedEffect(blobKey) {
+        val file = withContext(Dispatchers.IO) {
+            val mp4 = extractEmbeddedMp4(jpegBytes) ?: return@withContext null
+            File.createTempFile("secure_motion_", ".mp4", context.cacheDir).apply { writeBytes(mp4) }
+        }
+        if (file == null) available = false else videoFile = file
+    }
+    DisposableEffect(videoFile) {
+        val f = videoFile
+        onDispose { f?.delete() }
+    }
+
+    if (!available) return  // no embedded video — the still already shows
+
+    val player = remember(videoFile) {
+        videoFile?.let { f ->
+            ExoPlayer.Builder(context).build().apply {
+                setMediaItem(MediaItem.fromUri(Uri.fromFile(f)))
+                repeatMode = Player.REPEAT_MODE_ALL
+                volume = 0f
+                prepare()
+                playWhenReady = true
+            }
+        }
+    }
+    DisposableEffect(player) { onDispose { player?.release() } }
+    LaunchedEffect(playing, player) { player?.playWhenReady = playing }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (player != null && playing) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx -> PlayerView(ctx).apply { useController = false; this.player = player } }
+            )
+        }
+        // LIVE toggle pill (mirrors the main viewer's MotionPhotoOverlay)
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Surface(
+                modifier = Modifier
+                    .padding(bottom = 80.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .clickable { playing = !playing },
+                color = if (playing) Color.White else Color.Black.copy(alpha = 0.6f),
+                shape = androidx.compose.foundation.shape.CircleShape
+            ) {
+                Text(
+                    text = if (playing) "LIVE ●" else "LIVE ○",
+                    color = if (playing) Color.Black else Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Find an embedded MP4 trailer in a motion-photo JPEG by scanning for the
+ * `ftyp` box signature (the ISO base-media marker). The MP4 begins 4 bytes
+ * before `ftyp` (the box-size prefix). Mirrors the server's ftyp confirmation
+ * in `extract_motion_video`. Returns null if no plausible trailer is found.
+ */
+private fun extractEmbeddedMp4(data: ByteArray): ByteArray? {
+    var i = 4
+    val end = data.size - 4
+    while (i <= end) {
+        if (data[i] == 'f'.code.toByte() && data[i + 1] == 't'.code.toByte() &&
+            data[i + 2] == 'y'.code.toByte() && data[i + 3] == 'p'.code.toByte()
+        ) {
+            val start = i - 4
+            // Require a real trailer to skip a stray 'ftyp' inside the JPEG data.
+            if (start > 0 && data.size - start > 4096) {
+                return data.copyOfRange(start, data.size)
+            }
+        }
+        i++
+    }
+    return null
+}
+
+/** Collapse burst stacks in secure items: keep the first frame per burstId. */
+private fun collapseSecureBursts(items: List<SecureGalleryItem>): List<SecureGalleryItem> {
+    val seen = HashSet<String>()
+    return items.filter { item ->
+        val bid = item.burstId
+        if (bid.isNullOrEmpty()) true else seen.add(bid)
+    }
+}
+
+/**
+ * Expand a set of selected server blob IDs so that any selected burst
+ * representative also pulls in the rest of its burst frames. The picker grid
+ * collapses bursts to one tile, so a selection only holds the cover frame's
+ * blobId — without this, only the cover would move into the secure album.
+ *
+ * [allPhotos] is the un-collapsed picker source, so it still carries every
+ * burst frame; non-burst selections pass through unchanged.
+ */
+internal fun expandBurstBlobIds(
+    selected: Set<String>,
+    allPhotos: List<PhotoEntity>,
+): List<String> {
+    if (selected.isEmpty()) return emptyList()
+    val byBlob = allPhotos.filter { it.serverBlobId != null }.associateBy { it.serverBlobId!! }
+    val burstIds = selected.mapNotNull { byBlob[it]?.burstId }
+        .filter { it.isNotEmpty() }
+        .toSet()
+    if (burstIds.isEmpty()) return selected.toList()
+    val members = allPhotos
+        .filter { !it.burstId.isNullOrEmpty() && it.burstId in burstIds && it.serverBlobId != null }
+        .mapNotNull { it.serverBlobId }
+    return (selected + members).distinct()
 }

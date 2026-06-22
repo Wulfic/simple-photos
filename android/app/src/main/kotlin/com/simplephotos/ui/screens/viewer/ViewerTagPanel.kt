@@ -15,6 +15,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import com.simplephotos.ui.components.SpButton
+import com.simplephotos.ui.components.SpButtonVariant
+import com.simplephotos.ui.theme.Violet
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -117,26 +120,25 @@ fun ViewerTagPanel(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFF3B82F6),
+                            focusedBorderColor = Violet.v400,
                             unfocusedBorderColor = Color.White.copy(alpha = 0.1f),
                             cursorColor = Color.White
                         ),
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp)
                     )
-                    Button(
+                    SpButton(
+                        "Add",
                         onClick = {
                             if (tagInput.isNotBlank()) {
                                 onAddTag(tagInput)
                                 tagInput = ""
                             }
                         },
-                        enabled = tagInput.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text("Add", fontSize = 13.sp)
-                    }
+                        variant = SpButtonVariant.Primary,
+                        fontSize = 13,
+                        enabled = tagInput.isNotBlank()
+                    )
                 }
             }
         }

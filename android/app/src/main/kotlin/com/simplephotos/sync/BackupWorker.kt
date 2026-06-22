@@ -172,6 +172,14 @@ class BackupWorker @AssistedInject constructor(
                         val donor = existingSynced ?: db.photoDao().getSyncedByHash(contentHash)
                         if (donor?.serverBlobId != null && photo.serverPhotoId == null) {
                             try {
+                                // Identical content ⇒ same subtype. Detect from the
+                                // plaintext bytes so dedup copies still classify
+                                // (mirrors the main upload path in PhotoRepository).
+                                val dedupSubtype = if ((photo.mediaType ?: "photo") == "photo") {
+                                    com.simplephotos.data.media.MediaSubtypeDetector.detect(
+                                        photoData, photo.width, photo.height
+                                    )
+                                } else com.simplephotos.data.media.MediaSubtype()
                                 val regReq = com.simplephotos.data.remote.dto.RegisterEncryptedPhotoRequest(
                                     filename = photo.filename,
                                     mimeType = photo.mimeType,
@@ -182,7 +190,10 @@ class BackupWorker @AssistedInject constructor(
                                     takenAt = java.time.Instant.ofEpochMilli(photo.takenAt).toString(),
                                     encryptedBlobId = donor.serverBlobId!!,
                                     encryptedThumbBlobId = donor.thumbnailBlobId,
-                                    photoHash = contentHash
+                                    photoHash = contentHash,
+                                    photoSubtype = dedupSubtype.photoSubtype,
+                                    burstId = dedupSubtype.burstId,
+                                    cameraModel = donor.cameraModel
                                 )
                                 val regRes = api.registerEncryptedPhoto(regReq)
                                 db.photoDao().markSynced(
@@ -332,6 +343,20 @@ class BackupWorker @AssistedInject constructor(
                 "failed" to failed.toString(),
                 "totalProcessed" to genuinelyPending.size.toString()
             ))
+
+            // Now that this batch's frames are all registered (with camera_model),
+            // ask the server to timestamp-group bursts that carry no XMP BurstID
+            // (Samsung et al.). Best-effort — a failure here must not fail backup.
+            if (uploaded > 0) {
+                try {
+                    val res = api.detectBursts()
+                    diag.info(TAG, "Burst detection done", mapOf(
+                        "burstGroupsCreated" to res.burstGroupsCreated.toString()
+                    ))
+                } catch (e: Exception) {
+                    diag.warn(TAG, "Burst detection request failed: ${e.message}", emptyMap())
+                }
+            }
 
             // Re-register the reactive content-URI observer so the next
             // new photo/video also triggers a backup automatically.

@@ -1,12 +1,29 @@
 /** Slide-in panel showing photo metadata with inline edit mode. */
 import { useState, useEffect, useCallback } from "react";
 import { formatBytes } from "../../utils/formatters";
+import { db } from "../../db";
 import { metadataApi, type FullMetadataResponse, type MetadataUpdateRequest } from "../../api/metadata";
+
+/** Photo types the user may assign by hand.  Mirrors the server allowlist in
+ *  `metadata_edit.rs`; "none" is the sentinel for an ordinary photo. */
+const EDITABLE_SUBTYPES = ["none", "panorama", "equirectangular"] as const;
+type EditableSubtype = (typeof EDITABLE_SUBTYPES)[number];
+
+/** Collapse any stored subtype to the editable set.  panorama/equirectangular
+ *  map to themselves; everything else (null, "none", and the embedded-data
+ *  subtypes motion/burst/hdr) shows as "Normal" — the diff guard in saveEdit
+ *  means an unchanged dropdown never overwrites a motion/burst/hdr value. */
+function normalizeSubtype(raw: string | null | undefined): EditableSubtype {
+  return raw === "panorama" || raw === "equirectangular" ? raw : "none";
+}
 
 interface PhotoInfoPanelProps {
   show: boolean;
   onClose: () => void;
   photoId?: string;
+  /** Notifies the parent viewer of a manual subtype change so it can switch
+   *  to/from the panorama / 360° viewer without a reload. */
+  onSubtypeChange?: (subtype: string) => void;
   photoInfo: {
     filename: string;
     mimeType: string;
@@ -53,7 +70,7 @@ function EditRow({ label, value, onChange, placeholder, type }: {
   );
 }
 
-export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: PhotoInfoPanelProps) {
+export default function PhotoInfoPanel({ show, onClose, photoId, onSubtypeChange, photoInfo }: PhotoInfoPanelProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +83,7 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
   const [editLat, setEditLat] = useState("");
   const [editLon, setEditLon] = useState("");
   const [editCamera, setEditCamera] = useState("");
+  const [editSubtype, setEditSubtype] = useState<EditableSubtype>("none");
   // Edit form state — extended EXIF
   const [editCameraMake, setEditCameraMake] = useState("");
   const [editLens, setEditLens] = useState("");
@@ -115,6 +133,7 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
     setEditLat(photoInfo?.latitude != null ? String(photoInfo.latitude) : "");
     setEditLon(photoInfo?.longitude != null ? String(photoInfo.longitude) : "");
     setEditCamera(photoInfo?.cameraModel ?? "");
+    setEditSubtype(normalizeSubtype(fullMeta?.photo_subtype));
     // Populate extended fields from fullMeta
     setEditCameraMake(fullMeta?.camera_make ?? "");
     setEditLens(fullMeta?.lens_model ?? "");
@@ -154,6 +173,9 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
       if (editFilename !== (photoInfo?.filename ?? "")) patch.filename = editFilename;
       if (editTakenAt !== (photoInfo?.takenAt ?? "")) patch.taken_at = editTakenAt || undefined;
       if (editCamera !== (photoInfo?.cameraModel ?? "")) patch.camera_model = editCamera;
+
+      const subtypeChanged = editSubtype !== normalizeSubtype(fullMeta?.photo_subtype);
+      if (subtypeChanged) patch.photo_subtype = editSubtype;
 
       const hadGps = photoInfo?.latitude != null;
       const hasGps = editLat.trim() !== "" && editLon.trim() !== "";
@@ -230,6 +252,17 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
         await metadataApi.update(photoId, patch);
         await loadFullMetadata();
       }
+
+      if (subtypeChanged) {
+        // Switch the live viewer immediately and keep the local cache in sync
+        // (the periodic resync would otherwise lag by a couple of seconds).
+        onSubtypeChange?.(editSubtype);
+        try {
+          await db.photos.update(photoId, { photoSubtype: editSubtype });
+        } catch {
+          // Best-effort cache write; resync will reconcile if it fails.
+        }
+      }
       setEditing(false);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to save");
@@ -299,6 +332,20 @@ export default function PhotoInfoPanel({ show, onClose, photoId, photoInfo }: Ph
                   placeholder="2024-01-15T14:30:00Z" />
                 <EditRow label="Description" value={editDescription} onChange={setEditDescription} />
                 <EditRow label="Comment" value={editUserComment} onChange={setEditUserComment} />
+                {/* Manual photo-type correction — fixes a mis-detected or
+                    undetected panorama / 360° so the right viewer is offered. */}
+                <div className="flex justify-between items-center gap-4">
+                  <span className="text-gray-400 shrink-0 text-xs">Photo Type</span>
+                  <select
+                    value={editSubtype}
+                    onChange={(e) => setEditSubtype(e.target.value as EditableSubtype)}
+                    className="bg-gray-800 text-white text-xs px-2 py-1 rounded border border-white/10 w-48 text-right"
+                  >
+                    <option value="none">Normal</option>
+                    <option value="panorama">Panorama</option>
+                    <option value="equirectangular">360° Photo</option>
+                  </select>
+                </div>
 
                 {/* ── GPS ── */}
                 <div className="text-gray-500 text-[10px] uppercase tracking-wider pt-3">Location</div>

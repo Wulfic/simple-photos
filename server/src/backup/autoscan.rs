@@ -400,7 +400,19 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                         extract_media_metadata_async(abs_path.clone()).await;
 
                     // Extract XMP subtype (motion, panorama, 360, HDR, burst)
-                    let subtype_info = extract_xmp_subtype_async(abs_path.clone()).await;
+                    let mut subtype_info = extract_xmp_subtype_async(abs_path.clone()).await;
+
+                    // Aspect-ratio fallback for panoramas / 360° photos whose
+                    // XMP GPano markers are missing or stripped (real-world
+                    // stitched/exported panoramas frequently lack them). Without
+                    // this, files dropped into the storage folder were the ONLY
+                    // ingest path missing the fallback — scan/upload/ingest all
+                    // apply it — so XMP-less panoramas never got a subtype.
+                    crate::photos::metadata::apply_aspect_subtype_fallback(
+                        &mut subtype_info,
+                        img_w,
+                        img_h,
+                    );
 
                     if let Some(ref st) = subtype_info.photo_subtype {
                         tracing::info!(

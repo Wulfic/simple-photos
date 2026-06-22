@@ -15,8 +15,14 @@ package com.simplephotos.ui.screens.viewer
 import android.net.Uri
 import android.util.Log
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,8 +54,9 @@ import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import com.simplephotos.data.local.entities.PhotoEntity
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 // ─── Panorama / 360° flat-pan overlay ───────────────────────────────────────
 
@@ -67,16 +74,26 @@ fun PanoramaOverlay(
     intrinsicHeight: Float,
     is360: Boolean,
     contentDescription: String,
-    onLiveModeChange: (Boolean) -> Unit = {},
+    onLiveModeChange: (live: Boolean, usesVerticalDrag: Boolean) -> Unit = { _, _ -> },
 ) {
     if (imageData == null) return
     var liveMode by remember { mutableStateOf(false) }
 
+    // Whether the LIVE view consumes the VERTICAL drag axis. The 360 sphere
+    // (yaw + pitch) and tall/vertical flat panoramas (pan up/down) do; a normal
+    // wide flat panorama pans horizontally and leaves the vertical axis free.
+    // PhotoViewerScreen uses this to keep swipe-DOWN-to-dismiss working on wide
+    // panos while still disabling it for 360 / vertical panos (which need the
+    // vertical drag to look around). See android-pano-pending-2026-06-20 #3.
+    val aspect = if (intrinsicWidth > 0 && intrinsicHeight > 0)
+        intrinsicWidth / intrinsicHeight else 2f
+    val usesVerticalDrag = is360 || aspect < 1f
+
     // Notify caller (PhotoViewerScreen) so it can disable HorizontalPager
     // paging while the user is panning the panorama / 360 image.
-    LaunchedEffect(liveMode) { onLiveModeChange(liveMode) }
+    LaunchedEffect(liveMode) { onLiveModeChange(liveMode, usesVerticalDrag) }
     DisposableEffect(Unit) {
-        onDispose { onLiveModeChange(false) }
+        onDispose { onLiveModeChange(false, false) }
     }
 
     if (!liveMode) {
@@ -91,17 +108,46 @@ fun PanoramaOverlay(
         return
     }
 
-    // Live mode: paint our own pannable image on top of everything else.
+    // ── Live mode, equirectangular: real WebGL-style photo sphere ────────────
+    // Mirrors the web's Sphere360Viewer (drag to look around, pinch to zoom)
+    // instead of the old flat horizontal pan, which never gave a 360 feel.
+    if (is360) {
+        Sphere360Overlay(
+            imageData = imageData,
+            contentDescription = contentDescription,
+            onExitToFull = { liveMode = false },
+        )
+        return
+    }
+
+    // ── Live mode, flat panorama: pan along the image's LONG axis ────────────
+    // Mirrors the web PanoramaViewer flat mode: horizontal stitches pan
+    // left/right; tall (vertical) panoramas pan up/down.  The previous
+    // implementation only ever panned horizontally AND captured maxPan from the
+    // first (zero-size) composition, so the pan range was pinned to 0 and the
+    // image could not move at all.
     val context = LocalContext.current
     val density = LocalDensity.current
     var containerSize by remember { mutableStateOf(Size.Zero) }
-    var panX by remember { mutableStateOf(0f) }
+    var pan by remember { mutableStateOf(0f) }
 
-    val aspect = if (intrinsicWidth > 0 && intrinsicHeight > 0)
-        intrinsicWidth / intrinsicHeight else 2f
-    val renderedHeightPx = containerSize.height
-    val renderedWidthPx = renderedHeightPx * aspect
-    val maxPan = (renderedWidthPx - containerSize.width).coerceAtLeast(0f)
+    // `aspect` / `usesVerticalDrag` are computed once at the top of the overlay.
+    val horizontal = aspect >= 1f
+
+    // Rendered dimensions: the short axis fills the viewport, the long axis
+    // overflows and is translated.
+    val renderedWidthPx = if (horizontal) containerSize.height * aspect else containerSize.width
+    val renderedHeightPx = if (horizontal) containerSize.height else containerSize.width / aspect
+    val viewportSpan = if (horizontal) containerSize.width else containerSize.height
+    val renderedSpan = if (horizontal) renderedWidthPx else renderedHeightPx
+    val maxPan = (renderedSpan - viewportSpan).coerceAtLeast(0f)
+
+    // The gesture coroutine below is keyed on Unit so it is NOT restarted on
+    // every size change. Read these through rememberUpdatedState so the running
+    // loop always sees the CURRENT maxPan / axis instead of the stale
+    // first-composition values (the original "can't pan" bug).
+    val maxPanState = rememberUpdatedState(maxPan)
+    val horizontalState = rememberUpdatedState(horizontal)
 
     Box(
         modifier = Modifier
@@ -109,63 +155,82 @@ fun PanoramaOverlay(
             .background(Color.Black)
             .clipToBounds()
             .pointerInput(Unit) {
-                // Consume horizontal drag in the INITIAL pass so the parent
-                // HorizontalPager (in PhotoViewerScreen) does not see it and
-                // try to flip pages — which would prevent panning the pano.
+                // Consume the drag along the pan axis in the INITIAL pass so the
+                // parent HorizontalPager (in PhotoViewerScreen) does not see it
+                // and try to flip pages.
                 //
-                // CRITICAL: only consume a change when it carries an actual
-                // horizontal positionChange. The DOWN and UP events have
-                // positionChange().x == 0 — consuming those swallows taps and
-                // makes the "Full View" toggle pill un-clickable.
-                awaitPointerEventScope {
+                // TOUCH SLOP (android-pano-pending-2026-06-20 #4): a real finger
+                // tap carries sub-pixel jitter, so the old "consume any non-zero
+                // delta" rule swallowed taps and made the "Full View" pill
+                // un-clickable. Now we accumulate the pan-axis delta and only
+                // start consuming once it crosses the slop threshold — pre-slop
+                // jitter is left free so the pill's clickable press survives.
+                // (adb `input tap` is jitter-free and never reproduced this; only
+                // a human finger / tiny-move tap does.)
+                val slop = 8.dp.toPx() // PointerInputScope is a Density
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    var accum = 0f
+                    var panning = false
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
-                        var dx = 0f
-                        event.changes.forEach { change ->
-                            if (change.pressed) {
-                                val px = change.positionChange().x
-                                if (px != 0f) {
-                                    dx += px
-                                    change.consume()
-                                }
-                            }
+                        val change = event.changes.firstOrNull { it.pressed } ?: break
+                        val delta = if (horizontalState.value)
+                            change.positionChange().x else change.positionChange().y
+                        if (!panning) {
+                            accum += delta
+                            if (kotlin.math.abs(accum) > slop) panning = true
                         }
-                        if (dx != 0f) {
-                            panX = (panX - dx).coerceIn(0f, maxPan)
+                        if (panning && delta != 0f) {
+                            pan = (pan - delta).coerceIn(0f, maxPanState.value)
+                            change.consume()
                         }
                     }
                 }
             }
             .onSizeChanged { containerSize = Size(it.width.toFloat(), it.height.toFloat()) }
     ) {
-        // Give the image an explicit width equal to its rendered (height-scaled)
-        // width via requiredWidth so it can extend beyond the parent's maxWidth.
-        // Without this, AsyncImage is clamped to the container width and the
-        // graphicsLayer translationX just slides an already-clipped rect —
-        // panning reveals nothing. clipToBounds on the parent handles the
-        // visible-region clipping.
+        // Render the image at its natural aspect with the short side matching
+        // the viewport, then translate in screen pixels. requiredWidth/Height
+        // let it extend beyond the parent's max bounds; clipToBounds on the
+        // parent clips the visible region. FillBounds does not distort because
+        // the box already preserves the image aspect.
         val renderedWidthDp = with(density) { renderedWidthPx.toDp() }
+        val renderedHeightDp = with(density) { renderedHeightPx.toDp() }
+        // Compose CENTERS a child whose required size exceeds the parent (the Box
+        // is TopStart, but an over-wide requiredWidth child still lands centered —
+        // same gotcha as the gallery crop tile). So the image's leading edge sits
+        // at -maxPan/2, not 0. Web positions its pan div at top-0/left-0 and
+        // translates by -pan; to match that "pan=0 = leading edge" we shift by
+        // +maxPan/2. Without this you start mid-pano, can only pan one way, and
+        // overshoot into the black letterbox at the far end.
+        val lead = maxPan / 2f
         AsyncImage(
-            // 360 / wide panoramas commonly exceed Coil's default 4096-px
-            // bitmap budget; force ORIGINAL size + disable hardware bitmaps
-            // so the decoder doesn't silently drop the image to an empty
-            // placeholder.
+            // Decode wide panoramas at a CAPPED size, not ORIGINAL. A full-res
+            // pano (e.g. 17000×2540) decodes to a >100 MB bitmap that crashes on
+            // draw ("Canvas: trying to draw too large bitmap"). Capping the
+            // longest side to MAX_PANO_DECODE_PX keeps the bitmap within the GPU
+            // budget while still allowing full panning. allowHardware(false)
+            // keeps the AVIF/HEIF software decode path.
             model = ImageRequest.Builder(context)
                 .data(imageData)
-                .size(coil.size.Size.ORIGINAL)
+                .size(MAX_PANO_DECODE_PX)
                 .allowHardware(false)
                 .crossfade(true)
                 .build(),
             contentDescription = contentDescription,
-            contentScale = ContentScale.FillHeight,
+            contentScale = ContentScale.FillBounds,
             modifier = Modifier
-                .fillMaxHeight()
                 .requiredWidth(renderedWidthDp)
-                .graphicsLayer { translationX = -panX }
+                .requiredHeight(renderedHeightDp)
+                .graphicsLayer {
+                    translationX = if (horizontal) lead - pan else 0f
+                    translationY = if (horizontal) 0f else lead - pan
+                }
         )
 
-        // Pan position indicator
-        if (maxPan > 0f) {
+        // Pan position indicator (horizontal bar showing progress along the axis)
+        if (maxPan > 0f && renderedSpan > 0f) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -175,9 +240,8 @@ fun PanoramaOverlay(
                     .clip(RoundedCornerShape(2.dp))
                     .background(Color.White.copy(alpha = 0.25f))
             ) {
-                val frac = if (renderedWidthPx > 0f)
-                    (panX / renderedWidthPx).coerceIn(0f, 1f) else 0f
-                val barWidthFrac = (containerSize.width / renderedWidthPx).coerceIn(0f, 1f)
+                val frac = (pan / renderedSpan).coerceIn(0f, 1f)
+                val barWidthFrac = (viewportSpan / renderedSpan).coerceIn(0f, 1f)
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
@@ -232,34 +296,35 @@ private fun ModeTogglePill(label: String, sub: String, onClick: () -> Unit) {
 @Composable
 fun MotionPhotoOverlay(
     photo: PhotoEntity,
-    serverBaseUrl: String,
-    okHttpClient: OkHttpClient,
+    viewModel: PhotoViewerViewModel,
 ) {
-    val motionBlobId = photo.motionVideoBlobId ?: return
+    // Triggered by subtype=="motion" (see caller), not motion_video_blob_id:
+    // Android-captured motion photos embed the video in the JPEG and carry NO
+    // separate blob, so the old `motionVideoBlobId != null` gate hid the LIVE
+    // button entirely. The server resolves the video by photo id.
+    val serverPhotoId = photo.serverPhotoId ?: return
     val context = LocalContext.current
     var playing by remember(photo.localId) { mutableStateOf(true) }
     var loading by remember(photo.localId) { mutableStateOf(true) }
     var localUri by remember(photo.localId) { mutableStateOf<Uri?>(null) }
     var error by remember(photo.localId) { mutableStateOf(false) }
 
-    // Download motion video to a temp file (private, so ExoPlayer can read it).
-    LaunchedEffect(photo.localId, motionBlobId) {
+    // Fetch the motion video from `/api/photos/{id}/motion-video`, which returns
+    // a ready-to-play MP4 (the server serves the stored blob if present, else
+    // extracts the trailer from the server-side-decrypted photo). This mirrors
+    // the web's MotionVideoOverlay exactly — no client-side decryption, and it
+    // works for embedded motion videos that have no separate blob.
+    LaunchedEffect(photo.localId, serverPhotoId) {
         try {
-            val url = "$serverBaseUrl/api/blobs/$motionBlobId/download"
-            val req = Request.Builder().url(url).build()
-            okHttpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    error = true; loading = false
-                    return@use
-                }
-                val body = resp.body ?: run { error = true; loading = false; return@use }
-                val tmp = java.io.File(context.cacheDir, "motion_${photo.localId}.mp4")
-                tmp.outputStream().use { out -> body.byteStream().copyTo(out) }
-                localUri = Uri.fromFile(tmp)
-                loading = false
+            val tmp = withContext(Dispatchers.IO) {
+                val out = java.io.File(context.cacheDir, "motion_${photo.localId}.mp4")
+                viewModel.downloadMotionVideoToFile(serverPhotoId, out)
+                out
             }
-        } catch (e: Exception) {
-            Log.w("MotionPhotoOverlay", "download failed: ${e.message}")
+            localUri = Uri.fromFile(tmp)
+            loading = false
+        } catch (e: Throwable) {
+            Log.w("MotionPhotoOverlay", "motion video fetch failed: ${e.message}")
             error = true; loading = false
         }
     }
@@ -324,6 +389,96 @@ fun MotionPhotoOverlay(
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 )
+            }
+        }
+    }
+}
+
+// ─── Burst filmstrip overlay ────────────────────────────────────────────────
+
+/**
+ * Horizontal filmstrip for browsing the frames of a burst photo, shown at the
+ * bottom of the viewer. Mirrors the web's [BurstStrip].
+ *
+ * The pager itself only swipes between burst COVERS (one page per burst), so
+ * this strip is the only way to step through the individual shots of a large
+ * burst (e.g. 46 frames). Tapping a frame swaps the displayed image in place
+ * via [onSelectFrame] without leaving the current pager page.
+ */
+@Composable
+fun BurstStripOverlay(
+    frames: List<PhotoEntity>,
+    currentPhotoId: String,
+    visible: Boolean,
+    onSelectFrame: (String) -> Unit,
+) {
+    if (!visible || frames.size <= 1) return
+
+    val listState = rememberLazyListState()
+
+    // Keep the active frame scrolled into view as the selection moves.
+    LaunchedEffect(currentPhotoId, frames) {
+        val idx = frames.indexOfFirst { it.localId == currentPhotoId }
+        if (idx >= 0) {
+            try { listState.animateScrollToItem(idx) } catch (_: Exception) {}
+        }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier
+                .padding(bottom = 130.dp)
+                .widthIn(max = 340.dp)
+                .clip(RoundedCornerShape(12.dp)),
+            color = Color.Black.copy(alpha = 0.7f),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            LazyRow(
+                state = listState,
+                modifier = Modifier.padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                itemsIndexed(frames, key = { _, f -> f.localId }) { idx, frame ->
+                    val isActive = frame.localId == currentPhotoId
+                    val model: Any? = when {
+                        frame.thumbnailPath != null -> File(frame.thumbnailPath!!)
+                        frame.localPath != null -> Uri.parse(frame.localPath)
+                        else -> null
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(
+                                width = 2.dp,
+                                color = if (isActive) Color.White else Color.Transparent,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .clickable { onSelectFrame(frame.localId) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (model != null) {
+                            AsyncImage(
+                                model = model,
+                                contentDescription = "Burst frame ${idx + 1}",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Gray.copy(alpha = 0.4f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("${idx + 1}", color = Color.White, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
             }
         }
     }

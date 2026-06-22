@@ -44,7 +44,14 @@ data class SecureGalleryItem(
     @SerializedName("encrypted_thumb_blob_id") val encryptedThumbBlobId: String? = null,
     val width: Int? = null,
     val height: Int? = null,
-    @SerializedName("media_type") val mediaType: String? = null
+    @SerializedName("media_type") val mediaType: String? = null,
+    // Subtype-aware fields (mirrors the main gallery) so the secure viewer can
+    // play videos, pan panoramas/360, play motion (LIVE) photos, and collapse
+    // bursts. Sourced from the original photo server-side; see list_gallery_items.
+    @SerializedName("photo_subtype") val photoSubtype: String? = null,
+    @SerializedName("burst_id") val burstId: String? = null,
+    @SerializedName("duration_secs") val durationSecs: Float? = null,
+    @SerializedName("motion_video_blob_id") val motionVideoBlobId: String? = null
 )
 
 data class SecureGalleryItemsResponse(

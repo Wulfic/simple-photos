@@ -24,6 +24,11 @@ pub struct MetadataUpdateRequest {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub camera_model: Option<String>,
+    /// Manual photo-subtype correction.  Accepts only `none` (the sentinel for
+    /// "ordinary photo" — a non-NULL value so re-scans never re-tag it),
+    /// `panorama`, or `equirectangular`.  Lets the user fix a mis-detected
+    /// (or undetected) panorama / 360° photo so the right viewer is offered.
+    pub photo_subtype: Option<String>,
     /// Explicitly clear GPS coordinates when set to `true`.
     #[serde(default)]
     pub clear_gps: bool,
@@ -113,6 +118,17 @@ pub struct WriteExifResponse {
     pub new_photo_hash: Option<String>,
 }
 
+/// Whether a value is an accepted **manual** photo-subtype correction.
+///
+/// Restricted to the values the editor UI can offer and the viewer can act on.
+/// `none` is the sentinel for an ordinary photo (a non-NULL value so the
+/// NULL-gated re-scan / backfill paths never re-tag it).  Embedded-data
+/// subtypes (`motion` / `burst` / `hdr`) are intentionally excluded — those
+/// depend on backing video / burst data that relabeling can't conjure.
+fn is_allowed_manual_subtype(subtype: &str) -> bool {
+    matches!(subtype, "none" | "panorama" | "equirectangular")
+}
+
 // ── PATCH /api/photos/{id}/metadata ──────────────────────────────────
 
 /// Update metadata fields for a photo owned by the authenticated user.
@@ -174,6 +190,18 @@ pub async fn update_metadata(
         if !(-180.0..=180.0).contains(&lon) {
             return Err(AppError::BadRequest(
                 "Longitude must be between -180 and 180".into(),
+            ));
+        }
+    }
+
+    // Manual subtype correction is restricted to the values the UI can offer
+    // and the viewer can act on.  Embedded-data subtypes (motion/burst/hdr)
+    // are intentionally rejected — relabeling can't conjure the backing video
+    // or burst group.
+    if let Some(ref subtype) = req.photo_subtype {
+        if !is_allowed_manual_subtype(subtype) {
+            return Err(AppError::BadRequest(
+                "photo_subtype must be one of: none, panorama, equirectangular".into(),
             ));
         }
     }
@@ -263,6 +291,17 @@ pub async fn update_metadata(
             .execute(&state.pool)
             .await?;
         updated_fields.push("camera_model".to_string());
+    }
+
+    if let Some(ref subtype) = req.photo_subtype {
+        // Store the literal value (including the "none" sentinel) so the
+        // NULL-gated re-scan / backfill paths leave the user's choice alone.
+        sqlx::query("UPDATE photos SET photo_subtype = ?1 WHERE id = ?2")
+            .bind(subtype)
+            .bind(&photo_id)
+            .execute(&state.pool)
+            .await?;
+        updated_fields.push("photo_subtype".to_string());
     }
 
     // ── Extended EXIF field updates ──────────────────────────────
@@ -896,4 +935,26 @@ fn write_exif_fields_full(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_allowed_manual_subtype;
+
+    #[test]
+    fn accepts_the_three_editable_subtypes() {
+        for s in ["none", "panorama", "equirectangular"] {
+            assert!(is_allowed_manual_subtype(s), "{s} should be allowed");
+        }
+    }
+
+    #[test]
+    fn rejects_embedded_data_and_garbage_subtypes() {
+        // motion/burst/hdr depend on backing data that relabeling can't create.
+        for s in [
+            "motion", "burst", "hdr", "", "Panorama", "360", "none ", "../x",
+        ] {
+            assert!(!is_allowed_manual_subtype(s), "{s:?} should be rejected");
+        }
+    }
 }

@@ -14,6 +14,8 @@ interface GalleryItem {
   blob_id: string;
   encrypted_thumb_blob_id?: string | null;
   media_type?: string | null;
+  photo_subtype?: string | null;
+  duration_secs?: number | null;
 }
 
 /**
@@ -25,6 +27,8 @@ export function useSecureItemSource(item: GalleryItem): {
   source: ThumbnailSource;
   mediaType: "photo" | "gif" | "video" | "audio";
   filename: string;
+  photoSubtype: string | undefined;
+  duration: number | undefined;
 } {
   const cachedPhoto = useLiveQuery(
     () => db.photos.get(item.blob_id),
@@ -47,5 +51,11 @@ export function useSecureItemSource(item: GalleryItem): {
 
   const filename = cachedPhoto?.filename ?? item.blob_id;
 
-  return { source, mediaType, filename };
+  // Subtype + duration come from the server item (preferred) and fall back to
+  // the cached photo, so the secure tiles show PANO/360/LIVE badges and video
+  // durations just like the main gallery.
+  const photoSubtype = item.photo_subtype ?? cachedPhoto?.photoSubtype ?? undefined;
+  const duration = item.duration_secs ?? cachedPhoto?.duration ?? undefined;
+
+  return { source, mediaType, filename, photoSubtype, duration };
 }

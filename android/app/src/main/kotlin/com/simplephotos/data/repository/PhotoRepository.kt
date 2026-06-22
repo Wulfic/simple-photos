@@ -8,6 +8,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import com.simplephotos.crypto.CryptoManager
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
@@ -15,7 +16,11 @@ import com.simplephotos.data.remote.ApiService
 import com.simplephotos.data.remote.dto.DuplicatePhotoRequest
 import com.simplephotos.data.remote.dto.DuplicatePhotoResponse
 import com.simplephotos.data.remote.dto.FavoriteToggleResponse
+import com.simplephotos.data.remote.dto.FullMetadataResponse
+import com.simplephotos.data.remote.dto.MetadataUpdateRequest
+import com.simplephotos.data.remote.dto.MetadataUpdateResponse
 import com.simplephotos.data.remote.dto.SetCropRequest
+import com.simplephotos.data.remote.dto.WriteExifResponse
 import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_SERVER_URL
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -89,12 +94,92 @@ class PhotoRepository @Inject constructor(
     private fun computeContentHash(data: ByteArray): String =
         crypto.sha256Hex(data).take(12)
 
+    /**
+     * Read camera make/model from EXIF, formatted to match the server's
+     * `metadata::extract_media_metadata` (model alone when it already starts
+     * with the make, else "Make Model"). Used server-side to timestamp-group
+     * bursts; returns null when no camera info is present.
+     */
+    private fun extractCameraModel(data: ByteArray): String? {
+        return try {
+            val exif = androidx.exifinterface.media.ExifInterface(data.inputStream())
+            val make = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE)?.trim()
+            val model = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MODEL)?.trim()
+            when {
+                !make.isNullOrEmpty() && !model.isNullOrEmpty() ->
+                    if (model.startsWith(make)) model else "$make $model"
+                !model.isNullOrEmpty() -> model
+                !make.isNullOrEmpty() -> make
+                else -> null
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("PhotoRepository", "extractCameraModel failed: ${e.message}")
+            null
+        }
+    }
+
     fun getAllPhotos(): Flow<List<PhotoEntity>> = db.photoDao().getAllPhotos()
 
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
 
+    /**
+     * Resolve the ordered photo list for an album — handles BOTH virtual
+     * "smart" albums (favorites/photos/gifs/videos/audio/recents) AND
+     * user-created albums (photo↔album xref).
+     *
+     * Shared by the album-detail grid ([AlbumDetailViewModel]) and the
+     * full-screen pager ([PhotoViewerViewModel]). They MUST use the same
+     * source so the viewer pages in the exact order the grid shows; otherwise
+     * the tapped index lands on the wrong photo. Smart albums were previously
+     * only resolved by the grid, so opening one in the viewer found zero
+     * photos → "Photo not found".
+     */
+    suspend fun getAlbumPhotos(albumId: String): List<PhotoEntity> {
+        if (albumId.startsWith("smart-")) {
+            val all = getAllPhotos().first()
+            return when (albumId) {
+                // Collapse bursts BEFORE capping so a 46-shot burst counts as
+                // one item toward the 100-item recents window (matching grid).
+                "smart-recents" -> all.sortedByDescending { it.createdAt }.collapseBursts().take(100)
+                // Collapse bursts so a burst stack counts/renders as one item,
+                // matching the main gallery and the web (which collapses bursts
+                // everywhere it lists photos). collapseBursts is a no-op for
+                // media without a burstId, so videos/gifs/audio are unaffected.
+                "smart-favorites" -> all.filter { it.isFavorite }.collapseBursts()
+                "smart-photos" -> all.filter { it.mediaType == "photo" || it.mediaType == "gif" }.collapseBursts()
+                "smart-gifs" -> all.filter { it.mediaType == "gif" }
+                "smart-videos" -> all.filter { it.mediaType == "video" }
+                "smart-audio" -> all.filter { it.mediaType == "audio" }
+                else -> all
+            }
+        }
+        val photoIds = db.albumDao().getPhotoIdsForAlbum(albumId)
+        return photoIds.mapNotNull { id -> getPhoto(id) }
+    }
+
     suspend fun getPhotosByServerPhotoIds(ids: List<String>): List<PhotoEntity> =
         db.photoDao().getByServerPhotoIds(ids)
+
+    /**
+     * Expand a selection of photo localIds so that any burst-stack
+     * representative also pulls in every other frame of its burst group.
+     *
+     * Burst stacks render as a single tile, so a multi-select only ever holds
+     * the cover frame's localId. Adding that to an album would silently drop
+     * the rest of the burst; this re-hydrates the full membership. Non-burst
+     * ids pass through unchanged.
+     */
+    suspend fun expandBurstSelection(localIds: Collection<String>): List<String> {
+        val ids = localIds.toList()
+        if (ids.isEmpty()) return ids
+        val burstIds = db.photoDao().getByIds(ids)
+            .mapNotNull { it.burstId }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        if (burstIds.isEmpty()) return ids
+        val members = db.photoDao().getByBurstIds(burstIds).map { it.localId }
+        return (ids + members).distinct()
+    }
 
     suspend fun insertPhoto(photo: PhotoEntity) = db.photoDao().insert(photo)
 
@@ -233,6 +318,23 @@ class PhotoRepository @Inject constructor(
             val photoRes = api.uploadBlob(photoBody, mediaBlobType, encryptedPhoto.size.toString(), photoHash, contentHash)
             android.util.Log.d("PhotoRepository", "uploadPhoto: media uploaded, blobId=${photoRes.blobId}")
 
+            // ── Special-photo subtype detection (client-side) ────────────────
+            // The server only ever sees the encrypted blob, so it cannot scan
+            // XMP to classify motion/panorama/360/HDR/burst photos. Detect here
+            // from the plaintext bytes and ship the result with registration.
+            // camera_model lets the server timestamp-group bursts that carry no
+            // XMP BurstID (Samsung et al.) via burst::detect_bursts_for_user.
+            val detected = if (photo.mediaType == "photo") {
+                com.simplephotos.data.media.MediaSubtypeDetector.detect(photoData, photo.width, photo.height)
+            } else {
+                com.simplephotos.data.media.MediaSubtype()
+            }
+            val cameraModel = if (photo.mediaType == "photo") extractCameraModel(photoData) else null
+            if (detected.photoSubtype != null || detected.burstId != null || cameraModel != null) {
+                android.util.Log.d("PhotoRepository",
+                    "uploadPhoto: detected subtype=${detected.photoSubtype} burstId=${detected.burstId} camera=$cameraModel for ${photo.filename}")
+            }
+
             // Register the encrypted photo on the server to create a photos row
             val regReq = com.simplephotos.data.remote.dto.RegisterEncryptedPhotoRequest(
                 filename = photo.filename,
@@ -246,12 +348,20 @@ class PhotoRepository @Inject constructor(
                 longitude = photo.longitude,
                 encryptedBlobId = photoRes.blobId,
                 encryptedThumbBlobId = thumbBlobId,
-                photoHash = contentHash
+                photoHash = contentHash,
+                photoSubtype = detected.photoSubtype,
+                burstId = detected.burstId,
+                cameraModel = cameraModel
             )
             val regRes = api.registerEncryptedPhoto(regReq)
             android.util.Log.d("PhotoRepository", "uploadPhoto: registered photo, serverPhotoId=${regRes.photoId}, duplicate=${regRes.duplicate}")
 
             db.photoDao().markSynced(photo.localId, regRes.photoId, photoRes.blobId, thumbBlobId, contentHash)
+            // Persist locally too so the device gallery badges it immediately
+            // (server timestamp-burst grouping is reflected on the next sync).
+            if (detected.photoSubtype != null || detected.burstId != null) {
+                db.photoDao().backfillSubtypeFields(regRes.photoId, detected.photoSubtype, detected.burstId, null)
+            }
 
             // Cache uploaded thumbnail locally
             if (thumbnailData != null && thumbnailData.isNotEmpty()) {
@@ -266,6 +376,22 @@ class PhotoRepository @Inject constructor(
             android.util.Log.e("PhotoRepository", "uploadPhoto failed: ${e.message}", e)
             db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
             throw e
+        }
+    }
+
+    /**
+     * Stream the embedded motion-photo video for [photoId] to [outputFile].
+     *
+     * Hits `GET /api/photos/{id}/motion-video`, which returns a ready-to-play
+     * MP4 (the server extracts/decrypts the trailer). No client-side decryption
+     * — unlike photo/video blobs, this is already plaintext `video/mp4`.
+     */
+    suspend fun downloadMotionVideoToFile(photoId: String, outputFile: File) {
+        val response = api.serveMotionVideo(photoId)
+        response.byteStream().use { input ->
+            outputFile.outputStream().buffered().use { output ->
+                input.copyTo(output, bufferSize = 8192)
+            }
         }
     }
 
@@ -383,18 +509,29 @@ class PhotoRepository @Inject constructor(
             throw IllegalStateException("Could not find end of \"data\" field in decrypted blob")
         }
 
-        // Decode base64 in chunks and write to output file.
-        // Base64 decodes in groups of 4 chars → 3 bytes, so we process
-        // in multiples of 4 characters (e.g. 49152 chars → 36864 bytes).
-        outputFile.outputStream().buffered().use { out ->
-            val chunkSize = 49152 // must be multiple of 4
-            var pos = markerIdx
-            while (pos < endIdx) {
-                val end = minOf(pos + chunkSize, endIdx)
-                val base64Chunk = String(decrypted, pos, end - pos, Charsets.UTF_8)
-                val decoded = android.util.Base64.decode(base64Chunk, android.util.Base64.NO_WRAP)
-                out.write(decoded)
-                pos = end
+        // Decode the base64 "data" value to the output file.
+        //
+        // This previously decoded fixed 48k-char chunks with Base64.NO_WRAP,
+        // which threw "bad base-64" for blobs whose base64 uses the URL-safe
+        // alphabet ('-'/'_' instead of '+'/'/') — some secure items (e.g.
+        // motion/burst added via the web "secure add" flow) are encoded that
+        // way, while Android-backed-up blobs use the standard alphabet. Two
+        // fixes: (1) normalise URL-safe → standard in place so either alphabet
+        // decodes, (2) stream-decode the whole value via Base64InputStream so a
+        // chunk boundary can never split a 4-char group (and a missing-padding
+        // tail is flushed at EOF). Whitespace is skipped by the decoder.
+        var urlSafe = false
+        for (i in markerIdx until endIdx) {
+            when (decrypted[i]) {
+                '-'.code.toByte() -> { decrypted[i] = '+'.code.toByte(); urlSafe = true }
+                '_'.code.toByte() -> { decrypted[i] = '/'.code.toByte(); urlSafe = true }
+            }
+        }
+        val regionLen = endIdx - markerIdx
+        android.util.Log.d(TAG, "decoding base64 data: $regionLen chars (len%4=${regionLen % 4}, urlSafe=$urlSafe)")
+        java.io.ByteArrayInputStream(decrypted, markerIdx, regionLen).use { region ->
+            android.util.Base64InputStream(region, android.util.Base64.NO_WRAP).use { b64In ->
+                outputFile.outputStream().buffered().use { out -> b64In.copyTo(out, 64 * 1024) }
             }
         }
     }
@@ -635,6 +772,12 @@ class PhotoRepository @Inject constructor(
                     thumbnailBlobId = thumbBlobId,
                     filename = photo.filename,
                     takenAt = takenAtMs,
+                    // Library import order — mirror the server's created_at (the
+                    // web stores this as `addedAt`). Without this, createdAt
+                    // defaulted to the LOCAL insert time, so "Recently Added"
+                    // reflected device-sync order instead of server-add order
+                    // and never matched the web/server recents list.
+                    createdAt = parseIsoToEpochMs(photo.createdAt),
                     mimeType = photo.mimeType,
                     mediaType = photo.mediaType,
                     width = w,
@@ -789,6 +932,27 @@ class PhotoRepository @Inject constructor(
     suspend fun setCropOnServer(photoId: String, cropMetadata: String?) {
         android.util.Log.d(TAG, "[setCrop] photoId=$photoId, meta=$cropMetadata")
         api.setCrop(photoId, SetCropRequest(cropMetadata))
+    }
+
+    // ── Metadata edit (full EXIF view + edit + write-back) ───────────────
+    // Mirrors web/src/api/metadata.ts; used by PhotoViewerViewModel/ViewerInfoPanel.
+
+    /** Fetch the full metadata + raw EXIF tags for the Info panel. */
+    suspend fun getFullMetadata(photoId: String): FullMetadataResponse =
+        api.getFullMetadata(photoId)
+
+    /** PATCH only the changed metadata fields (nulls omitted by Gson). */
+    suspend fun updateMetadata(photoId: String, request: MetadataUpdateRequest): MetadataUpdateResponse =
+        api.updateMetadata(photoId, request)
+
+    /** Write the current DB metadata back to the file's EXIF (jpeg/tiff). */
+    suspend fun writeExif(photoId: String): WriteExifResponse =
+        api.writeExif(photoId)
+
+    /** Persist a manual photo-subtype correction to the local cache so the
+     *  pano/360 viewer switches immediately (the periodic resync would lag). */
+    suspend fun updateLocalSubtype(serverPhotoId: String, subtype: String?) {
+        db.photoDao().updatePhotoSubtype(serverPhotoId, subtype)
     }
 
     /** Create a server-side duplicate of a photo ("Save Copy"). */

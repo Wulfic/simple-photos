@@ -51,6 +51,12 @@ pub struct SearchResult {
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub tags: Vec<String>,
+    /// Burst group id, when this result is the representative frame of a burst
+    /// stack (the search collapses bursts to one result — see `search_photos`).
+    pub burst_id: Option<String>,
+    /// Number of frames in the burst group (only set on a burst representative),
+    /// so clients can badge "BURST N" without a second round-trip.
+    pub burst_count: Option<i64>,
 }
 
 /// Wrapper for search results.

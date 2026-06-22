@@ -360,8 +360,8 @@ pub async fn register_encrypted_photo(
         "INSERT INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
          size_bytes, width, height, duration_secs, taken_at, latitude, longitude, \
          thumb_path, created_at, encrypted_blob_id, encrypted_thumb_blob_id, photo_hash, \
-         photo_subtype, burst_id, motion_video_blob_id) \
-         VALUES (?, ?, ?, '', ?, ?, 0, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
+         photo_subtype, burst_id, motion_video_blob_id, camera_model) \
+         VALUES (?, ?, ?, '', ?, ?, 0, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
@@ -381,6 +381,7 @@ pub async fn register_encrypted_photo(
     .bind(&req.photo_subtype)
     .bind(&req.burst_id)
     .bind(&req.motion_video_blob_id)
+    .bind(&req.camera_model)
     .execute(&state.pool)
     .await?;
 

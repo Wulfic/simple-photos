@@ -155,11 +155,39 @@ pub async fn search_photos(
     // For fuzzy matching we also generate "stem" variants (strip common suffixes)
     // and allow partial substring matches via LIKE.
 
-    let field_expr = "COALESCE(pt.tag, '') || ' ' || COALESCE(p.filename, '') || ' ' || \
+    // Searchable text per row. Beyond the raw fields we also synthesise:
+    //   • Reverse-geocoded place names (geo_city/state/country) so a query like
+    //     "paris" or "france" matches by location, not just lat/long numbers.
+    //   • Human date words — weekday ("friday") and month ("june") names derived
+    //     from taken_at/created_at — so natural date queries work. (Year and
+    //     day-of-month already appear verbatim in the ISO timestamp.)
+    // `LOWER(...)` is applied around the whole expression below, so the literal
+    // day/month names are written lowercase here for clarity.
+    let date_col = "COALESCE(p.taken_at, p.created_at)";
+    let weekday_expr = format!(
+        "CASE strftime('%w', {date_col}) \
+            WHEN '0' THEN 'sunday' WHEN '1' THEN 'monday' WHEN '2' THEN 'tuesday' \
+            WHEN '3' THEN 'wednesday' WHEN '4' THEN 'thursday' WHEN '5' THEN 'friday' \
+            WHEN '6' THEN 'saturday' ELSE '' END"
+    );
+    let month_expr = format!(
+        "CASE strftime('%m', {date_col}) \
+            WHEN '01' THEN 'january' WHEN '02' THEN 'february' WHEN '03' THEN 'march' \
+            WHEN '04' THEN 'april' WHEN '05' THEN 'may' WHEN '06' THEN 'june' \
+            WHEN '07' THEN 'july' WHEN '08' THEN 'august' WHEN '09' THEN 'september' \
+            WHEN '10' THEN 'october' WHEN '11' THEN 'november' WHEN '12' THEN 'december' \
+            ELSE '' END"
+    );
+    let field_expr = format!(
+        "COALESCE(pt.tag, '') || ' ' || COALESCE(p.filename, '') || ' ' || \
         COALESCE(p.file_path, '') || ' ' || COALESCE(p.media_type, '') || ' ' || \
         COALESCE(p.taken_at, '') || ' ' || COALESCE(p.created_at, '') || ' ' || \
         COALESCE(CAST(p.latitude AS TEXT), '') || ' ' || COALESCE(CAST(p.longitude AS TEXT), '') || ' ' || \
-        COALESCE(sa.name, '')";
+        COALESCE(p.geo_city, '') || ' ' || COALESCE(p.geo_state, '') || ' ' || \
+        COALESCE(p.geo_country, '') || ' ' || COALESCE(p.geo_country_code, '') || ' ' || \
+        {weekday_expr} || ' ' || {month_expr} || ' ' || \
+        COALESCE(sa.name, '')"
+    );
 
     // Each token: the concatenated text must LIKE %token%
     let mut where_clauses = Vec::new();
@@ -210,7 +238,8 @@ pub async fn search_photos(
 
     let sql = format!(
         "SELECT DISTINCT p.id, p.filename, p.media_type, p.mime_type, p.thumb_path,
-                p.created_at, p.taken_at, p.latitude, p.longitude, p.width, p.height
+                p.created_at, p.taken_at, p.latitude, p.longitude, p.width, p.height,
+                p.burst_id
          FROM photos p
          LEFT JOIN photo_tags pt ON pt.photo_id = p.id AND pt.user_id = p.user_id
          LEFT JOIN shared_album_photos sap ON sap.photo_ref = p.id AND sap.ref_type = 'photo'
@@ -230,6 +259,29 @@ pub async fn search_photos(
     }
 
     let rows: Vec<SearchRow> = q.fetch_all(&state.read_pool).await?;
+
+    // Collapse burst stacks: a burst (which may hold dozens of frames) should
+    // count and render as ONE result, matching the gallery, smart albums, and
+    // secure views — which all collapse bursts. Rows arrive in created_at DESC
+    // order, so we keep the first frame seen per burst_id and record the group
+    // size for a "BURST N" badge. Non-burst rows (null/empty burst_id) pass
+    // through untouched.
+    let mut burst_sizes: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for r in &rows {
+        if let Some(b) = r.burst_id.as_deref() {
+            if !b.is_empty() {
+                *burst_sizes.entry(b.to_string()).or_default() += 1;
+            }
+        }
+    }
+    let mut seen_bursts: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let rows: Vec<SearchRow> = rows
+        .into_iter()
+        .filter(|r| match r.burst_id.as_deref() {
+            Some(b) if !b.is_empty() => seen_bursts.insert(b.to_string()),
+            _ => true,
+        })
+        .collect();
 
     // Batch-load tags for all results in a single query (avoids N+1).
     // Build a dynamic `WHERE photo_id IN (?, ?, ...)` clause.
@@ -258,6 +310,11 @@ pub async fn search_photos(
         .into_iter()
         .map(|row| {
             let tags = tags_by_photo.remove(&row.id).unwrap_or_default();
+            let burst_count = row
+                .burst_id
+                .as_deref()
+                .filter(|b| !b.is_empty())
+                .and_then(|b| burst_sizes.get(b).copied());
             SearchResult {
                 id: row.id,
                 filename: row.filename,
@@ -271,6 +328,8 @@ pub async fn search_photos(
                 width: row.width,
                 height: row.height,
                 tags,
+                burst_id: row.burst_id,
+                burst_count,
             }
         })
         .collect();
@@ -291,4 +350,5 @@ struct SearchRow {
     longitude: Option<f64>,
     width: Option<i32>,
     height: Option<i32>,
+    burst_id: Option<String>,
 }

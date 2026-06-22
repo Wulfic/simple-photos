@@ -3,7 +3,9 @@
  * (local IndexedDB) and server, with unified results.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import { useAppNavigate } from "../hooks/useAppNavigate";
+import { useScrollMemory } from "../hooks/useScrollMemory";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { db } from "../db";
@@ -32,8 +34,14 @@ interface SearchResult {
   width: number | null;
   height: number | null;
   tags: string[];
+  /** Burst group id, when this result represents a burst stack. */
+  burst_id?: string | null;
+  /** Frame count of the burst group, as reported by the server. */
+  burst_count?: number | null;
   /** For encrypted results, a local object URL for the thumbnail */
   _localThumbUrl?: string;
+  /** Resolved burst frame count for the badge (server count ∪ local frames). */
+  _burstCount?: number;
 }
 
 /**
@@ -71,6 +79,35 @@ function withinEditDistance1(a: string, b: string): boolean {
   return edits <= 1;
 }
 
+/**
+ * Human-friendly date words for a timestamp, so natural date queries match.
+ *
+ * The raw ISO timestamp already contains the year ("2024") and zero-padded
+ * day-of-month ("-20T"), but not the weekday or month *names*. Without these,
+ * a query like "friday" or "june" can never match. Returns a space-joined
+ * string of: full + short weekday, full + short month, day-of-month, year,
+ * and a relative term ("today"/"yesterday") when applicable.
+ */
+function dateSearchTokens(timestamp: number | null | undefined): string {
+  if (!timestamp) return "";
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return "";
+  const parts = [
+    d.toLocaleDateString("en-US", { weekday: "long" }),
+    d.toLocaleDateString("en-US", { weekday: "short" }),
+    d.toLocaleDateString("en-US", { month: "long" }),
+    d.toLocaleDateString("en-US", { month: "short" }),
+    String(d.getDate()),
+    String(d.getFullYear()),
+  ];
+  const startOfDay = (x: Date) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(new Date()) - startOfDay(d)) / 86_400_000);
+  if (diffDays === 0) parts.push("today");
+  else if (diffDays === 1) parts.push("yesterday");
+  return parts.join(" ");
+}
+
 // ── Search Page ──────────────────────────────────────────────────────────────
 
 export default function Search() {
@@ -81,6 +118,10 @@ export default function Search() {
   const [searched, setSearched] = useState(false);
   const [searchError, setSearchError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Preserve scroll position when opening a result and returning.
+  const { pathname } = useLocation();
+  useScrollMemory(pathname, results.length > 0);
 
   // ── Multi-select (parity with the main gallery; #2) ─────────────────────
   const { selectionMode, selectedIds, enter, toggle, setAll, clear: clearSelection } = usePhotoSelection();
@@ -188,6 +229,8 @@ export default function Search() {
               photo.mediaType,
               photo.mimeType,
               photo.takenAt ? new Date(photo.takenAt).toISOString() : "",
+              // Weekday / month names + relative terms so "friday"/"june" match.
+              dateSearchTokens(photo.takenAt),
               photo.latitude?.toString() ?? "",
               photo.longitude?.toString() ?? "",
               albumNames,
@@ -213,6 +256,7 @@ export default function Search() {
                 width: photo.width ?? null,
                 height: photo.height ?? null,
                 tags: [],
+                burst_id: photo.burstId ?? null,
                 _localThumbUrl: localThumbUrl,
               });
             }
@@ -235,12 +279,38 @@ export default function Search() {
           URL.revokeObjectURL(r._localThumbUrl);
         }
       }
-      const combined = [
+      const combined: SearchResult[] = [
         ...serverRes.results,
         ...localResults.filter((r) => !serverIds.has(r.id)),
       ];
 
-      setResults(combined);
+      // Collapse burst stacks so a burst renders as ONE result, matching the
+      // gallery, albums, and secure views. The server already collapses its
+      // own results (and reports burst_count); local encrypted frames carry
+      // burst_id from the photo cache, so we collapse the merged list here.
+      // Keep the first frame per burst_id and badge the total frame count;
+      // revoke the thumbnail object URL of any dropped frame so it doesn't leak.
+      const burstFrameCounts = new Map<string, number>();
+      for (const r of combined) {
+        if (r.burst_id) burstFrameCounts.set(r.burst_id, (burstFrameCounts.get(r.burst_id) ?? 0) + 1);
+      }
+      const seenBursts = new Set<string>();
+      const collapsed: SearchResult[] = [];
+      for (const r of combined) {
+        if (!r.burst_id) {
+          collapsed.push(r);
+          continue;
+        }
+        if (seenBursts.has(r.burst_id)) {
+          if (r._localThumbUrl) URL.revokeObjectURL(r._localThumbUrl);
+          continue;
+        }
+        seenBursts.add(r.burst_id);
+        const count = Math.max(r.burst_count ?? 0, burstFrameCounts.get(r.burst_id) ?? 1);
+        collapsed.push({ ...r, _burstCount: count });
+      }
+
+      setResults(collapsed);
       if (serverSearchFailed) {
         setSearchError("Server search unavailable — showing local results only.");
       }
@@ -306,7 +376,7 @@ export default function Search() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search tags, filenames, dates, media types…"
+            placeholder="Search tags, filenames, dates, places, media types…"
             maxLength={500}
             className="w-full pl-10 pr-4 py-3 rounded-xl border border-edge-strong bg-surface text-fg placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-accent-500 focus:border-transparent text-base"
           />
@@ -335,7 +405,7 @@ export default function Search() {
           <div className="text-center py-12">
             <p className="text-fg-muted">No results found for "{query}"</p>
             <p className="text-sm text-fg-muted mt-1">
-              Try a tag, filename, date (e.g. "2024"), or type (e.g. "video")
+              Try a tag, filename, date (e.g. "friday" or "june"), place, or type (e.g. "video")
             </p>
           </div>
         )}
@@ -611,6 +681,17 @@ function SearchResultTile({
       {result.media_type === "audio" && (
         <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
           <span>♫</span>
+        </div>
+      )}
+
+      {/* Burst stack badge (top-left) — bursts are collapsed to one result, so
+          mark the stack and show its frame count, matching the gallery tile. */}
+      {result.burst_id && (
+        <div className="absolute top-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16" />
+          </svg>
+          {result._burstCount && result._burstCount > 1 ? <span>{result._burstCount}</span> : null}
         </div>
       )}
 

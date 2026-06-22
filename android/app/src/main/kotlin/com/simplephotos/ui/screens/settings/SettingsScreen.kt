@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.simplephotos.data.remote.dto.*
 import com.simplephotos.R
+import com.simplephotos.ui.components.SpButton
+import com.simplephotos.ui.components.SpButtonVariant
 import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -150,7 +152,7 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("Not enabled", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        OutlinedButton(onClick = onSetup2fa) { Text("Enable 2FA") }
+                        SpButton("Enable 2FA", onClick = onSetup2fa, variant = SpButtonVariant.Secondary, fontSize = 14)
                     }
                 }
             }
@@ -336,9 +338,7 @@ fun SettingsScreen(
                     Text("Unable to load stats", style = MaterialTheme.typography.bodySmall)
                 }
                 Spacer(Modifier.height(4.dp))
-                TextButton(onClick = { viewModel.loadStorageStats() }) {
-                    Text("Refresh")
-                }
+                SpButton("Refresh", onClick = { viewModel.loadStorageStats() }, variant = SpButtonVariant.Ghost, fontSize = 14)
             }
 
             // ── Backup Folders ───────────────────────────────────────────
@@ -349,14 +349,14 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(
+                SpButton(
+                    "Select Backup Folders",
                     onClick = onBackupFolders,
+                    variant = SpButtonVariant.Secondary,
+                    fontSize = 14,
+                    leadingIcon = painterResource(R.drawable.ic_folder),
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(painter = painterResource(R.drawable.ic_folder), contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Select Backup Folders")
-                }
+                )
             }
 
             // ── Free Up Space ────────────────────────────────────────────
@@ -527,18 +527,15 @@ fun SettingsScreen(
             }
 
             // ── Logout ───────────────────────────────────────────────────
-            Button(
+            SpButton(
+                "Log Out",
                 onClick = { viewModel.logout(onLogout) },
+                variant = SpButtonVariant.Danger,
+                fontSize = 14,
                 enabled = !viewModel.loading,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-            ) {
-                if (viewModel.loading) {
-                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onError)
-                } else {
-                    Text("Log Out")
-                }
-            }
+                loading = viewModel.loading,
+                modifier = Modifier.fillMaxWidth()
+            )
 
             Spacer(Modifier.height(32.dp))
         }

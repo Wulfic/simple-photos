@@ -21,6 +21,92 @@ import type { EditTab } from "../components/viewer/ViewerEditPanel";
  */
 export const EDIT_CROP_PADDING_SCALE = 0.85;
 
+/**
+ * Build the CSS that makes an object-contain `<img>` (sized `elW × elH`,
+ * letterboxed inside a `containerW × containerH` box) display ONLY the crop
+ * rectangle, rotated upright and fit to the container (object-contain
+ * semantics).
+ *
+ * The crop fractions (x, y, w, h) are expressed in the *rotated* frame — the
+ * frame the user draws on. We map that rect onto the un-rotated element (a 90°
+ * multiple keeps it axis-aligned) for the clip-path, place the crop centre at
+ * the container centre, and scale to fit. Shared by the saved-photo view
+ * (`computeCropZoom`) and the in-editor preview so both stay pixel-consistent.
+ *
+ * Verified numerically for full-frame + asymmetric crops at 0/90/180/270.
+ */
+export function cropFitStyle(
+  crop: { x: number; y: number; w: number; h: number },
+  rotate: number,
+  brightness: number | undefined,
+  elW: number,
+  elH: number,
+  containerW: number,
+  containerH: number,
+): React.CSSProperties {
+  const filter = brightness ? `brightness(${1 + brightness / 100})` : undefined;
+  const rot = ((rotate % 360) + 360) % 360;
+  const { x, y, w, h } = crop;
+
+  // Full-frame, no rotation → leave the image at its natural contain size.
+  const isFullFrame = x <= 0.01 && y <= 0.01 && w >= 0.99 && h >= 0.99;
+  if (isFullFrame && rot === 0) return { filter };
+
+  const isSwapped = rot === 90 || rot === 270;
+  const cp = x + w / 2;
+  const cq = y + h / 2;
+
+  // Crop footprint AFTER rotation, in element px → fit-to-viewport scale.
+  const footW = isSwapped ? w * elH : w * elW;
+  const footH = isSwapped ? h * elW : h * elH;
+  const scale = Math.min(containerW / footW, containerH / footH);
+
+  // (a,b) = crop centre, and [aMin,aMax]×[bMin,bMax] = crop rect, both in the
+  // UN-rotated element's 0–1 space (per rotation).
+  let a: number, b: number, aMin: number, aMax: number, bMin: number, bMax: number;
+  if (rot === 90) {
+    a = cq; b = 1 - cp;
+    aMin = y; aMax = y + h; bMin = 1 - (x + w); bMax = 1 - x;
+  } else if (rot === 180) {
+    a = 1 - cp; b = 1 - cq;
+    aMin = 1 - (x + w); aMax = 1 - x; bMin = 1 - (y + h); bMax = 1 - y;
+  } else if (rot === 270) {
+    a = 1 - cq; b = cp;
+    aMin = 1 - (y + h); aMax = 1 - y; bMin = x; bMax = x + w;
+  } else {
+    a = cp; b = cq;
+    aMin = x; aMax = x + w; bMin = y; bMax = y + h;
+  }
+
+  const contentX = (containerW - elW) / 2;
+  const contentY = (containerH - elH) / 2;
+
+  // Translate the crop centre to the container centre. With transform-origin at
+  // the element (= container) centre C: P → C + scale·R·(P − C), so to send the
+  // crop centre Pc to C we need t = −scale·R·(Pc − C).
+  const pcx = (a - 0.5) * elW;
+  const pcy = (b - 0.5) * elH;
+  const rad = (rot * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const tx = -scale * (cos * pcx - sin * pcy);
+  const ty = -scale * (sin * pcx + cos * pcy);
+
+  // Clip to the crop rect in the element's LOCAL (un-rotated) space before the
+  // transform runs, so off-crop pixels are removed rather than merely shifted.
+  const insL = Math.max(0, contentX + aMin * elW);
+  const insT = Math.max(0, contentY + bMin * elH);
+  const insR = Math.max(0, containerW - (contentX + aMax * elW));
+  const insB = Math.max(0, containerH - (contentY + bMax * elH));
+
+  return {
+    transform: `translate(${tx}px, ${ty}px) scale(${scale})${rot ? ` rotate(${rot}deg)` : ""}`,
+    transformOrigin: "50% 50%",
+    clipPath: `inset(${insT}px ${insR}px ${insB}px ${insL}px)`,
+    filter,
+  };
+}
+
 export default function useViewerEdit(
   viewerContainerRef: React.RefObject<HTMLDivElement>,
 ) {
@@ -54,6 +140,29 @@ export default function useViewerEdit(
     setRotateValue(0);
     setCropCorners({ x: 0, y: 0, w: 1, h: 1 });
     setEditTab("crop");
+  }, []);
+
+  // ── Rotate the photo (and carry the crop with it) ──────────────────────
+  /**
+   * Rotate by a ±90° (or 180°) delta. The crop corners are stored in the
+   * *rotated* frame's 0–1 space, so when the rotation changes they must be
+   * re-expressed in the new frame — otherwise the same fractions point at a
+   * different region and the selection appears to "slide off" the content
+   * (it crops the wrong area). For a 90° multiple the rect stays axis-aligned,
+   * so we just map its corners and read off the new x/y/w/h.
+   */
+  const rotateBy = useCallback((delta: number) => {
+    const d = ((delta % 360) + 360) % 360;
+    setRotateValue((r) => (((r + delta) % 360) + 360) % 360);
+    setCropCorners(({ x, y, w, h }) => {
+      // +90° clockwise: corner (cx,cy) → (1−cy, cx)
+      if (d === 90) return { x: 1 - y - h, y: x, w: h, h: w };
+      // −90° (i.e. +270° CW): corner (cx,cy) → (cy, 1−cx)
+      if (d === 270) return { x: y, y: 1 - x - w, w: h, h: w };
+      // 180°: corner (cx,cy) → (1−cx, 1−cy)
+      if (d === 180) return { x: 1 - x - w, y: 1 - y - h, w, h };
+      return { x, y, w, h };
+    });
   }, []);
 
   // ── Rotation scale ─────────────────────────────────────────────────────
@@ -118,52 +227,12 @@ export default function useViewerEdit(
 
     const rot = ((cropData.rotate ?? 0) % 360 + 360) % 360;
 
-    console.log("[EDIT:cropZoom]", {
-      cropData: { x: cropData.x, y: cropData.y, w: cropData.width, h: cropData.height,
-                  rotate: cropData.rotate, brightness: cropData.brightness },
-      containerW, containerH, elW, elH, rot,
-    });
-
-    // Full-frame crop (no actual cropping) with no rotation — just brightness.
-    // Skip the translate/scale transform so the image stays at its natural
-    // object-contain size instead of shrinking to 85%.
-    const isFullFrame = cropData.x <= 0.01 && cropData.y <= 0.01 &&
-                        cropData.width >= 0.99 && cropData.height >= 0.99;
-    if (isFullFrame && rot === 0) {
-      setCropZoomStyle({
-        filter: cropData.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
-      });
-      return;
-    }
-
-    const isSwapped = rot === 90 || rot === 270;
-    const cropPixW = cropData.width * elW;
-    const cropPixH = cropData.height * elH;
-    const visW = isSwapped ? cropPixH : cropPixW;
-    const visH = isSwapped ? cropPixW : cropPixH;
-    const scaleW = containerW / visW;
-    const scaleH = containerH / visH;
-    // Fit the cropped region to the viewport (object-contain semantics). This
-    // is the *saved* view, not edit mode, so there are no corner handles to
-    // leave room for — a shrink factor here just left dead space and the crop
-    // never filled the screen (#4).
-    const scale = Math.min(scaleW, scaleH);
-    const cx = cropData.x + cropData.width / 2;
-    const cy = cropData.y + cropData.height / 2;
-
-    // Map crop center from content-normalized coords to element-% coords,
-    // accounting for letterbox offsets introduced by object-contain on a
-    // w-full h-full element whose aspect ratio differs from the container.
-    const contentX = (containerW - elW) / 2;
-    const contentY = (containerH - elH) / 2;
-    const cxEl = (contentX + cx * elW) / containerW;
-    const cyEl = (contentY + cy * elH) / containerH;
-
-    setCropZoomStyle({
-      transform: `translate(${(0.5 - cxEl) * 100}%, ${(0.5 - cyEl) * 100}%) scale(${scale})${rot ? ` rotate(${rot}deg)` : ""}`,
-      transformOrigin: `${cxEl * 100}% ${cyEl * 100}%`,
-      filter: cropData.brightness ? `brightness(${1 + (cropData.brightness ?? 0) / 100})` : undefined,
-    });
+    setCropZoomStyle(cropFitStyle(
+      { x: cropData.x, y: cropData.y, w: cropData.width, h: cropData.height },
+      rot,
+      cropData.brightness ?? undefined,
+      elW, elH, containerW, containerH,
+    ));
   }, [cropData, editMode]);
 
   useEffect(() => {
@@ -326,6 +395,7 @@ export default function useViewerEdit(
     cropImageRef, cropContainerRef, audioRef, videoRef, viewImgRef,
     // Functions
     resetEditState,
+    rotateBy,
     computeRotationScale,
     computeCropZoom,
     enterEditMode,

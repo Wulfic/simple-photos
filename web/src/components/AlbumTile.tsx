@@ -146,6 +146,38 @@ export default function AlbumTile({ photo, isSelectionMode, isSelected, onClick,
         </div>
       )}
 
+      {/* Photo subtype badges (top-left) — pano/360, motion (LIVE), and burst
+          stacks (with frame count) so smart albums match the main gallery. */}
+      {(() => {
+        const sub = photo.photoSubtype;
+        const burstCount = (photo as CachedPhoto & { _burstCount?: number })._burstCount;
+        if (sub === "panorama" || sub === "equirectangular") {
+          return (
+            <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+              {sub === "equirectangular" ? "360°" : "PANO"}
+            </div>
+          );
+        }
+        if (sub === "motion") {
+          return (
+            <div className="absolute top-1 left-1 bg-black/60 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+              LIVE
+            </div>
+          );
+        }
+        if (photo.burstId) {
+          return (
+            <div className="absolute top-1 left-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded flex items-center gap-1">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16" />
+              </svg>
+              {burstCount && burstCount > 1 ? <span>{burstCount}</span> : null}
+            </div>
+          );
+        }
+        return null;
+      })()}
+
       {/* (Remove-from-album hover button retired — selection circle + sticky
           banner now provide remove/delete affordances.) */}
     </div>

@@ -9,8 +9,11 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
+import com.simplephotos.data.remote.dto.FullMetadataResponse
+import com.simplephotos.data.remote.dto.MetadataUpdateRequest
 import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.TagRepository
@@ -54,9 +57,22 @@ class PhotoViewerViewModel @Inject constructor(
     /** Album context — non-null when viewer was opened from an album. */
     val albumId: String? = savedStateHandle["albumId"]
 
-    /** Full photo list for paging (matches gallery order). */
+    /**
+     * Burst-COLLAPSED photo list used for horizontal paging — one entry per
+     * burst group (the first frame / cover), exactly like the gallery grid.
+     * This is what the pager swipes through, so a 46-shot burst occupies a
+     * single page instead of hijacking 46 swipes. Individual frames are
+     * browsed via the in-viewer burst filmstrip ([burstFramesFor]).
+     */
     var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
         private set
+
+    /**
+     * Full, UN-collapsed photo list (every burst frame present). Source of
+     * truth; [allPhotos] is derived from this. Used to resolve burst frames
+     * for the filmstrip without an extra network round-trip.
+     */
+    private var allPhotosRaw: List<PhotoEntity> = emptyList()
 
     /** Index of the photo that was tapped in the gallery. */
     var initialPage by mutableStateOf(0)
@@ -88,6 +104,20 @@ class PhotoViewerViewModel @Inject constructor(
     var isFavorite by mutableStateOf(false)
         private set
 
+    // ── Info-panel metadata (full EXIF view + edit) ──────────────────────
+    /** Full metadata + raw EXIF for the currently viewed photo. Null until
+     *  loaded (or if the load failed — the panel then shows local fields). */
+    var fullMetadata by mutableStateOf<FullMetadataResponse?>(null)
+        private set
+
+    /** True while a metadata save / EXIF write is in flight. */
+    var metadataSaving by mutableStateOf(false)
+        private set
+
+    /** Last metadata save error, shown in the Info-panel editor. */
+    var metadataError by mutableStateOf<String?>(null)
+        private set
+
     init {
         loadPhotos()
     }
@@ -98,10 +128,13 @@ class PhotoViewerViewModel @Inject constructor(
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
 
                 val photos = if (albumId != null) {
-                    // Album context: load only photos in this album
+                    // Album context: load only photos in this album. Uses the
+                    // SAME resolver as the album grid so the pager order matches
+                    // the grid and smart albums (favorites/videos/recents/…)
+                    // resolve correctly — querying the xref table alone returns
+                    // nothing for smart albums → "Photo not found".
                     withContext(Dispatchers.IO) {
-                        val photoIds = albumRepository.getPhotoIdsForAlbum(albumId)
-                        photoIds.mapNotNull { id -> photoRepository.getPhoto(id) }
+                        photoRepository.getAlbumPhotos(albumId)
                     }
                 } else {
                     // Gallery context: load all photos
@@ -109,9 +142,19 @@ class PhotoViewerViewModel @Inject constructor(
                         photoRepository.getAllPhotos().first()
                     }
                 }
-                allPhotos = photos
-                initialPage = photos.indexOfFirst { it.localId == initialPhotoId }
-                    .coerceAtLeast(0)
+                setRawPhotos(photos)
+                // Locate the tapped photo in the COLLAPSED list. If the user
+                // somehow deep-linked to a non-cover burst frame, fall back to
+                // that frame's burst cover so the page still resolves.
+                initialPage = run {
+                    val direct = allPhotos.indexOfFirst { it.localId == initialPhotoId }
+                    if (direct >= 0) return@run direct
+                    val frame = photos.firstOrNull { it.localId == initialPhotoId }
+                    val bid = frame?.burstId
+                    if (!bid.isNullOrEmpty()) {
+                        allPhotos.indexOfFirst { it.burstId == bid }.coerceAtLeast(0)
+                    } else 0
+                }
             } catch (e: Exception) {
                 error = e.message
             } finally {
@@ -119,6 +162,26 @@ class PhotoViewerViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * Set the raw (un-collapsed) photo list and recompute the burst-collapsed
+     * [allPhotos] from it. Collapsing keeps only the FIRST frame of each
+     * burstId — identical to the gallery grid's collapse — so the pager swipes
+     * burst-by-burst, not frame-by-frame.
+     */
+    private fun setRawPhotos(photos: List<PhotoEntity>) {
+        allPhotosRaw = photos
+        allPhotos = photos.collapseBursts()
+    }
+
+    /**
+     * All frames belonging to [burstId], ordered oldest-first (taken_at ASC,
+     * matching the server's `GET /api/photos/burst/{id}` ordering and the web
+     * BurstStrip). Resolved entirely from the locally-loaded list — no network.
+     */
+    fun burstFramesFor(burstId: String): List<PhotoEntity> =
+        allPhotosRaw.filter { it.burstId == burstId }
+            .sortedBy { it.takenAt }
 
     /**
      * Download and decrypt an encrypted blob, returning the raw media bytes.
@@ -153,6 +216,16 @@ class PhotoViewerViewModel @Inject constructor(
         photoRepository.downloadAndDecryptBlobToFile(blobId, outputFile)
     }
 
+    /**
+     * Download the embedded motion-photo video for [photoId] to [outputFile].
+     * The server returns a ready-to-play MP4 (extracted/decrypted server-side),
+     * so this is a plain stream-to-file — no decryption. See
+     * [PhotoRepository.downloadMotionVideoToFile].
+     */
+    suspend fun downloadMotionVideoToFile(photoId: String, outputFile: java.io.File) = withContext(Dispatchers.IO) {
+        photoRepository.downloadMotionVideoToFile(photoId, outputFile)
+    }
+
     fun deletePhoto(photo: PhotoEntity, onDeleted: () -> Unit) {
         viewModelScope.launch {
             try {
@@ -176,7 +249,7 @@ class PhotoViewerViewModel @Inject constructor(
                     } catch (_: Exception) {}
                 }
                 // Remove from in-memory list and navigate
-                allPhotos = allPhotos.filter { it.localId != photo.localId }
+                setRawPhotos(allPhotosRaw.filter { it.localId != photo.localId })
                 onRemoved()
             } catch (e: Exception) {
                 error = e.message
@@ -250,13 +323,106 @@ class PhotoViewerViewModel @Inject constructor(
                 isFavorite = response.isFavorite
                 // Update the local allPhotos list so loadFavoriteForPhoto()
                 // returns the correct value when the user swipes away and back.
-                val idx = allPhotos.indexOfFirst { it.serverPhotoId == photoId }
+                val idx = allPhotosRaw.indexOfFirst { it.serverPhotoId == photoId }
                 if (idx >= 0) {
-                    allPhotos = allPhotos.toMutableList().also {
+                    setRawPhotos(allPhotosRaw.toMutableList().also {
                         it[idx] = it[idx].copy(isFavorite = response.isFavorite)
-                    }
+                    })
                 }
             } catch (_: Exception) {}
+        }
+    }
+
+    // ── Info-panel metadata operations ───────────────────────────────────
+
+    /** Load full metadata (+ raw EXIF) for the Info panel. Best-effort: on
+     *  failure [fullMetadata] is left null and the panel shows local fields. */
+    fun loadFullMetadata(serverPhotoId: String) {
+        viewModelScope.launch {
+            metadataError = null
+            try {
+                val meta = withContext(Dispatchers.IO) { photoRepository.getFullMetadata(serverPhotoId) }
+                fullMetadata = meta
+            } catch (e: Exception) {
+                Log.w(TAG, "[meta] loadFullMetadata failed for $serverPhotoId: ${e.message}")
+            }
+        }
+    }
+
+    /** Reset Info-panel metadata state when switching photos / closing. */
+    fun clearFullMetadata() {
+        fullMetadata = null
+        metadataError = null
+    }
+
+    /**
+     * PATCH the changed metadata fields. [request] must already contain ONLY
+     * the fields the user changed (nulls are omitted on the wire). When the
+     * Photo Type changed, pass [newSubtype] so the local cache + in-memory list
+     * are updated and the live pano/360 viewer switches immediately.
+     */
+    fun saveMetadata(
+        serverPhotoId: String,
+        request: MetadataUpdateRequest,
+        newSubtype: String?,
+        onSaved: () -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            metadataSaving = true
+            metadataError = null
+            try {
+                withContext(Dispatchers.IO) { photoRepository.updateMetadata(serverPhotoId, request) }
+                // Refresh so the read-only view reflects the saved values.
+                try {
+                    fullMetadata = withContext(Dispatchers.IO) { photoRepository.getFullMetadata(serverPhotoId) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "[meta] refresh after save failed: ${e.message}")
+                }
+                if (newSubtype != null) applyLocalSubtype(serverPhotoId, newSubtype)
+                onSaved()
+            } catch (e: Exception) {
+                Log.e(TAG, "[meta] saveMetadata failed for $serverPhotoId: ${e.message}", e)
+                metadataError = e.message ?: "Failed to save"
+            } finally {
+                metadataSaving = false
+            }
+        }
+    }
+
+    /** Write the current DB metadata back to the file's EXIF (jpeg/tiff). */
+    fun writeExif(serverPhotoId: String) {
+        viewModelScope.launch {
+            metadataSaving = true
+            metadataError = null
+            try {
+                withContext(Dispatchers.IO) { photoRepository.writeExif(serverPhotoId) }
+                try {
+                    fullMetadata = withContext(Dispatchers.IO) { photoRepository.getFullMetadata(serverPhotoId) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "[meta] refresh after writeExif failed: ${e.message}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "[meta] writeExif failed for $serverPhotoId: ${e.message}", e)
+                metadataError = e.message ?: "Failed to write EXIF"
+            } finally {
+                metadataSaving = false
+            }
+        }
+    }
+
+    /** Update the local DB + in-memory subtype so the pano/360 viewer switches
+     *  without waiting for the periodic resync. Mirrors the web's local db write. */
+    private suspend fun applyLocalSubtype(serverPhotoId: String, subtype: String) {
+        try {
+            withContext(Dispatchers.IO) { photoRepository.updateLocalSubtype(serverPhotoId, subtype) }
+        } catch (e: Exception) {
+            Log.w(TAG, "[meta] local subtype update failed for $serverPhotoId: ${e.message}")
+        }
+        val idx = allPhotosRaw.indexOfFirst { it.serverPhotoId == serverPhotoId }
+        if (idx >= 0) {
+            setRawPhotos(allPhotosRaw.toMutableList().also {
+                it[idx] = it[idx].copy(photoSubtype = subtype)
+            })
         }
     }
 
@@ -273,11 +439,11 @@ class PhotoViewerViewModel @Inject constructor(
                 }
                 Log.d(TAG, "[EDIT:saveEdit] Local DB updated for ${photo.localId}")
                 // Update in-memory list
-                val idx = allPhotos.indexOfFirst { it.localId == photo.localId }
+                val idx = allPhotosRaw.indexOfFirst { it.localId == photo.localId }
                 if (idx >= 0) {
-                    allPhotos = allPhotos.toMutableList().also {
+                    setRawPhotos(allPhotosRaw.toMutableList().also {
                         it[idx] = it[idx].copy(cropMetadata = metadata)
-                    }
+                    })
                 }
                 // Sync to server so web and other clients see the edit
                 photo.serverPhotoId?.let { serverId ->
@@ -475,6 +641,46 @@ class PhotoViewerViewModel @Inject constructor(
                     else -> false
                 }
             } catch (_: Exception) { false }
+        }
+
+    /**
+     * If [sourceFile] is an AVIF/HEIC/HEIF image (formats many gallery apps
+     * can't open), decode it and re-encode as JPEG, returning the JPEG bytes.
+     * Returns null when it's not such a format OR decode is unavailable on this
+     * device — AVIF decode needs API 31+ (the platform ImageDecoder added AVIF
+     * in Android 12) and HEIF needs API 28+ — so the caller falls back to saving
+     * the original bytes. Used by the viewer Download action so saved files are
+     * universally openable ("convert AVIF to JPEG").
+     */
+    suspend fun transcodeToJpegIfNeeded(sourceFile: java.io.File, filename: String): ByteArray? =
+        withContext(Dispatchers.IO) {
+            val ext = filename.substringAfterLast('.', "").lowercase()
+            if (ext != "avif" && ext != "heic" && ext != "heif") return@withContext null
+            try {
+                val bitmap: android.graphics.Bitmap? =
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                        val src = android.graphics.ImageDecoder.createSource(sourceFile)
+                        android.graphics.ImageDecoder.decodeBitmap(src) { decoder, _, _ ->
+                            // Software allocator → a readable bitmap we can compress
+                            // (the default hardware bitmap can't be re-encoded).
+                            decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                            decoder.isMutableRequired = false
+                        }
+                    } else {
+                        android.graphics.BitmapFactory.decodeFile(sourceFile.absolutePath)
+                    }
+                if (bitmap == null) {
+                    Log.w(TAG, "[download] $ext decode returned null for $filename")
+                    return@withContext null
+                }
+                val out = java.io.ByteArrayOutputStream()
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, out)
+                bitmap.recycle()
+                out.toByteArray()
+            } catch (e: Throwable) {
+                Log.w(TAG, "[download] $ext->JPEG transcode failed for $filename: ${e.message}")
+                null
+            }
         }
 
     /** Download the photo's full-resolution file bytes (for saving local files to device). */

@@ -314,7 +314,7 @@ export default function Slideshow({
           >
             <img
               src={mediaUrl}
-              className="max-w-full max-h-full object-contain"
+              className="w-full h-full object-contain"
               alt=""
               draggable={false}
             />

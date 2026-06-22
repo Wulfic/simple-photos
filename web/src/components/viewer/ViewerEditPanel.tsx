@@ -19,9 +19,10 @@ interface ViewerEditPanelProps {
   brightness: number;
   setBrightness: (v: number) => void;
 
-  /** Rotation value in degrees (0, 90, 180, 270) */
+  /** Rotation value in degrees (0, 90, 180, 270) — display only */
   rotateValue: number;
-  setRotateValue: (v: number) => void;
+  /** Rotate by a ±90° delta, carrying any existing crop with the photo. */
+  onRotate: (delta: number) => void;
 
   /** Existing crop/edit data (used to show Reset button) */
   cropData: {
@@ -78,7 +79,7 @@ export default function ViewerEditPanel({
   brightness,
   setBrightness,
   rotateValue,
-  setRotateValue,
+  onRotate,
   cropData,
   trimStart,
   trimEnd,
@@ -241,7 +242,7 @@ export default function ViewerEditPanel({
       {editTab === "rotate" && (
         <div className="flex items-center justify-center gap-4">
           <button
-            onClick={() => setRotateValue(((rotateValue - 90) % 360 + 360) % 360)}
+            onClick={() => onRotate(-90)}
             className="flex items-center gap-2 px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 transition-colors text-sm font-medium"
             title="Rotate left 90°"
           >
@@ -252,7 +253,7 @@ export default function ViewerEditPanel({
           </button>
           <span className="text-white text-sm font-medium tabular-nums w-12 text-center">{rotateValue}°</span>
           <button
-            onClick={() => setRotateValue((rotateValue + 90) % 360)}
+            onClick={() => onRotate(90)}
             className="flex items-center gap-2 px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 transition-colors text-sm font-medium"
             title="Rotate right 90°"
           >

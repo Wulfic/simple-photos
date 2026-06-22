@@ -175,6 +175,12 @@ data class ScanResponse(
     val message: String
 )
 
+// ── Burst detection ────────────────────────────────────────────────────────────
+
+data class DetectBurstsResponse(
+    @SerializedName("burst_groups_created") val burstGroupsCreated: Int = 0
+)
+
 // ── Favorites ────────────────────────────────────────────────────────────────
 
 data class FavoriteToggleResponse(

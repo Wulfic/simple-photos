@@ -48,6 +48,11 @@ export interface CachedPhoto {
    *  pipeline). The Viewer should fetch it via the photos API (`/photos/:id/file`)
    *  instead of downloading and decrypting an encrypted blob. */
   serverSide?: boolean;
+  /** Epoch ms when the item was added to the library (server `created_at`).
+   *  Distinct from `takenAt` (capture date): a freshly-imported old photo has
+   *  a recent `addedAt` but an old `takenAt`. Drives the "Recently Added"
+   *  smart album so import order — not capture order — decides recency. */
+  addedAt?: number;
   /** Photo subtype: "motion", "panorama", "equirectangular", "hdr", "burst" */
   photoSubtype?: string;
   /** Burst group identifier (shared across all shots in a burst sequence) */
@@ -202,6 +207,17 @@ class SimplePhotosDB extends Dexie {
     // v8 — added serverPhotoId index for AI people/face cluster lookups
     this.version(8).stores({
       photos: "blobId, takenAt, mediaType, *albumIds, contentHash, serverPhotoId",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+      fullPhotos: "photoId, cachedAt",
+      editCopies: "copyId, photoBlobId, createdAt",
+    });
+
+    // v9 — added burstId index so a collapsed burst representative can be
+    //       expanded back to its full set of frames (add-to-album / secure-add).
+    //       Dexie re-indexes existing rows automatically; no upgrade fn needed.
+    this.version(9).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash, serverPhotoId, burstId",
       albums: "albumId, name",
       trash: "trashId, blobId, deletedAt",
       fullPhotos: "photoId, cachedAt",

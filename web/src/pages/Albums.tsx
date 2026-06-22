@@ -16,6 +16,7 @@ import { randomUuid } from "../utils/uuid";
 import { toast } from "../store/toast";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
+import { useSecureAdd } from "../store/secureAdd";
 import type { FaceCluster, PetCluster } from "../api/ai";
 
 type SharedAlbumInfo = {
@@ -47,6 +48,8 @@ export default function Albums() {
   const [showCreate, setShowCreate] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
   const navigate = useAppNavigate();
+  const secureAddTarget = useSecureAdd((s) => s.target);
+  const cancelSecureAdd = useSecureAdd((s) => s.cancel);
 
   // Shared albums state
   const [sharedAlbums, setSharedAlbums] = useState<SharedAlbumInfo[]>([]);
@@ -238,6 +241,8 @@ export default function Albums() {
   // Compute encrypted smart album counts + first thumbnails from IndexedDB
   const encryptedPhotoCounts = encryptedPhotos ? {
     all: encryptedPhotos.length,
+    // "Recently Added" is capped at the 100 most-recently-imported items.
+    recent: Math.min(encryptedPhotos.length, 100),
     favorites: encryptedPhotos.filter(p => !!p.isFavorite).length,
     photos: encryptedPhotos.filter(p => p.mediaType === "photo" || p.mediaType === "gif").length,
     gifs: encryptedPhotos.filter(p => p.mediaType === "gif").length,
@@ -251,7 +256,16 @@ export default function Albums() {
     return encryptedPhotos.find(p => filter(p) && p.thumbnailData);
   }
 
+  // Cover for "Recently Added" = the most-recently-imported item with a
+  // thumbnail (by addedAt, falling back to takenAt for un-backfilled entries).
+  const recentCover = encryptedPhotos
+    ? [...encryptedPhotos]
+        .sort((a, b) => (b.addedAt ?? b.takenAt ?? 0) - (a.addedAt ?? a.takenAt ?? 0))
+        .find(p => p.thumbnailData)
+    : undefined;
+
   const smartAlbumCovers = {
+    recent: recentCover,
     favorites: findCoverPhoto(p => !!p.isFavorite),
     photos: findCoverPhoto(p => p.mediaType === "photo" || p.mediaType === "gif"),
     gifs: findCoverPhoto(p => p.mediaType === "gif"),
@@ -396,6 +410,25 @@ export default function Albums() {
       <AppHeader />
 
       <main className="p-4">
+        {/* Secure-add banner: shown while picking photos to move into a secure
+            album. Open any album below to multi-select, then "Add to 🔒". */}
+        {secureAddTarget && (
+          <div className="flex items-center justify-between gap-3 mb-4 p-3 rounded-lg bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800">
+            <span className="text-sm font-medium text-accent-800 dark:text-accent-200">
+              🔒 Open an album — or your main <strong>Gallery</strong> — to pick photos to add to <strong>{secureAddTarget.galleryName}</strong>
+            </span>
+            <button
+              onClick={() => {
+                const target = secureAddTarget.galleryId;
+                cancelSecureAdd();
+                navigate(`/secure-gallery?album=${target}`);
+              }}
+              className="btn btn-secondary btn-md shrink-0"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         {/* ── User Albums ────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-fg-muted uppercase tracking-wider">Albums</h2>
@@ -436,6 +469,12 @@ export default function Albums() {
 
       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
         {/* ── Smart albums pinned at top ────────────────────────────────── */}
+        <SmartAlbumCard
+          label="Recently Added"
+          count={encryptedPhotoCounts?.recent ?? 0}
+          coverPhoto={smartAlbumCovers.recent}
+          onClick={() => navigate("/albums/smart-recent")}
+        />
         <SmartAlbumCard
           label="Favorites"
           count={encryptedPhotoCounts?.favorites ?? 0}

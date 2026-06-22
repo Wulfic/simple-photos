@@ -91,6 +91,12 @@ interface PhotoDao {
     @Query("UPDATE photos SET cropMetadata = :metadata WHERE localId = :id")
     suspend fun updateCropMetadata(id: String, metadata: String?)
 
+    /** Persist a manual photo-subtype correction (Info-panel edit) WITHOUT
+     *  clobbering the burst/motion fields that [backfillSubtypeFields] also
+     *  writes. Matched by serverPhotoId so it lines up with the edit API. */
+    @Query("UPDATE photos SET photoSubtype = :subtype WHERE serverPhotoId = :serverPhotoId")
+    suspend fun updatePhotoSubtype(serverPhotoId: String, subtype: String?)
+
     @Query("SELECT * FROM photos WHERE serverBlobId = :blobId LIMIT 1")
     suspend fun getByServerBlobId(blobId: String): PhotoEntity?
 
@@ -100,6 +106,18 @@ interface PhotoDao {
     /** Batch lookup: get all photos whose serverPhotoId is in the given list. */
     @Query("SELECT * FROM photos WHERE serverPhotoId IN (:photoIds)")
     suspend fun getByServerPhotoIds(photoIds: List<String>): List<PhotoEntity>
+
+    /** Batch lookup: get all photos whose localId is in the given list. */
+    @Query("SELECT * FROM photos WHERE localId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<PhotoEntity>
+
+    /**
+     * Get every frame belonging to one of the given burst groups. Used to
+     * expand a collapsed burst representative back to its full stack when
+     * adding to an album / secure album.
+     */
+    @Query("SELECT * FROM photos WHERE burstId IN (:burstIds)")
+    suspend fun getByBurstIds(burstIds: List<String>): List<PhotoEntity>
 
     @Query("SELECT * FROM photos WHERE localPath = :path LIMIT 1")
     suspend fun getByLocalPath(path: String): PhotoEntity?

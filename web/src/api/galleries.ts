@@ -45,7 +45,19 @@ export const secureGalleriesApi = {
 
   listItems: (galleryId: string, galleryToken: string) =>
     request<{
-      items: Array<{ id: string; blob_id: string; added_at: string; encrypted_thumb_blob_id?: string | null }>;
+      items: Array<{
+        id: string;
+        blob_id: string;
+        added_at: string;
+        encrypted_thumb_blob_id?: string | null;
+        width?: number | null;
+        height?: number | null;
+        media_type?: string | null;
+        photo_subtype?: string | null;
+        burst_id?: string | null;
+        duration_secs?: number | null;
+        motion_video_blob_id?: string | null;
+      }>;
     }>(`/galleries/secure/${galleryId}/items`, {
       headers: { "X-Gallery-Token": galleryToken },
     }),

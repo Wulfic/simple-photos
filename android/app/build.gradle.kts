@@ -14,8 +14,8 @@ android {
         applicationId = "com.simplephotos"
         minSdk = 26
         targetSdk = 34
-        versionCode = 128
-        versionName = "1.3.73"
+        versionCode = 130
+        versionName = "1.4.91"
         testInstrumentationRunner = "com.simplephotos.HiltTestRunner"
     }
 
@@ -107,6 +107,7 @@ dependencies {
     implementation(libs.coil.video)
     implementation(libs.coil.gif)
     implementation(libs.coil.svg)
+    implementation(libs.aom.avif)
 
     // Media3 / ExoPlayer
     implementation(libs.media3.exoplayer)

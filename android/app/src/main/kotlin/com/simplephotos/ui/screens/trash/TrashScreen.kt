@@ -222,7 +222,7 @@ fun TrashScreen(
                         else 1f
                     },
                     getKey = { it.id },
-                    targetRowHeight = 180.dp,
+                    targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight(),
                     gap = 2.dp,
                 ) { item, widthDp, heightDp ->
                     TrashTile(

@@ -140,6 +140,12 @@ export function usePhotoSync(): PhotoSyncResult {
           if (existing.sourcePath !== serverSourcePath) updates.sourcePath = serverSourcePath;
           const serverSubtype = photo.photo_subtype ?? undefined;
           if (existing.photoSubtype !== serverSubtype) updates.photoSubtype = serverSubtype;
+          // Backfill addedAt (library import order) for entries cached before
+          // the field existed. created_at never changes, so set-once is safe.
+          if (existing.addedAt === undefined) {
+            const added = new Date(photo.created_at).getTime();
+            if (!Number.isNaN(added)) updates.addedAt = added;
+          }
           const serverBurstId = photo.burst_id ?? undefined;
           if (existing.burstId !== serverBurstId) updates.burstId = serverBurstId;
           const serverMotionBlob = photo.motion_video_blob_id ?? undefined;
@@ -256,6 +262,10 @@ export function usePhotoSync(): PhotoSyncResult {
           isFavorite: photo.is_favorite ?? false,
           serverPhotoId: photo.id,
           sourcePath: photo.source_path ?? undefined,
+          addedAt: (() => {
+            const added = new Date(photo.created_at).getTime();
+            return Number.isNaN(added) ? takenAt : added;
+          })(),
           photoSubtype: photo.photo_subtype ?? undefined,
           burstId: photo.burst_id ?? undefined,
           motionVideoBlobId: photo.motion_video_blob_id ?? undefined,

@@ -7,7 +7,9 @@
  * memories, trips), so the select circle now actually works there (#2).
  */
 import { useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAppNavigate } from "../../hooks/useAppNavigate";
+import { useScrollMemory } from "../../hooks/useScrollMemory";
 import type { CachedPhoto } from "../../db";
 import JustifiedGrid from "./JustifiedGrid";
 import AlbumTile from "../AlbumTile";
@@ -17,6 +19,8 @@ import { trashPhotos } from "../../utils/trashPhotos";
 import { usePhotoSelection } from "../../hooks/usePhotoSelection";
 import { getErrorMessage } from "../../utils/formatters";
 import { toast } from "../../store/toast";
+import { useSecureAdd } from "../../store/secureAdd";
+import { addPhotosToSecureGallery } from "../../utils/secureAdd";
 
 interface SelectablePhotoGridProps {
   photos: CachedPhoto[];
@@ -36,12 +40,40 @@ export default function SelectablePhotoGrid({
   allowDelete = true,
 }: SelectablePhotoGridProps) {
   const navigate = useAppNavigate();
+  const { pathname, search } = useLocation();
+  // Remember scroll position so returning from the viewer keeps the user's
+  // place in this grid (smart albums, people/pet/memory/trip detail views).
+  useScrollMemory(`${pathname}${search}`, photos.length > 0);
   const { selectionMode, selectedIds, enter, toggle, setAll, clear: clearSelection } = usePhotoSelection();
   const [showAddToAlbum, setShowAddToAlbum] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Secure-add flow: when active, this grid offers "Add to 🔒 <name>" instead of
+  // the normal Album/Delete actions, and tapping a tile toggles selection.
+  const secureAddTarget = useSecureAdd((s) => s.target);
+  const cancelSecureAdd = useSecureAdd((s) => s.cancel);
+  const [addingSecure, setAddingSecure] = useState(false);
+  const showBar = selectionMode || !!secureAddTarget;
+
   const selectAll = () => setAll(photos.map((p) => p.blobId));
   const allSelected = photos.length > 0 && selectedIds.size === photos.length;
+
+  async function addSelectedToSecure() {
+    if (!secureAddTarget || selectedIds.size === 0 || addingSecure) return;
+    setAddingSecure(true);
+    try {
+      const count = await addPhotosToSecureGallery(secureAddTarget.galleryId, [...selectedIds]);
+      toast.success(`Added ${count} photo${count !== 1 ? "s" : ""} to ${secureAddTarget.galleryName}`);
+      clearSelection();
+      const target = secureAddTarget.galleryId;
+      cancelSecureAdd();
+      navigate(`/secure-gallery?album=${target}`);
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setAddingSecure(false);
+    }
+  }
 
   async function deleteSelected() {
     if (selectedIds.size === 0 || deleting) return;
@@ -62,7 +94,7 @@ export default function SelectablePhotoGrid({
 
   return (
     <>
-      {selectionMode && (
+      {showBar && (
         <div className="flex items-center justify-between gap-3 mb-4 p-3 bg-accent-50 dark:bg-accent-900/30 rounded-lg">
           <div className="flex items-center gap-3">
             <button
@@ -74,7 +106,9 @@ export default function SelectablePhotoGrid({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
-            <span className="text-sm font-medium">{selectedIds.size} selected</span>
+            <span className="text-sm font-medium">
+              {secureAddTarget ? `${selectedIds.size} selected to add to 🔒 ${secureAddTarget.galleryName}` : `${selectedIds.size} selected`}
+            </span>
             <button
               onClick={allSelected ? clearSelection : selectAll}
               className="text-accent-600 dark:text-accent-400 text-sm hover:underline"
@@ -83,25 +117,39 @@ export default function SelectablePhotoGrid({
             </button>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowAddToAlbum(true)}
-              disabled={selectedIds.size === 0}
-              className="btn btn-primary btn-md inline-flex items-center gap-1.5"
-              title="Add to album"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              Album
-            </button>
-            {allowDelete && (
+            {secureAddTarget ? (
               <button
-                onClick={deleteSelected}
-                disabled={selectedIds.size === 0 || deleting}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700 shadow-sm disabled:opacity-50"
+                onClick={addSelectedToSecure}
+                disabled={selectedIds.size === 0 || addingSecure}
+                className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+                title={`Add to ${secureAddTarget.galleryName}`}
               >
-                {deleting ? "Deleting…" : `Delete (${selectedIds.size})`}
+                <span>🔒</span>
+                {addingSecure ? "Adding…" : `Add to album (${selectedIds.size})`}
               </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => setShowAddToAlbum(true)}
+                  disabled={selectedIds.size === 0}
+                  className="btn btn-primary btn-md inline-flex items-center gap-1.5"
+                  title="Add to album"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Album
+                </button>
+                {allowDelete && (
+                  <button
+                    onClick={deleteSelected}
+                    disabled={selectedIds.size === 0 || deleting}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700 shadow-sm disabled:opacity-50"
+                  >
+                    {deleting ? "Deleting…" : `Delete (${selectedIds.size})`}
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -117,7 +165,7 @@ export default function SelectablePhotoGrid({
             isSelectionMode={selectionMode}
             isSelected={selectedIds.has(photo.blobId)}
             onClick={() => {
-              if (selectionMode) {
+              if (selectionMode || secureAddTarget) {
                 toggle(photo.blobId);
               } else {
                 navigate(`/photo/${photo.blobId}`, {

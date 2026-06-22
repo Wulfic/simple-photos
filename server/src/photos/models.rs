@@ -110,6 +110,10 @@ pub struct RegisterEncryptedPhotoRequest {
     pub photo_subtype: Option<String>,
     pub burst_id: Option<String>,
     pub motion_video_blob_id: Option<String>,
+    /// Camera make/model from EXIF, detected client-side. Required for
+    /// timestamp-based burst grouping of encrypted backups whose frames carry
+    /// no XMP BurstID (see `burst::detect_bursts_for_user`).
+    pub camera_model: Option<String>,
 }
 
 /// Response for secure gallery listing.

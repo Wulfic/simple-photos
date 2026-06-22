@@ -53,6 +53,10 @@ export const searchApi = {
         width: number | null;
         height: number | null;
         tags: string[];
+        /** Burst group id when this result is a burst representative. */
+        burst_id?: string | null;
+        /** Frame count of the burst group (set on the representative). */
+        burst_count?: number | null;
       }>;
     }>(`/search?${params.toString()}`);
   },

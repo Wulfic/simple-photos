@@ -78,6 +78,18 @@ interface ApiService {
     @Streaming
     suspend fun photoFile(@Path("id") photoId: String): ResponseBody
 
+    /**
+     * Serve the embedded motion-photo video as a ready-to-play MP4. The server
+     * resolves it by photo id + subtype=="motion": it serves a separately
+     * stored motion blob if present, otherwise extracts the MP4 trailer from
+     * the (server-side-decrypted) photo on the fly. Returns decrypted
+     * `video/mp4` — no client-side decryption required. Mirrors the web's
+     * `api.photos.motionVideoUrl`.
+     */
+    @GET("api/photos/{id}/motion-video")
+    @Streaming
+    suspend fun serveMotionVideo(@Path("id") photoId: String): ResponseBody
+
     @POST("api/photos/upload")
     suspend fun uploadPhoto(
         @Body body: RequestBody,
@@ -87,6 +99,14 @@ interface ApiService {
 
     @DELETE("api/photos/{id}")
     suspend fun deletePhoto(@Path("id") photoId: String): Response<Unit>
+
+    /**
+     * Trigger server-side timestamp-based burst grouping for the current user.
+     * Called after a backup batch so bursts that carry no XMP BurstID (Samsung
+     * et al.) get stacked once all their frames have been registered.
+     */
+    @POST("api/photos/detect-bursts")
+    suspend fun detectBursts(): DetectBurstsResponse
 
     // ── Encrypted Blobs ──────────────────────────────────────────────────
     @POST("api/blobs")
@@ -506,6 +526,20 @@ interface ApiService {
 
     @DELETE("api/photos/{id}/metadata")
     suspend fun deletePhotoMetadata(@Path("id") photoId: String): Response<Unit>
+
+    // ── Metadata edit (full EXIF view + edit + write-back) ───────────────
+    // Mirrors web/src/api/metadata.ts. See MetadataEditDto.kt.
+    @GET("api/photos/{id}/metadata/full")
+    suspend fun getFullMetadata(@Path("id") photoId: String): FullMetadataResponse
+
+    @PATCH("api/photos/{id}/metadata")
+    suspend fun updateMetadata(
+        @Path("id") photoId: String,
+        @Body request: MetadataUpdateRequest,
+    ): MetadataUpdateResponse
+
+    @POST("api/photos/{id}/metadata/write-exif")
+    suspend fun writeExif(@Path("id") photoId: String): WriteExifResponse
 
     // ── Export ───────────────────────────────────────────────────────────
     @POST("api/export")

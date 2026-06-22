@@ -278,7 +278,7 @@ fun AlbumDetailScreen(
                                 else 1f
                             },
                             getKey = { it.localId },
-                            targetRowHeight = 180.dp,
+                            targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight(),
                             gap = 2.dp,
                         ) { photo, widthDp, heightDp ->
                             AlbumPhotoTile(

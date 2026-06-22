@@ -12,6 +12,8 @@ export interface MetadataUpdateRequest {
   latitude?: number;
   longitude?: number;
   camera_model?: string;
+  /** Manual subtype correction: "none" | "panorama" | "equirectangular". */
+  photo_subtype?: string;
   clear_gps?: boolean;
   camera_make?: string;
   lens_model?: string;

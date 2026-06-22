@@ -27,7 +27,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import com.simplephotos.ui.theme.Violet
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,10 +64,19 @@ internal fun VideoPlayerPage(
     editRotation: Int = 0,
     savedBrightness: Float = 0f,
     savedRotation: Int = 0,
+    // Saved crop rect (fractions of the displayed frame). Applied during
+    // playback in non-edit mode so a cropped video shows only its crop rect.
+    savedCropX: Float = 0f,
+    savedCropY: Float = 0f,
+    savedCropW: Float = 1f,
+    savedCropH: Float = 1f,
     photoWidth: Int = 0,
     photoHeight: Int = 0,
     playerError: String?,
-    onMediaSizeLoaded: ((Float, Float) -> Unit)? = null
+    onMediaSizeLoaded: ((Float, Float) -> Unit)? = null,
+    // Toggles the viewer's top bar (edit/download/trash) in addition to the
+    // in-player controls, so the chrome is reachable on video pages too.
+    onToggleControls: () -> Unit = {}
 ) {
     // When this page becomes active, notify the screen to load our URI
     // into the shared player.
@@ -261,10 +273,60 @@ internal fun VideoPlayerPage(
                 Modifier.fillMaxSize()
             }
 
+            // ── Crop display (saved metadata crop, non-edit mode) ───────────
+            // Mirror of the photo path's cropFit (PhotoViewerComponents): fit the
+            // crop sub-rect to the viewport, centre it, and CLIP to it. Without
+            // this a cropped video plays back at its full (uncropped) frame.
+            // Edit mode shows the full frame so a new crop can be drawn.
+            val isCropped = savedCropW < 0.999f || savedCropH < 0.999f
+            val density = LocalDensity.current
+            // Contain-fit size of the UN-rotated video in the container — the
+            // element the crop fractions are measured against (cropFit's elW/elH)
+            // and the exact size we give the TextureView so the two agree.
+            val containerAspect = if (containerH > 0f) containerW / containerH else 1f
+            val elW: Float
+            val elH: Float
+            if (textureAspect > 0f && containerW > 0f && containerH > 0f) {
+                if (textureAspect > containerAspect) {
+                    elW = containerW; elH = containerW / textureAspect
+                } else {
+                    elH = containerH; elW = containerH * textureAspect
+                }
+            } else {
+                elW = containerW; elH = containerH
+            }
+            val cropFitData = if (!editMode && isCropped && textureAspect > 0f &&
+                containerW > 0f && containerH > 0f
+            ) {
+                cropFit(
+                    savedCropX, savedCropY, savedCropW, savedCropH, totalRotation,
+                    elW, elH, containerW, containerH
+                )
+            } else null
+
+            // When cropped, cropFit carries rotation + scale + clip; the
+            // TextureView is sized to the exact contain-fit so the crop math
+            // lines up. Otherwise fall back to the plain rotation handling.
+            val containerModifier = if (cropFitData != null) {
+                Modifier.graphicsLayer {
+                    scaleX = cropFitData.scale
+                    scaleY = cropFitData.scale
+                    translationX = cropFitData.tx
+                    translationY = cropFitData.ty
+                    rotationZ = cropFitData.rot
+                    transformOrigin = TransformOrigin(0.5f, 0.5f)
+                    clip = true
+                    shape = CropInsetShape(cropFitData.insL, cropFitData.insT, cropFitData.insR, cropFitData.insB)
+                }
+            } else videoRotationModifier
+            val activeTextureModifier = if (cropFitData != null) {
+                with(density) { Modifier.width(elW.toDp()).height(elH.toDp()) }
+            } else textureModifier
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .then(videoRotationModifier),
+                    .then(containerModifier),
                 contentAlignment = Alignment.Center
             ) {
                 // Use a raw TextureView instead of PlayerView's default SurfaceView.
@@ -279,7 +341,7 @@ internal fun VideoPlayerPage(
                 update = { view ->
                     sharedPlayer.setVideoTextureView(view)
                 },
-                modifier = textureModifier
+                modifier = activeTextureModifier
             )
             // Brightness overlay: positive = brighten (white overlay),
             // negative = darken (black overlay). Matches CSS brightness() filter.
@@ -290,7 +352,7 @@ internal fun VideoPlayerPage(
                     Color.Black.copy(alpha = (-activeBrightness / 150f).coerceIn(0f, 0.7f))
                 }
                 Box(
-                    modifier = textureModifier
+                    modifier = activeTextureModifier
                         .background(overlayColor)
                 )
             }
@@ -326,7 +388,10 @@ internal fun VideoPlayerPage(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
-                    ) { showControls = !showControls }
+                    ) {
+                        showControls = !showControls
+                        onToggleControls()
+                    }
             )
 
             // Custom controls overlay — NOT rotated
@@ -425,7 +490,7 @@ internal fun VideoControlsOverlay(
                 },
                 colors = SliderDefaults.colors(
                     thumbColor = Color.White,
-                    activeTrackColor = Color(0xFF3B82F6),
+                    activeTrackColor = Violet.v500,
                     inactiveTrackColor = Color.White.copy(alpha = 0.2f)
                 ),
                 modifier = Modifier.fillMaxWidth()

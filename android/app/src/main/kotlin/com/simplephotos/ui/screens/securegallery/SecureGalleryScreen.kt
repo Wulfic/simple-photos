@@ -100,7 +100,6 @@ fun SecureGalleryScreen(
             gallery = sel,
             items = viewModel.items,
             itemsLoading = viewModel.itemsLoading,
-            allPhotos = viewModel.allPhotos,
             error = viewModel.error,
             onBack = { viewModel.deselectGallery() },
             onAddPhotos = { viewModel.addPhotosToGallery(it) },
@@ -117,7 +116,8 @@ fun SecureGalleryScreen(
         onBack = onBack,
         onGalleryClick = { viewModel.selectGallery(it) },
         onCreateGallery = { viewModel.createGallery(it) },
-        onDeleteGallery = { viewModel.deleteGallery(it) }
+        onDeleteGallery = { viewModel.deleteGallery(it) },
+        viewModel = viewModel
     )
 }
 
