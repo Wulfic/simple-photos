@@ -8,6 +8,7 @@ import { db, type CachedAlbum } from "../db";
 import { encrypt, sha256Hex } from "../crypto/crypto";
 import { api } from "../api/client";
 import { randomUuid } from "../utils/uuid";
+import { expandBurstSelection } from "../utils/burstExpand";
 
 interface AddToAlbumModalProps {
   blobIds: string[];
@@ -41,7 +42,10 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
     setBusyId(album.albumId);
     setError("");
     try {
-      const merged = [...new Set([...album.photoBlobIds, ...blobIds])];
+      // Expand any collapsed burst representative to its full set of frames so
+      // the whole stack lands in the album, not just the cover frame.
+      const expanded = await expandBurstSelection(blobIds);
+      const merged = [...new Set([...album.photoBlobIds, ...expanded])];
       const addedCount = merged.length - album.photoBlobIds.length;
       const cover = album.coverPhotoBlobId || merged[0] || undefined;
       const updated: CachedAlbum = {
@@ -86,7 +90,8 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
     try {
       const albumId = randomUuid();
       const createdAt = Date.now();
-      const photoBlobIds = [...new Set(blobIds)];
+      // Expand collapsed burst representatives so the whole stack is added.
+      const photoBlobIds = [...new Set(await expandBurstSelection(blobIds))];
       const coverPhotoBlobId = photoBlobIds[0] || undefined;
 
       const payload = JSON.stringify({

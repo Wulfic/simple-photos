@@ -415,7 +415,7 @@ export default function Albums() {
         {secureAddTarget && (
           <div className="flex items-center justify-between gap-3 mb-4 p-3 rounded-lg bg-accent-50 dark:bg-accent-900/30 border border-accent-200 dark:border-accent-800">
             <span className="text-sm font-medium text-accent-800 dark:text-accent-200">
-              🔒 Open an album to pick photos to add to <strong>{secureAddTarget.galleryName}</strong>
+              🔒 Open an album — or your main <strong>Gallery</strong> — to pick photos to add to <strong>{secureAddTarget.galleryName}</strong>
             </span>
             <button
               onClick={() => {

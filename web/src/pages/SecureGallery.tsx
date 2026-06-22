@@ -17,7 +17,13 @@ import JustifiedGrid from "../components/gallery/JustifiedGrid";
 import { getErrorMessage } from "../utils/formatters";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { useAuthStore } from "../store/auth";
-import { setGalleryToken as persistGalleryToken, getGalleryToken } from "../utils/galleryToken";
+import {
+  setGalleryToken as persistGalleryToken,
+  getGalleryToken,
+  clearGalleryToken,
+  hasFreshGalleryToken,
+  isGalleryTokenRejection,
+} from "../utils/galleryToken";
 import { useSecureAdd } from "../store/secureAdd";
 import { SecureGalleryItem, SecureAlbumCover } from "../gallery";
 import { GallerySkeleton, AlbumGridSkeleton } from "../components/skeletons";
@@ -60,9 +66,16 @@ export default function SecureGallery() {
   // instead of the password gate — and, combined with the ?album auto-select
   // effect below, restores the exact album you were viewing (#6: closing a
   // secure photo dumped you out of the secure gallery).
-  const persistedToken = getGalleryToken();
-  const [authenticated, setAuthenticated] = useState(!!persistedToken);
-  const [galleryToken, setGalleryToken] = useState(persistedToken ?? "");
+  //
+  // CRITICAL: gate on token *freshness*, not mere presence. The token lives in
+  // sessionStorage (whole tab lifetime) but the server only honours it for one
+  // hour. Keying `authenticated` off `!!token` meant an expired token skipped
+  // the password gate yet every secure request 401'd → "no password prompt AND
+  // nothing loads". `hasFreshGalleryToken()` re-prompts once the token is stale.
+  const persistedFresh = hasFreshGalleryToken();
+  const persistedToken = persistedFresh ? (getGalleryToken() ?? "") : "";
+  const [authenticated, setAuthenticated] = useState(persistedFresh);
+  const [galleryToken, setGalleryToken] = useState(persistedToken);
   const [password, setPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
@@ -93,6 +106,27 @@ export default function SecureGallery() {
   // in its dependency array (avoids infinite-loop risk).
   const selectedGalleryRef = useRef(selectedGallery);
   useEffect(() => { selectedGalleryRef.current = selectedGallery; }, [selectedGallery]);
+
+  // Drop a stale token from sessionStorage on mount so the central API client
+  // (api/core.ts) stops attaching a dead X-Gallery-Token to every request.
+  // Runs once; fresh tokens are left untouched so #6 (return-from-viewer)
+  // still works.
+  useEffect(() => {
+    if (!hasFreshGalleryToken()) clearGalleryToken();
+  }, []);
+
+  // Return to the password gate when the unlock token is no longer accepted
+  // (expired past its 1-hour TTL, or invalidated by a server restart that
+  // rotated the JWT secret). Without this the user is stranded: "unlocked" per
+  // the UI but unable to load anything and with no way to re-enter the password.
+  const lock = useCallback((message?: string) => {
+    clearGalleryToken();
+    setGalleryToken("");
+    setAuthenticated(false);
+    setSelectedGallery(null);
+    setItems([]);
+    setAuthError(message ?? "");
+  }, []);
 
   // When the browser Back button removes the ?album param, return to the
   // album list without navigating away from the page entirely.
@@ -139,13 +173,20 @@ export default function SecureGallery() {
       try {
         const res = await api.secureGalleries.listItems(galleryId, galleryToken);
         setItems(res.items);
-      } catch {
-        setError("Failed to load album items.");
+      } catch (err: unknown) {
+        // A rejected token means the session lapsed — send the user back to the
+        // gate to re-unlock instead of stranding them on a permanently empty
+        // album with a generic error.
+        if (isGalleryTokenRejection(err)) {
+          lock("Your secure session expired. Enter your password to continue.");
+        } else {
+          setError("Failed to load album items.");
+        }
       } finally {
         setItemsLoading(false);
       }
     },
-    [galleryToken]
+    [galleryToken, lock]
   );
 
   useEffect(() => {
@@ -405,6 +446,13 @@ export default function SecureGallery() {
                           currentIndex: idx,
                           secureGallery: true,
                           secureAlbumId: selectedGallery?.id,
+                          // Full (un-collapsed) item list, including every frame of
+                          // every burst — the Viewer's BurstStrip needs this to show
+                          // burst frames, since secured photos never sync into the
+                          // local IDB photo cache it normally reads subtype/burst
+                          // info from (they're intentionally excluded from main
+                          // gallery sync).
+                          secureItems: items,
                         },
                       })
                     }
@@ -433,7 +481,7 @@ export default function SecureGallery() {
   return (
     <div className="min-h-screen bg-canvas">
       <AppHeader />
-      <main className="max-w-4xl mx-auto p-4">
+      <main className="p-4">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -538,11 +586,13 @@ export default function SecureGallery() {
             )}
           </div>
         ) : (
-          <div className="space-y-3">
+          // Card grid mirroring the regular Albums page, with the delete button
+          // tucked inside each card (hover-revealed) the way shared albums do.
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">
             {galleries.map((g) => (
               <div
                 key={g.id}
-                className="card p-4 flex items-center justify-between hover:ring-2 hover:ring-accent-200 dark:hover:ring-accent-800 transition-all cursor-pointer"
+                className="card card-interactive p-2 cursor-pointer relative group"
                 onClick={() => {
                   setSelectedGallery(g);
                   // Push a history entry so the browser Back button returns
@@ -551,35 +601,33 @@ export default function SecureGallery() {
                   navigate(`/secure-gallery?album=${g.id}`);
                 }}
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-accent-100 dark:bg-accent-900/30 rounded-lg flex items-center justify-center overflow-hidden">
-                    <SecureAlbumCover
-                      galleryId={g.id}
-                      galleryToken={galleryToken}
-                      itemCount={g.item_count}
-                    />
-                  </div>
-                  <div>
-                    <h3 className="font-medium text-fg">
-                      {g.name}
-                    </h3>
-                    <p className="text-xs text-fg-muted mt-0.5">
-                      {g.item_count} item{g.item_count !== 1 ? "s" : ""} · Created{" "}
-                      {new Date(g.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
+                <div className="aspect-square bg-surface-raised rounded mb-1.5 flex items-center justify-center overflow-hidden">
+                  <SecureAlbumCover
+                    galleryId={g.id}
+                    galleryToken={galleryToken}
+                    itemCount={g.item_count}
+                  />
                 </div>
+                <p className="font-medium text-sm truncate flex items-center gap-1">
+                  <span className="shrink-0">🔒</span>
+                  <span className="truncate">{g.name}</span>
+                </p>
+                <p className="text-xs text-fg-muted">
+                  {g.item_count} item{g.item_count !== 1 ? "s" : ""}
+                </p>
+
                 {!isBackupServer && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(g);
-                  }}
-                  className="text-red-500 hover:text-red-600 text-sm px-3 py-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20"
-                  title="Delete album"
-                >
-                  Delete
-                </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(g);
+                    }}
+                    className="absolute top-2 right-2 hidden group-hover:flex items-center justify-center p-1 bg-white dark:bg-gray-700 rounded shadow text-red-500 hover:text-red-700"
+                    title="Delete album"
+                    aria-label="Delete secure album"
+                  >
+                    <AppIcon name="trashcan" />
+                  </button>
                 )}
               </div>
             ))}

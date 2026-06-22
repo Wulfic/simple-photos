@@ -39,7 +39,12 @@ data class SearchResult(
     val longitude: Double? = null,
     val width: Int? = null,
     val height: Int? = null,
-    val tags: List<String>
+    val tags: List<String>,
+    // Burst grouping: the server collapses burst stacks to a single result and
+    // reports the group's frame count, so search matches the gallery/secure
+    // grids (one tile per burst) instead of showing every frame.
+    @SerializedName("burst_id") val burstId: String? = null,
+    @SerializedName("burst_count") val burstCount: Int? = null
 )
 
 data class SearchResponse(

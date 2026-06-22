@@ -107,6 +107,7 @@ dependencies {
     implementation(libs.coil.video)
     implementation(libs.coil.gif)
     implementation(libs.coil.svg)
+    implementation(libs.aom.avif)
 
     // Media3 / ExoPlayer
     implementation(libs.media3.exoplayer)

@@ -211,6 +211,48 @@ class TestBurstCollapse:
         assert photo.get("burst_count") is None
 
 
+class TestBurstSearchCollapse:
+    """Search results must collapse burst stacks to a single representative
+    (with a frame count), matching the gallery, smart-album, and secure grids
+    — which all collapse bursts. Regression for "bursts not collapsed in
+    search": the endpoint used to return every frame as its own result.
+    """
+
+    def test_search_collapses_burst_to_one(self, user_client):
+        token = f"burstsrch{int(time.time())}"
+        burst_id = f"burst-search-{int(time.time())}"
+        ids = []
+        for i in range(3):
+            # Shared filename token so the search matches every frame; varying
+            # width keeps the bytes distinct so upload-time hash dedup doesn't
+            # drop frames before they're indexed.
+            content = generate_burst_jpeg(burst_id, width=200 + i)
+            pid = _upload(user_client, f"{token}_{i}.jpg", content)
+            ids.append(pid)
+        for pid in ids:
+            _wait_for_photo(user_client, pid)
+
+        results = user_client.search(token)["results"]
+        matching = [r for r in results if r.get("burst_id") == burst_id]
+        assert len(matching) == 1, (
+            f"Burst not collapsed in search: expected 1 result, got {len(matching)}"
+        )
+        assert matching[0]["burst_count"] == 3, (
+            f"Expected burst_count=3, got {matching[0].get('burst_count')}"
+        )
+
+    def test_search_normal_photo_has_null_burst(self, user_client):
+        token = f"normsrch{int(time.time())}"
+        pid = _upload(user_client, f"{token}.jpg", generate_normal_jpeg())
+        _wait_for_photo(user_client, pid)
+
+        results = user_client.search(token)["results"]
+        match = next((r for r in results if r["id"] == pid), None)
+        assert match is not None, "Normal photo missing from search results"
+        assert match.get("burst_id") is None
+        assert match.get("burst_count") is None
+
+
 class TestBurstDetectionPrecedence:
     """XMP-derived burst_id must take precedence over the timestamp-based
     grouper.  Regression for todo P0-8: a photo that already carries an

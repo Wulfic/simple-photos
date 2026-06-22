@@ -71,6 +71,28 @@ import kotlin.math.PI
 
 private const val TAG_SPHERE = "Sphere360View"
 
+/**
+ * Describe a decoded image blob by its magic bytes + size, for diagnosing
+ * decode failures (e.g. a 360 panorama rendering black). Identifies the
+ * container so we can tell "AVIF the device can't software-decode" apart from
+ * "truncated/empty blob". Used by the secure viewer + the 360 sphere.
+ */
+internal fun describeImageBytes(b: ByteArray): String {
+    fun ascii(off: Int, len: Int): String =
+        if (b.size >= off + len) String(b, off, len, Charsets.US_ASCII) else ""
+    val fmt = when {
+        b.size < 12 -> "too-small(${b.size}B)"
+        b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte() -> "JPEG"
+        b[0] == 0x89.toByte() && b[1] == 0x50.toByte() -> "PNG"
+        ascii(0, 3) == "GIF" -> "GIF"
+        ascii(0, 4) == "RIFF" && ascii(8, 4) == "WEBP" -> "WEBP"
+        ascii(4, 4) == "ftyp" -> "ISO-BMFF/${ascii(8, 4)}" // avif/heic/mif1…
+        b[0] == 0x42.toByte() && b[1] == 0x4D.toByte() -> "BMP"
+        else -> "unknown(${"%02x%02x%02x%02x".format(b[0], b[1], b[2], b[3])})"
+    }
+    return "$fmt, ${b.size} bytes"
+}
+
 // ─── Composable wrapper ──────────────────────────────────────────────────────
 
 /**
@@ -96,24 +118,38 @@ fun Sphere360Overlay(
         if (imageData == null) { loading = false; failed = true; return@LaunchedEffect }
         loading = true
         failed = false
+        // Diagnostic: identify the source so a black 360 can be traced to a
+        // format/size the device's Coil software decoder rejects (see the
+        // secure-gallery 360-black bug — pano decodes, equirectangular didn't).
+        if (imageData is ByteArray) {
+            Log.d(TAG_SPHERE, "decoding 360: ${describeImageBytes(imageData)}")
+        }
         val bmp = try {
             withContext(Dispatchers.IO) {
                 val req = ImageRequest.Builder(context)
                     .data(imageData)
                     .size(MAX_PANO_DECODE_PX)
                     .allowHardware(false) // need a non-hardware Bitmap for GLUtils
+                    // We recycle this bitmap after GL upload, so it must not be a
+                    // shared/cached instance (would corrupt the cache + flat base).
+                    .memoryCachePolicy(coil.request.CachePolicy.DISABLED)
                     .build()
                 val result = context.imageLoader.execute(req)
+                if (result is coil.request.ErrorResult) {
+                    Log.w(TAG_SPHERE, "Coil 360 decode error: ${result.throwable.message}", result.throwable)
+                }
                 (result.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
             }
         } catch (e: Throwable) {
-            Log.w(TAG_SPHERE, "panorama decode failed: ${e.message}")
+            Log.w(TAG_SPHERE, "panorama decode failed: ${e.message}", e)
             null
         }
         if (bmp != null) {
+            Log.d(TAG_SPHERE, "360 decoded to ${bmp.width}x${bmp.height}")
             glView.setPanorama(bmp)
             loading = false
         } else {
+            Log.w(TAG_SPHERE, "360 decode produced no bitmap → showing failure state")
             loading = false
             failed = true
         }
@@ -135,6 +171,18 @@ fun Sphere360Overlay(
             CircularProgressIndicator(
                 strokeWidth = 2.dp,
                 color = Color.White,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        // Visible failure state — previously a decode failure left the surface
+        // pure black with no indication (the secure 360-black bug). Surface it
+        // so the user (and logcat) knows the texture didn't load.
+        if (failed) {
+            Text(
+                "Couldn't load 360° view",
+                color = Color.White,
+                fontSize = 13.sp,
                 modifier = Modifier.align(Alignment.Center)
             )
         }
@@ -266,6 +314,10 @@ private class SphereRenderer(
     private var uTexLoc = 0
     private var textureId = 0
     private var hasTexture = false
+    // GL_MAX_TEXTURE_SIZE for this GPU, read after the context exists. A texture
+    // larger than this uploads as BLACK with no error — a prime suspect for the
+    // equirectangular-renders-black bug, since 360s are wider than flat panos.
+    private var maxTextureSize = 2048
 
     private lateinit var vertexBuffer: FloatBuffer
     private lateinit var indexBuffer: ShortBuffer
@@ -309,6 +361,11 @@ private class SphereRenderer(
         GLES20.glGenTextures(1, tex, 0)
         textureId = tex[0]
         hasTexture = false
+
+        val maxTex = IntArray(1)
+        GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, maxTex, 0)
+        if (maxTex[0] > 0) maxTextureSize = maxTex[0]
+        Log.d(TAG_SPHERE, "GL_MAX_TEXTURE_SIZE = $maxTextureSize")
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -318,8 +375,20 @@ private class SphereRenderer(
 
     override fun onDrawFrame(gl: GL10?) {
         // Upload a freshly-decoded bitmap on the GL thread, if one is pending.
-        pendingBitmap?.let { bmp ->
+        pendingBitmap?.let { rawBmp ->
             pendingBitmap = null
+            // A texture wider/taller than GL_MAX_TEXTURE_SIZE silently uploads as
+            // black. Coil caps to MAX_PANO_DECODE_PX (4096), but a GPU may report
+            // a smaller max — downscale to fit so the sphere never goes black.
+            val bmp = if (rawBmp.width > maxTextureSize || rawBmp.height > maxTextureSize) {
+                val scale = maxTextureSize.toFloat() / maxOf(rawBmp.width, rawBmp.height)
+                val w = (rawBmp.width * scale).toInt().coerceAtLeast(1)
+                val h = (rawBmp.height * scale).toInt().coerceAtLeast(1)
+                Log.w(TAG_SPHERE, "360 texture ${rawBmp.width}x${rawBmp.height} exceeds maxTex=$maxTextureSize → scaling to ${w}x$h")
+                Bitmap.createScaledBitmap(rawBmp, w, h, true).also {
+                    if (it != rawBmp && !rawBmp.isRecycled) rawBmp.recycle()
+                }
+            } else rawBmp
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
@@ -327,6 +396,8 @@ private class SphereRenderer(
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
             GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0)
+            val err = GLES20.glGetError()
+            if (err != GLES20.GL_NO_ERROR) Log.w(TAG_SPHERE, "texImage2D GL error: 0x${err.toString(16)}")
             hasTexture = true
             if (!bmp.isRecycled) bmp.recycle()
         }

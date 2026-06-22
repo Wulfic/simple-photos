@@ -107,6 +107,18 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE serverPhotoId IN (:photoIds)")
     suspend fun getByServerPhotoIds(photoIds: List<String>): List<PhotoEntity>
 
+    /** Batch lookup: get all photos whose localId is in the given list. */
+    @Query("SELECT * FROM photos WHERE localId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<PhotoEntity>
+
+    /**
+     * Get every frame belonging to one of the given burst groups. Used to
+     * expand a collapsed burst representative back to its full stack when
+     * adding to an album / secure album.
+     */
+    @Query("SELECT * FROM photos WHERE burstId IN (:burstIds)")
+    suspend fun getByBurstIds(burstIds: List<String>): List<PhotoEntity>
+
     @Query("SELECT * FROM photos WHERE localPath = :path LIMIT 1")
     suspend fun getByLocalPath(path: String): PhotoEntity?
 

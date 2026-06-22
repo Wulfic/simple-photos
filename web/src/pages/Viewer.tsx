@@ -48,6 +48,27 @@ interface ViewerLocationState {
   secureGallery?: boolean;
   /** When opened from inside a secure gallery, the gallery id so back returns to it */
   secureAlbumId?: string;
+  /**
+   * Every item in the secure gallery the photo was opened from (un-collapsed —
+   * includes every frame of every burst). Secured photos never sync into the
+   * local IDB photo cache (they're excluded from main-gallery sync), so this
+   * is the only source of subtype/burst metadata for them — `db.photos.get()`
+   * always misses.
+   */
+  secureItems?: SecureGalleryItemMeta[];
+}
+
+interface SecureGalleryItemMeta {
+  id: string;
+  blob_id: string;
+  encrypted_thumb_blob_id?: string | null;
+  width?: number | null;
+  height?: number | null;
+  media_type?: string | null;
+  photo_subtype?: string | null;
+  burst_id?: string | null;
+  duration_secs?: number | null;
+  motion_video_blob_id?: string | null;
 }
 
 // ── Viewer ────────────────────────────────────────────────────────────────────
@@ -65,6 +86,7 @@ export default function Viewer() {
   const albumId = navState.albumId;
   const secureGallery = navState.secureGallery ?? false;
   const secureAlbumId = navState.secureAlbumId;
+  const secureItems = navState.secureItems;
   const hasPrev = !!photoIds && currentIndex > 0;
   const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
   // Only real user-created albums support "remove from album". Smart/special
@@ -119,6 +141,14 @@ export default function Viewer() {
   const [burstId, setBurstId] = useState<string | undefined>();
   const [motionServerPhotoId, setMotionServerPhotoId] = useState<string | undefined>();
   const [panoImageDims, setPanoImageDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+  // Secure-gallery items sharing the current photo's burst_id — passed to
+  // BurstStrip so it can resolve frames without the regular (wrong-table)
+  // burst-frames API, which only knows about un-secured photos.
+  const secureBurstFrames = useMemo(
+    () => (secureGallery ? secureItems?.filter((i) => i.burst_id === burstId) : undefined),
+    [secureGallery, secureItems, burstId],
+  );
 
   // ── Edit state (from hook) ─────────────────────────────────────────────
   const {
@@ -297,9 +327,27 @@ export default function Viewer() {
         if (cached.cropData) {
           try { setCropData(JSON.parse(cached.cropData)); } catch { setCropData(null); }
         } else { setCropData(null); }
-      } else { setCropData(null); }
+      } else {
+        setCropData(null);
+        // Secured photos are excluded from main-gallery sync, so the IDB cache
+        // always misses for them — fall back to the secure gallery's own item
+        // list (passed via location.state) for subtype/burst metadata.
+        if (secureGallery && secureItems) {
+          const secureItem = secureItems.find((i) => i.blob_id === id);
+          if (secureItem) {
+            setPhotoSubtype(secureItem.photo_subtype ?? undefined);
+            setBurstId(secureItem.burst_id ?? undefined);
+            if (
+              (secureItem.photo_subtype === "panorama" || secureItem.photo_subtype === "equirectangular") &&
+              secureItem.width && secureItem.height
+            ) {
+              setPanoImageDims({ width: secureItem.width, height: secureItem.height });
+            }
+          }
+        }
+      }
     }).catch(() => { setCropData(null); });
-  }, [id]);
+  }, [id, secureGallery, secureItems]);
 
   async function onToggleFavorite() {
     const result = await handleToggleFavorite();
@@ -318,9 +366,9 @@ export default function Viewer() {
     navigate(`/photo/${nextId}`, {
       replace: true,
       viewTransition: false,
-      state: { photoIds, currentIndex: index, albumId, secureGallery, secureAlbumId } satisfies ViewerLocationState,
+      state: { photoIds, currentIndex: index, albumId, secureGallery, secureAlbumId, secureItems } satisfies ViewerLocationState,
     });
-  }, [photoIds, navigate, currentIndex]);
+  }, [photoIds, navigate, currentIndex, albumId, secureGallery, secureAlbumId, secureItems]);
 
   const goPrev = useCallback(() => { if (hasPrev) navigateToPhoto(currentIndex - 1); }, [hasPrev, currentIndex, navigateToPhoto]);
   const goNext = useCallback(() => { if (hasNext) navigateToPhoto(currentIndex + 1); }, [hasNext, currentIndex, navigateToPhoto]);
@@ -869,6 +917,7 @@ export default function Viewer() {
             burstId={burstId}
             currentPhotoId={id!}
             visible={showOverlay}
+            secureFrames={secureBurstFrames}
             onSelectFrame={(frameId) => {
               // Navigate to the selected burst frame
               if (frameId === id) return;
@@ -876,7 +925,7 @@ export default function Viewer() {
               navigate(`/photo/${frameId}`, {
                 replace: true,
                 viewTransition: false,
-                state: { photoIds, currentIndex, albumId, secureGallery, secureAlbumId } satisfies ViewerLocationState,
+                state: { photoIds, currentIndex, albumId, secureGallery, secureAlbumId, secureItems } satisfies ViewerLocationState,
               });
             }}
           />

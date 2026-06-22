@@ -13,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.SecureGallery
 import com.simplephotos.data.remote.dto.SecureGalleryItem
+import com.simplephotos.data.repository.AlbumRepository
 import com.simplephotos.data.repository.PhotoRepository
 import com.simplephotos.data.repository.SecureGalleryRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -39,7 +40,8 @@ private const val TAG = "SecureGalleryVM"
 @HiltViewModel
 class SecureGalleryViewModel @Inject constructor(
     private val secureGalleryRepository: SecureGalleryRepository,
-    private val photoRepository: PhotoRepository
+    private val photoRepository: PhotoRepository,
+    private val albumRepository: AlbumRepository
 ) : ViewModel() {
 
     // Auth gate
@@ -66,8 +68,16 @@ class SecureGalleryViewModel @Inject constructor(
     var itemsLoading by mutableStateOf(false)
         private set
 
-    // Photos for picker
-    var allPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
+    // ── Picker source selection ─────────────────────────────────────────────
+    // The "Add Photos" picker can draw from the full library OR a specific
+    // album / smart album, mirroring the web flow. `pickerAlbums` are the
+    // (id, displayName) sources offered alongside the implicit "All Photos";
+    // `pickerPhotos` is the resolved list for the currently-selected source.
+    var pickerAlbums by mutableStateOf<List<Pair<String, String>>>(emptyList())
+        private set
+    var pickerSourceId by mutableStateOf("all")
+        private set
+    var pickerPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
         private set
 
     var error by mutableStateOf<String?>(null)
@@ -152,12 +162,50 @@ class SecureGalleryViewModel @Inject constructor(
     private fun loadPhotos() {
         viewModelScope.launch {
             try {
-                allPhotos = withContext(Dispatchers.IO) {
+                val all = withContext(Dispatchers.IO) {
                     photoRepository.getAllPhotos().first()
                 }
-                Log.d(TAG, "Loaded ${allPhotos.size} photos for picker")
+                // Default the picker to the full library each time an album opens.
+                pickerSourceId = "all"
+                pickerPhotos = all
+                Log.d(TAG, "Loaded ${all.size} photos for picker")
+
+                // Offer album sources: the user's own albums first, then the
+                // smart albums that actually have content (skip empty ones so the
+                // chip row stays uncluttered).
+                val userAlbums = withContext(Dispatchers.IO) {
+                    albumRepository.getAllAlbums().first()
+                }
+                val sources = mutableListOf<Pair<String, String>>()
+                for (a in userAlbums) sources.add(a.localId to a.name)
+                if (all.isNotEmpty()) sources.add("smart-recents" to "Recently Added")
+                if (all.any { it.isFavorite }) sources.add("smart-favorites" to "Favorites")
+                if (all.any { it.mediaType == "video" }) sources.add("smart-videos" to "Videos")
+                pickerAlbums = sources
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to load photos for picker", e)
+            }
+        }
+    }
+
+    /**
+     * Switch the "Add Photos" picker to a different source — the full library
+     * ("all") or a specific album / smart album id. Resolves the photo list off
+     * the main thread; [PhotoRepository.getAlbumPhotos] handles both real and
+     * smart albums.
+     */
+    fun selectPickerSource(sourceId: String) {
+        pickerSourceId = sourceId
+        viewModelScope.launch {
+            try {
+                pickerPhotos = withContext(Dispatchers.IO) {
+                    if (sourceId == "all") photoRepository.getAllPhotos().first()
+                    else photoRepository.getAlbumPhotos(sourceId)
+                }
+                Log.d(TAG, "Picker source '$sourceId' → ${pickerPhotos.size} photos")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to load picker source $sourceId", e)
+                pickerPhotos = emptyList()
             }
         }
     }

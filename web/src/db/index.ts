@@ -212,6 +212,17 @@ class SimplePhotosDB extends Dexie {
       fullPhotos: "photoId, cachedAt",
       editCopies: "copyId, photoBlobId, createdAt",
     });
+
+    // v9 — added burstId index so a collapsed burst representative can be
+    //       expanded back to its full set of frames (add-to-album / secure-add).
+    //       Dexie re-indexes existing rows automatically; no upgrade fn needed.
+    this.version(9).stores({
+      photos: "blobId, takenAt, mediaType, *albumIds, contentHash, serverPhotoId, burstId",
+      albums: "albumId, name",
+      trash: "trashId, blobId, deletedAt",
+      fullPhotos: "photoId, cachedAt",
+      editCopies: "copyId, photoBlobId, createdAt",
+    });
   }
 }
 

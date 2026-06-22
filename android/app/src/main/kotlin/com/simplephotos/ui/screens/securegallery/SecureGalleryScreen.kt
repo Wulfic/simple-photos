@@ -100,7 +100,6 @@ fun SecureGalleryScreen(
             gallery = sel,
             items = viewModel.items,
             itemsLoading = viewModel.itemsLoading,
-            allPhotos = viewModel.allPhotos,
             error = viewModel.error,
             onBack = { viewModel.deselectGallery() },
             onAddPhotos = { viewModel.addPhotosToGallery(it) },

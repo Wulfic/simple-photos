@@ -204,7 +204,10 @@ class GalleryViewModel @Inject constructor(
     fun addSelectedToAlbum(albumId: String) {
         viewModelScope.launch {
             try {
-                for (id in selectedIds) {
+                // Expand any collapsed burst representative to its full stack so
+                // the whole burst is added, not just the cover frame.
+                val ids = withContext(Dispatchers.IO) { photoRepository.expandBurstSelection(selectedIds) }
+                for (id in ids) {
                     withContext(Dispatchers.IO) { albumRepository.addPhotoToAlbum(id, albumId) }
                 }
                 clearSelection()
@@ -218,7 +221,9 @@ class GalleryViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val album = withContext(Dispatchers.IO) { albumRepository.createAlbum(name) }
-                for (id in selectedIds) {
+                // Expand burst representatives so the entire stack is added.
+                val ids = withContext(Dispatchers.IO) { photoRepository.expandBurstSelection(selectedIds) }
+                for (id in ids) {
                     withContext(Dispatchers.IO) { albumRepository.addPhotoToAlbum(id, album.localId) }
                 }
                 clearSelection()

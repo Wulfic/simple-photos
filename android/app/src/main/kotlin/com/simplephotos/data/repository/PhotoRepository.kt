@@ -160,6 +160,27 @@ class PhotoRepository @Inject constructor(
     suspend fun getPhotosByServerPhotoIds(ids: List<String>): List<PhotoEntity> =
         db.photoDao().getByServerPhotoIds(ids)
 
+    /**
+     * Expand a selection of photo localIds so that any burst-stack
+     * representative also pulls in every other frame of its burst group.
+     *
+     * Burst stacks render as a single tile, so a multi-select only ever holds
+     * the cover frame's localId. Adding that to an album would silently drop
+     * the rest of the burst; this re-hydrates the full membership. Non-burst
+     * ids pass through unchanged.
+     */
+    suspend fun expandBurstSelection(localIds: Collection<String>): List<String> {
+        val ids = localIds.toList()
+        if (ids.isEmpty()) return ids
+        val burstIds = db.photoDao().getByIds(ids)
+            .mapNotNull { it.burstId }
+            .filter { it.isNotEmpty() }
+            .distinct()
+        if (burstIds.isEmpty()) return ids
+        val members = db.photoDao().getByBurstIds(burstIds).map { it.localId }
+        return (ids + members).distinct()
+    }
+
     suspend fun insertPhoto(photo: PhotoEntity) = db.photoDao().insert(photo)
 
     /**
@@ -488,18 +509,29 @@ class PhotoRepository @Inject constructor(
             throw IllegalStateException("Could not find end of \"data\" field in decrypted blob")
         }
 
-        // Decode base64 in chunks and write to output file.
-        // Base64 decodes in groups of 4 chars → 3 bytes, so we process
-        // in multiples of 4 characters (e.g. 49152 chars → 36864 bytes).
-        outputFile.outputStream().buffered().use { out ->
-            val chunkSize = 49152 // must be multiple of 4
-            var pos = markerIdx
-            while (pos < endIdx) {
-                val end = minOf(pos + chunkSize, endIdx)
-                val base64Chunk = String(decrypted, pos, end - pos, Charsets.UTF_8)
-                val decoded = android.util.Base64.decode(base64Chunk, android.util.Base64.NO_WRAP)
-                out.write(decoded)
-                pos = end
+        // Decode the base64 "data" value to the output file.
+        //
+        // This previously decoded fixed 48k-char chunks with Base64.NO_WRAP,
+        // which threw "bad base-64" for blobs whose base64 uses the URL-safe
+        // alphabet ('-'/'_' instead of '+'/'/') — some secure items (e.g.
+        // motion/burst added via the web "secure add" flow) are encoded that
+        // way, while Android-backed-up blobs use the standard alphabet. Two
+        // fixes: (1) normalise URL-safe → standard in place so either alphabet
+        // decodes, (2) stream-decode the whole value via Base64InputStream so a
+        // chunk boundary can never split a 4-char group (and a missing-padding
+        // tail is flushed at EOF). Whitespace is skipped by the decoder.
+        var urlSafe = false
+        for (i in markerIdx until endIdx) {
+            when (decrypted[i]) {
+                '-'.code.toByte() -> { decrypted[i] = '+'.code.toByte(); urlSafe = true }
+                '_'.code.toByte() -> { decrypted[i] = '/'.code.toByte(); urlSafe = true }
+            }
+        }
+        val regionLen = endIdx - markerIdx
+        android.util.Log.d(TAG, "decoding base64 data: $regionLen chars (len%4=${regionLen % 4}, urlSafe=$urlSafe)")
+        java.io.ByteArrayInputStream(decrypted, markerIdx, regionLen).use { region ->
+            android.util.Base64InputStream(region, android.util.Base64.NO_WRAP).use { b64In ->
+                outputFile.outputStream().buffered().use { out -> b64In.copyTo(out, 64 * 1024) }
             }
         }
     }

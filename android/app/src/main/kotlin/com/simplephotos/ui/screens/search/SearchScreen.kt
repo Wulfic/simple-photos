@@ -94,7 +94,7 @@ fun SearchScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .focusRequester(focusRequester),
-                placeholder = { Text("Search tags, filenames, dates, types…") },
+                placeholder = { Text("Search tags, filenames, dates, places, types…") },
                 leadingIcon = {
                     Icon(
                         painter = painterResource(R.drawable.ic_magnify_glass),
@@ -137,7 +137,7 @@ fun SearchScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Try a different tag or filename",
+                            "Try a tag, filename, date (e.g. \"friday\"), or place",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
@@ -157,7 +157,7 @@ fun SearchScreen(
 
             // Results grid — justified layout matching the gallery
             if (viewModel.results.isNotEmpty()) {
-                val targetRowHeight = 120.dp
+                val targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight()
                 com.simplephotos.ui.components.JustifiedGrid(
                     items = viewModel.results,
                     getAspectRatio = { r ->
@@ -204,7 +204,7 @@ fun SearchScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Search by tags, filenames,\ndates, or media types",
+                            "Search by tags, filenames, dates,\nplaces, or media types",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                             textAlign = TextAlign.Center
@@ -273,6 +273,27 @@ private fun SearchResultTile(
             ) {
                 Text(
                     "▶",
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    color = Color.White,
+                    fontSize = 10.sp
+                )
+            }
+        }
+
+        // Burst stack badge (top-end) — the server collapses bursts to one
+        // result, so mark the stack and show its frame count, matching the
+        // gallery and secure grids. Placed top-end so it clears the tag chips.
+        if (!result.burstId.isNullOrEmpty()) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp),
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                val count = result.burstCount ?: 0
+                Text(
+                    if (count > 1) "BURST $count" else "BURST",
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                     color = Color.White,
                     fontSize = 10.sp

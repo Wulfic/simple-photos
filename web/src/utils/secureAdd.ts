@@ -8,6 +8,7 @@
 import { api } from "../api/client";
 import { db } from "../db";
 import { encrypt, sha256Hex } from "../crypto/crypto";
+import { expandBurstSelection } from "./burstExpand";
 
 /**
  * Add a set of photos (by blob ID) to a secure gallery.
@@ -23,9 +24,13 @@ export async function addPhotosToSecureGallery(
   galleryId: string,
   blobIds: string[],
 ): Promise<number> {
+  // A selected burst representative stands in for its whole stack — pull in the
+  // rest of the frames so the entire burst moves into the secure album, not
+  // just the cover frame.
+  const expanded = await expandBurstSelection(blobIds);
   const addedOriginalIds: string[] = [];
 
-  for (const blobId of blobIds) {
+  for (const blobId of expanded) {
     const response = await api.secureGalleries.addItem(galleryId, blobId);
     if (response.new_blob_id) {
       const originalCached = await db.photos.get(blobId);

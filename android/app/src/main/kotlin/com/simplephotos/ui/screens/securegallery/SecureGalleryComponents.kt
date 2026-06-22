@@ -8,10 +8,13 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyItems
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as lazyGridItems
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -48,6 +52,7 @@ import com.simplephotos.data.remote.dto.SecureGallery
 import com.simplephotos.data.remote.dto.SecureGalleryItem
 import com.simplephotos.ui.screens.viewer.MAX_PANO_DECODE_PX
 import com.simplephotos.ui.screens.viewer.PanoramaOverlay
+import com.simplephotos.ui.screens.viewer.describeImageBytes
 import android.net.Uri
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
@@ -321,34 +326,39 @@ internal fun GalleryListView(
                     }
                 }
             } else {
-                LazyColumn(
+                // 2-column card grid mirroring the regular Albums screen, with
+                // the delete action tucked inside each card (top-right) the way
+                // the album cards present their in-card actions.
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 8.dp)
                 ) {
-                    lazyItems(galleries, key = { it.id }) { gallery ->
+                    lazyGridItems(galleries, key = { it.id }) { gallery ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onGalleryClick(gallery) },
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                GalleryCoverThumbnail(
-                                    galleryId = gallery.id,
-                                    itemCount = gallery.itemCount,
-                                    viewModel = viewModel
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
+                            Box {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    GalleryCoverThumbnail(
+                                        galleryId = gallery.id,
+                                        itemCount = gallery.itemCount,
+                                        viewModel = viewModel,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .aspectRatio(1f)
+                                    )
+                                    Spacer(Modifier.height(8.dp))
                                     Text(
                                         gallery.name,
                                         style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Medium
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1
                                     )
                                     Text(
                                         "${gallery.itemCount} item${if (gallery.itemCount != 1) "s" else ""}",
@@ -356,7 +366,7 @@ internal fun GalleryListView(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                IconButton(
+                                Surface(
                                     onClick = {
                                         if (confirmDeleteId == gallery.id) {
                                             onDeleteGallery(gallery)
@@ -364,16 +374,26 @@ internal fun GalleryListView(
                                         } else {
                                             confirmDeleteId = gallery.id
                                         }
-                                    }
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(8.dp)
+                                        .size(32.dp),
+                                    shape = CircleShape,
+                                    color = Color.Black.copy(alpha = 0.45f)
                                 ) {
-                                    Icon(
-                                        Icons.Default.Delete,
-                                        contentDescription = "Delete",
-                                        tint = if (confirmDeleteId == gallery.id)
-                                            MaterialTheme.colorScheme.error
-                                        else
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = if (confirmDeleteId == gallery.id)
+                                                "Tap again to confirm delete" else "Delete",
+                                            tint = if (confirmDeleteId == gallery.id)
+                                                MaterialTheme.colorScheme.error
+                                            else
+                                                Color.White,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -394,7 +414,6 @@ internal fun GalleryDetailView(
     gallery: SecureGallery,
     items: List<SecureGalleryItem>,
     itemsLoading: Boolean,
-    allPhotos: List<PhotoEntity>,
     error: String?,
     onBack: () -> Unit,
     onAddPhotos: (List<String>) -> Unit,
@@ -406,10 +425,14 @@ internal fun GalleryDetailView(
     var viewerIndex by remember { mutableStateOf<Int?>(null) }
 
     val albumBlobIds = remember(items) { items.map { it.blobId }.toSet() }
+    // Picker source: full library ("all") or a specific album / smart album.
+    val pickerPhotos = viewModel.pickerPhotos
+    val pickerAlbums = viewModel.pickerAlbums
+    val pickerSourceId = viewModel.pickerSourceId
     // Picker excludes anything already in the album, then collapses bursts so
     // the user picks one tile per burst (matching the main gallery picker).
-    val availablePhotos = remember(allPhotos, albumBlobIds) {
-        allPhotos.filter { it.serverBlobId != null && it.serverBlobId !in albumBlobIds }
+    val availablePhotos = remember(pickerPhotos, albumBlobIds) {
+        pickerPhotos.filter { it.serverBlobId != null && it.serverBlobId !in albumBlobIds }
             .collapseBursts()
     }
 
@@ -457,7 +480,11 @@ internal fun GalleryDetailView(
                 },
                 actions = {
                     if (!showAddPhotos) {
-                        IconButton(onClick = { showAddPhotos = true; selectedBlobIds = emptySet() }) {
+                        IconButton(onClick = {
+                            showAddPhotos = true
+                            selectedBlobIds = emptySet()
+                            viewModel.selectPickerSource("all")
+                        }) {
                             Icon(Icons.Default.Add, contentDescription = "Add Photos")
                         }
                     }
@@ -496,7 +523,9 @@ internal fun GalleryDetailView(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
-                                onAddPhotos(selectedBlobIds.toList())
+                                // Expand burst representatives to their full stack
+                                // (pickerPhotos is the un-collapsed source).
+                                onAddPhotos(expandBurstBlobIds(selectedBlobIds, pickerPhotos))
                                 showAddPhotos = false
                                 selectedBlobIds = emptySet()
                             },
@@ -506,6 +535,31 @@ internal fun GalleryDetailView(
                             showAddPhotos = false
                             selectedBlobIds = emptySet()
                         }) { Text("Cancel") }
+                    }
+                }
+
+                // Source selector — pick from the whole library or a specific
+                // album / smart album (parity with the web album-based flow).
+                if (pickerAlbums.isNotEmpty()) {
+                    androidx.compose.foundation.lazy.LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = pickerSourceId == "all",
+                                onClick = { viewModel.selectPickerSource("all") },
+                                label = { Text("All Photos") }
+                            )
+                        }
+                        lazyItems(pickerAlbums) { (id, name) ->
+                            FilterChip(
+                                selected = pickerSourceId == id,
+                                onClick = { viewModel.selectPickerSource(id) },
+                                label = { Text(name, maxLines = 1) }
+                            )
+                        }
                     }
                 }
 
@@ -534,7 +588,7 @@ internal fun GalleryDetailView(
                                 if (p.width > 0 && p.height > 0) p.width.toFloat() / p.height.toFloat() else 1f
                             },
                             getKey = { it.localId },
-                            targetRowHeight = 110.dp,
+                            targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight(),
                             gap = 2.dp,
                         ) { photo, widthDp, heightDp ->
                             val blobId = photo.serverBlobId
@@ -593,7 +647,11 @@ internal fun GalleryDetailView(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("This album is empty.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
-                            Button(onClick = { showAddPhotos = true; selectedBlobIds = emptySet() }) {
+                            Button(onClick = {
+                                showAddPhotos = true
+                                selectedBlobIds = emptySet()
+                                viewModel.selectPickerSource("all")
+                            }) {
                                 Text("Add Photos")
                             }
                         }
@@ -607,7 +665,7 @@ internal fun GalleryDetailView(
                             if (w > 0 && h > 0) w.toFloat() / h.toFloat() else 1f
                         },
                         getKey = { it.id },
-                        targetRowHeight = 130.dp,
+                        targetRowHeight = com.simplephotos.ui.components.rememberGalleryRowHeight(),
                         gap = 2.dp,
                     ) { item, widthDp, heightDp ->
                         val openViewer = {
@@ -641,7 +699,8 @@ internal fun GalleryDetailView(
 internal fun GalleryCoverThumbnail(
     galleryId: String,
     itemCount: Int,
-    viewModel: SecureGalleryViewModel
+    viewModel: SecureGalleryViewModel,
+    modifier: Modifier = Modifier.size(48.dp)
 ) {
     var bitmap by remember(galleryId) { mutableStateOf<android.graphics.Bitmap?>(null) }
 
@@ -659,7 +718,7 @@ internal fun GalleryCoverThumbnail(
     }
 
     Surface(
-        modifier = Modifier.size(48.dp),
+        modifier = modifier,
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.primaryContainer
     ) {
@@ -721,7 +780,10 @@ internal fun SecureItemTile(
 
     Box(
         modifier = Modifier
-            .aspectRatio(1f)
+            // Fill the JustifiedGrid cell (which is already aspect-sized) instead
+            // of forcing a square — a square inside a wide/tall cell left gaps and
+            // made the grid look "scattered". Crop fills it cleanly.
+            .fillMaxSize()
             .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick),
@@ -989,11 +1051,23 @@ private fun SecureMediaPage(
     var decrypted by remember(item.blobId) { mutableStateOf<ByteArray?>(null) }
     var loading by remember(item.blobId) { mutableStateOf(true) }
     var failed by remember(item.blobId) { mutableStateOf(false) }
+    // Coil decode error (distinct from a decrypt failure). Previously a decode
+    // failure on the base image was swallowed → pure black. Surface it so a
+    // black 360/pano can be diagnosed instead of looking like a blank page.
+    var imageError by remember(item.blobId) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(item.blobId) {
         loading = true; failed = false
         try {
-            decrypted = viewModel.downloadAndDecrypt(item.blobId)
+            val data = viewModel.downloadAndDecrypt(item.blobId)
+            android.util.Log.d(
+                "SecureMediaPage",
+                "decrypted blobId=${item.blobId} sub=$sub → ${describeImageBytes(data)}"
+            )
+            // AVIF/HEIF are handled by the app's AvifCoilDecoder (libavif), so the
+            // raw decrypted bytes can go straight to Coil — no temp file / no
+            // plaintext on disk.
+            decrypted = data
         } catch (e: Exception) {
             android.util.Log.e("SecureMediaPage", "decrypt failed blobId=${item.blobId}", e)
             failed = true
@@ -1019,8 +1093,26 @@ private fun SecureMediaPage(
                         .build(),
                     contentDescription = "Secure photo",
                     modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
+                    contentScale = ContentScale.Fit,
+                    onState = { state ->
+                        if (state is AsyncImagePainter.State.Error) {
+                            val t = state.result.throwable
+                            android.util.Log.w(
+                                "SecureMediaPage",
+                                "Coil decode failed blobId=${item.blobId} sub=$sub: ${t.message}",
+                                t
+                            )
+                            imageError = "Unable to display this image"
+                        } else if (state is AsyncImagePainter.State.Success) {
+                            imageError = null
+                        }
+                    }
                 )
+
+                // Visible fallback for a base-image decode failure (was: black).
+                if (imageError != null) {
+                    Text(imageError!!, color = Color.White)
+                }
 
                 if (isPano) {
                     PanoramaOverlay(
@@ -1032,7 +1124,7 @@ private fun SecureMediaPage(
                         onLiveModeChange = { live, _ -> onPanoLiveModeChange(live) },
                     )
                 } else if (isMotion) {
-                    SecureMotionOverlay(jpegBytes = data, blobKey = item.blobId)
+                    SecureMotionOverlay(jpegBytes = decrypted!!, blobKey = item.blobId)
                 }
             }
         }
@@ -1205,4 +1297,29 @@ private fun collapseSecureBursts(items: List<SecureGalleryItem>): List<SecureGal
         val bid = item.burstId
         if (bid.isNullOrEmpty()) true else seen.add(bid)
     }
+}
+
+/**
+ * Expand a set of selected server blob IDs so that any selected burst
+ * representative also pulls in the rest of its burst frames. The picker grid
+ * collapses bursts to one tile, so a selection only holds the cover frame's
+ * blobId — without this, only the cover would move into the secure album.
+ *
+ * [allPhotos] is the un-collapsed picker source, so it still carries every
+ * burst frame; non-burst selections pass through unchanged.
+ */
+internal fun expandBurstBlobIds(
+    selected: Set<String>,
+    allPhotos: List<PhotoEntity>,
+): List<String> {
+    if (selected.isEmpty()) return emptyList()
+    val byBlob = allPhotos.filter { it.serverBlobId != null }.associateBy { it.serverBlobId!! }
+    val burstIds = selected.mapNotNull { byBlob[it]?.burstId }
+        .filter { it.isNotEmpty() }
+        .toSet()
+    if (burstIds.isEmpty()) return selected.toList()
+    val members = allPhotos
+        .filter { !it.burstId.isNullOrEmpty() && it.burstId in burstIds && it.serverBlobId != null }
+        .mapNotNull { it.serverBlobId }
+    return (selected + members).distinct()
 }

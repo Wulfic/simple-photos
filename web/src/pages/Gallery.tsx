@@ -28,6 +28,9 @@ import { useBackupStore } from "../store/backup";
 import { useAuthStore } from "../store/auth";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { toast } from "../store/toast";
+import { useSecureAdd } from "../store/secureAdd";
+import { addPhotosToSecureGallery } from "../utils/secureAdd";
+import { getErrorMessage } from "../utils/formatters";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -115,6 +118,17 @@ export default function Gallery() {
   const [showUploadMenu, setShowUploadMenu] = useState(false);
   const [showAddToAlbum, setShowAddToAlbum] = useState(false);
 
+  // ── Secure-add session ──────────────────────────────────────────────────
+  // When the user starts "Add Photos" inside a secure album, that flow can land
+  // here (the main gallery is a valid pick surface, alongside /albums). While a
+  // session is active, tapping a tile toggles selection and a sticky bar pinned
+  // under the navbar offers "Add to 🔒 <name>".
+  const secureAddTarget = useSecureAdd((s) => s.target);
+  const cancelSecureAdd = useSecureAdd((s) => s.cancel);
+  const [addingSecure, setAddingSecure] = useState(false);
+  // Force selection-style tiles whenever we're selecting OR adding to a secure album.
+  const selecting = selectionMode || !!secureAddTarget;
+
   function enterSelectionMode(id: string) {
     setSelectionMode(true);
     setSelectedIds(new Set([id]));
@@ -199,6 +213,34 @@ export default function Gallery() {
       setError(err instanceof Error ? err.message : "Failed to delete selected items");
     }
     clearSelection();
+  }
+
+  /** Add the currently-selected photos to the active secure album, then return
+   *  to that album. Mirrors the album-based flow (SelectablePhotoGrid). */
+  async function addSelectedToSecure() {
+    if (!secureAddTarget || selectedIds.size === 0 || addingSecure) return;
+    setAddingSecure(true);
+    try {
+      const count = await addPhotosToSecureGallery(secureAddTarget.galleryId, Array.from(selectedIds));
+      toast.success(`Added ${count} photo${count !== 1 ? "s" : ""} to ${secureAddTarget.galleryName}`);
+      const target = secureAddTarget.galleryId;
+      clearSelection();
+      cancelSecureAdd();
+      await loadEncryptedPhotos();
+      navigate(`/secure-gallery?album=${target}`);
+    } catch (err: unknown) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setAddingSecure(false);
+    }
+  }
+
+  /** Leave the secure-add session without adding anything; back to the album. */
+  function exitSecureAdd() {
+    const target = secureAddTarget?.galleryId;
+    clearSelection();
+    cancelSecureAdd();
+    navigate(target ? `/secure-gallery?album=${target}` : "/secure-gallery");
   }
 
   // ── Filter out photos in secure galleries (private) ─────────────────────
@@ -302,9 +344,34 @@ export default function Gallery() {
       <DebugCropOverlay />
       <AppHeader />
 
-      <main className={`p-4 ${selectionMode && !isBackupView && !isBackupServer ? "pt-16" : ""}`}>
+      <main className={`p-4 ${selecting && !isBackupView && !isBackupServer ? "pt-16" : ""}`}>
+        {/* ── Secure-add bar (fixed just under the AppHeader, always visible) ──
+            Shown while a "add to secure album" session is active, so the user can
+            scroll the whole library and the Add action stays pinned in view. */}
+        {secureAddTarget && !isBackupView && !isBackupServer && (
+          <div className="fixed top-14 left-0 right-0 z-40 flex items-center justify-between bg-surface-raised/95 dark:bg-surface/95 backdrop-blur px-4 py-2 shadow-sm">
+            <div className="flex items-center gap-3 min-w-0">
+              <button onClick={exitSecureAdd} className="text-fg-muted hover:text-fg dark:hover:text-white transition-colors shrink-0" aria-label="Cancel adding to secure album">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+              <span className="text-sm font-medium text-fg-muted truncate">
+                {selectedIds.size} selected to add to 🔒 {secureAddTarget.galleryName}
+              </span>
+            </div>
+            <button
+              onClick={addSelectedToSecure}
+              disabled={selectedIds.size === 0 || addingSecure}
+              className="btn btn-primary btn-md inline-flex items-center gap-1.5 shrink-0"
+              title={`Add to ${secureAddTarget.galleryName}`}
+            >
+              <span>🔒</span>
+              {addingSecure ? "Adding…" : `Add to album (${selectedIds.size})`}
+            </button>
+          </div>
+        )}
+
         {/* ── Selection mode bar (fixed just under the AppHeader, always visible) ── */}
-        {selectionMode && !isBackupView && !isBackupServer && (
+        {selectionMode && !secureAddTarget && !isBackupView && !isBackupServer && (
           <div className="fixed top-14 left-0 right-0 z-40 flex items-center justify-between bg-surface-raised/95 dark:bg-surface/95 backdrop-blur px-4 py-2 shadow-sm">
             <div className="flex items-center gap-3">
               <button onClick={clearSelection} className="text-fg-muted hover:text-fg dark:hover:text-white transition-colors" aria-label="Cancel selection">
@@ -630,16 +697,16 @@ export default function Gallery() {
                       duration={photo.duration}
                       photoSubtype={photo.photoSubtype}
                       burstCount={(photo as CachedPhoto & { _burstCount?: number })._burstCount}
-                      selectionMode={selectionMode}
+                      selectionMode={selecting}
                       isSelected={selectedIds.has(photo.blobId)}
                       onClick={() => {
-                        if (selectionMode) toggleSelect(photo.blobId);
+                        if (selecting) toggleSelect(photo.blobId);
                         else navigate(`/photo/${photo.blobId}`, {
                           state: { photoIds: collapsedPhotos!.map(p => p.blobId), currentIndex: globalIdx },
                         });
                       }}
                       onLongPress={() => {
-                        if (!selectionMode) enterSelectionMode(photo.blobId);
+                        if (!selecting) enterSelectionMode(photo.blobId);
                       }}
                       onDimensionMismatch={(nw, nh) => {
                         const correction = correctDimensionsFromThumbnail(nw, nh, photo.width, photo.height);
