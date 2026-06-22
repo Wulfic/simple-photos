@@ -40,14 +40,15 @@ pub async fn download(
         return Err(AppError::BadRequest("Invalid blob ID format".into()));
     }
 
-    let (storage_path, _blob_type, size_bytes) = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT storage_path, blob_type, size_bytes FROM blobs WHERE id = ? AND user_id = ?",
-    )
-    .bind(&blob_id)
-    .bind(&auth.user_id)
-    .fetch_optional(&state.read_pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let (storage_path, _blob_type, size_bytes, blob_format) =
+        sqlx::query_as::<_, (String, String, i64, i64)>(
+            "SELECT storage_path, blob_type, size_bytes, blob_format FROM blobs WHERE id = ? AND user_id = ?",
+        )
+        .bind(&blob_id)
+        .bind(&auth.user_id)
+        .fetch_optional(&state.read_pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     // Secure-album gate: blobs that belong to a secure gallery require a valid
     // unlock token, not just the account session.
@@ -148,6 +149,9 @@ pub async fn download(
                     HeaderValue::from_str(&etag)
                         .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
                 )
+                // Tells the client which decrypt path to use (1 = legacy
+                // monolithic envelope, 2 = chunked container).
+                .header("X-Blob-Format", HeaderValue::from(blob_format))
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()));
         } else {
@@ -197,6 +201,9 @@ pub async fn download(
             HeaderValue::from_str(&etag)
                 .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
         )
+        // Tells the client which decrypt path to use (1 = legacy monolithic
+        // envelope, 2 = chunked container).
+        .header("X-Blob-Format", HeaderValue::from(blob_format))
         .body(body)
         .map_err(|e| AppError::Internal(e.to_string()))
 }

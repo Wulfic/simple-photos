@@ -12,8 +12,7 @@
  */
 import { db } from "../db";
 import { api } from "../api/client";
-import { decrypt } from "../crypto/crypto";
-import { base64ToUint8Array } from "./encoding";
+import { decryptPhotoBlobToBlob } from "../crypto/blobEnvelope";
 import { useAuthStore } from "../store/auth";
 
 /** In-flight promises keyed by blobId to avoid duplicate downloads. */
@@ -60,12 +59,10 @@ async function _load(blobId: string, serverPhotoId?: string): Promise<string | n
         return URL.createObjectURL(blob);
       }
 
-      // 3. Encrypted blob — download + decrypt
+      // 3. Encrypted blob — download + decrypt (handles v1 + v2 chunked; the
+      // Blob is built from per-chunk parts, no giant contiguous array).
       const encrypted = await api.blobs.download(blobId, controller.signal);
-      const decrypted = await decrypt(encrypted);
-      const payload = JSON.parse(new TextDecoder().decode(decrypted));
-      const bytes = base64ToUint8Array(payload.data);
-      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: payload.mime_type || "image/gif" });
+      const { blob } = await decryptPhotoBlobToBlob(encrypted, "image/gif");
       return URL.createObjectURL(blob);
     } finally {
       clearTimeout(timer);

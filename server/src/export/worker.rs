@@ -187,35 +187,33 @@ async fn do_export(
             }
         };
 
-        // Decrypt blob data — yields the JSON envelope containing
-        // base64-encoded media in its "data" field.
-        let decrypted_envelope = match crate::crypto::decrypt(&encryption_key, &encrypted_data) {
-            Ok(d) => d,
-            Err(e) => {
-                decrypt_failures += 1;
-                tracing::warn!(
-                    job_id = %job_id, blob_id = %blob_id, error = %e,
-                    "Failed to decrypt blob, skipping"
-                );
-                continue;
-            }
-        };
-
-        // Extract the raw bytes from the decrypted blob.
-        // Media blobs (photo, gif, video, audio, thumbnail) use a JSON
-        // envelope: {"v":1,"filename":"...","data":"<base64>", ...}.
-        // Metadata blobs (album_manifest) are encrypted plain JSON without
-        // an envelope — for those we ship the decrypted bytes verbatim so
-        // the manifest is readable in the export.
+        // Extract the raw bytes from the blob.
+        // Media blobs (photo, gif, video, audio, thumbnail) use either the v1
+        // monolithic envelope `{"v":1,...,"data":"<base64>"}` or the v2 chunked
+        // container (large videos) — `decrypt_photo_blob` handles both.
+        // Metadata blobs (album_manifest) are encrypted plain JSON without an
+        // envelope — for those we ship the decrypted bytes verbatim so the
+        // manifest is readable in the export.
         let data = if blob_type == "album_manifest" {
-            decrypted_envelope
-        } else {
-            match extract_media_from_envelope(&decrypted_envelope) {
+            match crate::crypto::decrypt(&encryption_key, &encrypted_data) {
                 Ok(d) => d,
                 Err(e) => {
+                    decrypt_failures += 1;
                     tracing::warn!(
                         job_id = %job_id, blob_id = %blob_id, error = %e,
-                        "Failed to extract media from envelope, skipping"
+                        "Failed to decrypt manifest blob, skipping"
+                    );
+                    continue;
+                }
+            }
+        } else {
+            match crate::blobs::chunked::decrypt_photo_blob(&encryption_key, &encrypted_data) {
+                Ok(d) => d,
+                Err(e) => {
+                    decrypt_failures += 1;
+                    tracing::warn!(
+                        job_id = %job_id, blob_id = %blob_id, error = %e,
+                        "Failed to decrypt/extract media blob, skipping"
                     );
                     continue;
                 }
@@ -409,30 +407,3 @@ async fn register_zip_file(
     Ok(())
 }
 
-/// Extract the raw media bytes from a decrypted JSON envelope.
-///
-/// The envelope format is:
-/// ```json
-/// {"v":1,"filename":"IMG_001.jpg","taken_at":"...","mime_type":"...","data":"<base64>"}
-/// ```
-///
-/// For non-media blobs (album manifests, thumbnails) that use a similar
-/// envelope, the same extraction applies — the "data" field holds the
-/// base64-encoded payload.
-fn extract_media_from_envelope(decrypted: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
-    let json_str = std::str::from_utf8(decrypted)
-        .map_err(|e| anyhow::anyhow!("Decrypted blob is not valid UTF-8: {e}"))?;
-
-    let envelope: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| anyhow::anyhow!("Decrypted blob is not valid JSON: {e}"))?;
-
-    let data_b64 = envelope
-        .get("data")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("No \"data\" field in decrypted envelope"))?;
-
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(data_b64)
-        .map_err(|e| anyhow::anyhow!("Failed to base64-decode \"data\" field: {e}"))
-}

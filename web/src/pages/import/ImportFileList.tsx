@@ -7,8 +7,19 @@ interface ImportFileListProps {
   removeItem: (index: number) => void;
 }
 
+/**
+ * Cap how many rows we render. A folder import can carry tens of thousands of
+ * files; rendering one table row each freezes (and can OOM-crash) the tab. The
+ * full list still drives the import — this only bounds the DOM. Indices are
+ * preserved for the visible slice, so `removeItem(i)` stays correct.
+ */
+const MAX_VISIBLE_ROWS = 300;
+
 export default function ImportFileList({ items, removeItem }: ImportFileListProps) {
   if (items.length === 0) return null;
+
+  const visible = items.slice(0, MAX_VISIBLE_ROWS);
+  const hiddenCount = items.length - visible.length;
 
   return (
     <div className="card overflow-hidden">
@@ -31,7 +42,7 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
           </tr>
         </thead>
         <tbody className="divide-y divide-edge">
-          {items.map((item, i) => (
+          {visible.map((item, i) => (
             <tr
               key={`${item.name}-${i}`}
               className="hover:bg-surface-sunken dark:hover:bg-white/10/50"
@@ -96,6 +107,11 @@ export default function ImportFileList({ items, removeItem }: ImportFileListProp
           ))}
         </tbody>
       </table>
+      {hiddenCount > 0 && (
+        <div className="px-4 py-2.5 text-xs text-fg-muted border-t border-edge bg-canvas">
+          + {hiddenCount.toLocaleString()} more file{hiddenCount === 1 ? "" : "s"} not shown
+        </div>
+      )}
     </div>
   );
 }

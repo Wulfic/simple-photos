@@ -32,6 +32,12 @@ fn conversion_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Set when a conversion trigger arrives while a pass is already running. The
+/// active pass checks this before releasing the lock and performs one more
+/// sweep if set, so files that landed mid-walk are never stranded until the
+/// next autoscan tick.
+static CONVERSION_RERUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Pure decision for [`ingest_pipeline_busy`], split out so the phase-ordering
 /// invariant can be unit-tested without a live database or running migration.
 ///
@@ -79,7 +85,9 @@ pub async fn ingest_pipeline_busy(pool: &sqlx::SqlitePool) -> bool {
     .unwrap_or(false);
 
     let pending_unencrypted: bool = if has_key {
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM photos WHERE encrypted_blob_id IS NULL)")
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM photos WHERE encrypted_blob_id IS NULL AND encryption_deferred = 0)",
+        )
             .fetch_one(pool)
             .await
             .unwrap_or(false)
@@ -99,9 +107,43 @@ pub async fn run_conversion_pass(
     storage_root: PathBuf,
     jwt_secret: String,
 ) {
-    // Serialize: only one conversion pass at a time to keep progress counters accurate.
-    let _guard = conversion_lock().lock().await;
+    use std::sync::atomic::Ordering;
 
+    // Only one conversion pass runs at a time. If one is already in flight, set
+    // a rerun flag and return immediately instead of spawning a task that
+    // blocks on `lock().await`. Autoscan (every ~5 min) and every deferred
+    // upload spawn a fresh call here; on a large library those blocked tasks
+    // would otherwise accumulate without bound and exhaust memory. The running
+    // pass honors the flag with one extra sweep so nothing is missed.
+    let _guard = match conversion_lock().try_lock() {
+        Ok(g) => g,
+        Err(_) => {
+            CONVERSION_RERUN.store(true, Ordering::SeqCst);
+            tracing::debug!("[INGEST] Conversion pass already running; queued a follow-up sweep");
+            return;
+        }
+    };
+
+    loop {
+        CONVERSION_RERUN.store(false, Ordering::SeqCst);
+        run_conversion_pass_inner(pool.clone(), storage_root.clone(), jwt_secret.clone()).await;
+        if !CONVERSION_RERUN.swap(false, Ordering::SeqCst) {
+            break;
+        }
+        tracing::info!(
+            "[INGEST] Re-running conversion pass to pick up files that arrived during the previous pass"
+        );
+    }
+}
+
+/// One full conversion pass: walk the tree, convert non-native files, register
+/// the results, and encrypt them. Always invoked under the conversion lock by
+/// [`run_conversion_pass`], which also handles the rerun-on-trigger semantics.
+async fn run_conversion_pass_inner(
+    pool: sqlx::SqlitePool,
+    storage_root: PathBuf,
+    jwt_secret: String,
+) {
     // ── Step 0: Determine the admin user to assign new photos to ─────────
     let admin_id: Option<String> = sqlx::query_scalar(
         "SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1",
@@ -128,7 +170,9 @@ pub async fn run_conversion_pass(
         let start = std::time::Instant::now();
         loop {
             let unencrypted: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL")
+                sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM photos WHERE encrypted_blob_id IS NULL AND encryption_deferred = 0",
+                )
                     .fetch_one(&pool)
                     .await
                     .unwrap_or(0);

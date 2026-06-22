@@ -404,11 +404,23 @@ pub async fn add_gallery_item(
         )
     };
 
-    // Clone: read the original file data from disk, write a new copy under a fresh ID.
-    // For photos that have been server-side encrypted (empty file_path), decrypt
-    // the encrypted blob to get the plaintext data.
-    let blob_data = if storage_path.is_empty() {
-        // Encrypted photo — decrypt from encrypted_blob_id
+    // Clone the source media to a fresh plaintext blob WITHOUT holding the whole
+    // file in memory (the migration re-encrypts it afterward — chunked for large
+    // files). For a server-side-encrypted source (empty file_path) we
+    // stream-decrypt the encrypted blob frame-by-frame to disk; for a plaintext
+    // source we stream-copy the file. This keeps secure-adding a multi-gigabyte
+    // video off the heap, matching the import path.
+    let new_blob_id = Uuid::new_v4().to_string();
+    let new_blob_abs = crate::blobs::storage::blob_path(&storage_root, &auth.user_id, &new_blob_id);
+    if let Some(parent) = new_blob_abs.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| AppError::Internal(format!("Create clone directory: {e}")))?;
+    }
+    let new_storage_path = crate::blobs::storage::relative_path(&auth.user_id, &new_blob_id);
+
+    if storage_path.is_empty() {
+        // Encrypted source — stream-decrypt the encrypted blob to the clone.
         let enc_blob_id = photo_row_full
             .as_ref()
             .and_then(|p| p.encrypted_blob_id.as_deref())
@@ -419,9 +431,8 @@ pub async fn add_gallery_item(
 
         let enc_key = crypto::load_wrapped_key(&state.pool, &state.config.auth.jwt_secret)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to load encryption key: {e}")))?;
-        let enc_key =
-            enc_key.ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
+            .map_err(|e| AppError::Internal(format!("Failed to load encryption key: {e}")))?
+            .ok_or_else(|| AppError::Internal("No encryption key configured".into()))?;
 
         let enc_sp: Option<(String,)> =
             sqlx::query_as("SELECT storage_path FROM blobs WHERE id = ? AND user_id = ?")
@@ -432,43 +443,34 @@ pub async fn add_gallery_item(
         let (enc_storage_path,) = enc_sp
             .ok_or_else(|| AppError::Internal(format!("Encrypted blob {enc_blob_id} not found")))?;
 
-        let enc_data = crate::blobs::storage::read_blob(&storage_root, &enc_storage_path).await?;
-        let plaintext = {
-            let k = enc_key;
-            tokio::task::spawn_blocking(move || crypto::decrypt(&k, &enc_data))
-                .await
-                .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
-                .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?
-        };
-
-        // Parse JSON envelope and extract the base64 "data" field
-        let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
-            .map_err(|e| AppError::Internal(format!("Invalid blob envelope JSON: {e}")))?;
-        let data_b64 = envelope["data"]
-            .as_str()
-            .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
-        let raw_bytes =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
-                .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
+        let src_abs = storage_root.join(&enc_storage_path);
+        let dst_abs = new_blob_abs.clone();
+        let k = enc_key;
+        tokio::task::spawn_blocking(move || {
+            crate::blobs::chunked::decrypt_blob_file_to_file(&k, &src_abs, &dst_abs)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("Decrypt task panicked: {e}")))?
+        .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
 
         tracing::info!(
             encrypted_blob_id = %enc_blob_id,
-            decrypted_size = raw_bytes.len(),
-            "[DIAG:SECURE_ADD] Decrypted encrypted photo for secure gallery clone"
+            "[DIAG:SECURE_ADD] Stream-decrypted encrypted photo for secure gallery clone"
         );
-
-        raw_bytes
     } else {
-        crate::blobs::storage::read_blob(&storage_root, &storage_path)
+        // Plaintext source on disk — stream-copy to the clone.
+        let src_abs = storage_root.join(&storage_path);
+        tokio::fs::copy(&src_abs, &new_blob_abs)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to read source blob: {e}")))?
-    };
+            .map_err(|e| AppError::Internal(format!("Failed to copy source blob: {e}")))?;
+    }
 
-    let new_blob_id = Uuid::new_v4().to_string();
-    let new_storage_path =
-        crate::blobs::storage::write_blob(&storage_root, &auth.user_id, &new_blob_id, &blob_data)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to write cloned blob: {e}")))?;
+    // Actual on-disk size of the plaintext clone (the resolved source size may be
+    // the *encrypted* size for an encrypted source).
+    let clone_size = tokio::fs::metadata(&new_blob_abs)
+        .await
+        .map(|m| m.len() as i64)
+        .unwrap_or(size_bytes);
 
     // Insert the cloned blob record.
     // content_hash is deliberately set to NULL so the server-side encryption
@@ -482,7 +484,7 @@ pub async fn add_gallery_item(
     .bind(&new_blob_id)
     .bind(&auth.user_id)
     .bind(&blob_type)
-    .bind(size_bytes)
+    .bind(clone_size)
     .bind(&client_hash)
     .bind(&now)
     .bind(&new_storage_path)

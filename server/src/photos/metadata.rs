@@ -864,9 +864,9 @@ pub async fn backfill_photo_subtypes_all_users(
     storage_root: &std::path::Path,
     max_files: usize,
 ) -> i64 {
+    use futures_util::stream::{self, StreamExt};
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::sync::Arc;
-    use tokio::sync::Semaphore;
 
     // XMP subtypes only apply to still photos.  Including videos here used
     // to pull entire multi-GB files into memory for a string scan.
@@ -897,82 +897,79 @@ pub async fn backfill_photo_subtypes_all_users(
         "[subtype-backfill] checking existing photos for missed XMP / aspect subtypes"
     );
 
-    let sem = Arc::new(Semaphore::new(4));
     let updated = Arc::new(AtomicI64::new(0));
-    let mut handles = Vec::with_capacity(rows.len());
+    let storage_root = storage_root.to_path_buf();
+    stream::iter(rows)
+        .map(|(pid, fpath, ph_w, ph_h)| {
+            let pool = pool.clone();
+            let updated = updated.clone();
+            let storage_root = storage_root.clone();
+            async move {
+                let abs = storage_root.join(&fpath);
+                if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
+                    return;
+                }
+                let _ = tokio::spawn(async move {
+                    let bytes = read_file_prefix(&abs, XMP_SCAN_PREFIX_BYTES).await;
+                    if bytes.is_empty() {
+                        return;
+                    }
+                    let mut sub = extract_xmp_subtype(&bytes);
 
-    for (pid, fpath, ph_w, ph_h) in rows {
-        let abs = storage_root.join(&fpath);
-        if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
-            continue;
-        }
-        let sem = sem.clone();
-        let pool = pool.clone();
-        let updated = updated.clone();
+                    // Re-extract dimensions for legacy rows missing width/height.
+                    let (mut eff_w, mut eff_h) = (ph_w, ph_h);
+                    if eff_w <= 0 || eff_h <= 0 {
+                        let fname = abs
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let (rw, rh, _, _, _, _) =
+                            extract_media_metadata_from_bytes_async(bytes.clone(), fname).await;
+                        if rw > 0 && rh > 0 {
+                            eff_w = rw;
+                            eff_h = rh;
+                            let _ =
+                                sqlx::query("UPDATE photos SET width = ?, height = ? WHERE id = ?")
+                                    .bind(eff_w)
+                                    .bind(eff_h)
+                                    .bind(&pid)
+                                    .execute(&pool)
+                                    .await;
+                        }
+                    }
 
-        handles.push(tokio::spawn(async move {
-            let _permit = match sem.acquire().await {
-                Ok(p) => p,
-                Err(_) => return,
-            };
-            let bytes = read_file_prefix(&abs, XMP_SCAN_PREFIX_BYTES).await;
-            if bytes.is_empty() {
-                return;
-            }
-            let mut sub = extract_xmp_subtype(&bytes);
+                    apply_aspect_subtype_fallback(&mut sub, eff_w, eff_h);
 
-            // Re-extract dimensions for legacy rows missing width/height.
-            let (mut eff_w, mut eff_h) = (ph_w, ph_h);
-            if eff_w <= 0 || eff_h <= 0 {
-                let fname = abs
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string();
-                let (rw, rh, _, _, _, _) =
-                    extract_media_metadata_from_bytes_async(bytes.clone(), fname).await;
-                if rw > 0 && rh > 0 {
-                    eff_w = rw;
-                    eff_h = rh;
-                    let _ = sqlx::query("UPDATE photos SET width = ?, height = ? WHERE id = ?")
-                        .bind(eff_w)
-                        .bind(eff_h)
+                    if let Some(ref subtype) = sub.photo_subtype {
+                        let res = sqlx::query(
+                            "UPDATE photos \
+                     SET photo_subtype = ?, burst_id = COALESCE(burst_id, ?) \
+                     WHERE id = ? AND photo_subtype IS NULL",
+                        )
+                        .bind(subtype)
+                        .bind(&sub.burst_id)
                         .bind(&pid)
                         .execute(&pool)
                         .await;
-                }
-            }
-
-            apply_aspect_subtype_fallback(&mut sub, eff_w, eff_h);
-
-            if let Some(ref subtype) = sub.photo_subtype {
-                let res = sqlx::query(
-                    "UPDATE photos \
-                     SET photo_subtype = ?, burst_id = COALESCE(burst_id, ?) \
-                     WHERE id = ? AND photo_subtype IS NULL",
-                )
-                .bind(subtype)
-                .bind(&sub.burst_id)
-                .bind(&pid)
-                .execute(&pool)
-                .await;
-                if let Ok(r) = res {
-                    if r.rows_affected() > 0 {
-                        updated.fetch_add(1, Ordering::Relaxed);
-                        tracing::debug!(
-                            photo_id = %pid,
-                            subtype = %subtype,
-                            "[subtype-backfill] tagged photo"
-                        );
+                        if let Ok(r) = res {
+                            if r.rows_affected() > 0 {
+                                updated.fetch_add(1, Ordering::Relaxed);
+                                tracing::debug!(
+                                    photo_id = %pid,
+                                    subtype = %subtype,
+                                    "[subtype-backfill] tagged photo"
+                                );
+                            }
+                        }
                     }
-                }
+                })
+                .await;
             }
-        }));
-    }
-
-    for h in handles {
-        let _ = h.await;
-    }
+        })
+        .buffer_unordered(4)
+        .for_each(|_| async {})
+        .await;
 
     let n = updated.load(Ordering::Relaxed);
     if n > 0 {

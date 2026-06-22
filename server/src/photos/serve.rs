@@ -203,19 +203,14 @@ pub async fn serve_photo(
                 .await?
                 .ok_or(AppError::NotFound)?;
         let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
-        let plaintext =
-            tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
-                .await
-                .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
-                .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
-        let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
-            .map_err(|e| AppError::Internal(format!("Blob envelope JSON: {e}")))?;
-        let data_b64 = envelope["data"]
-            .as_str()
-            .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
-        let raw_bytes = base64::engine::general_purpose::STANDARD
-            .decode(data_b64)
-            .map_err(|e| AppError::Internal(format!("Base64 decode: {e}")))?;
+        // Format-aware: handles both the legacy monolithic envelope and the v2
+        // chunked container (large videos) — see blobs/chunked.rs.
+        let raw_bytes = tokio::task::spawn_blocking(move || {
+            crate::blobs::chunked::decrypt_photo_blob(&key, &enc_data)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+        .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
         let etag = format!("\"{}-enc-{}\"", photo_id, raw_bytes.len());
         if let Some(not_modified) = check_etag(&headers, &etag) {
             return Ok(not_modified);

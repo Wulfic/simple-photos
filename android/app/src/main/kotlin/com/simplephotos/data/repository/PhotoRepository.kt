@@ -7,6 +7,7 @@ package com.simplephotos.data.repository
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import com.simplephotos.crypto.ChunkedBlob
 import com.simplephotos.crypto.CryptoManager
 import com.simplephotos.data.collapseBursts
 import com.simplephotos.data.local.AppDatabase
@@ -405,6 +406,18 @@ class PhotoRepository @Inject constructor(
     }
 
     /**
+     * Download a blob and decrypt it into raw **media bytes**, handling both the
+     * v1 monolithic envelope and the v2 chunked container (large files). Used
+     * for photos that Coil renders from a `ByteArray`; videos use the streaming
+     * [downloadAndDecryptBlobToFile] path instead.
+     */
+    suspend fun downloadAndDecryptMediaBytes(blobId: String): ByteArray {
+        val response = api.downloadBlob(blobId)
+        val encrypted = response.bytes()
+        return ChunkedBlob.decryptPhotoBlobBytes(crypto, encrypted)
+    }
+
+    /**
      * Download and decrypt a **thumbnail** blob via `GET /api/blobs/{id}/thumb`.
      *
      * The server resolves the photo blob ID → encrypted_thumb_blob_id internally,
@@ -449,18 +462,25 @@ class PhotoRepository @Inject constructor(
                 }
             }
 
-            // Step 2: Read encrypted file and decrypt (one allocation for GCM)
-            val encrypted = encryptedTempFile.readBytes()
-            // Delete the encrypted temp file immediately to free disk space
-            encryptedTempFile.delete()
-            val decrypted = crypto.decrypt(encrypted)
-            // encrypted is now GC-eligible
+            // Step 2: Detect the container format from the leading magic bytes.
+            val head = ByteArray(ChunkedBlob.MAGIC_SIZE)
+            val headLen = encryptedTempFile.inputStream().use { it.read(head) }
 
-            // Step 3: Extract the base64 "data" field and decode to output file.
-            // We scan for `"data":"` then read until the closing `"`, decoding
-            // base64 in chunks to avoid holding the full decoded bytes in memory.
-            streamExtractBase64ToFile(decrypted, outputFile)
-            // decrypted is now GC-eligible
+            if (ChunkedBlob.isChunked(head, headLen)) {
+                // v2 chunked: stream each ~4 MiB chunk frame straight to disk so a
+                // multi-gigabyte video never lives entirely in the Java heap.
+                encryptedTempFile.inputStream().use { input ->
+                    ChunkedBlob.decryptChunkedStreamToFile(crypto, input, outputFile)
+                }
+            } else {
+                // v1 monolithic: decrypt the whole blob (one GCM allocation), then
+                // stream the base64 "data" field to disk in chunks.
+                val encrypted = encryptedTempFile.readBytes()
+                val decrypted = crypto.decrypt(encrypted)
+                // encrypted is now GC-eligible
+                streamExtractBase64ToFile(decrypted, outputFile)
+                // decrypted is now GC-eligible
+            }
         } finally {
             // Ensure cleanup even on error
             if (encryptedTempFile.exists()) encryptedTempFile.delete()
