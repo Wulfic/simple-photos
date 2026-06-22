@@ -329,8 +329,9 @@ pub async fn upload_photo(
     // converted output would silently lose motion/panorama/360/HDR/burst
     // classification. Mirrors scan.rs / ingest.rs, which always scan the
     // original file prefix.
-    let original_xmp_bytes: Option<Vec<u8>> =
-        original_upload.as_ref().map(|(orig_bytes, _)| orig_bytes.clone());
+    let original_xmp_bytes: Option<Vec<u8>> = original_upload
+        .as_ref()
+        .map(|(orig_bytes, _)| orig_bytes.clone());
 
     let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
         if let Some((orig_bytes, orig_filename)) = original_upload {

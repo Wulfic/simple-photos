@@ -721,10 +721,11 @@ pub async fn serve_motion_video(
                 .await?
                 .ok_or(AppError::NotFound)?;
         let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
-        let plaintext = tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
-            .await
-            .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
-            .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
+        let plaintext =
+            tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
+                .await
+                .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+                .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
         let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
             .map_err(|e| AppError::Internal(format!("Blob envelope JSON: {e}")))?;
         let data_b64 = envelope["data"]
@@ -745,7 +746,9 @@ pub async fn serve_motion_video(
         .motion_video_offset
         .or_else(|| super::motion::find_samsung_motion_offset(&data))
         .ok_or_else(|| {
-            AppError::BadRequest("Motion video offset not found (no XMP offset, no Samsung trailer)".to_string())
+            AppError::BadRequest(
+                "Motion video offset not found (no XMP offset, no Samsung trailer)".to_string(),
+            )
         })?;
 
     let video_bytes = super::metadata::extract_motion_video(&data, offset).ok_or_else(|| {

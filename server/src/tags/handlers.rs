@@ -266,8 +266,7 @@ pub async fn search_photos(
     // order, so we keep the first frame seen per burst_id and record the group
     // size for a "BURST N" badge. Non-burst rows (null/empty burst_id) pass
     // through untouched.
-    let mut burst_sizes: std::collections::HashMap<String, i64> =
-        std::collections::HashMap::new();
+    let mut burst_sizes: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     for r in &rows {
         if let Some(b) = r.burst_id.as_deref() {
             if !b.is_empty() {

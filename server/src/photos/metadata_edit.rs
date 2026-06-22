@@ -951,7 +951,9 @@ mod tests {
     #[test]
     fn rejects_embedded_data_and_garbage_subtypes() {
         // motion/burst/hdr depend on backing data that relabeling can't create.
-        for s in ["motion", "burst", "hdr", "", "Panorama", "360", "none ", "../x"] {
+        for s in [
+            "motion", "burst", "hdr", "", "Panorama", "360", "none ", "../x",
+        ] {
             assert!(!is_allowed_manual_subtype(s), "{s:?} should be rejected");
         }
     }
