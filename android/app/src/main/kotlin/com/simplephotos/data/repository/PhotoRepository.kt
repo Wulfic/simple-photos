@@ -27,6 +27,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -117,6 +118,26 @@ class PhotoRepository @Inject constructor(
             android.util.Log.w("PhotoRepository", "extractCameraModel failed: ${e.message}")
             null
         }
+    }
+
+    /** Bytes of a file head scanned for XMP/EXIF subtype + camera detection. */
+    private val subtypeScanPrefixBytes = 256 * 1024
+
+    /**
+     * Read up to [maxBytes] from the head of [input] into a prefix buffer. Used by
+     * the chunked upload path to classify subtype/camera from a large file's
+     * header without ever buffering the whole file. A single `read` may return
+     * fewer bytes than asked, so loop until the buffer is full or the stream ends.
+     */
+    private fun readPrefix(input: java.io.InputStream, maxBytes: Int): ByteArray {
+        val buf = ByteArray(maxBytes)
+        var off = 0
+        while (off < maxBytes) {
+            val n = input.read(buf, off, maxBytes - off)
+            if (n < 0) break
+            off += n
+        }
+        return if (off == maxBytes) buf else buf.copyOf(off)
     }
 
     fun getAllPhotos(): Flow<List<PhotoEntity>> = db.photoDao().getAllPhotos()
@@ -252,45 +273,13 @@ class PhotoRepository @Inject constructor(
         db.photoDao().updateSyncStatus(photo.localId, SyncStatus.UPLOADING)
 
         try {
-            val thumbBlobType = if (photo.mediaType == "video") "video_thumbnail" else "thumbnail"
             val mediaBlobType = when (photo.mediaType) {
                 "gif" -> "gif"
                 "video" -> "video"
                 else -> "photo"
             }
 
-            var thumbBlobId: String? = null
-
-            if (thumbnailData != null && thumbnailData.isNotEmpty()) {
-                android.util.Log.d("PhotoRepository", "uploadPhoto: encrypting thumbnail for ${photo.filename}")
-
-                // Decode thumbnail to get actual dimensions (thumbnails are now
-                // aspect-ratio-preserving, not always 256×256).
-                val thumbBitmap = android.graphics.BitmapFactory.decodeByteArray(thumbnailData, 0, thumbnailData.size)
-                val thumbW = thumbBitmap?.width ?: 256
-                val thumbH = thumbBitmap?.height ?: 256
-                thumbBitmap?.recycle()
-
-                // Build & encrypt thumbnail payload
-                val thumbPayload = JSONObject().apply {
-                    put("v", 1)
-                    put("photo_blob_id", "")
-                    put("width", thumbW)
-                    put("height", thumbH)
-                    put("data", android.util.Base64.encodeToString(thumbnailData, android.util.Base64.NO_WRAP))
-                }.toString()
-
-                val encryptedThumb = crypto.encrypt(thumbPayload.toByteArray())
-                val thumbHash = crypto.sha256Hex(encryptedThumb)
-                val thumbBody = encryptedThumb.toRequestBody("application/octet-stream".toMediaType())
-
-                android.util.Log.d("PhotoRepository", "uploadPhoto: uploading thumbnail blob (${encryptedThumb.size} bytes, type=$thumbBlobType)")
-                val thumbRes = api.uploadBlob(thumbBody, thumbBlobType, encryptedThumb.size.toString(), thumbHash)
-                android.util.Log.d("PhotoRepository", "uploadPhoto: thumbnail uploaded, blobId=${thumbRes.blobId}")
-                thumbBlobId = thumbRes.blobId
-            } else {
-                android.util.Log.d("PhotoRepository", "uploadPhoto: no thumbnail data for ${photo.filename}, skipping thumbnail upload")
-            }
+            val thumbBlobId = uploadThumbnailBlob(photo, thumbnailData)
 
             // Build & encrypt media payload
             val mediaPayload = JSONObject().apply {
@@ -336,38 +325,16 @@ class PhotoRepository @Inject constructor(
                     "uploadPhoto: detected subtype=${detected.photoSubtype} burstId=${detected.burstId} camera=$cameraModel for ${photo.filename}")
             }
 
-            // Register the encrypted photo on the server to create a photos row
-            val regReq = com.simplephotos.data.remote.dto.RegisterEncryptedPhotoRequest(
-                filename = photo.filename,
-                mimeType = photo.mimeType,
-                mediaType = photo.mediaType,
-                width = photo.width,
-                height = photo.height,
-                durationSecs = photo.durationSecs?.toDouble(),
-                takenAt = java.time.Instant.ofEpochMilli(photo.takenAt).toString(),
-                latitude = photo.latitude,
-                longitude = photo.longitude,
-                encryptedBlobId = photoRes.blobId,
-                encryptedThumbBlobId = thumbBlobId,
-                photoHash = contentHash,
-                photoSubtype = detected.photoSubtype,
-                burstId = detected.burstId,
-                cameraModel = cameraModel
+            // Register on the server + mark synced (shared with the chunked path).
+            registerAndMark(
+                photo = photo,
+                photoBlobId = photoRes.blobId,
+                thumbBlobId = thumbBlobId,
+                contentHash = contentHash,
+                detected = detected,
+                cameraModel = cameraModel,
+                thumbnailData = thumbnailData,
             )
-            val regRes = api.registerEncryptedPhoto(regReq)
-            android.util.Log.d("PhotoRepository", "uploadPhoto: registered photo, serverPhotoId=${regRes.photoId}, duplicate=${regRes.duplicate}")
-
-            db.photoDao().markSynced(photo.localId, regRes.photoId, photoRes.blobId, thumbBlobId, contentHash)
-            // Persist locally too so the device gallery badges it immediately
-            // (server timestamp-burst grouping is reflected on the next sync).
-            if (detected.photoSubtype != null || detected.burstId != null) {
-                db.photoDao().backfillSubtypeFields(regRes.photoId, detected.photoSubtype, detected.burstId, null)
-            }
-
-            // Cache uploaded thumbnail locally
-            if (thumbnailData != null && thumbnailData.isNotEmpty()) {
-                saveThumbnailToDisk(photo.localId, thumbnailData)
-            }
         } catch (e: retrofit2.HttpException) {
             val errorBody = e.response()?.errorBody()?.string()
             android.util.Log.e("PhotoRepository", "uploadPhoto HTTP ${e.code()}: $errorBody", e)
@@ -377,6 +344,201 @@ class PhotoRepository @Inject constructor(
             android.util.Log.e("PhotoRepository", "uploadPhoto failed: ${e.message}", e)
             db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
             throw e
+        }
+    }
+
+    /**
+     * Encrypt and upload a photo, GIF, or large video as a **v2 chunked** container with
+     * bounded heap — the large-media counterpart to [uploadPhoto], which buffers
+     * the whole file (base64 → JSON → AES-GCM, ~5× size) and OOMs the phone on big
+     * videos. The media bytes are streamed straight from [openSource] to a temp
+     * file via [ChunkedBlob.encryptStreamToFile]; only the small thumbnail and
+     * metadata frame are ever held in memory.
+     *
+     * [dataLen] is the original source size (the caller already stat'd it to decide
+     * the chunked path). [openSource] must yield a fresh stream on every call — it
+     * is opened once to scan a bounded header prefix for subtype/camera and again
+     * to stream the encrypt, so the whole file is never buffered.
+     */
+    suspend fun uploadPhotoChunked(
+        photo: PhotoEntity,
+        dataLen: Long,
+        openSource: () -> java.io.InputStream,
+        thumbnailData: ByteArray?,
+    ) {
+        db.photoDao().updateSyncStatus(photo.localId, SyncStatus.UPLOADING)
+
+        val tmp = File.createTempFile("upload_", ".spchnk", context.cacheDir)
+        try {
+            val mediaBlobType = when (photo.mediaType) {
+                "gif" -> "gif"
+                "video" -> "video"
+                else -> "photo"
+            }
+
+            val thumbBlobId = uploadThumbnailBlob(photo, thumbnailData)
+
+            // Special-photo subtype + camera model (photo-only), derived from a
+            // bounded header prefix so a multi-GB source is never buffered — mirrors
+            // the full-bytes detection in [uploadPhoto]. Videos/GIFs carry no subtype.
+            val detected: com.simplephotos.data.media.MediaSubtype
+            val cameraModel: String?
+            if (photo.mediaType == "photo") {
+                val prefix = openSource().use { readPrefix(it, subtypeScanPrefixBytes) }
+                detected = com.simplephotos.data.media.MediaSubtypeDetector.detect(prefix, photo.width, photo.height)
+                cameraModel = extractCameraModel(prefix)
+                if (detected.photoSubtype != null || detected.burstId != null || cameraModel != null) {
+                    android.util.Log.d(TAG,
+                        "uploadPhotoChunked: detected subtype=${detected.photoSubtype} burstId=${detected.burstId} camera=$cameraModel for ${photo.filename}")
+                }
+            } else {
+                detected = com.simplephotos.data.media.MediaSubtype()
+                cameraModel = null
+            }
+
+            // v2 metadata frame: the v1 envelope minus the inline `data`, plus the
+            // chunk parameters. Field names mirror the server's chunked encoder
+            // (photos/server_migrate_encrypt.rs) so web/server decode it identically.
+            val meta = JSONObject().apply {
+                put("v", ChunkedBlob.FORMAT_V2)
+                put("filename", photo.filename)
+                put("taken_at", java.time.Instant.ofEpochMilli(photo.takenAt).toString())
+                put("mime_type", photo.mimeType)
+                put("media_type", photo.mediaType)
+                put("width", photo.width)
+                put("height", photo.height)
+                if (photo.durationSecs != null) put("duration", photo.durationSecs.toDouble())
+                if (photo.latitude != null) put("latitude", photo.latitude)
+                if (photo.longitude != null) put("longitude", photo.longitude)
+                put("album_ids", JSONArray())
+                if (thumbBlobId != null) put("thumbnail_blob_id", thumbBlobId)
+                put("chunk_size", ChunkedBlob.CHUNK_SIZE)
+                put("data_len", dataLen)
+            }.toString()
+
+            // Stream-encrypt straight to disk — peak heap ≈ one chunk (~4 MiB).
+            val result = openSource().use { src ->
+                ChunkedBlob.encryptStreamToFile(crypto, src, tmp, meta.toByteArray())
+            }
+
+            android.util.Log.d(TAG, "uploadPhotoChunked: streaming media blob (${result.blobSize} bytes, type=$mediaBlobType, contentHash=${result.contentHashHex})")
+            val photoBody = tmp.asRequestBody("application/octet-stream".toMediaType())
+            val photoRes = api.uploadBlob(
+                photoBody,
+                mediaBlobType,
+                result.blobSize.toString(),
+                result.clientHashHex,
+                result.contentHashHex,
+                ChunkedBlob.FORMAT_V2.toString(),
+            )
+            android.util.Log.d(TAG, "uploadPhotoChunked: media uploaded, blobId=${photoRes.blobId}")
+
+            registerAndMark(
+                photo = photo,
+                photoBlobId = photoRes.blobId,
+                thumbBlobId = thumbBlobId,
+                contentHash = result.contentHashHex,
+                detected = detected,
+                cameraModel = cameraModel,
+                thumbnailData = thumbnailData,
+            )
+        } catch (e: retrofit2.HttpException) {
+            val errorBody = e.response()?.errorBody()?.string()
+            android.util.Log.e(TAG, "uploadPhotoChunked HTTP ${e.code()}: $errorBody", e)
+            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "uploadPhotoChunked failed: ${e.message}", e)
+            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.FAILED)
+            throw e
+        } finally {
+            if (tmp.exists() && !tmp.delete()) {
+                android.util.Log.w(TAG, "uploadPhotoChunked: failed to delete temp file ${tmp.absolutePath}")
+            }
+        }
+    }
+
+    /**
+     * Encrypt and upload [thumbnailData] as a v1 thumbnail blob, returning its blob
+     * id (or null when there's no thumbnail). Shared by [uploadPhoto] and
+     * [uploadPhotoChunked]; thumbnails are always small, so they stay v1.
+     */
+    private suspend fun uploadThumbnailBlob(photo: PhotoEntity, thumbnailData: ByteArray?): String? {
+        if (thumbnailData == null || thumbnailData.isEmpty()) {
+            android.util.Log.d(TAG, "uploadThumbnailBlob: no thumbnail data for ${photo.filename}, skipping")
+            return null
+        }
+        val thumbBlobType = if (photo.mediaType == "video") "video_thumbnail" else "thumbnail"
+
+        // Decode thumbnail to get actual dimensions (thumbnails are now
+        // aspect-ratio-preserving, not always 256×256).
+        val thumbBitmap = android.graphics.BitmapFactory.decodeByteArray(thumbnailData, 0, thumbnailData.size)
+        val thumbW = thumbBitmap?.width ?: 256
+        val thumbH = thumbBitmap?.height ?: 256
+        thumbBitmap?.recycle()
+
+        val thumbPayload = JSONObject().apply {
+            put("v", 1)
+            put("photo_blob_id", "")
+            put("width", thumbW)
+            put("height", thumbH)
+            put("data", android.util.Base64.encodeToString(thumbnailData, android.util.Base64.NO_WRAP))
+        }.toString()
+
+        val encryptedThumb = crypto.encrypt(thumbPayload.toByteArray())
+        val thumbHash = crypto.sha256Hex(encryptedThumb)
+        val thumbBody = encryptedThumb.toRequestBody("application/octet-stream".toMediaType())
+
+        android.util.Log.d(TAG, "uploadThumbnailBlob: uploading thumbnail blob (${encryptedThumb.size} bytes, type=$thumbBlobType)")
+        val thumbRes = api.uploadBlob(thumbBody, thumbBlobType, encryptedThumb.size.toString(), thumbHash)
+        android.util.Log.d(TAG, "uploadThumbnailBlob: thumbnail uploaded, blobId=${thumbRes.blobId}")
+        return thumbRes.blobId
+    }
+
+    /**
+     * Register an uploaded encrypted photo on the server, then mark it synced and
+     * cache its thumbnail locally. Shared finalisation step for both the v1
+     * ([uploadPhoto]) and v2 ([uploadPhotoChunked]) upload paths.
+     */
+    private suspend fun registerAndMark(
+        photo: PhotoEntity,
+        photoBlobId: String,
+        thumbBlobId: String?,
+        contentHash: String,
+        detected: com.simplephotos.data.media.MediaSubtype,
+        cameraModel: String?,
+        thumbnailData: ByteArray?,
+    ) {
+        val regReq = com.simplephotos.data.remote.dto.RegisterEncryptedPhotoRequest(
+            filename = photo.filename,
+            mimeType = photo.mimeType,
+            mediaType = photo.mediaType,
+            width = photo.width,
+            height = photo.height,
+            durationSecs = photo.durationSecs?.toDouble(),
+            takenAt = java.time.Instant.ofEpochMilli(photo.takenAt).toString(),
+            latitude = photo.latitude,
+            longitude = photo.longitude,
+            encryptedBlobId = photoBlobId,
+            encryptedThumbBlobId = thumbBlobId,
+            photoHash = contentHash,
+            photoSubtype = detected.photoSubtype,
+            burstId = detected.burstId,
+            cameraModel = cameraModel
+        )
+        val regRes = api.registerEncryptedPhoto(regReq)
+        android.util.Log.d(TAG, "registerAndMark: registered photo, serverPhotoId=${regRes.photoId}, duplicate=${regRes.duplicate}")
+
+        db.photoDao().markSynced(photo.localId, regRes.photoId, photoBlobId, thumbBlobId, contentHash)
+        // Persist locally too so the device gallery badges it immediately
+        // (server timestamp-burst grouping is reflected on the next sync).
+        if (detected.photoSubtype != null || detected.burstId != null) {
+            db.photoDao().backfillSubtypeFields(regRes.photoId, detected.photoSubtype, detected.burstId, null)
+        }
+
+        // Cache uploaded thumbnail locally
+        if (thumbnailData != null && thumbnailData.isNotEmpty()) {
+            saveThumbnailToDisk(photo.localId, thumbnailData)
         }
     }
 

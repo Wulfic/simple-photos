@@ -115,7 +115,11 @@ interface ApiService {
         @Header("X-Blob-Type") blobType: String,
         @Header("X-Blob-Size") blobSize: String,
         @Header("X-Client-Hash") clientHash: String? = null,
-        @Header("X-Content-Hash") contentHash: String? = null
+        @Header("X-Content-Hash") contentHash: String? = null,
+        // Container format: omitted (null) → server defaults to 1 (monolithic
+        // envelope); "2" for the chunked streaming container. Retrofit drops
+        // null-valued headers, so thumbnail/manifest uploads stay v1.
+        @Header("X-Blob-Format") blobFormat: String? = null
     ): BlobUploadResponse
 
     @GET("api/blobs")
