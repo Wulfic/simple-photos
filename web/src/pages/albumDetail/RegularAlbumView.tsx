@@ -20,11 +20,13 @@ import { getEffectiveAspectRatio } from "../../utils/thumbnailCss";
 import { getErrorMessage } from "../../utils/formatters";
 import { toast } from "../../store/toast";
 import { useIsBackupServer } from "../../hooks/useIsBackupServer";
-import useSlideshow from "../../hooks/useSlideshow";
-import Slideshow from "../../components/viewer/Slideshow";
+import { usePhotoSlideshow } from "../../hooks/useSlideshow";
+import SlideshowHost from "../../components/viewer/SlideshowHost";
+import SlideshowTriggers from "../../components/viewer/SlideshowTriggers";
 import { useSecureAdd } from "../../store/secureAdd";
 import { addPhotosToSecureGallery } from "../../utils/secureAdd";
 import type { ShareUser } from "../../types/sharing";
+import SharePickerModal from "../../components/SharePickerModal";
 
 export default function RegularAlbumView({ albumId }: { albumId: string | undefined }) {
   const navigate = useAppNavigate();
@@ -91,17 +93,7 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
     return allPhotos.filter((p) => !idSet.has(p.blobId) && !secureBlobIds.has(p.blobId));
   }, [album, allPhotos, secureBlobIds]);
 
-  // Slideshow
-  const albumBlobIds = useMemo(() => albumPhotos.map((p) => p.blobId), [albumPhotos]);
-  const albumMediaTypeMap = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const p of albumPhotos) m.set(p.blobId, p.mediaType);
-    return m;
-  }, [albumPhotos]);
-  const slideshow = useSlideshow(albumBlobIds, albumMediaTypeMap);
-  const hasPhotosForSlideshow = albumPhotos.some(
-    (p) => p.mediaType === "photo" || p.mediaType === "gif",
-  );
+  const slideshow = usePhotoSlideshow(albumPhotos);
 
   // ── Multi-select state ──────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -299,34 +291,13 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
 
       {/* Share user picker modal */}
       {showSharePicker && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
-          <div className="card shadow-pop max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-4">Share "{album.name}" with</h3>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {shareUsers.map((u) => (
-                <button
-                  key={u.id}
-                  onClick={() => handleShareWithUser(u.id)}
-                  className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-sunken dark:hover:bg-white/10 text-sm flex items-center gap-2"
-                >
-                  <svg className="w-5 h-5 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-                  </svg>
-                  {u.username}
-                </button>
-              ))}
-              {shareUsers.length === 0 && (
-                <p className="text-fg-muted text-sm text-center py-4">No other users found</p>
-              )}
-            </div>
-            <button
-              onClick={() => setShowSharePicker(false)}
-              className="mt-4 w-full py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 rounded-md"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <SharePickerModal
+          title={`Share "${album.name}" with`}
+          users={shareUsers}
+          onPick={(id) => handleShareWithUser(id)}
+          onClose={() => setShowSharePicker(false)}
+          emptyText="No other users found"
+        />
       )}
 
       <main className="p-4">
@@ -342,28 +313,7 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
             </button>
             <h2 className="text-xl font-semibold truncate">{album.name}</h2>
             <span className="text-fg-muted text-sm shrink-0">{album.photoBlobIds.length} items</span>
-            {hasPhotosForSlideshow && (
-              <>
-              <button
-                onClick={() => slideshow.start(0)}
-                className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
-                title="Start Slideshow"
-              >
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </button>
-              <button
-                onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-                className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
-                title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
-              >
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
-                </svg>
-              </button>
-              </>
-            )}
+            <SlideshowTriggers slideshow={slideshow} />
           </div>
 
           {/* Action buttons */}
@@ -487,25 +437,7 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
       )}
       </main>
 
-      {slideshow.isActive && (
-        <Slideshow
-          currentBlobId={slideshow.currentBlobId}
-          isPlaying={slideshow.isPlaying}
-          currentSlide={slideshow.currentSlide}
-          totalSlides={slideshow.totalSlides}
-          shuffleEnabled={slideshow.shuffleEnabled}
-          intervalMs={slideshow.intervalMs}
-          transition={slideshow.transition}
-          direction={slideshow.direction}
-          onTogglePlay={slideshow.togglePlay}
-          onNext={slideshow.next}
-          onPrev={slideshow.prev}
-          onToggleShuffle={slideshow.toggleShuffle}
-          onSetSpeed={slideshow.setSpeed}
-          onSetTransition={slideshow.setTransition}
-          onExit={slideshow.stop}
-        />
-      )}
+      <SlideshowHost slideshow={slideshow} />
     </div>
   );
 }

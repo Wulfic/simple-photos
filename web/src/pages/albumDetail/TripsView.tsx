@@ -2,16 +2,18 @@
  * Trips smart album — auto-generated multi-day location albums. Lists every
  * trip and renders the per-trip photo grid (server-resolved photos).
  */
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { useAppNavigate } from "../../hooks/useAppNavigate";
 import { api } from "../../api/client";
-import { db, type CachedPhoto } from "../../db";
+import { type CachedPhoto } from "../../db";
 import AppHeader from "../../components/AppHeader";
 import { GallerySkeleton } from "../../components/skeletons";
 import AppIcon from "../../components/AppIcon";
 import SelectablePhotoGrid from "../../components/gallery/SelectablePhotoGrid";
-import useSlideshow from "../../hooks/useSlideshow";
-import Slideshow from "../../components/viewer/Slideshow";
+import { useIdbThumbnailMap } from "../../hooks/useIdbThumbnailMap";
+import { usePhotoSlideshow } from "../../hooks/useSlideshow";
+import SlideshowHost from "../../components/viewer/SlideshowHost";
+import SlideshowTriggers from "../../components/viewer/SlideshowTriggers";
 import { resolveServerPhotos } from "./resolveServerPhotos";
 
 // ── Trips View (list of all multi-day smart location albums) ─────────────────
@@ -25,7 +27,9 @@ export function TripsView() {
     first_photo_id: string | null; first_thumb_path: string | null;
   }>>([]);
   const [loading, setLoading] = useState(true);
-  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
+  const thumbUrls = useIdbThumbnailMap(
+    trips.map((t) => ({ key: t.id, photoId: t.first_photo_id })),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -38,30 +42,6 @@ export function TripsView() {
     })();
     return () => { cancelled = true; };
   }, []);
-
-  // Load thumbnails from IDB for representative photos
-  useEffect(() => {
-    if (trips.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      const urls: Record<string, string> = {};
-      for (const t of trips) {
-        if (!t.first_photo_id) continue;
-        const photo = await db.photos.where("serverPhotoId").equals(t.first_photo_id).first()
-          ?? await db.photos.get(t.first_photo_id);
-        if (cancelled) return;
-        if (photo?.thumbnailData) {
-          const mime = photo.thumbnailMimeType || "image/jpeg";
-          urls[t.id] = URL.createObjectURL(new Blob([photo.thumbnailData], { type: mime }));
-        }
-      }
-      if (!cancelled) setThumbUrls(urls);
-    })();
-    return () => {
-      cancelled = true;
-      Object.values(thumbUrls).forEach(URL.revokeObjectURL);
-    };
-  }, [trips]);
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -149,14 +129,7 @@ export function TripDetailView({ tripId }: { tripId: string }) {
     return () => { cancelled = true; };
   }, [tripId]);
 
-  const blobIds = useMemo(() => photos.map(p => p.blobId), [photos]);
-  const mediaTypeMap = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const p of photos) m.set(p.blobId, p.mediaType);
-    return m;
-  }, [photos]);
-  const slideshow = useSlideshow(blobIds, mediaTypeMap);
-  const hasPhotos = photos.some(p => p.mediaType === "photo" || p.mediaType === "gif");
+  const slideshow = usePhotoSlideshow(photos);
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -172,26 +145,7 @@ export function TripDetailView({ tripId }: { tripId: string }) {
           </button>
           <h2 className="text-xl font-semibold truncate">{tripName}</h2>
           <span className="text-fg-muted text-sm shrink-0">{photos.length} photos</span>
-          {hasPhotos && (
-            <>
-            <button
-              onClick={() => slideshow.start(0)}
-              className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
-              title="Start Slideshow"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-            </button>
-            <button
-              onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
-              title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
-              </svg>
-            </button>
-            </>
-          )}
+          <SlideshowTriggers slideshow={slideshow} />
         </div>
 
         {loading ? (
@@ -209,25 +163,7 @@ export function TripDetailView({ tripId }: { tripId: string }) {
         )}
       </main>
 
-      {slideshow.isActive && (
-        <Slideshow
-          currentBlobId={slideshow.currentBlobId}
-          isPlaying={slideshow.isPlaying}
-          currentSlide={slideshow.currentSlide}
-          totalSlides={slideshow.totalSlides}
-          shuffleEnabled={slideshow.shuffleEnabled}
-          intervalMs={slideshow.intervalMs}
-          transition={slideshow.transition}
-          direction={slideshow.direction}
-          onTogglePlay={slideshow.togglePlay}
-          onNext={slideshow.next}
-          onPrev={slideshow.prev}
-          onToggleShuffle={slideshow.toggleShuffle}
-          onSetSpeed={slideshow.setSpeed}
-          onSetTransition={slideshow.setTransition}
-          onExit={slideshow.stop}
-        />
-      )}
+      <SlideshowHost slideshow={slideshow} />
     </div>
   );
 }

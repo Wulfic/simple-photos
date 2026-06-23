@@ -9,6 +9,7 @@ import { encrypt, sha256Hex } from "../crypto/crypto";
 import { api } from "../api/client";
 import { randomUuid } from "../utils/uuid";
 import { expandBurstSelection } from "../utils/burstExpand";
+import { Modal } from "./ui";
 
 interface AddToAlbumModalProps {
   blobIds: string[];
@@ -125,29 +126,13 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
+    <Modal
+      onClose={onClose}
+      size="md"
+      zClassName="z-[60]"
+      panelClassName="max-h-[80vh] flex flex-col"
+      title={`Add ${blobIds.length} ${blobIds.length === 1 ? "item" : "items"} to album`}
     >
-      <div
-        className="card shadow-pop w-full max-w-md max-h-[80vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
-          <h3 className="text-base font-semibold text-fg">
-            Add {blobIds.length} {blobIds.length === 1 ? "item" : "items"} to album
-          </h3>
-          <button
-            onClick={onClose}
-            className="icon-btn -mr-1.5"
-            aria-label="Close"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
         {/* Create-new-album affordance — sticky at the top of the picker */}
         <div className="border-b border-edge">
           {creating ? (
@@ -225,7 +210,6 @@ export default function AddToAlbumModal({ blobIds, onClose, onAdded }: AddToAlbu
             {error}
           </p>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -5,7 +5,7 @@ import { api } from "../../api/client";
 import { useIsAdmin } from "../../hooks/useIsAdmin";
 import AppIcon from "../AppIcon";
 import { getErrorMessage } from "../../utils/formatters";
-import { Select } from "../ui";
+import { Select, Modal } from "../ui";
 
 type ManagedUser = {
   id: string;
@@ -370,8 +370,13 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
 
       {/* 2FA Setup Modal */}
       {setup2faUserId && setup2faUri && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="card shadow-pop w-full max-w-md p-6">
+        <Modal
+          onClose={cancelAdminSetup2fa}
+          size="md"
+          panelClassName="p-6"
+          closeOnBackdrop={!setup2faLoading}
+          closeOnEscape={!setup2faLoading}
+        >
             <h3 className="text-lg font-semibold text-fg mb-2">
               Enable 2FA for {managedUsers.find(u => u.id === setup2faUserId)?.username}
             </h3>
@@ -427,8 +432,7 @@ export default function UserManagement({ setError, setSuccess }: UserManagementP
             >
               Cancel
             </button>
-          </div>
-        </div>
+        </Modal>
       )}
     </section>
   );

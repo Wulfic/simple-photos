@@ -27,6 +27,7 @@ type AlbumMember = {
 };
 
 import type { ShareUser } from "../types/sharing";
+import SharePickerModal from "../components/SharePickerModal";
 
 export default function SharedAlbumDetail() {
   const { albumId } = useParams<{ albumId: string }>();
@@ -187,25 +188,12 @@ export default function SharedAlbumDetail() {
 
         {/* Share picker modal */}
         {showSharePicker && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowSharePicker(false)}>
-            <div className="card shadow-pop max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold mb-4">Add Member</h3>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {shareUsers.map((u) => (
-                  <button
-                    key={u.id}
-                    onClick={() => addMember(u.id)}
-                    className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-sunken dark:hover:bg-white/10 text-sm"
-                  >
-                    {u.username}
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => setShowSharePicker(false)} className="mt-4 w-full py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 rounded-md">
-                Cancel
-              </button>
-            </div>
-          </div>
+          <SharePickerModal
+            title="Add Member"
+            users={shareUsers}
+            onPick={(id) => addMember(id)}
+            onClose={() => setShowSharePicker(false)}
+          />
         )}
 
         {/* Photo grid */}

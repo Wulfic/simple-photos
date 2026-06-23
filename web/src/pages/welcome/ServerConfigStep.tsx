@@ -2,6 +2,7 @@
 import { useState, useCallback, useRef } from "react";
 import { api } from "../../api/client";
 import FolderBrowserModal from "../../components/FolderBrowserModal";
+import { Modal } from "../../components/ui";
 import type { WizardStep, ServerRole } from "./types";
 import { getErrorMessage } from "../../utils/formatters";
 
@@ -450,13 +451,13 @@ export default function ServerConfigStep({
       {/* SMB credentials prompt — opens automatically when the user types
           an SMB-style address into the storage path field and hits Set Path. */}
       {smbModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !smbBusy) setSmbModalOpen(false);
-          }}
+        <Modal
+          onClose={() => setSmbModalOpen(false)}
+          size="md"
+          panelClassName="p-6"
+          closeOnBackdrop={!smbBusy}
+          closeOnEscape={!smbBusy}
         >
-          <div className="card shadow-pop w-full max-w-md p-6">
             <h3 className="text-lg font-semibold text-fg mb-1">
               Connect to network share
             </h3>
@@ -560,8 +561,7 @@ export default function ServerConfigStep({
                 {smbBusy ? "Mounting…" : "Connect"}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

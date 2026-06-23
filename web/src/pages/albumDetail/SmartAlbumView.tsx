@@ -12,8 +12,9 @@ import AppHeader from "../../components/AppHeader";
 import { GallerySkeleton } from "../../components/skeletons";
 import AppIcon from "../../components/AppIcon";
 import SelectablePhotoGrid from "../../components/gallery/SelectablePhotoGrid";
-import useSlideshow from "../../hooks/useSlideshow";
-import Slideshow from "../../components/viewer/Slideshow";
+import { usePhotoSlideshow } from "../../hooks/useSlideshow";
+import SlideshowHost from "../../components/viewer/SlideshowHost";
+import SlideshowTriggers from "../../components/viewer/SlideshowTriggers";
 
 // ── Smart album definitions ───────────────────────────────────────────────────
 
@@ -129,17 +130,7 @@ export default function SmartAlbumView({ albumId }: { albumId: string }) {
 
   const photoCount = filteredEncrypted.length;
 
-  // Slideshow
-  const blobIds = useMemo(() => filteredEncrypted.map((p) => p.blobId), [filteredEncrypted]);
-  const mediaTypeMap = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const p of filteredEncrypted) m.set(p.blobId, p.mediaType);
-    return m;
-  }, [filteredEncrypted]);
-  const slideshow = useSlideshow(blobIds, mediaTypeMap);
-  const hasPhotosForSlideshow = filteredEncrypted.some(
-    (p) => p.mediaType === "photo" || p.mediaType === "gif",
-  );
+  const slideshow = usePhotoSlideshow(filteredEncrypted);
 
   return (
     <div className="min-h-screen bg-canvas">
@@ -157,28 +148,7 @@ export default function SmartAlbumView({ albumId }: { albumId: string }) {
           </button>
           <h2 className="text-xl font-semibold truncate">{def.label}</h2>
           <span className="text-fg-muted text-sm shrink-0">{photoCount} items</span>
-          {hasPhotosForSlideshow && (
-            <>
-            <button
-              onClick={() => slideshow.start(0)}
-              className="text-fg-muted hover:text-accent-600 dark:hover:text-accent-400 transition-colors shrink-0"
-              title="Start Slideshow"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </button>
-            <button
-              onClick={() => { slideshow.toggleShuffle(); slideshow.start(0); }}
-              className={`transition-colors shrink-0 ${slideshow.shuffleEnabled ? "text-accent-600 dark:text-accent-400" : "text-fg-muted hover:text-accent-600 dark:hover:text-accent-400"}`}
-              title={slideshow.shuffleEnabled ? "Shuffle On" : "Shuffle Off"}
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
-              </svg>
-            </button>
-            </>
-          )}
+          <SlideshowTriggers slideshow={slideshow} />
         </div>
 
         {loading ? (
@@ -195,25 +165,7 @@ export default function SmartAlbumView({ albumId }: { albumId: string }) {
         )}
       </main>
 
-      {slideshow.isActive && (
-        <Slideshow
-          currentBlobId={slideshow.currentBlobId}
-          isPlaying={slideshow.isPlaying}
-          currentSlide={slideshow.currentSlide}
-          totalSlides={slideshow.totalSlides}
-          shuffleEnabled={slideshow.shuffleEnabled}
-          intervalMs={slideshow.intervalMs}
-          transition={slideshow.transition}
-          direction={slideshow.direction}
-          onTogglePlay={slideshow.togglePlay}
-          onNext={slideshow.next}
-          onPrev={slideshow.prev}
-          onToggleShuffle={slideshow.toggleShuffle}
-          onSetSpeed={slideshow.setSpeed}
-          onSetTransition={slideshow.setTransition}
-          onExit={slideshow.stop}
-        />
-      )}
+      <SlideshowHost slideshow={slideshow} />
     </div>
   );
 }

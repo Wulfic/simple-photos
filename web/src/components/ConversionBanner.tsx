@@ -11,15 +11,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "../api/client";
 import { useProcessingStore } from "../store/processing";
 import { ProgressBanner } from "./ProgressBanner";
-
-/** Format seconds as HH:MM:SS, clamped to 0. */
-function formatEta(seconds: number): string {
-  const s = Math.max(0, Math.ceil(seconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-}
+import { formatEta } from "../utils/formatters";
 
 export default function ConversionBanner() {
   const [dismissed, setDismissed] = useState(false);

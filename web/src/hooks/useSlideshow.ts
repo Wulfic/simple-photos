@@ -251,3 +251,25 @@ export default function useSlideshow(
     setTransition,
   };
 }
+
+/** Minimal photo shape needed to drive a slideshow. */
+export interface SlideshowPhoto {
+  blobId: string;
+  mediaType: string;
+}
+
+/**
+ * Convenience wrapper over {@link useSlideshow} for the common case where the
+ * caller already has a `{ blobId, mediaType }[]`. Builds the blob-id list and
+ * mediaType map internally — collapsing the identical memo boilerplate that
+ * every album-detail view used to repeat.
+ */
+export function usePhotoSlideshow(photos: SlideshowPhoto[]): UseSlideshowResult {
+  const blobIds = useMemo(() => photos.map((p) => p.blobId), [photos]);
+  const mediaTypeMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of photos) m.set(p.blobId, p.mediaType);
+    return m;
+  }, [photos]);
+  return useSlideshow(blobIds, mediaTypeMap);
+}

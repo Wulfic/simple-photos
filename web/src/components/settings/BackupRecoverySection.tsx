@@ -10,7 +10,7 @@ import { useBackupStore } from "../../store/backup";
 import { useProcessingStore } from "../../store/processing";
 import AppIcon from "../AppIcon";
 import { getErrorMessage } from "../../utils/formatters";
-import { Select } from "../ui";
+import { Select, Modal } from "../ui";
 
 interface BackupRecoverySectionProps {
   isBackupMode: boolean;
@@ -231,8 +231,7 @@ export default function BackupRecoverySection({
 
           {/* Confirmation modal */}
           {showRecoverConfirm && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" data-testid="recovery-confirm-modal">
-              <div className="card shadow-pop max-w-md w-full mx-4 p-6">
+            <Modal onClose={() => setShowRecoverConfirm(false)} size="md" panelClassName="p-6" testId="recovery-confirm-modal">
                 <h3 className="text-lg font-semibold text-red-600 dark:text-red-400 mb-3">
                   ⚠️ Confirm Recovery
                 </h3>
@@ -265,8 +264,7 @@ export default function BackupRecoverySection({
                     {recovering ? "Starting…" : "Yes, Recover"}
                   </button>
                 </div>
-              </div>
-            </div>
+            </Modal>
           )}
         </>
       )}

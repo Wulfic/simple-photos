@@ -29,7 +29,7 @@ import useViewerEdit, { EDIT_CROP_PADDING_SCALE, cropFitStyle } from "../hooks/u
 import useSwipeNavigation from "../hooks/useSwipeNavigation";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import useSlideshow from "../hooks/useSlideshow";
-import Slideshow from "../components/viewer/Slideshow";
+import SlideshowHost from "../components/viewer/SlideshowHost";
 import { diagnosticLogger } from "../utils/diagnosticLogger";
 import { castMedia, getCastState, subscribeCastState } from "../utils/cast";
 import { useAuthStore } from "../store/auth";
@@ -985,25 +985,7 @@ export default function Viewer() {
       )}
 
       {/* Slideshow overlay */}
-      {slideshow.isActive && (
-        <Slideshow
-          currentBlobId={slideshow.currentBlobId}
-          isPlaying={slideshow.isPlaying}
-          currentSlide={slideshow.currentSlide}
-          totalSlides={slideshow.totalSlides}
-          shuffleEnabled={slideshow.shuffleEnabled}
-          intervalMs={slideshow.intervalMs}
-          transition={slideshow.transition}
-          direction={slideshow.direction}
-          onTogglePlay={slideshow.togglePlay}
-          onNext={slideshow.next}
-          onPrev={slideshow.prev}
-          onToggleShuffle={slideshow.toggleShuffle}
-          onSetSpeed={slideshow.setSpeed}
-          onSetTransition={slideshow.setTransition}
-          onExit={slideshow.stop}
-        />
-      )}
+      <SlideshowHost slideshow={slideshow} />
 
     </div>
   );

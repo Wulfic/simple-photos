@@ -1,4 +1,6 @@
 /** Modal prompt confirming unsaved edit changes before navigating away. */
+import { Modal } from "../ui";
+
 interface LeavePromptProps {
   show: boolean;
   onCancel: () => void;
@@ -10,31 +12,22 @@ export default function LeavePrompt({ show, onCancel, onDiscard, onSave }: Leave
   if (!show) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="bg-gray-800 rounded-xl p-6 max-w-sm w-full mx-4 space-y-4">
-        <h3 className="text-white text-lg font-semibold">Unsaved Changes</h3>
-        <p className="text-gray-300 text-sm">You have unsaved edits. Would you like to save or discard them?</p>
+    <Modal onClose={onCancel} size="sm">
+      <div className="p-6 space-y-4">
+        <h3 className="text-fg text-lg font-semibold">Unsaved Changes</h3>
+        <p className="text-fg-muted text-sm">You have unsaved edits. Would you like to save or discard them?</p>
         <div className="flex gap-3 justify-end">
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 bg-gray-700 text-white rounded-lg text-sm font-medium hover:bg-gray-600 transition-colors"
-          >
+          <button onClick={onCancel} className="btn btn-secondary btn-md">
             Cancel
           </button>
-          <button
-            onClick={onDiscard}
-            className="btn btn-danger btn-md"
-          >
+          <button onClick={onDiscard} className="btn btn-danger btn-md">
             Discard
           </button>
-          <button
-            onClick={onSave}
-            className="btn btn-primary btn-md"
-          >
+          <button onClick={onSave} className="btn btn-primary btn-md">
             Save
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
