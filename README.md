@@ -41,7 +41,7 @@ Simple Photos was born out of a desire for a secure, private, and user-friendly 
 - **Trash** — 30-day soft-delete with restore
 - **Tags & search** — tag photos and search across your library
 - **Favorites** — mark and filter favorite photos
-- **Import** — drag-and-drop upload with Google Photos metadata import (single and batch)
+- **Import** — drag-and-drop upload with Google Photos (Google Takeout) Support
 - **Library export** — download your entire library as a ZIP archive
 
 ### Backup & Sync

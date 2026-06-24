@@ -278,21 +278,21 @@ async fn record_encryption_failure(
         return;
     }
 
-    let attempts: i64 = sqlx::query_scalar(
-        "SELECT encryption_attempts FROM photos WHERE id = ? AND user_id = ?",
-    )
-    .bind(photo_id)
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-
-    if attempts >= MIGRATION_MAX_ATTEMPTS {
-        let _ = sqlx::query("UPDATE photos SET encryption_deferred = 1 WHERE id = ? AND user_id = ?")
+    let attempts: i64 =
+        sqlx::query_scalar("SELECT encryption_attempts FROM photos WHERE id = ? AND user_id = ?")
             .bind(photo_id)
             .bind(user_id)
-            .execute(pool)
-            .await;
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
+    if attempts >= MIGRATION_MAX_ATTEMPTS {
+        let _ =
+            sqlx::query("UPDATE photos SET encryption_deferred = 1 WHERE id = ? AND user_id = ?")
+                .bind(photo_id)
+                .bind(user_id)
+                .execute(pool)
+                .await;
         tracing::error!(
             "[SERVER_MIG] photo {photo_id} deferred after {attempts} failed encryption attempts: {truncated}"
         );

@@ -522,7 +522,8 @@ async fn encrypt_one_photo_chunked(
 
     let mut tx = pool.begin().await.map_err(|e| format!("Begin tx: {e}"))?;
 
-    if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params {
+    if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params
+    {
         sqlx::query(
             "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash, blob_format) \
              VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1)",

@@ -129,7 +129,12 @@ fn encrypt_file_chunked_inner(
     let meta_frame = crypto::encrypt(key, metadata_json)?;
     let meta_len =
         u32::try_from(meta_frame.len()).map_err(|_| "metadata frame too large".to_string())?;
-    write_tracked(&mut out, &meta_len.to_be_bytes(), &mut blob_hasher, &mut written)?;
+    write_tracked(
+        &mut out,
+        &meta_len.to_be_bytes(),
+        &mut blob_hasher,
+        &mut written,
+    )?;
     write_tracked(&mut out, &meta_frame, &mut blob_hasher, &mut written)?;
 
     // Chunk frames.
@@ -142,7 +147,12 @@ fn encrypt_file_chunked_inner(
         let frame = crypto::encrypt(key, &buf[..n])?;
         let frame_len =
             u32::try_from(frame.len()).map_err(|_| "chunk frame too large".to_string())?;
-        write_tracked(&mut out, &frame_len.to_be_bytes(), &mut blob_hasher, &mut written)?;
+        write_tracked(
+            &mut out,
+            &frame_len.to_be_bytes(),
+            &mut blob_hasher,
+            &mut written,
+        )?;
         write_tracked(&mut out, &frame, &mut blob_hasher, &mut written)?;
         if n < CHUNK_SIZE {
             break; // short read ⇒ EOF; skip the extra zero-length read
@@ -193,11 +203,7 @@ fn decrypt_v1_to_bytes(key: &[u8; 32], enc: &[u8]) -> Result<Vec<u8>, String> {
 ///
 /// On error the partial output is removed so a failed decrypt never leaves a
 /// truncated plaintext file behind.
-pub fn decrypt_blob_file_to_file(
-    key: &[u8; 32],
-    src: &Path,
-    dst: &Path,
-) -> Result<(), String> {
+pub fn decrypt_blob_file_to_file(key: &[u8; 32], src: &Path, dst: &Path) -> Result<(), String> {
     match decrypt_blob_file_to_file_inner(key, src, dst) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -211,14 +217,11 @@ pub fn decrypt_blob_file_to_file(
     }
 }
 
-fn decrypt_blob_file_to_file_inner(
-    key: &[u8; 32],
-    src: &Path,
-    dst: &Path,
-) -> Result<(), String> {
+fn decrypt_blob_file_to_file_inner(key: &[u8; 32], src: &Path, dst: &Path) -> Result<(), String> {
     use std::io::{BufReader, BufWriter};
 
-    let mut input = BufReader::new(std::fs::File::open(src).map_err(|e| format!("open enc src: {e}"))?);
+    let mut input =
+        BufReader::new(std::fs::File::open(src).map_err(|e| format!("open enc src: {e}"))?);
 
     // Peek the magic to choose the path.
     let mut magic = [0u8; MAGIC.len()];
@@ -243,7 +246,9 @@ fn decrypt_blob_file_to_file_inner(
 
         loop {
             // A clean EOF at a frame boundary ends the stream.
-            if !read_len_or_eof(&mut input, &mut len_buf).map_err(|e| format!("read frame len: {e}"))? {
+            if !read_len_or_eof(&mut input, &mut len_buf)
+                .map_err(|e| format!("read frame len: {e}"))?
+            {
                 break;
             }
             let frame_len = u32::from_be_bytes(len_buf) as usize;
@@ -252,7 +257,8 @@ fn decrypt_blob_file_to_file_inner(
                 .read_exact(&mut frame)
                 .map_err(|e| format!("read frame: {e}"))?;
             let plain = crypto::decrypt(key, &frame)?;
-            out.write_all(&plain).map_err(|e| format!("write dst: {e}"))?;
+            out.write_all(&plain)
+                .map_err(|e| format!("write dst: {e}"))?;
         }
         out.flush().map_err(|e| format!("flush dst: {e}"))?;
         Ok(())
@@ -290,7 +296,8 @@ fn write_tracked(
     hasher: &mut Sha256,
     written: &mut u64,
 ) -> Result<(), String> {
-    out.write_all(bytes).map_err(|e| format!("write blob: {e}"))?;
+    out.write_all(bytes)
+        .map_err(|e| format!("write blob: {e}"))?;
     hasher.update(bytes);
     *written += bytes.len() as u64;
     Ok(())
@@ -371,7 +378,7 @@ mod tests {
     #[test]
     fn roundtrip_multi_chunk() {
         let key = [0x11u8; 32]; // codeql[rust/hard-coded-cryptographic-value] -- test fixture
-        // 2.5 chunks worth of pseudo-random data.
+                                // 2.5 chunks worth of pseudo-random data.
         let mut data = Vec::with_capacity(CHUNK_SIZE * 2 + 123);
         for i in 0..(CHUNK_SIZE * 2 + 123) {
             data.push((i as u8).wrapping_mul(31).wrapping_add(7));

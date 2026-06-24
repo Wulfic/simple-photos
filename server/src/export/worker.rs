@@ -406,4 +406,3 @@ async fn register_zip_file(
 
     Ok(())
 }
-
