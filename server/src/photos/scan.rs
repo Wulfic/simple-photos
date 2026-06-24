@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::Json;
+use futures_util::stream::{self, StreamExt};
 use futures_util::TryStreamExt;
-use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
@@ -163,22 +163,21 @@ pub async fn scan_and_register(
         candidates.len()
     );
 
-    // ── Phase 2: Register files in parallel (metadata, hash, DB insert, thumbnail) ──
+    // ── Phase 2: Register files with bounded concurrency ──
+    // A buffered stream caps live per-file futures at SCAN_PARALLELISM rather
+    // than spawning one task per candidate up front; on a large library that
+    // up-front fan-out was a heap spike that could OOM the process. The inner
+    // spawn preserves multi-core parallelism and isolates per-file panics.
     let new_count = Arc::new(AtomicI64::new(0));
-    let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
-    let mut handles = Vec::with_capacity(candidates.len());
-
-    for candidate in candidates {
-        let sem = sem.clone();
-        let new_count = new_count.clone();
-        let pool = state.pool.clone();
-        let storage_root = storage_root.clone();
-        let user_id = auth.user_id.clone();
-
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await;
-
-            // Native format — register directly (no conversion needed).
+    stream::iter(candidates)
+        .map(|candidate| {
+            let new_count = new_count.clone();
+            let pool = state.pool.clone();
+            let storage_root = storage_root.clone();
+            let user_id = auth.user_id.clone();
+            async move {
+                let _ = tokio::spawn(async move {
+                    // Native format — register directly (no conversion needed).
             let photo_id = Uuid::new_v4().to_string();
             let now = utc_now_iso();
             // GIFs get an animated GIF thumbnail; everything else gets JPEG
@@ -290,13 +289,13 @@ pub async fn scan_and_register(
             }
 
             new_count.fetch_add(1, Ordering::Relaxed);
-        }));
-    }
-
-    // Wait for all registration tasks to complete
-    for h in handles {
-        let _ = h.await;
-    }
+                })
+                .await;
+            }
+        })
+        .buffer_unordered(SCAN_PARALLELISM)
+        .for_each(|_| async {})
+        .await;
 
     let new_count = new_count.load(Ordering::Relaxed);
     tracing::info!("Scan complete: registered {} new files", new_count,);
@@ -331,21 +330,17 @@ pub async fn scan_and_register(
         .unwrap_or_default();
 
     let fixed_count = Arc::new(AtomicI64::new(0));
-    {
-        let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
-        let mut handles = Vec::with_capacity(photos_needing_fix.len());
-
-        for (pid, fpath, mtype) in photos_needing_fix {
-            let abs = storage_root.join(&fpath);
-            if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
-                continue;
-            }
-            let sem = sem.clone();
+    stream::iter(photos_needing_fix)
+        .map(|(pid, fpath, mtype)| {
             let pool = state.pool.clone();
             let fixed_count = fixed_count.clone();
-
-            handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await;
+            let storage_root = storage_root.clone();
+            async move {
+                let abs = storage_root.join(&fpath);
+                if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
+                    return;
+                }
+                let _ = tokio::spawn(async move {
                 let (w, h, cam, lat, lon, taken) = extract_media_metadata_async(abs.clone()).await;
                 let file_hash = compute_photo_hash_streaming(&abs).await;
 
@@ -391,13 +386,13 @@ pub async fn scan_and_register(
                     .ok();
                     fixed_count.fetch_add(1, Ordering::Relaxed);
                 }
-            }));
-        }
-
-        for h in handles {
-            let _ = h.await;
-        }
-    }
+                })
+                .await;
+            }
+        })
+        .buffer_unordered(SCAN_PARALLELISM)
+        .for_each(|_| async {})
+        .await;
     let fixed_count = fixed_count.load(Ordering::Relaxed);
 
     if fixed_count > 0 {
@@ -437,23 +432,19 @@ pub async fn scan_and_register(
             "Checking {} existing photos for XMP subtypes",
             photos_needing_subtype.len()
         );
-        let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
         let subtype_count = Arc::new(AtomicI64::new(0));
-        let mut handles = Vec::with_capacity(photos_needing_subtype.len());
-
-        for (pid, fpath, ph_w, ph_h) in photos_needing_subtype {
-            let abs = storage_root.join(&fpath);
-            if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
-                continue;
-            }
-            let sem = sem.clone();
+        stream::iter(photos_needing_subtype)
+        .map(|(pid, fpath, ph_w, ph_h)| {
             let pool = state.pool.clone();
             let user_id = auth.user_id.clone();
             let storage_root = storage_root.clone();
             let subtype_count = subtype_count.clone();
-
-            handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await;
+            async move {
+                let abs = storage_root.join(&fpath);
+                if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
+                    return;
+                }
+                let _ = tokio::spawn(async move {
                 let file_bytes = super::metadata::read_file_prefix(
                     &abs,
                     super::metadata::XMP_SCAN_PREFIX_BYTES,
@@ -533,12 +524,13 @@ pub async fn scan_and_register(
                     );
                     subtype_count.fetch_add(1, Ordering::Relaxed);
                 }
-            }));
-        }
-
-        for h in handles {
-            let _ = h.await;
-        }
+                })
+                .await;
+            }
+        })
+        .buffer_unordered(SCAN_PARALLELISM)
+        .for_each(|_| async {})
+        .await;
 
         let sc = subtype_count.load(Ordering::Relaxed);
         if sc > 0 {
@@ -556,37 +548,30 @@ pub async fn scan_and_register(
     .unwrap_or_default();
 
     let thumb_count = Arc::new(AtomicI64::new(0));
-    {
-        let sem = Arc::new(Semaphore::new(SCAN_PARALLELISM));
-        let mut handles = Vec::with_capacity(thumbs_to_gen.len());
-
-        for (_pid, fpath, tpath, mime) in &thumbs_to_gen {
-            let abs = storage_root.join(fpath);
-            if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
-                continue;
-            }
-
-            let thumb_abs = storage_root.join(tpath);
-            if tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
-                continue; // already has a thumbnail
-            }
-
-            let sem = sem.clone();
+    stream::iter(thumbs_to_gen)
+        .map(|(_pid, fpath, tpath, mime)| {
             let tc = thumb_count.clone();
-            let mime = mime.clone();
-
-            handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await;
-                if generate_thumbnail_file(&abs, &thumb_abs, &mime, None).await {
-                    tc.fetch_add(1, Ordering::Relaxed);
+            let storage_root = storage_root.clone();
+            async move {
+                let abs = storage_root.join(&fpath);
+                if !tokio::fs::try_exists(&abs).await.unwrap_or(false) {
+                    return;
                 }
-            }));
-        }
-
-        for h in handles {
-            let _ = h.await;
-        }
-    }
+                let thumb_abs = storage_root.join(&tpath);
+                if tokio::fs::try_exists(&thumb_abs).await.unwrap_or(false) {
+                    return; // already has a thumbnail
+                }
+                let _ = tokio::spawn(async move {
+                    if generate_thumbnail_file(&abs, &thumb_abs, &mime, None).await {
+                        tc.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .await;
+            }
+        })
+        .buffer_unordered(SCAN_PARALLELISM)
+        .for_each(|_| async {})
+        .await;
 
     let tc = thumb_count.load(Ordering::Relaxed);
     if tc > 0 {

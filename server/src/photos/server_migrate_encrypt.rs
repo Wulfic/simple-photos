@@ -11,7 +11,7 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::blobs::storage;
+use crate::blobs::{chunked, storage};
 use crate::crypto;
 
 use super::thumbnail::{apply_exif_orientation_from_bytes, generate_thumbnail_file};
@@ -27,7 +27,6 @@ pub struct PlainPhotoRow {
     pub file_path: String,
     pub mime_type: String,
     pub media_type: String,
-    #[allow(dead_code)]
     pub size_bytes: i64,
     pub width: i64,
     pub height: i64,
@@ -129,6 +128,17 @@ pub async fn encrypt_one_photo(
     storage_root: &std::path::Path,
 ) -> Result<(), String> {
     let full_path = storage_root.join(&photo.file_path);
+
+    // Large files take the streaming chunked (v2) path. The legacy path below
+    // reads the whole file, base64-encodes it, serializes it into JSON, and
+    // encrypts that as a single AES-GCM message — roughly 5× the file size held
+    // in RAM at once, in multi-hundred-MB contiguous allocations. On a big video
+    // that OOM-aborts the entire process. The chunked path streams the file in
+    // CHUNK_SIZE frames so peak memory stays at a few MiB regardless of size.
+    if photo.size_bytes >= chunked::CHUNKED_THRESHOLD_BYTES {
+        return encrypt_one_photo_chunked(photo, key, pool, storage_root, &full_path).await;
+    }
+
     let file_data = tokio::fs::read(&full_path)
         .await
         .map_err(|e| format!("Read failed for {}: {}", photo.filename, e))?;
@@ -341,6 +351,236 @@ pub async fn encrypt_one_photo(
 
     tx.commit().await.map_err(|e| format!("Commit tx: {e}"))?;
 
+    Ok(())
+}
+
+/// Streaming chunked (v2) encryption for large files — see [`chunked`].
+///
+/// Mirrors [`encrypt_one_photo`] but never holds the whole media file in
+/// memory: the dedup hash is computed by streaming, the thumbnail comes from
+/// the cached file or FFmpeg (which reads the path, not RAM), and the media
+/// bytes are encrypted frame-by-frame straight to the blob on disk inside a
+/// single blocking task.
+async fn encrypt_one_photo_chunked(
+    photo: PlainPhotoRow,
+    key: &[u8; 32],
+    pool: &sqlx::SqlitePool,
+    storage_root: &std::path::Path,
+    full_path: &std::path::Path,
+) -> Result<(), String> {
+    tracing::info!(
+        "[SERVER_MIG] chunked-encrypting large file: {} ({} bytes, mime={})",
+        photo.filename,
+        photo.size_bytes,
+        photo.mime_type
+    );
+
+    // Content hash for dedup — streamed, never loads the whole file. Matches the
+    // `hex(sha256(file)[..6])` form the v1 path and blob dedup use.
+    let content_hash = crate::photos::utils::compute_photo_hash_streaming(full_path)
+        .await
+        .ok_or_else(|| format!("Hash failed for {}", photo.filename))?;
+
+    // Reuse an already-encrypted blob with identical content (e.g. synced from a
+    // primary) instead of re-encrypting — same logic as the v1 path.
+    let existing_blob: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM blobs WHERE content_hash = ? AND user_id = ? LIMIT 1")
+            .bind(&content_hash)
+            .bind(&photo.user_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("Check existing blob: {e}"))?;
+
+    if let Some((existing_blob_id,)) = existing_blob {
+        let existing_thumb_id: Option<String> = sqlx::query_scalar(
+            "SELECT p.encrypted_thumb_blob_id FROM photos p \
+             WHERE p.encrypted_blob_id = ? AND p.user_id = ? \
+               AND p.encrypted_thumb_blob_id IS NOT NULL LIMIT 1",
+        )
+        .bind(&existing_blob_id)
+        .bind(&photo.user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Check existing thumb: {e}"))?
+        .flatten();
+
+        sqlx::query(
+            "UPDATE photos SET encrypted_blob_id = ?, encrypted_thumb_blob_id = ? \
+             WHERE id = ? AND user_id = ?",
+        )
+        .bind(&existing_blob_id)
+        .bind(existing_thumb_id.as_deref())
+        .bind(&photo.id)
+        .bind(&photo.user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Link existing blob failed: {e}"))?;
+
+        tracing::info!(
+            "[SERVER_MIG] reused existing blob {} for large file {}",
+            existing_blob_id,
+            photo.filename
+        );
+        return Ok(());
+    }
+
+    // Thumbnail: cached if present, else FFmpeg on the path. The empty slice
+    // skips the in-memory `image::load_from_memory` fast path (irrelevant for
+    // video, and large stills fall back to FFmpeg anyway) so we never buffer
+    // the whole source for thumbnailing.
+    let thumb_data = build_thumbnail(&photo, full_path, &[], storage_root).await;
+
+    let mut thumb_blob_id = String::new();
+    let thumb_insert_params = if let Some(ref thumb_bytes) = thumb_data {
+        let params = encrypt_and_write_thumbnail(thumb_bytes, key, &photo, storage_root).await?;
+        thumb_blob_id = params.0.clone();
+        Some(params)
+    } else {
+        None
+    };
+
+    // Choose the encrypt source. Non-browser-native containers (e.g. .mov, .mkv,
+    // .tiff) get a browser-viewable preview generated to disk and encrypted in
+    // its place — exactly like the v1 path, but the preview is read from the
+    // path by FFmpeg so memory stays bounded. The content hash above still keys
+    // on the ORIGINAL file so dedup is unchanged.
+    let (encrypt_src, payload_mime): (std::path::PathBuf, String) =
+        if let Some(preview_ext) = needs_web_preview(&photo.filename) {
+            let preview_path =
+                storage_root.join(format!(".web_previews/{}.web.{}", photo.id, preview_ext));
+            let have_preview = if tokio::fs::try_exists(&preview_path).await.unwrap_or(false) {
+                true
+            } else {
+                generate_web_preview_bg(full_path, &preview_path, preview_ext).await
+            };
+            if have_preview {
+                let preview_mime = match preview_ext {
+                    "jpg" => "image/jpeg",
+                    "png" => "image/png",
+                    "mp3" => "audio/mpeg",
+                    "mp4" => "video/mp4",
+                    _ => photo.mime_type.as_str(),
+                };
+                (preview_path, preview_mime.to_string())
+            } else {
+                (full_path.to_path_buf(), photo.mime_type.clone())
+            }
+        } else {
+            (full_path.to_path_buf(), photo.mime_type.clone())
+        };
+
+    let data_len = tokio::fs::metadata(&encrypt_src)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(photo.size_bytes.max(0) as u64);
+
+    // Metadata envelope — the v1 fields minus the (now-streamed) `data`, plus the
+    // chunk parameters clients need to walk the frames.
+    let meta = serde_json::json!({
+        "v": chunked::FORMAT_V2,
+        "filename": photo.filename,
+        "taken_at": photo.taken_at.as_deref().unwrap_or(&photo.created_at),
+        "mime_type": payload_mime,
+        "media_type": photo.media_type,
+        "width": photo.width,
+        "height": photo.height,
+        "duration": photo.duration_secs,
+        "latitude": photo.latitude,
+        "longitude": photo.longitude,
+        "album_ids": [],
+        "thumbnail_blob_id": thumb_blob_id,
+        "chunk_size": chunked::CHUNK_SIZE,
+        "data_len": data_len,
+    });
+    let meta_json =
+        serde_json::to_vec(&meta).map_err(|e| format!("Metadata JSON serialize failed: {e}"))?;
+
+    // Stream-encrypt the media straight to the blob path. Create the parent dir
+    // first (the blocking writer only opens the final file).
+    let blob_id = Uuid::new_v4().to_string();
+    let blob_abs = storage::blob_path(storage_root, &photo.user_id, &blob_id);
+    if let Some(parent) = blob_abs.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Create blob directory: {e}"))?;
+    }
+    let blob_rel = storage::relative_path(&photo.user_id, &blob_id);
+
+    let key_copy = *key;
+    let src_for_task = encrypt_src.clone();
+    let dst_for_task = blob_abs.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        chunked::encrypt_file_chunked(&key_copy, &src_for_task, &dst_for_task, &meta_json)
+    })
+    .await
+    .map_err(|e| format!("Chunked encrypt task panicked: {e}"))?
+    .map_err(|e| format!("Chunked encrypt failed: {e}"))?;
+
+    let server_blob_type = classify_blob_type(&photo.mime_type);
+    let blob_client_hash = hex::encode(result.blob_sha256);
+    let now = Utc::now().to_rfc3339();
+
+    let mut tx = pool.begin().await.map_err(|e| format!("Begin tx: {e}"))?;
+
+    if let Some((ref tid, ref ttype, tsize, ref thash, ref ttime, ref tpath)) = thumb_insert_params
+    {
+        sqlx::query(
+            "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash, blob_format) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1)",
+        )
+        .bind(tid)
+        .bind(&photo.user_id)
+        .bind(ttype)
+        .bind(tsize)
+        .bind(thash)
+        .bind(ttime)
+        .bind(tpath)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("Insert thumbnail blob row: {e}"))?;
+    }
+
+    sqlx::query(
+        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash, blob_format) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&blob_id)
+    .bind(&photo.user_id)
+    .bind(server_blob_type)
+    .bind(result.blob_size as i64)
+    .bind(&blob_client_hash)
+    .bind(&now)
+    .bind(&blob_rel)
+    .bind(&content_hash)
+    .bind(chunked::FORMAT_V2)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Insert photo blob row: {e}"))?;
+
+    sqlx::query(
+        "UPDATE photos SET encrypted_blob_id = ?, encrypted_thumb_blob_id = ? \
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(&blob_id)
+    .bind(if thumb_blob_id.is_empty() {
+        None::<&str>
+    } else {
+        Some(thumb_blob_id.as_str())
+    })
+    .bind(&photo.id)
+    .bind(&photo.user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| format!("Mark encrypted failed: {e}"))?;
+
+    tx.commit().await.map_err(|e| format!("Commit tx: {e}"))?;
+
+    tracing::info!(
+        "[SERVER_MIG] chunked-encrypted {} → blob {} ({} bytes)",
+        photo.filename,
+        blob_id,
+        result.blob_size
+    );
     Ok(())
 }
 

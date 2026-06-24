@@ -26,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -34,7 +33,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.repository.AiRepository
 import com.simplephotos.data.repository.GeoRepository
 import com.simplephotos.data.repository.PhotoRepository
@@ -133,10 +132,7 @@ private fun ClusterTile(
             ) {
                 if (!thumbUrl.isNullOrEmpty()) {
                     AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(thumbUrl)
-                            .crossfade(true)
-                            .build(),
+                        model = rememberThumbnailRequest(data = thumbUrl),
                         contentDescription = label,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
@@ -224,10 +220,7 @@ private fun PhotoIdsGridScaffold(
                         ) {
                             if (url != null) {
                                 AsyncImage(
-                                    model = ImageRequest.Builder(LocalContext.current)
-                                        .data(url)
-                                        .crossfade(true)
-                                        .build(),
+                                    model = rememberThumbnailRequest(data = url),
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize(),

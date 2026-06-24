@@ -3,6 +3,8 @@
  */
 package com.simplephotos.ui.screens.viewer
 
+import com.simplephotos.data.decodeThumbEnvelope
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -187,21 +189,11 @@ class PhotoViewerViewModel @Inject constructor(
      * Download and decrypt an encrypted blob, returning the raw media bytes.
      * Called from per-page composables for encrypted-mode photos.
      *
-     * Memory: the decrypted JSON envelope contains a base64-encoded "data"
-     * field. We extract just that field and decode it, then let the
-     * intermediate strings become GC-eligible before returning.
+     * Format-aware: handles both the v1 monolithic envelope (base64 `data` in
+     * JSON) and the v2 chunked container (large files) — see [ChunkedBlob].
      */
     suspend fun downloadAndDecrypt(blobId: String): ByteArray = withContext(Dispatchers.IO) {
-        val decrypted = photoRepository.downloadAndDecryptBlob(blobId)
-        // Parse and extract the base64 payload. We use JSONObject which
-        // unfortunately copies the string, but we null-out intermediates
-        // so GC can reclaim them during the Base64 decode.
-        val jsonStr = String(decrypted, Charsets.UTF_8)
-        // decrypted ByteArray is now GC-eligible (jsonStr holds the data)
-        val payload = JSONObject(jsonStr)
-        val dataBase64 = payload.getString("data")
-        // payload and jsonStr are now GC-eligible (only dataBase64 is needed)
-        android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
+        photoRepository.downloadAndDecryptMediaBytes(blobId)
     }
 
     /**
@@ -578,10 +570,7 @@ class PhotoViewerViewModel @Inject constructor(
                         withContext(Dispatchers.IO) {
                             try {
                                 val thumbDecrypted = photoRepository.downloadAndDecryptBlob(serverThumbBlobId!!)
-                                val thumbPayload = org.json.JSONObject(String(thumbDecrypted, Charsets.UTF_8))
-                                val thumbBase64 = thumbPayload.optString("data", "")
-                                if (thumbBase64.isNotEmpty()) {
-                                    val thumbBytes = android.util.Base64.decode(thumbBase64, android.util.Base64.NO_WRAP)
+                                decodeThumbEnvelope(thumbDecrypted)?.let { thumbBytes ->
                                     val thumbPath = photoRepository.saveThumbnailToDisk(copyId, thumbBytes)
                                     photoRepository.updateThumbnailPath(copyId, thumbPath)
                                     Log.d(TAG, "[EDIT:thumb] Downloaded server thumbnail for copy $copyId (${thumbBytes.size} bytes)")

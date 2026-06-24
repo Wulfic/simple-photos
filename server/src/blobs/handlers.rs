@@ -43,11 +43,36 @@ pub struct ListBlobsQuery {
     pub limit: Option<i64>,
 }
 
+/// Parse the optional `X-Blob-Format` header into a `blobs.blob_format` value.
+///
+/// Clients that produce the legacy v1 monolithic envelope omit the header, so
+/// the default is `1`. Streaming clients that upload a v2 chunked container
+/// (see [`super::chunked`]) send `X-Blob-Format: 2`. Any other value is a
+/// client bug — reject it with 400 rather than silently persisting a format the
+/// download path and clients can't describe or decrypt.
+fn parse_blob_format(headers: &HeaderMap) -> Result<i64, AppError> {
+    // Absent header → legacy v1 envelope (the column default), matching every
+    // existing client that predates the chunked path.
+    let raw = match headers.get("x-blob-format").and_then(|v| v.to_str().ok()) {
+        None => return Ok(1),
+        Some(s) => s,
+    };
+    match raw.trim().parse::<i64>() {
+        Ok(1) => Ok(1),
+        Ok(v) if v == super::chunked::FORMAT_V2 => Ok(super::chunked::FORMAT_V2),
+        _ => Err(AppError::BadRequest(format!(
+            "Invalid X-Blob-Format '{raw}'. Valid values: 1 (monolithic envelope), 2 (chunked)"
+        ))),
+    }
+}
+
 /// POST /api/blobs — upload an encrypted blob.
 ///
 /// Headers:
 /// - `x-blob-type` — one of: photo, gif, video, audio, thumbnail,
 ///   video_thumbnail, album_manifest (default: "photo")
+/// - `x-blob-format` — container format: `1` (legacy monolithic envelope,
+///   the default when absent) or `2` (chunked streaming container)
 /// - `x-client-hash` — optional SHA-256 hex digest for integrity verification
 /// - `x-content-hash` — optional short hash of the *original* (pre-encryption)
 ///   content, used for cross-platform photo alignment
@@ -93,6 +118,10 @@ pub async fn upload(
             VALID_BLOB_TYPES.join(", ")
         )));
     }
+
+    // Container format (1 = legacy monolithic envelope, 2 = chunked). Reject a
+    // malformed value before streaming the body to disk.
+    let blob_format = parse_blob_format(&headers)?;
 
     let client_hash = headers
         .get("x-client-hash")
@@ -217,8 +246,8 @@ pub async fn upload(
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO blobs (id, user_id, blob_type, size_bytes, client_hash, upload_time, storage_path, content_hash, blob_format) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&blob_id)
     .bind(&auth.user_id)
@@ -228,6 +257,7 @@ pub async fn upload(
     .bind(&now)
     .bind(&storage_path)
     .bind(&content_hash)
+    .bind(blob_format)
     .execute(&state.pool)
     .await?;
 
@@ -248,6 +278,7 @@ pub async fn upload(
         user_id = %auth.user_id,
         blob_id = %blob_id,
         blob_type = %blob_type,
+        blob_format = blob_format,
         size_bytes = actual_size,
         "Blob upload completed successfully"
     );
@@ -452,4 +483,61 @@ pub async fn delete(
     .await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    fn headers_with_format(value: &'static str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("x-blob-format", HeaderValue::from_static(value));
+        h
+    }
+
+    #[test]
+    fn blob_format_defaults_to_v1_when_header_absent() {
+        // Every pre-chunked client omits the header — it must map to v1, the
+        // column default, not error.
+        assert_eq!(parse_blob_format(&HeaderMap::new()).unwrap(), 1);
+    }
+
+    #[test]
+    fn blob_format_accepts_explicit_v1() {
+        assert_eq!(parse_blob_format(&headers_with_format("1")).unwrap(), 1);
+    }
+
+    #[test]
+    fn blob_format_accepts_v2() {
+        assert_eq!(
+            parse_blob_format(&headers_with_format("2")).unwrap(),
+            super::super::chunked::FORMAT_V2
+        );
+    }
+
+    #[test]
+    fn blob_format_tolerates_surrounding_whitespace() {
+        assert_eq!(parse_blob_format(&headers_with_format(" 2 ")).unwrap(), 2);
+    }
+
+    #[test]
+    fn blob_format_rejects_unknown_numeric_value() {
+        // A format the download path can't describe and clients can't decrypt is
+        // a client bug — reject it rather than silently storing it.
+        let err = parse_blob_format(&headers_with_format("3")).unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn blob_format_rejects_non_numeric_value() {
+        let err = parse_blob_format(&headers_with_format("v2")).unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn blob_format_rejects_empty_value() {
+        let err = parse_blob_format(&headers_with_format("")).unwrap_err();
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
 }

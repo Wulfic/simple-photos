@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { decrypt } from "../../crypto/crypto";
+import { decryptBlobMetadata } from "../../crypto/blobEnvelope";
 import {
   db,
   type CachedPhoto,
@@ -283,8 +284,10 @@ export function usePhotoSync(): PhotoSyncResult {
         if (existing) continue;
         try {
           const encrypted = await api.blobs.download(blob.id);
-          const decrypted = await decrypt(encrypted);
-          const payload: PhotoPayload = JSON.parse(new TextDecoder().decode(decrypted));
+          // Only metadata is needed here — decryptBlobMetadata avoids
+          // reconstructing media bytes (and, for v2, avoids decrypting every
+          // chunk frame just to read fields). Handles both blob formats.
+          const payload = await decryptBlobMetadata<PhotoPayload>(encrypted);
 
           let thumbnailData: ArrayBuffer | undefined;
           let unsyncedThumbMime: string | undefined;

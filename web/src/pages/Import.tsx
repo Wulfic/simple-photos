@@ -1,24 +1,30 @@
 /**
  * Import page — bulk photo/video import from server paths or local files.
  *
- * Reads files (server-side via `/admin/import/*` or via the browser file
- * picker) and streams each one to `/api/photos/upload`. The server handles
- * thumbnail generation, format conversion (HEIC/MKV/etc.), EXIF/GPS
- * extraction, audio_backup_enabled enforcement, and ingest encryption —
- * giving identical results to the setup-time autoscan path.
+ * Two modes:
  *
- * Google Photos Takeout sidecars are still parsed locally so their
- * `photoTakenTime` / `geoData` are forwarded as override headers when the
- * file's EXIF is missing those fields.
+ * - **Server Directory**: hands a server-side path to `POST /admin/import/ingest`,
+ *   which registers files in place (when under the storage root) or stream-copies
+ *   them into the library server-side — NO bytes round-trip through the browser.
+ *   This replaces the old download-then-reupload flow that pulled the whole
+ *   library through the tab and failed / partially-imported on large folders.
+ *
+ * - **Local Upload**: genuine browser-picked files are uploaded to
+ *   `/api/photos/upload` through a bounded-concurrency worker pool with retry +
+ *   exponential backoff, so transient errors don't abandon files mid-import.
+ *
+ * Google Photos Takeout sidecars are still parsed locally (local mode) so their
+ * `photoTakenTime` / `geoData` are forwarded as override headers when the file's
+ * EXIF is missing those fields.
  */
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { hasCryptoKey } from "../crypto/crypto";
 import { api } from "../api/client";
 import AppHeader from "../components/AppHeader";
 import { useProcessingStore } from "../store/processing";
 
-import type { ImportItem, ServerFile, GooglePhotosMetadata } from "../utils/importTypes";
+import type { ImportItem, GooglePhotosMetadata } from "../utils/importTypes";
 import {
   guessMimeFromName,
   matchMetadataToFiles,
@@ -28,6 +34,15 @@ import { formatBytes } from "../utils/formatters";
 import ImportFileList from "./import/ImportFileList";
 
 type ImportMode = "server" | "local";
+
+/** How many local uploads run at once. Bounded so a huge folder can't open
+ *  tens of thousands of simultaneous requests. */
+const UPLOAD_CONCURRENCY = 3;
+/** Per-file upload attempts before giving up (1 try + 2 retries). */
+const MAX_UPLOAD_ATTEMPTS = 3;
+/** Throttle interval (ms) for flushing per-file status into React state. Keeps
+ *  the import O(n) overall instead of O(n²) re-renders on large lists. */
+const STATUS_FLUSH_MS = 250;
 
 export default function Import() {
   const navigate = useNavigate();
@@ -42,76 +57,49 @@ export default function Import() {
   const [notice, setNotice] = useState("");
   const [dragOver, setDragOver] = useState(false);
 
-  // Server scan state
-  const [scanning, setScanning] = useState(false);
+  // Server-directory ingest state
   const [scanPath, setScanPath] = useState("");
-  const [autoScanned, setAutoScanned] = useState(false);
-  const autoImportPending = useRef(false);
+  const [serverBusy, setServerBusy] = useState(false);
+  const [serverResult, setServerResult] = useState<{
+    queued: number;
+    in_place: boolean;
+    directory: string;
+  } | null>(null);
 
-  // ── Hooks (unconditional — must run in the same order every render) ────
-
-  // Auto-scan default storage on first mount
-  useEffect(() => {
-    if (!hasCryptoKey() || autoScanned) return;
-    setAutoScanned(true);
-    autoImportPending.current = true;
-    handleServerScan();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- Intentionally runs once on mount.
-  // handleServerScan is defined in the same component and must not trigger re-runs.
-
-  // Auto-import once scan populates items
-  useEffect(() => {
-    if (!hasCryptoKey()) return;
-    if (
-      autoImportPending.current &&
-      !scanning &&
-      !importing &&
-      items.length > 0 &&
-      items.some((i) => i.status === "pending")
-    ) {
-      autoImportPending.current = false;
-      handleImport();
-    }
-  }, [items, scanning, importing]); // eslint-disable-line react-hooks/exhaustive-deps
-  // handleImport is excluded intentionally: including it would re-trigger the effect
-  // on every render since it closes over component state. The effect only needs to
-  // fire when items/scanning/importing change.
-
-  // ── Conditional early returns (AFTER all hooks) ─────────────────────────
-
-  // Redirect if no crypto key
+  // Redirect if no crypto key (after hooks, none above are conditional).
   if (!hasCryptoKey()) {
     navigate("/setup");
     return null;
   }
 
-  // ── Server scan ─────────────────────────────────────────────────────────
+  // ── Server directory ingest (no browser round-trip) ─────────────────────
 
-  async function handleServerScan(path?: string) {
-    setScanning(true);
+  async function handleServerIngest() {
+    setServerBusy(true);
     setError("");
+    setNotice("");
+    setServerResult(null);
     try {
-      const result = await api.admin.importScan(path || scanPath || undefined);
-      setScanPath(result.directory);
-
-      const newItems: ImportItem[] = result.files.map((f: ServerFile) => ({
-        serverPath: f.path,
-        name: f.name,
-        size: f.size,
-        mimeType: f.mime_type,
-        status: "pending" as const,
-      }));
-
-      setItems(newItems);
-
-      if (result.files.length === 0) {
-        setError("No media files found in this directory.");
+      const res = await api.admin.importIngest(scanPath || undefined, "copy");
+      setServerResult(res);
+      if (res.queued === 0) {
+        setNotice("No new media files found to import in that directory.");
+      } else {
+        setNotice(
+          `Queued ${res.queued.toLocaleString()} file${res.queued === 1 ? "" : "s"} from ` +
+            `${res.directory}. ${
+              res.in_place
+                ? "Registering them in place"
+                : "Copying them into your library"
+            } — conversion and encryption continue in the background. You can ` +
+            "leave this page; progress shows in the banners.",
+        );
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Scan failed";
+      const msg = err instanceof Error ? err.message : "Import failed";
       setError(msg);
     } finally {
-      setScanning(false);
+      setServerBusy(false);
     }
   }
 
@@ -175,72 +163,113 @@ export default function Import() {
     });
   }, []);
 
-  // ── Core import logic ───────────────────────────────────────────────────
+  // ── Core local-upload logic (bounded concurrency + retry/backoff) ───────
 
   async function handleImport() {
-    const pending = items.filter(
-      (i) => i.status === "pending" || i.status === "error"
-    );
-    if (pending.length === 0) return;
+    // Snapshot the indices that still need work. We read file data from this
+    // snapshot during the run; per-file status lives in `statusRef` (not React
+    // state) so completing a file is O(1), not an O(n) array map.
+    const snapshot = items;
+    const pendingIdx: number[] = [];
+    snapshot.forEach((it, i) => {
+      if (it.status === "pending" || it.status === "error") pendingIdx.push(i);
+    });
+    if (pendingIdx.length === 0) return;
 
     setImporting(true);
     startTask("import");
     setError("");
     abortRef.current = false;
-    setProgress({ done: 0, total: pending.length });
+    setProgress({ done: 0, total: pendingIdx.length });
 
-    let doneCount = 0;
+    const statusRef = new Map<
+      number,
+      { status: ImportItem["status"]; error?: string }
+    >();
+    let done = 0;
 
-    for (let i = 0; i < items.length; i++) {
-      if (abortRef.current) break;
-
-      const item = items[i];
-      if (item.status === "done") continue;
-      if (item.status !== "pending" && item.status !== "error") continue;
-
+    // Flush accumulated statuses into React state at most every STATUS_FLUSH_MS,
+    // so a 50k-file import doesn't trigger 50k full-list re-renders.
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      flushTimer = null;
       setItems((prev) =>
-        prev.map((it, idx) =>
-          idx === i ? { ...it, status: "uploading", error: undefined } : it
-        )
+        prev.map((it, i) => {
+          const s = statusRef.get(i);
+          return s ? { ...it, status: s.status, error: s.error } : it;
+        })
       );
+    };
+    const scheduleFlush = () => {
+      if (flushTimer === null) flushTimer = setTimeout(flush, STATUS_FLUSH_MS);
+    };
+    const setStatus = (
+      i: number,
+      status: ImportItem["status"],
+      errMsg?: string
+    ) => {
+      statusRef.set(i, { status, error: errMsg });
+      scheduleFlush();
+    };
 
-      try {
-        await importSingleItem(item);
-        setItems((prev) =>
-          prev.map((it, idx) => (idx === i ? { ...it, status: "done" } : it))
-        );
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : "Import failed";
-        console.error(`Import failed for ${item.name}:`, err); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
-        setItems((prev) =>
-          prev.map((it, idx) =>
-            idx === i ? { ...it, status: "error", error: msg } : it
-          )
-        );
+    let cursor = 0;
+    const worker = async () => {
+      while (!abortRef.current) {
+        const pos = cursor++;
+        if (pos >= pendingIdx.length) break;
+        const i = pendingIdx[pos];
+        setStatus(i, "uploading");
+
+        let lastErr = "";
+        for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+          if (abortRef.current) break;
+          try {
+            await importSingleItem(snapshot[i]);
+            lastErr = "";
+            break;
+          } catch (err: unknown) {
+            lastErr = err instanceof Error ? err.message : "Import failed";
+            if (attempt < MAX_UPLOAD_ATTEMPTS) {
+              // Exponential backoff with jitter: ~0.5s, ~1s.
+              const delay = 500 * 2 ** (attempt - 1) + Math.random() * 250;
+              await new Promise((r) => setTimeout(r, delay));
+            }
+          }
+        }
+
+        if (lastErr) {
+          console.error(`Import failed for ${snapshot[i].name}: ${lastErr}`); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+          setStatus(i, "error", lastErr);
+        } else {
+          setStatus(i, "done");
+        }
+        done++;
+        setProgress({ done, total: pendingIdx.length });
       }
+    };
 
-      doneCount++;
-      setProgress({ done: doneCount, total: pending.length });
+    const workerCount = Math.min(UPLOAD_CONCURRENCY, pendingIdx.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-      if (!abortRef.current) {
-        await new Promise((r) => setTimeout(r, 100));
+    // Any file still marked "uploading" was interrupted by Stop — return it to
+    // pending so a later Import/Retry picks it up cleanly.
+    for (const i of pendingIdx) {
+      if (statusRef.get(i)?.status === "uploading") {
+        statusRef.set(i, { status: "pending" });
       }
     }
+    if (flushTimer !== null) clearTimeout(flushTimer);
+    flush();
 
     setImporting(false);
     endTask("import");
   }
 
   async function importSingleItem(item: ImportItem) {
-    let rawData: ArrayBuffer;
-
-    if (item.serverPath) {
-      rawData = await api.admin.importFile(item.serverPath);
-    } else if (item.file) {
-      rawData = await item.file.arrayBuffer();
-    } else {
-      throw new Error("No file data source");
+    if (!item.file) {
+      throw new Error("No local file data — use Server Directory import for server-side files");
     }
+    const rawData = await item.file.arrayBuffer();
 
     const mimeType = item.mimeType || guessMimeFromName(item.name);
     const filename = item.metadata?.title || item.name;
@@ -280,28 +309,14 @@ export default function Import() {
       }
     }
 
-    // Single canonical upload path — server handles thumbnail, conversion,
-    // EXIF/GPS extraction, audio_backup_enabled enforcement, AI/geo backfill,
-    // and ingest encryption (via the stored encryption key). This keeps the
-    // /import page result identical to the setup-time autoscan path.
-    //
-    // Forward the local File's lastModified (when this is a browser-picked
-    // file, not a server-scan path) so the server can use it as the
-    // taken_at fallback when EXIF is absent. Without this, EXIF-less files
-    // get stamped with `now` and end up at the top of the timeline instead
-    // of where their mtime would place them — diverging from the autoscan
-    // pipeline.
-    const fileModifiedAt = item.file?.lastModified;
     // Defer conversion to the server's background pass so a slow per-file
-    // FFmpeg run can't freeze this sequential import loop. The server only
-    // acts on this for convertible (non-native) files with no metadata
-    // overrides — native files and Takeout-sidecar items still convert inline,
-    // so behaviour is unchanged for them.
+    // FFmpeg run can't freeze the import. The server only acts on this for
+    // convertible (non-native) files with no metadata overrides.
     await api.photos.upload(rawData, filename, mimeType, {
       takenAt,
       latitude,
       longitude,
-      fileModifiedAt,
+      fileModifiedAt: item.file.lastModified,
       deferConversion: true,
     });
   }
@@ -349,7 +364,7 @@ export default function Import() {
         <div className="mb-6">
           <h2 className="text-xl font-semibold dark:text-white">Import Photos</h2>
           <p className="text-fg-muted text-sm mt-1">
-            Import from server directory or local files
+            Import from a server directory or upload local files
           </p>
         </div>
 
@@ -380,9 +395,13 @@ export default function Import() {
         {/* Server Directory Mode */}
         {mode === "server" && (
           <div className="card p-6 mb-6">
-            <h3 className="font-semibold text-fg mb-3">Scan Server Directory</h3>
+            <h3 className="font-semibold text-fg mb-3">Import a Server Directory</h3>
             <p className="text-sm text-fg-muted mb-4">
-              Scan a directory on the server for photos and videos to import. Files are encrypted locally before being stored.
+              Import every photo and video under a directory on the server. Files
+              already inside your storage folder are registered in place; files
+              elsewhere are copied into your library. Nothing is downloaded to
+              this browser, so very large folders import reliably. Everything is
+              encrypted on the server.
             </p>
             <div className="flex gap-2">
               <input
@@ -391,23 +410,40 @@ export default function Import() {
                 onChange={(e) => setScanPath(e.target.value)}
                 placeholder="Server directory path (defaults to storage root)"
                 className="input flex-1"
-                onKeyDown={(e) => { if (e.key === "Enter") handleServerScan(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !serverBusy) handleServerIngest();
+                }}
               />
               <button
-                onClick={() => handleServerScan()}
-                disabled={scanning}
+                onClick={() => handleServerIngest()}
+                disabled={serverBusy}
                 className="btn btn-primary btn-md whitespace-nowrap"
               >
-                {scanning ? (
+                {serverBusy ? (
                   <span className="flex items-center gap-2">
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Scanning…
+                    Starting…
                   </span>
                 ) : (
-                  "Scan Directory"
+                  "Import Directory"
                 )}
               </button>
             </div>
+
+            {serverResult && serverResult.queued > 0 && (
+              <div className="mt-4 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-4">
+                <p className="text-green-800 dark:text-green-300 font-medium text-sm">
+                  🚀 Importing {serverResult.queued.toLocaleString()} file
+                  {serverResult.queued === 1 ? "" : "s"} in the background
+                </p>
+                <button
+                  onClick={() => navigate("/gallery")}
+                  className="mt-3 btn btn-success btn-md"
+                >
+                  View Gallery →
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -480,7 +516,7 @@ export default function Import() {
           </div>
         )}
 
-        {/* Stats bar */}
+        {/* Stats bar (local mode) */}
         {items.length > 0 && (
           <div className="card flex flex-wrap items-center justify-between p-4 mb-4 gap-3">
             <div className="flex flex-wrap gap-4 text-sm">
@@ -537,7 +573,7 @@ export default function Import() {
           </div>
         )}
 
-        {/* File list */}
+        {/* File list (local mode) */}
         <ImportFileList items={items} removeItem={removeItem} />
 
         {/* Success message */}

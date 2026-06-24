@@ -14,6 +14,7 @@ import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import { decrypt } from "../crypto/crypto";
 import { downloadRaw } from "../api/core";
 import { GallerySkeleton } from "../components/skeletons";
+import { Modal } from "../components/ui";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -481,8 +482,7 @@ export default function Trash() {
 
       {/* ── Empty Trash Confirmation Modal ──────────────────────────── */}
       {confirmEmpty && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="card shadow-pop max-w-md w-full mx-4 p-6">
+        <Modal onClose={() => setConfirmEmpty(false)} size="md" panelClassName="p-6">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
                 <svg className="w-5 h-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -514,8 +514,7 @@ export default function Trash() {
                 {actionLoading === "empty" ? "Deleting..." : "Delete All"}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

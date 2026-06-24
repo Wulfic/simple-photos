@@ -2,6 +2,7 @@
  * Modal dialog for choosing between downloading the converted
  * (browser-native) version or the original source file.
  */
+import { Modal } from "../ui";
 
 interface DownloadChoiceModalProps {
   onConvertedDownload: () => void;
@@ -15,16 +16,10 @@ export default function DownloadChoiceModal({
   onCancel,
 }: DownloadChoiceModalProps) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={onCancel}
-    >
-      <div
-        className="bg-gray-900 rounded-xl p-6 max-w-sm mx-4 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-white text-lg font-semibold mb-2">Download</h3>
-        <p className="text-gray-400 text-sm mb-5">
+    <Modal onClose={onCancel} size="sm">
+      <div className="p-6">
+        <h3 className="text-fg text-lg font-semibold mb-2">Download</h3>
+        <p className="text-fg-muted text-sm mb-5">
           This file was converted to a browser-friendly format during import.
           Which version would you like to download?
         </p>
@@ -37,18 +32,18 @@ export default function DownloadChoiceModal({
           </button>
           <button
             onClick={onSourceDownload}
-            className="w-full px-4 py-2.5 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-600 transition-colors"
+            className="btn btn-secondary btn-md w-full"
           >
             Original source file
           </button>
           <button
             onClick={onCancel}
-            className="w-full px-4 py-2 text-gray-400 text-sm hover:text-white transition-colors"
+            className="w-full px-4 py-2 text-fg-muted text-sm hover:text-fg transition-colors"
           >
             Cancel
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -31,6 +31,7 @@ type SharedAlbumInfo = {
 
 import type { ShareUser } from "../types/sharing";
 import { AlbumGridSkeleton } from "../components/skeletons";
+import SharePickerModal from "../components/SharePickerModal";
 
 export default function Albums() {
   const [loading, setLoading] = useState(true);
@@ -775,34 +776,12 @@ export default function Albums() {
 
         {/* Share user picker modal */}
         {sharePickerAlbumId && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setSharePickerAlbumId(null)}>
-            <div className="card shadow-pop max-w-sm w-full p-6" onClick={(e) => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold mb-4">Share with User</h3>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {shareUsers.map((u) => (
-                  <button
-                    key={u.id}
-                    onClick={() => { addMemberToAlbum(u.id); setSharePickerAlbumId(null); }}
-                    className="w-full text-left px-3 py-2 rounded-md hover:bg-surface-sunken dark:hover:bg-white/10 text-sm flex items-center gap-2"
-                  >
-                    <svg className="w-5 h-5 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-                    </svg>
-                    {u.username}
-                  </button>
-                ))}
-                {shareUsers.length === 0 && (
-                  <p className="text-fg-muted text-sm text-center py-4">No users found</p>
-                )}
-              </div>
-              <button
-                onClick={() => setSharePickerAlbumId(null)}
-                className="mt-4 w-full py-2 text-sm text-fg-muted hover:bg-surface-sunken dark:hover:bg-white/10 rounded-md"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+          <SharePickerModal
+            title="Share with User"
+            users={shareUsers}
+            onPick={(id) => { addMemberToAlbum(id); setSharePickerAlbumId(null); }}
+            onClose={() => setSharePickerAlbumId(null)}
+          />
         )}
 
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-3">

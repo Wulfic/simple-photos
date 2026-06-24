@@ -14,6 +14,7 @@ import { request } from "../api/core";
 import { useAuthStore } from "../store/auth";
 import { useProcessingStore } from "../store/processing";
 import { ProgressBanner } from "./ProgressBanner";
+import { formatEta } from "../utils/formatters";
 
 interface ActivityResponse {
   precise_progress?: {
@@ -22,15 +23,6 @@ interface ActivityResponse {
     done: number;
     pending: number;
   };
-}
-
-/** Format seconds as HH:MM:SS, clamped to 0. */
-function formatEta(seconds: number): string {
-  const s = Math.max(0, Math.ceil(seconds));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
 export default function PreciseGeoBanner() {

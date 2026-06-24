@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.exoplayer.ExoPlayer
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.local.entities.PhotoEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -580,17 +580,12 @@ internal fun PhotoPageContent(
                     // Local file — use Coil with content URI for memory-safe loading
                     hasLocalPath -> {
                         AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(Uri.parse(photo.localPath))
-                                .apply {
-                                    if (isWidePano) {
-                                        // Capped decode (NOT ORIGINAL) — see MAX_PANO_DECODE_PX.
-                                        size(MAX_PANO_DECODE_PX)
-                                        allowHardware(false)
-                                    }
-                                }
-                                .crossfade(true)
-                                .build(),
+                            // Capped decode (NOT ORIGINAL) for wide panos — see MAX_PANO_DECODE_PX.
+                            model = rememberThumbnailRequest(
+                                data = Uri.parse(photo.localPath),
+                                size = if (isWidePano) MAX_PANO_DECODE_PX else null,
+                                allowHardware = !isWidePano,
+                            ),
                             contentDescription = photo.filename,
                             modifier = Modifier.fillMaxSize().then(combinedModifier),
                             contentScale = ContentScale.Fit,
@@ -630,17 +625,12 @@ internal fun PhotoPageContent(
                             bytes
                         }
                         AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(imageData)
-                                .apply {
-                                    if (isWidePano) {
-                                        // Capped decode (NOT ORIGINAL) — see MAX_PANO_DECODE_PX.
-                                        size(MAX_PANO_DECODE_PX)
-                                        allowHardware(false)
-                                    }
-                                }
-                                .crossfade(true)
-                                .build(),
+                            // Capped decode (NOT ORIGINAL) for wide panos — see MAX_PANO_DECODE_PX.
+                            model = rememberThumbnailRequest(
+                                data = imageData,
+                                size = if (isWidePano) MAX_PANO_DECODE_PX else null,
+                                allowHardware = !isWidePano,
+                            ),
                             contentDescription = photo.filename,
                             modifier = Modifier.fillMaxSize().then(combinedModifier),
                             contentScale = ContentScale.Fit,

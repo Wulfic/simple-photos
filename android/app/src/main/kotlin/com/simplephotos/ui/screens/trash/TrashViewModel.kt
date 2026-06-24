@@ -1,9 +1,12 @@
 package com.simplephotos.ui.screens.trash
 
+import com.simplephotos.data.decodeThumbEnvelope
+
 import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.simplephotos.ui.components.SelectionState
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.ViewModel
@@ -46,10 +49,9 @@ class TrashViewModel @Inject constructor(
     var error by mutableStateOf<String?>(null)
     var actionLoading by mutableStateOf<String?>(null)
         private set
-    var selectedIds by mutableStateOf(emptySet<String>())
-        private set
-    var isSelectionMode by mutableStateOf(false)
-        private set
+    private val selection = SelectionState()
+    val selectedIds get() = selection.selectedIds
+    val isSelectionMode get() = selection.isSelectionMode
     var serverBaseUrl by mutableStateOf("")
         private set
     var username by mutableStateOf("")
@@ -97,10 +99,7 @@ class TrashViewModel @Inject constructor(
                             }
                             val decrypted = crypto.decrypt(encrypted)
                             // Parse envelope to extract image bytes
-                            val payload = JSONObject(String(decrypted, Charsets.UTF_8))
-                            val dataB64 = payload.optString("data", "")
-                            if (dataB64.isNotEmpty()) {
-                                val thumbBytes = android.util.Base64.decode(dataB64, android.util.Base64.NO_WRAP)
+                            decodeThumbEnvelope(decrypted)?.let { thumbBytes ->
                                 cached.writeBytes(thumbBytes)
                                 thumbMap[item.id] = cached.absolutePath
                                 android.util.Log.d(TAG, "loadTrash: decrypted thumb for ${item.id} (${thumbBytes.size} bytes)")
@@ -120,21 +119,11 @@ class TrashViewModel @Inject constructor(
         }
     }
 
-    fun enterSelectionMode(id: String) {
-        isSelectionMode = true
-        selectedIds = setOf(id)
-    }
+    fun enterSelectionMode(id: String) = selection.enter(id)
 
-    fun toggleSelect(id: String) {
-        if (!isSelectionMode) return
-        selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
-        if (selectedIds.isEmpty()) isSelectionMode = false
-    }
+    fun toggleSelect(id: String) = selection.toggle(id)
 
-    fun clearSelection() {
-        selectedIds = emptySet()
-        isSelectionMode = false
-    }
+    fun clearSelection() = selection.clear()
 
     fun emptyTrash() {
         viewModelScope.launch {

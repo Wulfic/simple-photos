@@ -200,6 +200,25 @@ export const adminApi = {
     return res.arrayBuffer();
   },
 
+  /**
+   * Bulk server-side ingest: import every media file under `path` (default:
+   * storage root) WITHOUT downloading bytes to the browser. Files already under
+   * the storage root are registered in place; external paths are stream-copied
+   * server-side with content-hash de-duplication. Returns immediately with the
+   * number of files queued; convert/encrypt work runs in the background and is
+   * reflected in the conversion/encryption banners. Idempotent — safe to re-run
+   * to resume an interrupted import.
+   */
+  importIngest: (path?: string, mode: "copy" | "move" = "copy") => {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    params.set("mode", mode);
+    return request<{ queued: number; in_place: boolean; directory: string }>(
+      `/admin/import/ingest?${params.toString()}`,
+      { method: "POST" },
+    );
+  },
+
   getPort: () =>
     request<{ port: number; suggested_port: number; external_port?: number; message: string }>("/admin/port"),
 

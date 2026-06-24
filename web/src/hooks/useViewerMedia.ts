@@ -6,9 +6,8 @@
  */
 import { useState, useCallback, useRef } from "react";
 import { api } from "../api/client";
-import { decrypt } from "../crypto/crypto";
+import { decryptPhotoBlobToBlob } from "../crypto/blobEnvelope";
 import { db, type MediaType } from "../db";
-import { base64ToUint8Array } from "../utils/media";
 import { diagnosticLogger } from "../utils/diagnosticLogger";
 import type { MediaPayload, PreloadEntry, CropMetadata, PhotoInfoData } from "../types/media";
 export type { MediaPayload, PreloadEntry, CropMetadata, PhotoInfoData };
@@ -104,11 +103,14 @@ export default function useViewerMedia(
       // Check if aborted during download
       if (controller.signal.aborted) return;
       diagnosticLogger.debug("VIEWER", `Downloaded ${encrypted.byteLength} bytes, decrypting`);
-      const decrypted = await decrypt(encrypted);
+      // Format-aware: handles both the v1 monolithic envelope and the v2 chunked
+      // container (large videos). For v2 the Blob is built from per-chunk parts,
+      // so a multi-gigabyte video is never one contiguous JS allocation — see
+      // crypto/blobEnvelope.ts.
+      const { payload, blob } = await decryptPhotoBlobToBlob(encrypted);
       if (controller.signal.aborted) return;
-      diagnosticLogger.debug("VIEWER", `Decrypted ${decrypted.byteLength} bytes, parsing JSON`);
-      const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
-      diagnosticLogger.debug("VIEWER", `Payload: mime_type=${payload.mime_type}, media_type=${payload.media_type}, filename=${payload.filename}`, { data_length: payload.data?.length ?? 0 });
+      diagnosticLogger.debug("VIEWER", `Decrypted ${blob.size} bytes`);
+      diagnosticLogger.debug("VIEWER", `Payload: mime_type=${payload.mime_type}, media_type=${payload.media_type}, filename=${payload.filename}`, { data_length: blob.size });
 
       setFilename(payload.filename);
       setMimeType(payload.mime_type);
@@ -126,9 +128,7 @@ export default function useViewerMedia(
       setMediaType(resolvedType);
       diagnosticLogger.debug("VIEWER", `Resolved mediaType=${resolvedType}`);
 
-      // Decode base64 → Blob → Object URL
-      const bytes = base64ToUint8Array(payload.data).buffer as ArrayBuffer;
-      const blob = new Blob([bytes], { type: payload.mime_type });
+      // Blob → Object URL
       const url = URL.createObjectURL(blob);
       diagnosticLogger.debug("VIEWER", `Created blob URL: type=${payload.mime_type}, size=${blob.size}`);
       setMediaUrl(url);
@@ -153,13 +153,16 @@ export default function useViewerMedia(
         isFavorite: photoIsFavorite,
       });
 
-      // Cache decrypted data in IndexedDB for cross-session persistence
+      // Cache decrypted data in IndexedDB for cross-session persistence.
+      // Only materialize the bytes for reasonably small media — large videos
+      // skip the cache, so the giant payload never lands on the JS heap.
       if (blob.size < 50 * 1024 * 1024) {
         try {
+          const data = await blob.arrayBuffer();
           await db.fullPhotos?.put({
             photoId: blobId, filename: payload.filename, mimeType: payload.mime_type,
             mediaType: resolvedType, cropData: cachedEntry?.cropData ?? undefined,
-            isFavorite: photoIsFavorite, data: bytes, cachedAt: Date.now(),
+            isFavorite: photoIsFavorite, data, cachedAt: Date.now(),
           });
         } catch { /* non-fatal */ }
       }

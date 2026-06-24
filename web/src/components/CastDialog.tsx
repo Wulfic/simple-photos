@@ -25,6 +25,7 @@ import {
   endCastSession,
   type CastState,
 } from "../utils/cast";
+import { Modal } from "./ui";
 
 interface CastDialogProps {
   open: boolean;
@@ -62,14 +63,6 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
       unsub();
     };
   }, [open]);
-
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -229,40 +222,19 @@ export default function CastDialog({ open, onClose }: CastDialogProps) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm"
-      onClick={onClose}
+    <Modal
+      onClose={onClose}
+      size="sm"
+      zClassName="z-[10000]"
+      title="Cast to TV"
+      titleIcon={<CastIcon className="w-5 h-5 text-fg-muted" />}
     >
-      <div
-        className="card shadow-pop w-full max-w-sm mx-4"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="cast-dialog-title"
-      >
-        <div className="px-5 py-4 border-b border-edge flex items-center gap-2">
-          <CastIcon className="w-5 h-5 text-fg-muted" />
-          <h2
-            id="cast-dialog-title"
-            className="text-base font-semibold text-fg flex-1"
-          >
-            Cast to TV
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="text-gray-700 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white text-xl leading-none px-1"
-          >
-            ×
-          </button>
-        </div>
-        <div className="px-5 py-4">
-          {error && (
-            <p className="text-xs text-red-600 dark:text-red-400 mb-3">{error}</p>
-          )}
-          {body}
-        </div>
+      <div className="px-5 py-4">
+        {error && (
+          <p className="text-xs text-red-600 dark:text-red-400 mb-3">{error}</p>
+        )}
+        {body}
       </div>
-    </div>
+    </Modal>
   );
 }

@@ -10,6 +10,20 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 
 /**
+ * The minimal AES-GCM surface that format-aware blob helpers (e.g. [ChunkedBlob])
+ * depend on. [CryptoManager] is the production implementation; extracting it as an
+ * interface lets the chunked encode/decode framing be unit-tested on the JVM with
+ * an in-memory key, without the Android Keystore that [KeyManager] requires.
+ */
+interface Cryptor {
+    /** Encrypt [plaintext], returning `nonce || ciphertext+tag`. */
+    fun encrypt(plaintext: ByteArray): ByteArray
+
+    /** Decrypt a `nonce || ciphertext+tag` payload produced by [encrypt]. */
+    fun decrypt(data: ByteArray): ByteArray
+}
+
+/**
  * Provides AES-256-GCM encryption and decryption using the Data Encryption Key
  * managed by [KeyManager].
  *
@@ -17,7 +31,7 @@ import javax.crypto.spec.GCMParameterSpec
  * is `nonce || ciphertext+tag`, matching the [EncryptedPayload] wire format used
  * by the Android client, the web client, and the server.
  */
-class CryptoManager(private val keyManager: KeyManager) {
+class CryptoManager(private val keyManager: KeyManager) : Cryptor {
 
     companion object {
         private const val NONCE_SIZE = 12
@@ -26,7 +40,7 @@ class CryptoManager(private val keyManager: KeyManager) {
     }
 
     /** Encrypt [plaintext] with a fresh random nonce. Returns `nonce || ciphertext+tag`. */
-    fun encrypt(plaintext: ByteArray): ByteArray {
+    override fun encrypt(plaintext: ByteArray): ByteArray {
         val key = keyManager.loadKey() ?: throw IllegalStateException("Encryption key not available")
         val nonce = ByteArray(NONCE_SIZE)
         SecureRandom().nextBytes(nonce)
@@ -39,7 +53,7 @@ class CryptoManager(private val keyManager: KeyManager) {
         return EncryptedPayload(nonce, ciphertext).toByteArray()
     }
 
-    fun decrypt(data: ByteArray): ByteArray {
+    override fun decrypt(data: ByteArray): ByteArray {
         val key = keyManager.loadKey() ?: throw IllegalStateException("Encryption key not available")
         val payload = EncryptedPayload.fromByteArray(data)
 

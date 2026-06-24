@@ -523,8 +523,6 @@ async fn load_encrypted_photo_bytes(
     encrypted_blob_id: &str,
     user_id: &str,
 ) -> anyhow::Result<Vec<u8>> {
-    use base64::Engine;
-
     let key = crate::crypto::load_wrapped_key(pool, jwt_secret)
         .await
         .map_err(|e| anyhow::anyhow!("load wrapped key: {e}"))?
@@ -542,19 +540,14 @@ async fn load_encrypted_photo_bytes(
         .await
         .map_err(|e| anyhow::anyhow!("read encrypted blob: {e}"))?;
 
-    let plaintext = tokio::task::spawn_blocking(move || crate::crypto::decrypt(&key, &enc_data))
-        .await
-        .map_err(|e| anyhow::anyhow!("decrypt panicked: {e}"))?
-        .map_err(|e| anyhow::anyhow!("decrypt failed: {e}"))?;
-
-    let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
-        .map_err(|e| anyhow::anyhow!("blob envelope JSON: {e}"))?;
-    let data_b64 = envelope["data"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("missing 'data' field in blob envelope"))?;
-    let raw_bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_b64)
-        .map_err(|e| anyhow::anyhow!("base64 decode: {e}"))?;
+    // Format-aware: handles both the legacy monolithic envelope and the v2
+    // chunked container — see blobs/chunked.rs.
+    let raw_bytes = tokio::task::spawn_blocking(move || {
+        crate::blobs::chunked::decrypt_photo_blob(&key, &enc_data)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("decrypt panicked: {e}"))?
+    .map_err(|e| anyhow::anyhow!("decrypt failed: {e}"))?;
 
     Ok(raw_bytes)
 }

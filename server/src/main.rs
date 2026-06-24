@@ -258,7 +258,11 @@ async fn main() -> anyhow::Result<()> {
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
-                .allow_headers(Any),
+                .allow_headers(Any)
+                // Expose custom response headers (e.g. X-Blob-Format) to
+                // cross-origin browser clients. Safe under stateless JWT auth
+                // with no cookies.
+                .expose_headers(Any),
         )
         .layer(TraceLayer::new_for_http())
         // ── HTTP response compression (gzip + brotli) ────────────────────

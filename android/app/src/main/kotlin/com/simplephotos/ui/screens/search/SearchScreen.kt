@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.R
 import com.simplephotos.data.remote.dto.SearchResult
 import com.simplephotos.ui.components.ActiveTab
@@ -245,11 +245,7 @@ private fun SearchResultTile(
     ) {
         if (imageModel != null) {
             AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(imageModel)
-                    .crossfade(true)
-                    .size(512)
-                    .build(),
+                model = rememberThumbnailRequest(data = imageModel, size = 512),
                 contentDescription = result.filename,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop

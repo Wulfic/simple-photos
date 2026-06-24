@@ -215,6 +215,10 @@ fn admin_routes() -> Router<AppState> {
         // Server-side import
         .route("/admin/import/scan", get(crate::setup::import::import_scan))
         .route("/admin/import/file", get(crate::setup::import::import_file))
+        .route(
+            "/admin/import/ingest",
+            post(crate::setup::import::import_ingest),
+        )
 }
 
 // ── Google Photos / metadata import ──────────────────────────────────

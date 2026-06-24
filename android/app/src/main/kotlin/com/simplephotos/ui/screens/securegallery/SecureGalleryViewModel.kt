@@ -4,6 +4,8 @@
  */
 package com.simplephotos.ui.screens.securegallery
 
+import com.simplephotos.data.decodeThumbEnvelope
+
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +30,17 @@ import java.io.File
 import javax.inject.Inject
 
 private const val TAG = "SecureGalleryVM"
+
+/**
+ * A selectable source shown in the secure "Add Photos" album browser
+ * (the "Albums" tab). [coverThumbPath] is an optional cached-thumbnail file
+ * path for a small cover preview; null falls back to a folder icon.
+ */
+data class PickerAlbum(
+    val id: String,
+    val name: String,
+    val coverThumbPath: String? = null,
+)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ViewModel
@@ -73,11 +86,17 @@ class SecureGalleryViewModel @Inject constructor(
     // album / smart album, mirroring the web flow. `pickerAlbums` are the
     // (id, displayName) sources offered alongside the implicit "All Photos";
     // `pickerPhotos` is the resolved list for the currently-selected source.
-    var pickerAlbums by mutableStateOf<List<Pair<String, String>>>(emptyList())
+    var pickerAlbums by mutableStateOf<List<PickerAlbum>>(emptyList())
         private set
     var pickerSourceId by mutableStateOf("all")
         private set
     var pickerPhotos by mutableStateOf<List<PhotoEntity>>(emptyList())
+        private set
+
+    // Blob/photo/encrypted IDs that already live in ANY secure gallery. The
+    // picker hides these so a photo already secured can't be added a second
+    // time — same set the main gallery uses to hide secured originals.
+    var secureBlobIds by mutableStateOf<Set<String>>(emptySet())
         private set
 
     var error by mutableStateOf<String?>(null)
@@ -170,17 +189,34 @@ class SecureGalleryViewModel @Inject constructor(
                 pickerPhotos = all
                 Log.d(TAG, "Loaded ${all.size} photos for picker")
 
-                // Offer album sources: the user's own albums first, then the
-                // smart albums that actually have content (skip empty ones so the
-                // chip row stays uncluttered).
+                // Photos already in ANY secure gallery must not be offered for
+                // re-adding. This is the same id set the main gallery filters on
+                // (see GalleryScreen) — originals, clones, and encrypted blobs.
+                secureBlobIds = withContext(Dispatchers.IO) {
+                    secureGalleryRepository.getSecureBlobIds()
+                }
+                Log.d(TAG, "Loaded ${secureBlobIds.size} secure blob ids for dedup")
+
+                // Build the "Albums" browser sources: the user's own albums, then
+                // the non-empty smart albums (Recently Added is its own top-level
+                // chip, so it's intentionally not duplicated here).
+                val byLocalId = all.associateBy { it.localId }
                 val userAlbums = withContext(Dispatchers.IO) {
                     albumRepository.getAllAlbums().first()
                 }
-                val sources = mutableListOf<Pair<String, String>>()
-                for (a in userAlbums) sources.add(a.localId to a.name)
-                if (all.isNotEmpty()) sources.add("smart-recents" to "Recently Added")
-                if (all.any { it.isFavorite }) sources.add("smart-favorites" to "Favorites")
-                if (all.any { it.mediaType == "video" }) sources.add("smart-videos" to "Videos")
+                val sources = mutableListOf<PickerAlbum>()
+                for (a in userAlbums) {
+                    val cover = a.coverPhotoLocalId?.let { byLocalId[it]?.thumbnailPath }
+                    sources.add(PickerAlbum(a.localId, a.name, cover))
+                }
+                if (all.any { it.isFavorite }) {
+                    sources.add(PickerAlbum("smart-favorites", "Favorites",
+                        all.firstOrNull { it.isFavorite }?.thumbnailPath))
+                }
+                if (all.any { it.mediaType == "video" }) {
+                    sources.add(PickerAlbum("smart-videos", "Videos",
+                        all.firstOrNull { it.mediaType == "video" }?.thumbnailPath))
+                }
                 pickerAlbums = sources
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to load photos for picker", e)
@@ -285,22 +321,41 @@ class SecureGalleryViewModel @Inject constructor(
     }
 
     /**
-     * Remove a single item from the selected secure gallery. The original
-     * photo becomes visible again in the regular gallery (mirrors the web's
-     * per-item removal).
+     * Remove a single item (or whole burst) from the selected secure gallery.
+     * Delegates to [removeItems] so burst stacks are removed in full.
      */
-    fun removeItem(item: SecureGalleryItem) {
+    fun removeItem(item: SecureGalleryItem) = removeItems(listOf(item))
+
+    /**
+     * Remove items from the selected secure gallery, returning their originals
+     * to the regular gallery (mirrors the web's per-item removal).
+     *
+     * Burst-aware: any target that belongs to a burst pulls in ALL sibling
+     * frames sharing its `burst_id`. The grid and viewer collapse a burst to a
+     * single tile/page, so a naive single-item delete would strand the other
+     * frames in the album while only the cover returned to the gallery — the
+     * exact bug this fixes.
+     */
+    fun removeItems(targets: List<SecureGalleryItem>) {
         val gallery = selectedGallery ?: return
+        if (targets.isEmpty()) return
+        val burstIds = targets.mapNotNull { it.burstId }.filter { it.isNotEmpty() }.toSet()
+        val toRemove = (targets + items.filter { !it.burstId.isNullOrEmpty() && it.burstId in burstIds })
+            .distinctBy { it.id }
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    secureGalleryRepository.removeItem(gallery.id, item.id)
+                    coroutineScope {
+                        toRemove.map { item ->
+                            async { secureGalleryRepository.removeItem(gallery.id, item.id) }
+                        }.awaitAll()
+                    }
                 }
-                Log.i(TAG, "Removed item ${item.id} from gallery ${gallery.id}")
+                Log.i(TAG, "Removed ${toRemove.size} item(s) from gallery ${gallery.id}")
                 loadItems(gallery.id)
                 loadGalleries()
             } catch (e: Exception) {
-                Log.e(TAG, "Remove item failed: ${item.id}", e)
+                Log.e(TAG, "Remove items failed (${toRemove.size} targets)", e)
                 error = "Remove failed: ${e.message}"
             }
         }
@@ -370,11 +425,10 @@ class SecureGalleryViewModel @Inject constructor(
             Log.d(TAG, "downloadThumb: using encryptedThumbBlobId=$encryptedThumbBlobId for blobId=$blobId")
             try {
                 val thumbBytes = photoRepository.downloadAndDecryptBlob(encryptedThumbBlobId)
-                val payload = org.json.JSONObject(String(thumbBytes, Charsets.UTF_8))
-                val dataBase64 = payload.getString("data")
-                val decoded = android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
-                Log.d(TAG, "downloadThumb: direct thumb success, ${decoded.size} bytes")
-                return@withContext decoded
+                decodeThumbEnvelope(thumbBytes)?.let { decoded ->
+                    Log.d(TAG, "downloadThumb: direct thumb success, ${decoded.size} bytes")
+                    return@withContext decoded
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "downloadThumb: direct thumb download failed for $encryptedThumbBlobId, trying /thumb endpoint", e)
             }
@@ -385,11 +439,10 @@ class SecureGalleryViewModel @Inject constructor(
         try {
             val thumbBytes = photoRepository.downloadAndDecryptThumbBlob(blobId)
             if (thumbBytes != null) {
-                val payload = org.json.JSONObject(String(thumbBytes, Charsets.UTF_8))
-                val dataBase64 = payload.getString("data")
-                val decoded = android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
-                Log.d(TAG, "downloadThumb: /thumb endpoint success, ${decoded.size} bytes")
-                return@withContext decoded
+                decodeThumbEnvelope(thumbBytes)?.let { decoded ->
+                    Log.d(TAG, "downloadThumb: /thumb endpoint success, ${decoded.size} bytes")
+                    return@withContext decoded
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "downloadThumb: /thumb endpoint failed for $blobId", e)

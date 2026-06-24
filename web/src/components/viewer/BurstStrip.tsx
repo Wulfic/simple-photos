@@ -61,65 +61,72 @@ export default function BurstStrip({ burstId, currentPhotoId, onSelectFrame, vis
     // its decoded thumbnails for the lifetime of the tab.
     const createdUrls: string[] = [];
 
+    // Patch a single frame's thumbnail into state once it resolves, matched by id.
+    const patchThumb = (frameId: string, thumbUrl: string) => {
+      if (cancelled) return;
+      createdUrls.push(thumbUrl);
+      setFrames((prev) => prev.map((f) => (f.id === frameId ? { ...f, thumbUrl } : f)));
+    };
+
     (async () => {
       try {
         if (secureFrames) {
-          // Secure-gallery mode — frames are already known (passed in), just
-          // resolve each thumbnail: IDB cache first, then the encrypted thumb
-          // blob (download + decrypt), same fallback chain useThumbnailLoader
-          // uses for secure tiles.
-          const loadedFrames: BurstFrame[] = [];
-          for (const sf of secureFrames) {
-            let thumbUrl: string | null = null;
-            const cached = await db.photos.get(sf.blob_id);
-            if (cached?.thumbnailData) {
-              const mime = cached.thumbnailMimeType || "image/jpeg";
-              thumbUrl = URL.createObjectURL(new Blob([cached.thumbnailData], { type: mime }));
-              createdUrls.push(thumbUrl);
-            } else if (sf.encrypted_thumb_blob_id) {
+          // Secure-gallery mode — frames are already known (passed in). Show
+          // the strip IMMEDIATELY with placeholder tiles, then resolve each
+          // thumbnail (IDB cache → encrypted-thumb blob decrypt) in PARALLEL,
+          // patching them in as they arrive. Previously every frame was
+          // decrypted sequentially before the strip rendered at all, so a large
+          // burst (dozens of frames) made the strip look like it never appeared.
+          if (!cancelled) {
+            setFrames(secureFrames.map((sf) => ({ id: sf.blob_id, filename: sf.blob_id, thumbUrl: null })));
+            setLoading(false);
+          }
+          await Promise.all(
+            secureFrames.map(async (sf) => {
               try {
-                const encData = await api.blobs.download(sf.encrypted_thumb_blob_id);
-                const plaintext = await decrypt(encData);
-                const json = JSON.parse(new TextDecoder().decode(plaintext));
-                const b64 = json.data as string;
-                if (b64) {
-                  const binary = atob(b64);
-                  const bytes = new Uint8Array(binary.length);
-                  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                  thumbUrl = URL.createObjectURL(new Blob([bytes], { type: json.mime_type || "image/jpeg" }));
-                  createdUrls.push(thumbUrl);
+                const cached = await db.photos.get(sf.blob_id);
+                if (cached?.thumbnailData) {
+                  const mime = cached.thumbnailMimeType || "image/jpeg";
+                  patchThumb(sf.blob_id, URL.createObjectURL(new Blob([cached.thumbnailData], { type: mime })));
+                  return;
+                }
+                if (sf.encrypted_thumb_blob_id) {
+                  const encData = await api.blobs.download(sf.encrypted_thumb_blob_id);
+                  const plaintext = await decrypt(encData);
+                  const json = JSON.parse(new TextDecoder().decode(plaintext));
+                  const b64 = json.data as string;
+                  if (b64) {
+                    const binary = atob(b64);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                    patchThumb(sf.blob_id, URL.createObjectURL(new Blob([bytes], { type: json.mime_type || "image/jpeg" })));
+                  }
                 }
               } catch (e) {
                 console.warn("[BurstStrip] failed to load secure thumb:", e); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
               }
-            }
-            loadedFrames.push({ id: sf.blob_id, filename: sf.blob_id, thumbUrl });
-          }
-          if (!cancelled) setFrames(loadedFrames);
+            }),
+          );
         } else {
           const burstPhotos = await api.photos.burstFrames(burstId);
           if (cancelled) return;
 
-          // Load thumbnails for each frame from IDB cache or server thumb endpoint
-          const loadedFrames: BurstFrame[] = [];
-          for (const bp of burstPhotos) {
-            let thumbUrl: string | null = null;
-
-            // Check IDB first (photo may be cached locally)
-            const cached = await db.photos.get(bp.id);
-            if (cached?.thumbnailData) {
-              const mime = cached.thumbnailMimeType || "image/jpeg";
-              thumbUrl = URL.createObjectURL(new Blob([cached.thumbnailData], { type: mime }));
-              createdUrls.push(thumbUrl);
-            } else if (bp.thumb_path) {
-              // Use server thumbnail endpoint
-              thumbUrl = api.photos.thumbUrl(bp.id);
-            }
-
-            loadedFrames.push({ id: bp.id, filename: bp.filename, thumbUrl });
-          }
-
-          if (!cancelled) setFrames(loadedFrames);
+          // Show frames immediately, then resolve thumbnails (IDB cache → server
+          // thumb endpoint) in parallel and patch them in.
+          setFrames(burstPhotos.map((bp) => ({ id: bp.id, filename: bp.filename, thumbUrl: null })));
+          setLoading(false);
+          await Promise.all(
+            burstPhotos.map(async (bp) => {
+              const cached = await db.photos.get(bp.id);
+              if (cached?.thumbnailData) {
+                const mime = cached.thumbnailMimeType || "image/jpeg";
+                patchThumb(bp.id, URL.createObjectURL(new Blob([cached.thumbnailData], { type: mime })));
+              } else if (bp.thumb_path) {
+                // Server thumbnail endpoint — a plain URL, no object URL to revoke.
+                if (!cancelled) setFrames((prev) => prev.map((f) => (f.id === bp.id ? { ...f, thumbUrl: api.photos.thumbUrl(bp.id) } : f)));
+              }
+            }),
+          );
         }
       } catch (e) {
         console.error("[BurstStrip] failed to load burst frames:", e);

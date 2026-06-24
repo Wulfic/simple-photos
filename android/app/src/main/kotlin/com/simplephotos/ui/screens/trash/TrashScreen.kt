@@ -20,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -28,7 +27,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.TileSelectionCircle
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.remote.dto.TrashItemDto
 import com.simplephotos.ui.components.ActiveTab
 import com.simplephotos.ui.components.AppHeader
@@ -309,11 +309,7 @@ private fun TrashTile(
     ) {
         // Thumbnail
         AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(thumbSource)
-                .crossfade(true)
-                .size(256)
-                .build(),
+            model = rememberThumbnailRequest(data = thumbSource, size = 256),
             contentDescription = item.filename,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
@@ -348,31 +344,7 @@ private fun TrashTile(
 
         // Selection circle (top-right) — always shown, empty when not selected
         if (isSelectionMode) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (isSelected) Color(0xFF22C55E) else Color.White.copy(alpha = 0.8f)
-                    )
-                    .border(
-                        width = 2.dp,
-                        color = if (isSelected) Color(0xFF22C55E) else Color.Gray.copy(alpha = 0.5f),
-                        shape = CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isSelected) {
-                    Icon(
-                        Icons.Default.Check,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
+            TileSelectionCircle(isSelected = isSelected)
         }
     }
 }

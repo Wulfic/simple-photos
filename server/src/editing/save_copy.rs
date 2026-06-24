@@ -169,23 +169,17 @@ pub async fn duplicate_photo(
         let (blob_storage_path,) = blob_row.ok_or(AppError::NotFound)?;
 
         let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
-        let plaintext = {
+        // Format-aware: handles both the legacy monolithic envelope and the v2
+        // chunked container — see blobs/chunked.rs.
+        let raw_bytes = {
             let k = enc_key;
-            tokio::task::spawn_blocking(move || crypto::decrypt(&k, &enc_data))
-                .await
-                .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
-                .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?
+            tokio::task::spawn_blocking(move || {
+                crate::blobs::chunked::decrypt_photo_blob(&k, &enc_data)
+            })
+            .await
+            .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+            .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?
         };
-
-        // Parse JSON envelope and extract the base64 "data" field
-        let envelope: serde_json::Value = serde_json::from_slice(&plaintext)
-            .map_err(|e| AppError::Internal(format!("Invalid blob envelope JSON: {e}")))?;
-        let data_b64 = envelope["data"]
-            .as_str()
-            .ok_or_else(|| AppError::Internal("Missing 'data' field in blob envelope".into()))?;
-        let raw_bytes =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
-                .map_err(|e| AppError::Internal(format!("Base64 decode failed: {e}")))?;
 
         // Write to a temp file with proper extension for ffmpeg/image crate.
         // Filename embeds the freshly-generated `new_id` (UUID), preventing

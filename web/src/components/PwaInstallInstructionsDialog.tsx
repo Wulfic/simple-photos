@@ -8,7 +8,7 @@
  * actionable path to install the PWA. This dialog detects the active
  * browser/platform and shows the matching manual install steps.
  */
-import { useEffect } from "react";
+import { Modal } from "./ui";
 
 export type InstallEnv =
   | "brave"
@@ -161,33 +161,13 @@ export default function PwaInstallInstructionsDialog({
   open: boolean;
   onClose: () => void;
 }) {
-  // Close on Escape for keyboard users.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   const env = detectInstallEnv();
   const { title, steps, note } = instructionsFor(env);
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="pwa-install-title"
-    >
-      <div
-        className="card shadow-pop max-w-md w-full p-5"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} size="md" panelClassName="p-5">
         <div className="flex items-start justify-between mb-3">
           <h3
             id="pwa-install-title"
@@ -224,7 +204,6 @@ export default function PwaInstallInstructionsDialog({
             Got it
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

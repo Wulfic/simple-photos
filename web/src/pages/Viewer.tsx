@@ -29,7 +29,7 @@ import useViewerEdit, { EDIT_CROP_PADDING_SCALE, cropFitStyle } from "../hooks/u
 import useSwipeNavigation from "../hooks/useSwipeNavigation";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
 import useSlideshow from "../hooks/useSlideshow";
-import Slideshow from "../components/viewer/Slideshow";
+import SlideshowHost from "../components/viewer/SlideshowHost";
 import { diagnosticLogger } from "../utils/diagnosticLogger";
 import { castMedia, getCastState, subscribeCastState } from "../utils/cast";
 import { useAuthStore } from "../store/auth";
@@ -48,6 +48,12 @@ interface ViewerLocationState {
   secureGallery?: boolean;
   /** When opened from inside a secure gallery, the gallery id so back returns to it */
   secureAlbumId?: string;
+  /**
+   * Burst group of the photo being opened, carried across burst-frame
+   * navigation so the filmstrip survives a hop to a frame the IDB cache
+   * doesn't hold (e.g. browser-imported bursts cache only the cover).
+   */
+  burstId?: string;
   /**
    * Every item in the secure gallery the photo was opened from (un-collapsed —
    * includes every frame of every burst). Secured photos never sync into the
@@ -87,6 +93,8 @@ export default function Viewer() {
   const secureGallery = navState.secureGallery ?? false;
   const secureAlbumId = navState.secureAlbumId;
   const secureItems = navState.secureItems;
+  // Burst context passed when hopping between frames via the filmstrip.
+  const navBurstId = navState.burstId;
   const hasPrev = !!photoIds && currentIndex > 0;
   const hasNext = !!photoIds && currentIndex < photoIds.length - 1;
   // Only real user-created albums support "remove from album". Smart/special
@@ -344,10 +352,15 @@ export default function Viewer() {
               setPanoImageDims({ width: secureItem.width, height: secureItem.height });
             }
           }
+        } else if (navBurstId) {
+          // Regular burst frame the IDB cache doesn't hold (browser-imported
+          // bursts cache only the cover). Restore the burst context the
+          // filmstrip passed so the strip stays up and keeps switching frames.
+          setBurstId(navBurstId);
         }
       }
     }).catch(() => { setCropData(null); });
-  }, [id, secureGallery, secureItems]);
+  }, [id, secureGallery, secureItems, navBurstId]);
 
   async function onToggleFavorite() {
     const result = await handleToggleFavorite();
@@ -922,10 +935,12 @@ export default function Viewer() {
               // Navigate to the selected burst frame
               if (frameId === id) return;
               // Burst-frame switch is intra-viewer too — skip the crossfade.
+              // Pass burstId so the filmstrip survives hops to frames the IDB
+              // cache doesn't hold.
               navigate(`/photo/${frameId}`, {
                 replace: true,
                 viewTransition: false,
-                state: { photoIds, currentIndex, albumId, secureGallery, secureAlbumId, secureItems } satisfies ViewerLocationState,
+                state: { photoIds, currentIndex, albumId, secureGallery, secureAlbumId, secureItems, burstId } satisfies ViewerLocationState,
               });
             }}
           />
@@ -985,25 +1000,7 @@ export default function Viewer() {
       )}
 
       {/* Slideshow overlay */}
-      {slideshow.isActive && (
-        <Slideshow
-          currentBlobId={slideshow.currentBlobId}
-          isPlaying={slideshow.isPlaying}
-          currentSlide={slideshow.currentSlide}
-          totalSlides={slideshow.totalSlides}
-          shuffleEnabled={slideshow.shuffleEnabled}
-          intervalMs={slideshow.intervalMs}
-          transition={slideshow.transition}
-          direction={slideshow.direction}
-          onTogglePlay={slideshow.togglePlay}
-          onNext={slideshow.next}
-          onPrev={slideshow.prev}
-          onToggleShuffle={slideshow.toggleShuffle}
-          onSetSpeed={slideshow.setSpeed}
-          onSetTransition={slideshow.setTransition}
-          onExit={slideshow.stop}
-        />
-      )}
+      <SlideshowHost slideshow={slideshow} />
 
     </div>
   );

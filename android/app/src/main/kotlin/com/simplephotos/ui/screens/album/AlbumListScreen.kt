@@ -30,7 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.SharedAlbumInfo
@@ -464,10 +464,7 @@ private fun AlbumCard(
                     }
                     if (thumbModel != null) {
                         AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(thumbModel)
-                                .crossfade(true)
-                                .build(),
+                            model = rememberThumbnailRequest(data = thumbModel),
                             contentDescription = album.name,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
@@ -544,10 +541,7 @@ private fun SmartAlbumCard(
                     }
                     if (thumbModel != null) {
                         AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(thumbModel)
-                                .crossfade(true)
-                                .build(),
+                            model = rememberThumbnailRequest(data = thumbModel),
                             contentDescription = label,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
@@ -752,10 +746,7 @@ private fun DiscoverThumbCard(
             ) {
                 if (!thumbUrl.isNullOrEmpty()) {
                     AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(thumbUrl)
-                            .crossfade(true)
-                            .build(),
+                        model = rememberThumbnailRequest(data = thumbUrl),
                         contentDescription = primary,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()

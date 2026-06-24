@@ -9,10 +9,8 @@
  */
 import { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "../../api/client";
-import { decrypt } from "../../crypto/crypto";
+import { decryptPhotoBlobToBlob } from "../../crypto/blobEnvelope";
 import { db } from "../../db";
-import { base64ToUint8Array } from "../../utils/media";
-import type { MediaPayload } from "../../types/media";
 import SlideshowTransitions from "./SlideshowTransitions";
 import type { SlideshowTransition } from "../../hooks/useSlideshow";
 import { castMedia, getCastState } from "../../utils/cast";
@@ -124,7 +122,7 @@ export default function Slideshow({
         const dbCached = await db.photos.get(currentBlobId).catch(() => undefined);
         if (cancelled) return;
 
-        let bytes: ArrayBuffer;
+        let blob: Blob;
         let mimeType: string;
         let mediaType: "photo" | "gif" | "video" | "audio";
         let filename: string;
@@ -142,7 +140,7 @@ export default function Slideshow({
           });
           if (cancelled) return;
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          bytes = await res.arrayBuffer();
+          blob = await res.blob();
           mimeType = res.headers.get("content-type") || dbCached.mimeType || "image/jpeg";
           mediaType = dbCached.mediaType;
           filename = dbCached.filename;
@@ -152,32 +150,34 @@ export default function Slideshow({
           const fetchId = dbCached?.storageBlobId || currentBlobId;
           const encrypted = await api.blobs.download(fetchId);
           if (cancelled) return;
-          const decrypted = await decrypt(encrypted);
+          // Format-aware: handles v1 monolithic + v2 chunked blobs; the Blob is
+          // built from per-chunk parts so a large video is never one contiguous
+          // JS allocation.
+          const decoded = await decryptPhotoBlobToBlob(encrypted);
           if (cancelled) return;
-          const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
-          bytes = base64ToUint8Array(payload.data).buffer as ArrayBuffer;
-          mimeType = payload.mime_type;
-          mediaType = (payload.media_type ?? "photo") as "photo" | "gif" | "video" | "audio";
-          filename = payload.filename;
+          blob = decoded.blob;
+          mimeType = decoded.payload.mime_type;
+          mediaType = (decoded.payload.media_type ?? "photo") as "photo" | "gif" | "video" | "audio";
+          filename = decoded.payload.filename;
         }
 
-        const blob = new Blob([bytes], { type: mimeType });
         const url = URL.createObjectURL(blob);
         if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current);
         prevUrlRef.current = url;
         setMediaUrl(url);
 
-        // Cache for future.  Skip caching for very large blobs to avoid
-        // blowing the IndexedDB quota.
-        if (bytes.byteLength < 50 * 1024 * 1024) {
+        // Cache for future.  Skip very large blobs (IndexedDB quota) — and only
+        // then materialize the bytes, so a big video never lands on the JS heap.
+        if (blob.size < 50 * 1024 * 1024) {
           try {
+            const data = await blob.arrayBuffer();
             await db.fullPhotos.put({
               photoId: currentBlobId,
               filename,
               mimeType,
               mediaType,
               isFavorite: dbCached?.isFavorite ?? false,
-              data: bytes,
+              data,
               cachedAt: Date.now(),
             });
           } catch { /* non-fatal */ }

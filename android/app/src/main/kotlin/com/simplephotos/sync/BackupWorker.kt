@@ -19,6 +19,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.simplephotos.crypto.ChunkedBlob
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
@@ -142,9 +143,50 @@ class BackupWorker @AssistedInject constructor(
 
                 try {
                     val uri = android.net.Uri.parse(localPath)
-                    val inputStream = applicationContext.contentResolver.openInputStream(uri)
-                    if (inputStream == null) {
-                        diag.warn(TAG, "Cannot open content URI — inaccessible", mapOf(
+
+                    // Decide the upload path by size BEFORE reading the file. Large
+                    // media (videos, the occasional huge photo) streams as a v2
+                    // chunked container with bounded heap; buffering it whole here
+                    // (read → base64 → JSON → encrypt, ~5×) is the phone-OOM bug
+                    // this guards against. Small media keeps the simple v1 path.
+                    val sizeBytes = querySize(uri)
+                    val useChunked = sizeBytes >= ChunkedBlob.CHUNKED_THRESHOLD_BYTES
+                    if (sizeBytes < 0) {
+                        diag.warn(TAG, "Could not determine media size — using in-memory v1 path", mapOf(
+                            "localId" to photo.localId,
+                            "filename" to photo.filename,
+                            "uri" to localPath
+                        ))
+                    }
+
+                    // Small media is read once here (needed for thumbnail, EXIF,
+                    // subtype, and the v1 upload). Large media is never buffered —
+                    // photoData stays null and every step streams from the URI.
+                    val photoData: ByteArray? = if (useChunked) null else {
+                        val input = applicationContext.contentResolver.openInputStream(uri)
+                        if (input == null) {
+                            diag.warn(TAG, "Cannot open content URI — inaccessible", mapOf(
+                                "localId" to photo.localId,
+                                "filename" to photo.filename,
+                                "uri" to localPath
+                            ))
+                            failed++
+                            continue
+                        }
+                        input.use { it.readBytes() }
+                    }
+
+                    // ── Content hash dedup ─────────────────────────────
+                    // Short content hash (sha256(original)[..6]) keys cross-session
+                    // dedup. Small media hashes the buffered bytes; large media
+                    // streams a hash pass so it still never holds the whole file.
+                    val digestBytes = if (photoData != null) {
+                        java.security.MessageDigest.getInstance("SHA-256").digest(photoData)
+                    } else {
+                        streamDigest(uri)
+                    }
+                    if (digestBytes == null) {
+                        diag.warn(TAG, "Cannot read content URI for hashing — inaccessible", mapOf(
                             "localId" to photo.localId,
                             "filename" to photo.filename,
                             "uri" to localPath
@@ -152,15 +194,7 @@ class BackupWorker @AssistedInject constructor(
                         failed++
                         continue
                     }
-                    val photoData = inputStream.use { it.readBytes() }
-
-                    // ── Content hash dedup ─────────────────────────────
-                    // Compute a short content hash and check if we've already
-                    // uploaded identical content in this session or a previous one.
-                    val contentHash = java.security.MessageDigest.getInstance("SHA-256")
-                        .digest(photoData)
-                        .take(6)
-                        .joinToString("") { "%02x".format(it) }
+                    val contentHash = digestBytes.take(6).joinToString("") { "%02x".format(it) }
 
                     val isDupSession = contentHash in uploadedHashes
                     val existingSynced = if (!isDupSession) db.photoDao().getSyncedByHash(contentHash) else null
@@ -175,7 +209,7 @@ class BackupWorker @AssistedInject constructor(
                                 // Identical content ⇒ same subtype. Detect from the
                                 // plaintext bytes so dedup copies still classify
                                 // (mirrors the main upload path in PhotoRepository).
-                                val dedupSubtype = if ((photo.mediaType ?: "photo") == "photo") {
+                                val dedupSubtype = if (photoData != null && (photo.mediaType ?: "photo") == "photo") {
                                     com.simplephotos.data.media.MediaSubtypeDetector.detect(
                                         photoData, photo.width, photo.height
                                     )
@@ -233,34 +267,36 @@ class BackupWorker @AssistedInject constructor(
                         db.photoDao().update(photo.copy(photoHash = contentHash))
                     }
 
-                    diag.debug(TAG, "Read ${photoData.size} bytes from content URI", mapOf(
+                    diag.debug(TAG, "Prepared ${photo.filename} for upload", mapOf(
                         "localId" to photo.localId,
                         "filename" to photo.filename,
-                        "sizeBytes" to photoData.size.toString(),
+                        "sizeBytes" to sizeBytes.toString(),
+                        "path" to (if (useChunked) "chunked-v2" else "inline-v1"),
                         "mediaType" to (photo.mediaType ?: "unknown"),
                         "mimeType" to photo.mimeType
                     ))
 
-                    // Generate thumbnail based on media type.
-                    // Thumbnails preserve the original aspect ratio (longest edge
-                    // scaled to 256px) so the justified grid doesn't double-crop
-                    // portrait photos.
+                    // Generate thumbnail based on media type. Thumbnails preserve
+                    // the original aspect ratio (longest edge scaled to 512px) so
+                    // the justified grid doesn't double-crop portrait photos. Large
+                    // (chunked) media has no buffered bytes, so it decodes a
+                    // downsampled thumbnail straight from the URI stream.
                     val thumbnailData = when (photo.mediaType) {
                         "video" -> generateVideoThumbnail(uri)
-                        "gif" -> {
+                        "gif" -> if (photoData != null) {
                             // For GIFs, decode first frame
                             val opts = BitmapFactory.Options().apply { inSampleSize = 1 }
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size, opts)
                             // fitThumbnail recycles the original if it creates a new scaled bitmap;
                             // bitmapToJpeg recycles whatever it receives — no extra recycle needed.
                             bitmapToJpeg(fitThumbnail(bitmap, 512))
-                        }
-                        else -> {
+                        } else generateDownsampledImageThumbnail(uri)
+                        else -> if (photoData != null) {
                             // Photos: decode, apply EXIF rotation, then thumbnail
                             val bitmap = BitmapFactory.decodeByteArray(photoData, 0, photoData.size)
                             val rotated = applyExifRotation(bitmap, photoData)
                             bitmapToJpeg(fitThumbnail(rotated, 512))
-                        }
+                        } else generateDownsampledImageThumbnail(uri)
                     }
 
                     if (thumbnailData != null) {
@@ -286,11 +322,7 @@ class BackupWorker @AssistedInject constructor(
                     // sensor dimensions (width > height for a portrait-EXIF photo).
                     val correctedPhoto = if (photo.mediaType == "photo") {
                         try {
-                            val exif = androidx.exifinterface.media.ExifInterface(photoData.inputStream())
-                            val orient = exif.getAttributeInt(
-                                androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
-                                androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL
-                            )
+                            val orient = readExifOrientation(uri, photoData)
                             val needsSwap = orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90
                                     || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270
                                     || orient == androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSPOSE
@@ -306,12 +338,29 @@ class BackupWorker @AssistedInject constructor(
                     // Upload (encrypted mode bundles thumbnail inside the
                     // encrypted payload, so we must have a thumbnail to proceed)
                     if (thumbnailData != null) {
-                        diag.info(TAG, "Uploading photo (encrypted)", mapOf(
+                        diag.info(TAG, "Uploading photo (encrypted, ${if (useChunked) "chunked v2" else "inline v1"})", mapOf(
                             "localId" to correctedPhoto.localId,
                             "filename" to correctedPhoto.filename,
-                            "sizeBytes" to photoData.size.toString()
+                            "sizeBytes" to sizeBytes.toString()
                         ))
-                        photoRepository.uploadPhoto(correctedPhoto, photoData, thumbnailData)
+                        if (useChunked) {
+                            // Stream straight from the URI to a v2 chunked container —
+                            // peak heap ≈ one 4 MiB chunk, no matter the file size.
+                            photoRepository.uploadPhotoChunked(
+                                correctedPhoto,
+                                sizeBytes,
+                                openSource = {
+                                    applicationContext.contentResolver.openInputStream(uri)
+                                        ?: throw java.io.IOException("Cannot open $uri for chunked upload")
+                                },
+                                thumbnailData = thumbnailData,
+                            )
+                        } else {
+                            // Small media: the buffered bytes are guaranteed present
+                            // on this path (useChunked == false ⇒ photoData != null).
+                            val data = requireNotNull(photoData) { "inline upload path requires buffered bytes" }
+                            photoRepository.uploadPhoto(correctedPhoto, data, thumbnailData)
+                        }
                         uploadedHashes.add(contentHash)
                         diag.info(TAG, "Upload succeeded", mapOf(
                             "localId" to photo.localId,
@@ -425,28 +474,159 @@ class BackupWorker @AssistedInject constructor(
      */
     private fun applyExifRotation(bitmap: Bitmap?, imageBytes: ByteArray): Bitmap? {
         bitmap ?: return null
+        val orientation = try {
+            ExifInterface(java.io.ByteArrayInputStream(imageBytes))
+                .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } catch (_: Exception) {
+            return bitmap
+        }
+        return rotateBitmap(bitmap, orientation)
+    }
+
+    /**
+     * Apply an EXIF [orientation] (rotation/flip) to [bitmap], recycling the
+     * source when a new bitmap is produced. Shared by the in-memory
+     * ([applyExifRotation]) and streamed ([generateDownsampledImageThumbnail])
+     * thumbnail paths.
+     */
+    private fun rotateBitmap(bitmap: Bitmap?, orientation: Int): Bitmap? {
+        bitmap ?: return null
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.setRotate(270f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(270f)
+            else -> return bitmap
+        }
         return try {
-            val exif = ExifInterface(java.io.ByteArrayInputStream(imageBytes))
-            val orientation = exif.getAttributeInt(
-                ExifInterface.TAG_ORIENTATION,
-                ExifInterface.ORIENTATION_NORMAL
-            )
-            val matrix = Matrix()
-            when (orientation) {
-                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
-                ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
-                ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
-                ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }
-                ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
-                ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.setRotate(270f); matrix.postScale(-1f, 1f) }
-                ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(270f)
-                else -> return bitmap
-            }
             val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
             if (rotated !== bitmap) bitmap.recycle()
             rotated
         } catch (_: Exception) {
             bitmap
+        }
+    }
+
+    /**
+     * Read EXIF orientation either from already-buffered [buffered] bytes (small
+     * media) or by streaming the header from [uri] (large media) — ExifInterface
+     * only reads the file head, so a multi-GB source is never buffered.
+     */
+    private fun readExifOrientation(uri: android.net.Uri, buffered: ByteArray?): Int {
+        return try {
+            val stream = if (buffered != null) {
+                java.io.ByteArrayInputStream(buffered)
+            } else {
+                applicationContext.contentResolver.openInputStream(uri)
+                    ?: return ExifInterface.ORIENTATION_NORMAL
+            }
+            stream.use {
+                ExifInterface(it).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            }
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+    }
+
+    /**
+     * Decode a downsampled, EXIF-rotated thumbnail straight from a large image's
+     * URI stream — without ever holding the full-resolution bitmap (or the file
+     * bytes) in memory. Two passes: bounds-only to pick an [calculateInSampleSize]
+     * factor, then a sampled decode capped near 1024px before fitting to 512px.
+     */
+    private fun generateDownsampledImageThumbnail(uri: android.net.Uri): ByteArray? {
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            applicationContext.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, bounds)
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                Log.w(TAG, "generateDownsampledImageThumbnail: could not read bounds for $uri")
+                return null
+            }
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, 1024)
+            }
+            val sampled = applicationContext.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, opts)
+            } ?: return null
+            val rotated = rotateBitmap(sampled, readExifOrientation(uri, null))
+            bitmapToJpeg(fitThumbnail(rotated, 512))
+        } catch (e: Exception) {
+            Log.w(TAG, "generateDownsampledImageThumbnail failed for $uri", e)
+            null
+        }
+    }
+
+    /**
+     * Largest power-of-two sample factor that keeps the decoded longest edge at or
+     * above [targetMaxEdge] — the standard BitmapFactory downsample idiom.
+     */
+    private fun calculateInSampleSize(width: Int, height: Int, targetMaxEdge: Int): Int {
+        var sample = 1
+        var longest = maxOf(width, height)
+        while (longest / 2 >= targetMaxEdge) {
+            longest /= 2
+            sample *= 2
+        }
+        return sample
+    }
+
+    /**
+     * Resolve a media item's byte size without reading its contents. Prefers the
+     * MediaStore `SIZE` column, falling back to the file-descriptor length.
+     * Returns `-1` when the size can't be determined (caller treats that as the
+     * conservative in-memory v1 path).
+     */
+    private fun querySize(uri: android.net.Uri): Long {
+        try {
+            applicationContext.contentResolver.query(
+                uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null
+            )?.use { c ->
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) return c.getLong(idx)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "querySize: column query failed for $uri: ${e.message}")
+        }
+        return try {
+            applicationContext.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                val len = afd.length
+                if (len == android.content.res.AssetFileDescriptor.UNKNOWN_LENGTH) -1L else len
+            } ?: -1L
+        } catch (e: Exception) {
+            Log.w(TAG, "querySize: fd length failed for $uri: ${e.message}")
+            -1L
+        }
+    }
+
+    /**
+     * Stream the full SHA-256 digest of a media item from [uri] without buffering
+     * it — used to compute the dedup content hash for large media. Returns null if
+     * the URI can't be opened.
+     */
+    private fun streamDigest(uri: android.net.Uri): ByteArray? {
+        return try {
+            applicationContext.contentResolver.openInputStream(uri)?.use { input ->
+                val md = java.security.MessageDigest.getInstance("SHA-256")
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    md.update(buf, 0, n)
+                }
+                md.digest()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "streamDigest failed for $uri: ${e.message}")
+            null
         }
     }
 

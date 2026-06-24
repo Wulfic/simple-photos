@@ -5,6 +5,7 @@
  * navigate the server's filesystem and pick a target folder.
  */
 import { useState } from "react";
+import { Modal } from "./ui";
 
 interface FolderBrowserModalProps {
   open: boolean;
@@ -44,8 +45,7 @@ export default function FolderBrowserModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="card shadow-pop w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
+    <Modal onClose={onClose} size="lg" panelClassName="max-h-[80vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-edge">
           <div>
@@ -179,7 +179,6 @@ export default function FolderBrowserModal({
             Select This Folder
           </button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

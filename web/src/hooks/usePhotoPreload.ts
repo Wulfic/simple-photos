@@ -7,9 +7,8 @@
 import { useRef, useCallback, useEffect } from "react";
 import { api } from "../api/client";
 import { db, type MediaType } from "../db";
-import { decrypt } from "../crypto/crypto";
-import { base64ToUint8Array } from "../utils/media";
-import type { MediaPayload, PreloadEntry } from "../types/media";
+import { decryptPhotoBlob } from "../crypto/blobEnvelope";
+import type { PreloadEntry } from "../types/media";
 export type { PreloadEntry };
 
 /**
@@ -67,8 +66,9 @@ export default function usePhotoPreload(
       }
 
       const encrypted = await api.blobs.download(fetchId);
-      const decrypted = await decrypt(encrypted);
-      const payload: MediaPayload = JSON.parse(new TextDecoder().decode(decrypted));
+      // Format-aware: handles both the v1 monolithic envelope and the v2 chunked
+      // container — see crypto/blobEnvelope.ts.
+      const { payload, bytes: mediaBytes } = await decryptPhotoBlob(encrypted);
 
       const resolvedType: MediaType =
         payload.media_type ??
@@ -80,7 +80,7 @@ export default function usePhotoPreload(
           ? "audio"
           : "photo");
 
-      const bytes = base64ToUint8Array(payload.data).buffer as ArrayBuffer;
+      const bytes = mediaBytes.buffer as ArrayBuffer;
       const blob = new Blob([bytes], { type: payload.mime_type });
       const url = URL.createObjectURL(blob);
 
