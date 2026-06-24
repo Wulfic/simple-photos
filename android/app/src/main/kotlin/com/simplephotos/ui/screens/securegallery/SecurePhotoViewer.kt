@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.remote.dto.SecureGalleryItem
 import com.simplephotos.ui.screens.viewer.MAX_PANO_DECODE_PX
 import com.simplephotos.ui.screens.viewer.PanoramaOverlay
@@ -203,14 +203,12 @@ private fun SecureMediaPage(
             else -> {
                 val data = decrypted!!
                 AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(data)
-                        .apply {
-                            // Capped decode (NOT ORIGINAL) for wide panos/360 — see MAX_PANO_DECODE_PX.
-                            if (isPano) { size(MAX_PANO_DECODE_PX); allowHardware(false) }
-                        }
-                        .crossfade(true)
-                        .build(),
+                    // Capped decode (NOT ORIGINAL) for wide panos/360 — see MAX_PANO_DECODE_PX.
+                    model = rememberThumbnailRequest(
+                        data = data,
+                        size = if (isPano) MAX_PANO_DECODE_PX else null,
+                        allowHardware = !isPano,
+                    ),
                     contentDescription = "Secure photo",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Fit,

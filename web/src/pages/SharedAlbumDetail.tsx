@@ -8,6 +8,7 @@ import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import AppHeader from "../components/AppHeader";
 import AppIcon from "../components/AppIcon";
+import DetailHeader from "../components/DetailHeader";
 import { useThumbnailSizeStore } from "../store/thumbnailSize";
 import { getErrorMessage } from "../utils/formatters";
 import { toast } from "../store/toast";
@@ -126,38 +127,32 @@ export default function SharedAlbumDetail() {
 
       <main className="p-4">
         {/* Sub-header with album name + actions */}
-        <div className="flex items-center justify-between gap-3 mb-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              onClick={() => navigate("/albums")}
-              className="text-fg-muted hover:text-fg transition-colors shrink-0"
-            >
-              <AppIcon name="back-arrow" size="w-5 h-5" />
-            </button>
-            <h2 className="text-xl font-semibold truncate">{albumName || "Shared Album"}</h2>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setShowMembers(!showMembers)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
-            >
-              <AppIcon name="shared" />
-              <span>{members.length}</span>
-            </button>
-            {isOwner && (
+        <DetailHeader
+          backTo="/albums"
+          title={albumName || "Shared Album"}
+          actions={
+            <>
               <button
-                onClick={openSharePicker}
+                onClick={() => setShowMembers(!showMembers)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
               >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z" />
-                </svg>
-                <span className="hidden sm:inline">Add Member</span>
+                <AppIcon name="shared" />
+                <span>{members.length}</span>
               </button>
-            )}
-          </div>
-        </div>
+              {isOwner && (
+                <button
+                  onClick={openSharePicker}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.766z" />
+                  </svg>
+                  <span className="hidden sm:inline">Add Member</span>
+                </button>
+              )}
+            </>
+          }
+        />
 
         {/* Errors surface via the global toast host (#8) */}
 

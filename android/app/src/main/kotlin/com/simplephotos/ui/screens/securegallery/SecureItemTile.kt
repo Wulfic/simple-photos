@@ -14,14 +14,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.R
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.remote.dto.SecureGalleryItem
@@ -79,9 +78,10 @@ internal fun SecureItemTile(
                 strokeWidth = 2.dp
             )
             gifBytes != null -> AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(java.nio.ByteBuffer.wrap(gifBytes!!))
-                    .build(),
+                model = rememberThumbnailRequest(
+                    data = java.nio.ByteBuffer.wrap(gifBytes!!),
+                    crossfade = false,
+                ),
                 contentDescription = "Secure photo",
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
@@ -163,9 +163,10 @@ internal fun PhotoThumbnail(photo: PhotoEntity) {
     when {
         isGif && photo.localPath != null -> {
             AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(android.net.Uri.parse(photo.localPath))
-                    .build(),
+                model = rememberThumbnailRequest(
+                    data = android.net.Uri.parse(photo.localPath),
+                    crossfade = false,
+                ),
                 contentDescription = photo.filename,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop

@@ -48,7 +48,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.CloudBackupBadge
+import com.simplephotos.ui.components.TileSelectionCircle
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoEntity
@@ -668,15 +670,9 @@ private fun MediaTile(
             }
 
             AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(imageModel)
-                    .crossfade(true)
-                    .apply {
-                        // GIFs: don't constrain size — Coil's GifDecoder needs
-                        // the full data to produce an animated Drawable.
-                        if (!isGif) size(512)
-                    }
-                    .build(),
+                // GIFs: no size cap — Coil's GifDecoder needs the full data to
+                // produce an animated Drawable.
+                model = rememberThumbnailRequest(data = imageModel, size = if (isGif) null else 512),
                 contentDescription = photo.filename,
                 contentScale = thumbScale,
                 modifier = thumbModifier,
@@ -739,14 +735,7 @@ private fun MediaTile(
         // user an at-a-glance signal that the original is safely synced and
         // could be freed up locally if needed.
         if (photo.syncStatus == SyncStatus.SYNCED && photo.localPath != null) {
-            AsyncImage(
-                model = R.drawable.ic_cloud,
-                contentDescription = "Backed up to cloud",
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(4.dp)
-                    .size(18.dp)
-            )
+            CloudBackupBadge()
         }
 
         // Sync status indicator (only when not in selection mode)
@@ -799,24 +788,7 @@ private fun MediaTile(
 
         // Selection circle (top-right) — sized to match web (~20% smaller than original)
         if (isSelectionMode) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(5.dp)
-                    .size(19.dp)
-                    .clip(CircleShape)
-                    .background(if (isSelected) Color(0xFF22C55E) else Color.White.copy(alpha = 0.8f))
-                    .border(
-                        width = 2.dp,
-                        color = if (isSelected) Color(0xFF22C55E) else Color.Gray.copy(alpha = 0.5f),
-                        shape = CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isSelected) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
-                }
-            }
+            TileSelectionCircle(isSelected = isSelected, padding = 5.dp, size = 19.dp, checkSize = 13.dp)
         }
     }
 }

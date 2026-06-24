@@ -52,7 +52,7 @@ import androidx.media3.ui.PlayerView
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.local.entities.PhotoEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -212,12 +212,11 @@ fun PanoramaOverlay(
             // longest side to MAX_PANO_DECODE_PX keeps the bitmap within the GPU
             // budget while still allowing full panning. allowHardware(false)
             // keeps the AVIF/HEIF software decode path.
-            model = ImageRequest.Builder(context)
-                .data(imageData)
-                .size(MAX_PANO_DECODE_PX)
-                .allowHardware(false)
-                .crossfade(true)
-                .build(),
+            model = rememberThumbnailRequest(
+                data = imageData,
+                size = MAX_PANO_DECODE_PX,
+                allowHardware = false,
+            ),
             contentDescription = contentDescription,
             contentScale = ContentScale.FillBounds,
             modifier = Modifier

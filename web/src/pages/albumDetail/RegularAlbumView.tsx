@@ -13,6 +13,7 @@ import { db, type CachedPhoto, type CachedAlbum } from "../../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../../components/AppHeader";
 import AppIcon from "../../components/AppIcon";
+import DetailHeader from "../../components/DetailHeader";
 import AddPhotosPanel from "../../components/AddPhotosPanel";
 import JustifiedGrid from "../../components/gallery/JustifiedGrid";
 import AlbumTile from "../../components/AlbumTile";
@@ -302,49 +303,41 @@ export default function RegularAlbumView({ albumId }: { albumId: string | undefi
 
       <main className="p-4">
         {/* Sub-header with album name */}
-        <div className="flex items-center justify-between gap-3 mb-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              onClick={() => navigate("/albums")}
-              className="text-fg-muted hover:text-fg transition-colors shrink-0"
-              title="Back to Albums"
-            >
-              <AppIcon name="back-arrow" size="w-5 h-5" />
-            </button>
-            <h2 className="text-xl font-semibold truncate">{album.name}</h2>
-            <span className="text-fg-muted text-sm shrink-0">{album.photoBlobIds.length} items</span>
-            <SlideshowTriggers slideshow={slideshow} />
-          </div>
-
-          {/* Action buttons */}
-          {!isBackupServer && (
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={openSharePicker}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
-            >
-              <AppIcon name="shared" />
-              <span className="hidden sm:inline">Share</span>
-            </button>
-            <button
-              onClick={() => setShowAddPhotos(!showAddPhotos)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 shadow-sm ${
-                showAddPhotos
-                  ? "bg-accent-600 text-white border border-accent-500 hover:bg-accent-700"
-                  : "text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20"
-              }`}
-            >
-              {showAddPhotos ? "Done" : "Add Photos"}
-            </button>
-            <button
-              onClick={deleteAlbum}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-red-600 dark:text-red-400 bg-white dark:bg-white/10 border border-edge hover:bg-red-50 dark:hover:bg-red-900/30 shadow-sm"
-            >
-              Delete
-            </button>
-          </div>
-          )}
-        </div>
+        <DetailHeader
+          backTo="/albums"
+          backTitle="Back to Albums"
+          title={album.name}
+          count={`${album.photoBlobIds.length} items`}
+          actions={!isBackupServer ? (
+            <>
+              <button
+                onClick={openSharePicker}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20 shadow-sm"
+              >
+                <AppIcon name="shared" />
+                <span className="hidden sm:inline">Share</span>
+              </button>
+              <button
+                onClick={() => setShowAddPhotos(!showAddPhotos)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 shadow-sm ${
+                  showAddPhotos
+                    ? "bg-accent-600 text-white border border-accent-500 hover:bg-accent-700"
+                    : "text-fg-muted bg-white dark:bg-white/10 border border-edge hover:bg-surface-sunken dark:hover:bg-white/20"
+                }`}
+              >
+                {showAddPhotos ? "Done" : "Add Photos"}
+              </button>
+              <button
+                onClick={deleteAlbum}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 text-red-600 dark:text-red-400 bg-white dark:bg-white/10 border border-edge hover:bg-red-50 dark:hover:bg-red-900/30 shadow-sm"
+              >
+                Delete
+              </button>
+            </>
+          ) : undefined}
+        >
+          <SlideshowTriggers slideshow={slideshow} />
+        </DetailHeader>
 
       {/* Errors surface via the global toast host (#8) */}
 

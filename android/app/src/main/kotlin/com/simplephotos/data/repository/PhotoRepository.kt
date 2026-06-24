@@ -4,6 +4,8 @@
  */
 package com.simplephotos.data.repository
 
+import com.simplephotos.data.decodeThumbEnvelope
+
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
@@ -923,10 +925,7 @@ class PhotoRepository @Inject constructor(
                 if (!thumbBlobId.isNullOrEmpty()) {
                     try {
                         val thumbDecrypted = downloadAndDecryptBlob(thumbBlobId)
-                        val thumbPayload = JSONObject(String(thumbDecrypted, Charsets.UTF_8))
-                        val thumbBase64 = thumbPayload.optString("data", "")
-                        if (thumbBase64.isNotEmpty()) {
-                            val thumbBytes = android.util.Base64.decode(thumbBase64, android.util.Base64.NO_WRAP)
+                        decodeThumbEnvelope(thumbDecrypted)?.let { thumbBytes ->
                             thumbPath = saveThumbnailToDisk(localId, thumbBytes)
                         }
                     } catch (e: Exception) {

@@ -10,7 +10,7 @@ import { db, type CachedPhoto } from "../../db";
 import { useLiveQuery } from "dexie-react-hooks";
 import AppHeader from "../../components/AppHeader";
 import { GallerySkeleton } from "../../components/skeletons";
-import AppIcon from "../../components/AppIcon";
+import DetailHeader from "../../components/DetailHeader";
 import SelectablePhotoGrid from "../../components/gallery/SelectablePhotoGrid";
 import { usePhotoSlideshow } from "../../hooks/useSlideshow";
 import SlideshowHost from "../../components/viewer/SlideshowHost";
@@ -138,18 +138,14 @@ export default function SmartAlbumView({ albumId }: { albumId: string }) {
 
       <main className="p-4">
         {/* Sub-header */}
-        <div className="flex items-center gap-3 mb-4">
-          <button
-            onClick={() => navigate("/albums")}
-            className="text-fg-muted hover:text-fg transition-colors shrink-0"
-            title="Back to Albums"
-          >
-            <AppIcon name="back-arrow" size="w-5 h-5" />
-          </button>
-          <h2 className="text-xl font-semibold truncate">{def.label}</h2>
-          <span className="text-fg-muted text-sm shrink-0">{photoCount} items</span>
+        <DetailHeader
+          backTo="/albums"
+          backTitle="Back to Albums"
+          title={def.label}
+          count={`${photoCount} items`}
+        >
           <SlideshowTriggers slideshow={slideshow} />
-        </div>
+        </DetailHeader>
 
         {loading ? (
           <GallerySkeleton />

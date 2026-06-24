@@ -33,7 +33,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
+import com.simplephotos.ui.components.CloudBackupBadge
+import com.simplephotos.ui.components.TileSelectionCircle
+import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.local.entities.PhotoEntity
 import com.simplephotos.data.local.entities.SyncStatus
 import java.io.File
@@ -356,11 +358,7 @@ private fun AddPhotoTile(
 
         if (imageModel != null) {
             AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(imageModel)
-                    .crossfade(true)
-                    .apply { if (!isGif) size(256) }
-                    .build(),
+                model = rememberThumbnailRequest(data = imageModel, size = if (isGif) null else 256),
                 contentDescription = photo.filename,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -432,11 +430,7 @@ private fun AlbumPhotoTile(
 
         if (imageModel != null) {
             AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(imageModel)
-                    .crossfade(true)
-                    .apply { if (!isGif) size(256) }
-                    .build(),
+                model = rememberThumbnailRequest(data = imageModel, size = if (isGif) null else 256),
                 contentDescription = photo.filename,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -479,36 +473,12 @@ private fun AlbumPhotoTile(
 
         // Cloud-backup badge — backed up to server AND still on device.
         if (photo.syncStatus == SyncStatus.SYNCED && photo.localPath != null) {
-            AsyncImage(
-                model = R.drawable.ic_cloud,
-                contentDescription = "Backed up to cloud",
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(4.dp)
-                    .size(18.dp)
-            )
+            CloudBackupBadge()
         }
 
         // Selection circle (top-right) — only visible in selection mode
         if (isSelectionMode) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .background(if (isSelected) Color(0xFF22C55E) else Color.White.copy(alpha = 0.8f))
-                    .border(
-                        width = 2.dp,
-                        color = if (isSelected) Color(0xFF22C55E) else Color.Gray.copy(alpha = 0.5f),
-                        shape = CircleShape
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isSelected) {
-                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                }
-            }
+            TileSelectionCircle(isSelected = isSelected)
         }
     }
 }

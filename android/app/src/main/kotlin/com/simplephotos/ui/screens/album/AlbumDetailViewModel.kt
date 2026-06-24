@@ -3,6 +3,7 @@ package com.simplephotos.ui.screens.album
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.simplephotos.ui.components.SelectionState
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -56,10 +57,9 @@ class AlbumDetailViewModel @Inject constructor(
 
 
     // ── Multi-select state ────────────────────────────────────────
-    var selectedIds by mutableStateOf(emptySet<String>())
-        private set
-    var isSelectionMode by mutableStateOf(false)
-        private set
+    private val selection = SelectionState()
+    val selectedIds get() = selection.selectedIds
+    val isSelectionMode get() = selection.isSelectionMode
 
     init {
         viewModelScope.launch {
@@ -167,26 +167,13 @@ class AlbumDetailViewModel @Inject constructor(
         }
     }
 
-    fun enterSelectionMode(id: String) {
-        isSelectionMode = true
-        selectedIds = setOf(id)
-    }
+    fun enterSelectionMode(id: String) = selection.enter(id)
 
-    fun toggleSelect(id: String) {
-        if (!isSelectionMode) return
-        selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
-        if (selectedIds.isEmpty()) isSelectionMode = false
-    }
+    fun toggleSelect(id: String) = selection.toggle(id)
 
-    fun selectAll() {
-        isSelectionMode = true
-        selectedIds = photos.map { it.localId }.toSet()
-    }
+    fun selectAll() = selection.setSelection(photos.map { it.localId }.toSet())
 
-    fun clearSelection() {
-        selectedIds = emptySet()
-        isSelectionMode = false
-    }
+    fun clearSelection() = selection.clear()
 
     fun removeSelectedFromAlbum() {
         viewModelScope.launch {

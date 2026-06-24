@@ -3,6 +3,8 @@
  */
 package com.simplephotos.ui.screens.viewer
 
+import com.simplephotos.data.decodeThumbEnvelope
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -568,10 +570,7 @@ class PhotoViewerViewModel @Inject constructor(
                         withContext(Dispatchers.IO) {
                             try {
                                 val thumbDecrypted = photoRepository.downloadAndDecryptBlob(serverThumbBlobId!!)
-                                val thumbPayload = org.json.JSONObject(String(thumbDecrypted, Charsets.UTF_8))
-                                val thumbBase64 = thumbPayload.optString("data", "")
-                                if (thumbBase64.isNotEmpty()) {
-                                    val thumbBytes = android.util.Base64.decode(thumbBase64, android.util.Base64.NO_WRAP)
+                                decodeThumbEnvelope(thumbDecrypted)?.let { thumbBytes ->
                                     val thumbPath = photoRepository.saveThumbnailToDisk(copyId, thumbBytes)
                                     photoRepository.updateThumbnailPath(copyId, thumbPath)
                                     Log.d(TAG, "[EDIT:thumb] Downloaded server thumbnail for copy $copyId (${thumbBytes.size} bytes)")

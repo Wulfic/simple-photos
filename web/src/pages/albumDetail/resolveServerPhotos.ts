@@ -52,3 +52,18 @@ export async function resolveServerPhotos(summaries: { id: string; filename: str
   }
   return found;
 }
+
+/**
+ * Resolve a list of server photo ids (e.g. the `photo_id`s returned by the
+ * face / pet detection endpoints) to their cached `CachedPhoto` rows, dropping
+ * any that have no local row. Shared by the Pets and People detail views, which
+ * both walked their detections through the same per-id index lookup.
+ */
+export async function resolvePhotosByServerId(ids: string[]): Promise<CachedPhoto[]> {
+  const found: CachedPhoto[] = [];
+  for (const id of ids) {
+    const photo = await db.photos.where("serverPhotoId").equals(id).first();
+    if (photo) found.push(photo);
+  }
+  return found;
+}

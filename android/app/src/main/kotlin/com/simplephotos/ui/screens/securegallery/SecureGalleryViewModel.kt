@@ -4,6 +4,8 @@
  */
 package com.simplephotos.ui.screens.securegallery
 
+import com.simplephotos.data.decodeThumbEnvelope
+
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -370,11 +372,10 @@ class SecureGalleryViewModel @Inject constructor(
             Log.d(TAG, "downloadThumb: using encryptedThumbBlobId=$encryptedThumbBlobId for blobId=$blobId")
             try {
                 val thumbBytes = photoRepository.downloadAndDecryptBlob(encryptedThumbBlobId)
-                val payload = org.json.JSONObject(String(thumbBytes, Charsets.UTF_8))
-                val dataBase64 = payload.getString("data")
-                val decoded = android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
-                Log.d(TAG, "downloadThumb: direct thumb success, ${decoded.size} bytes")
-                return@withContext decoded
+                decodeThumbEnvelope(thumbBytes)?.let { decoded ->
+                    Log.d(TAG, "downloadThumb: direct thumb success, ${decoded.size} bytes")
+                    return@withContext decoded
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "downloadThumb: direct thumb download failed for $encryptedThumbBlobId, trying /thumb endpoint", e)
             }
@@ -385,11 +386,10 @@ class SecureGalleryViewModel @Inject constructor(
         try {
             val thumbBytes = photoRepository.downloadAndDecryptThumbBlob(blobId)
             if (thumbBytes != null) {
-                val payload = org.json.JSONObject(String(thumbBytes, Charsets.UTF_8))
-                val dataBase64 = payload.getString("data")
-                val decoded = android.util.Base64.decode(dataBase64, android.util.Base64.NO_WRAP)
-                Log.d(TAG, "downloadThumb: /thumb endpoint success, ${decoded.size} bytes")
-                return@withContext decoded
+                decodeThumbEnvelope(thumbBytes)?.let { decoded ->
+                    Log.d(TAG, "downloadThumb: /thumb endpoint success, ${decoded.size} bytes")
+                    return@withContext decoded
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "downloadThumb: /thumb endpoint failed for $blobId", e)

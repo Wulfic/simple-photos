@@ -9,6 +9,7 @@ import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.simplephotos.ui.components.SelectionState
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.lifecycle.ViewModel
@@ -112,11 +113,10 @@ class GalleryViewModel @Inject constructor(
     var secureBlobIds by mutableStateOf(emptySet<String>())
         private set
 
-    // ── Multi-select state ────────────────────────────────────────
-    var selectedIds by mutableStateOf(emptySet<String>())
-        private set
-    var isSelectionMode by mutableStateOf(false)
-        private set
+    // ── Multi-select state (shared machine; see ui.components.SelectionState) ──
+    private val selection = SelectionState()
+    val selectedIds get() = selection.selectedIds
+    val isSelectionMode get() = selection.isSelectionMode
 
     // ── Album state for picker ────────────────────────────────────
     val albums = albumRepository.getAllAlbums()
@@ -156,31 +156,17 @@ class GalleryViewModel @Inject constructor(
         }
     }
 
-    fun enterSelectionMode(id: String) {
-        isSelectionMode = true
-        selectedIds = setOf(id)
-    }
+    fun enterSelectionMode(id: String) = selection.enter(id)
 
-    fun toggleSelect(id: String) {
-        if (!isSelectionMode) return
-        selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
-        if (selectedIds.isEmpty()) isSelectionMode = false
-    }
+    fun toggleSelect(id: String) = selection.toggle(id)
 
-    fun selectAll(allPhotos: List<PhotoEntity>) {
-        isSelectionMode = true
-        selectedIds = allPhotos.map { it.localId }.toSet()
-    }
+    fun selectAll(allPhotos: List<PhotoEntity>) =
+        selection.setSelection(allPhotos.map { it.localId }.toSet())
 
-    fun selectDay(dayPhotoIds: Set<String>) {
-        isSelectionMode = true
-        selectedIds = selectedIds + dayPhotoIds
-    }
+    fun selectDay(dayPhotoIds: Set<String>) =
+        selection.setSelection(selectedIds + dayPhotoIds)
 
-    fun clearSelection() {
-        selectedIds = emptySet()
-        isSelectionMode = false
-    }
+    fun clearSelection() = selection.clear()
 
     fun deleteSelectedPhotos(allPhotos: List<PhotoEntity>) {
         viewModelScope.launch {
