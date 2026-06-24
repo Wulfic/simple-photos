@@ -1,11 +1,18 @@
 package com.simplephotos.ui.screens.securegallery
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -15,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -49,7 +57,10 @@ internal fun SecurePhotoViewer(
     initialIndex: Int,
     viewModel: SecureGalleryViewModel,
     onBack: () -> Unit,
-    onRemove: ((SecureGalleryItem) -> Unit)? = null
+    onRemove: ((SecureGalleryItem) -> Unit)? = null,
+    // The FULL (un-collapsed) item list, so the burst filmstrip can resolve
+    // every frame of a burst (the pager only swipes between covers).
+    allItems: List<SecureGalleryItem> = items,
 ) {
     val pagerState = rememberPagerState(
         initialPage = initialIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0)),
@@ -62,12 +73,37 @@ internal fun SecurePhotoViewer(
     var panoLive by remember { mutableStateOf(false) }
     LaunchedEffect(pagerState.currentPage) { panoLive = false }
 
+    // Per-burst selected frame (cover-itemId → frame-itemId). The pager swipes
+    // between burst covers; selecting a frame in the filmstrip swaps the image
+    // shown on that page WITHOUT making each frame its own page.
+    var burstSelections by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+
+    fun framesFor(cover: SecureGalleryItem): List<SecureGalleryItem> {
+        val bid = cover.burstId
+        return if (bid.isNullOrEmpty()) emptyList() else allItems.filter { it.burstId == bid }
+    }
+
+    fun effectiveItem(cover: SecureGalleryItem): SecureGalleryItem {
+        val frames = framesFor(cover)
+        if (frames.isEmpty()) return cover
+        val selId = burstSelections[cover.id]
+        return frames.firstOrNull { it.id == selId } ?: cover
+    }
+
     if (confirmRemove) {
         val current = items.getOrNull(pagerState.currentPage)
+        val isBurst = current?.let { framesFor(it).size > 1 } == true
         AlertDialog(
             onDismissRequest = { confirmRemove = false },
             title = { Text("Remove from secure album?") },
-            text = { Text("The photo will return to your regular gallery.") },
+            text = {
+                Text(
+                    if (isBurst)
+                        "This burst (all of its frames) will return to your regular gallery."
+                    else
+                        "The photo will return to your regular gallery."
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRemove = false
@@ -91,7 +127,7 @@ internal fun SecurePhotoViewer(
             modifier = Modifier.fillMaxSize()
         ) { page ->
             SecureMediaPage(
-                item = items[page],
+                item = effectiveItem(items[page]),
                 viewModel = viewModel,
                 onPanoLiveModeChange = { live ->
                     if (pagerState.currentPage == page) panoLive = live
@@ -129,6 +165,115 @@ internal fun SecurePhotoViewer(
                     tint = Color.White
                 )
             }
+        }
+
+        // Burst filmstrip — step through the frames of the current burst.
+        val curCover = items.getOrNull(pagerState.currentPage)
+        if (curCover != null && !panoLive) {
+            val frames = framesFor(curCover)
+            if (frames.size > 1) {
+                SecureBurstStrip(
+                    frames = frames,
+                    currentItemId = effectiveItem(curCover).id,
+                    viewModel = viewModel,
+                    onSelect = { fid -> burstSelections = burstSelections + (curCover.id to fid) }
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Secure burst filmstrip — horizontal frame picker for one burst
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Filmstrip shown at the bottom of the secure viewer while a burst is open.
+ * The pager only swipes between burst COVERS, so this strip is the only way to
+ * step through the individual frames of a secure burst. Tapping a frame swaps
+ * the displayed image in place (via [onSelect]). Mirrors the regular viewer's
+ * BurstStripOverlay and the web's BurstStrip.
+ */
+@Composable
+private fun SecureBurstStrip(
+    frames: List<SecureGalleryItem>,
+    currentItemId: String,
+    viewModel: SecureGalleryViewModel,
+    onSelect: (String) -> Unit,
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(currentItemId, frames) {
+        val idx = frames.indexOfFirst { it.id == currentItemId }
+        if (idx >= 0) try { listState.animateScrollToItem(idx) } catch (_: Exception) {}
+    }
+    Box(
+        modifier = Modifier.fillMaxSize().navigationBarsPadding(),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Surface(
+            modifier = Modifier
+                .padding(bottom = 24.dp)
+                .widthIn(max = 340.dp)
+                .clip(RoundedCornerShape(12.dp)),
+            color = Color.Black.copy(alpha = 0.7f),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            LazyRow(
+                state = listState,
+                modifier = Modifier.padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                itemsIndexed(frames, key = { _, f -> f.id }) { idx, frame ->
+                    SecureBurstThumb(
+                        item = frame,
+                        index = idx,
+                        isActive = frame.id == currentItemId,
+                        viewModel = viewModel,
+                        onClick = { onSelect(frame.id) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One decrypted 48dp thumbnail in the secure burst filmstrip. */
+@Composable
+private fun SecureBurstThumb(
+    item: SecureGalleryItem,
+    index: Int,
+    isActive: Boolean,
+    viewModel: SecureGalleryViewModel,
+    onClick: () -> Unit,
+) {
+    var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(item.blobId) {
+        try {
+            val data = viewModel.downloadThumb(item.blobId, item.encryptedThumbBlobId)
+            bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+        } catch (_: Exception) {
+            bitmap = null
+        }
+    }
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .border(2.dp, if (isActive) Color.White else Color.Transparent, RoundedCornerShape(8.dp))
+            .background(Color.Gray.copy(alpha = 0.4f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        val bmp = bitmap
+        if (bmp != null) {
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = "Burst frame ${index + 1}",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Text("${index + 1}", color = Color.White, fontSize = 10.sp)
         }
     }
 }

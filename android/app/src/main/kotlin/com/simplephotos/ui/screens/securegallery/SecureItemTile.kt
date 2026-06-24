@@ -32,8 +32,8 @@ import com.simplephotos.data.remote.dto.SecureGalleryItem
 @Composable
 internal fun SecureItemTile(
     item: SecureGalleryItem,
-    onClick: () -> Unit,
     viewModel: SecureGalleryViewModel,
+    onClick: (() -> Unit)? = null,
     burstCount: Int = 0
 ) {
     var bitmap by remember(item.blobId) { mutableStateOf<android.graphics.Bitmap?>(null) }
@@ -69,7 +69,7 @@ internal fun SecureItemTile(
             .fillMaxSize()
             .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick),
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center
     ) {
         when {
@@ -110,30 +110,52 @@ internal fun SecureItemTile(
         }
 
         // ── Subtype / media badges (mirror the main gallery tiles) ──────────
-        val sub = item.photoSubtype
-        val durLabel = item.durationSecs?.let { d ->
-            val m = (d / 60).toInt(); val s = (d % 60).toInt(); "$m:${s.toString().padStart(2, '0')}"
-        }
-        when (item.mediaType) {
-            "video" -> SecureTileBadge("▶" + (durLabel?.let { " $it" } ?: ""), Alignment.BottomStart)
-            "gif" -> SecureTileBadge("GIF", Alignment.BottomStart)
-            "audio" -> SecureTileBadge("♫" + (durLabel?.let { " $it" } ?: ""), Alignment.BottomStart)
-        }
-        val topLabel = when {
-            sub == "equirectangular" -> "360°"
-            sub == "panorama" -> "PANO"
-            sub == "motion" -> "LIVE"
-            burstCount > 1 -> "BURST $burstCount"
-            !item.burstId.isNullOrEmpty() -> "BURST"
-            else -> null
-        }
-        if (topLabel != null) SecureTileBadge(topLabel, Alignment.TopStart, bold = true)
+        MediaTileBadges(
+            mediaType = item.mediaType,
+            photoSubtype = item.photoSubtype,
+            burstId = item.burstId,
+            burstCount = burstCount,
+            durationSecs = item.durationSecs,
+        )
     }
+}
+
+/**
+ * Subtype / media badge overlay shared by the secure grid tiles AND the
+ * "Add Photos" picker tiles, so a burst/live/360/pano/video reads the same in
+ * both. Renders a bottom-start media badge (video/gif/audio + duration) and a
+ * top-start subtype badge (360°/PANO/LIVE/BURST n).
+ */
+@Composable
+internal fun BoxScope.MediaTileBadges(
+    mediaType: String?,
+    photoSubtype: String?,
+    burstId: String?,
+    burstCount: Int,
+    durationSecs: Float?,
+) {
+    val durLabel = durationSecs?.let { d ->
+        val m = (d / 60).toInt(); val s = (d % 60).toInt(); "$m:${s.toString().padStart(2, '0')}"
+    }
+    when (mediaType) {
+        "video" -> SecureTileBadge("▶" + (durLabel?.let { " $it" } ?: ""), Alignment.BottomStart)
+        "gif" -> SecureTileBadge("GIF", Alignment.BottomStart)
+        "audio" -> SecureTileBadge("♫" + (durLabel?.let { " $it" } ?: ""), Alignment.BottomStart)
+    }
+    val topLabel = when {
+        photoSubtype == "equirectangular" -> "360°"
+        photoSubtype == "panorama" -> "PANO"
+        photoSubtype == "motion" -> "LIVE"
+        burstCount > 1 -> "BURST $burstCount"
+        !burstId.isNullOrEmpty() -> "BURST"
+        else -> null
+    }
+    if (topLabel != null) SecureTileBadge(topLabel, Alignment.TopStart, bold = true)
 }
 
 /** Small translucent badge used on secure tiles (matches the gallery style). */
 @Composable
-private fun BoxScope.SecureTileBadge(
+internal fun BoxScope.SecureTileBadge(
     text: String,
     alignment: Alignment,
     bold: Boolean = false

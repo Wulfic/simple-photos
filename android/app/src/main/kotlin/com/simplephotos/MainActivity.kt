@@ -76,8 +76,20 @@ class MainActivity : FragmentActivity() {
             prefs[KEY_BIOMETRIC_ENABLED] ?: false
         }
 
+        // Allowed authenticators for the app-lock. On API 30+ we add
+        // DEVICE_CREDENTIAL so a biometric lockout (after repeated failed
+        // fingerprints) falls back to the phone PIN/password instead of locking
+        // the user out of the app entirely. Pre-30 can't combine the two, so it
+        // stays biometric-only with a Cancel button.
+        val lockAuthenticators = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        } else {
+            BiometricManager.Authenticators.BIOMETRIC_STRONG
+        }
+
         val biometricAvailable = BiometricManager.from(this)
-            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+            .canAuthenticate(lockAuthenticators) == BiometricManager.BIOMETRIC_SUCCESS
 
         setContent {
             SimplePhotosTheme {
@@ -85,9 +97,10 @@ class MainActivity : FragmentActivity() {
                 var authFailed by remember { mutableStateOf(false) }
 
                 if (!authenticated) {
-                    // Show biometric prompt on launch
+                    // Show biometric (+ device-credential) prompt on launch
                     LaunchedEffect(Unit) {
                         showBiometricPrompt(
+                            authenticators = lockAuthenticators,
                             onSuccess = { authenticated = true },
                             onFail = { authFailed = true }
                         )
@@ -112,17 +125,20 @@ class MainActivity : FragmentActivity() {
                                 fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            if (authFailed) {
-                                Spacer(Modifier.height(16.dp))
-                                Button(onClick = {
-                                    authFailed = false
-                                    showBiometricPrompt(
-                                        onSuccess = { authenticated = true },
-                                        onFail = { authFailed = true }
-                                    )
-                                }) {
-                                    Text("Try Again")
-                                }
+                            // Always offer a way to re-trigger the prompt — if the
+                            // user cancels or biometric locks out, this re-opens it
+                            // (which now includes the device-PIN fallback) so they
+                            // can never get stranded on this screen.
+                            Spacer(Modifier.height(16.dp))
+                            Button(onClick = {
+                                authFailed = false
+                                showBiometricPrompt(
+                                    authenticators = lockAuthenticators,
+                                    onSuccess = { authenticated = true },
+                                    onFail = { authFailed = true }
+                                )
+                            }) {
+                                Text(if (authFailed) "Try Again" else "Unlock")
                             }
                         }
                     }
@@ -136,7 +152,11 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    private fun showBiometricPrompt(onSuccess: () -> Unit, onFail: () -> Unit) {
+    private fun showBiometricPrompt(
+        authenticators: Int,
+        onSuccess: () -> Unit,
+        onFail: () -> Unit,
+    ) {
         val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
@@ -153,13 +173,21 @@ class MainActivity : FragmentActivity() {
                 // Individual attempt failed — prompt stays open for retry
             }
         })
-        val info = BiometricPrompt.PromptInfo.Builder()
+        val builder = BiometricPrompt.PromptInfo.Builder()
             .setTitle("Unlock Simple Photos")
-            .setSubtitle("Verify your identity")
-            .setNegativeButtonText("Cancel")
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .build()
-        prompt.authenticate(info)
+            .setAllowedAuthenticators(authenticators)
+        // DEVICE_CREDENTIAL provides its own "Use PIN" affordance — the API
+        // forbids a custom negative button when it's allowed. Only set the
+        // Cancel button on the biometric-only (pre-30) path.
+        val hasDeviceCredential =
+            authenticators and BiometricManager.Authenticators.DEVICE_CREDENTIAL != 0
+        if (hasDeviceCredential) {
+            builder.setSubtitle("Use biometrics or your device PIN")
+        } else {
+            builder.setSubtitle("Verify your identity")
+            builder.setNegativeButtonText("Cancel")
+        }
+        prompt.authenticate(builder.build())
     }
 }
 
