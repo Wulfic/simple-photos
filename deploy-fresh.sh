@@ -2,27 +2,29 @@
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║  Simple Photos — Fresh Deploy (Docker instance)                           ║
 # ║                                                                           ║
-# ║  Pulls the latest code for a branch, rebuilds the web bundle + server     ║
-# ║  image, and (optionally) wipes the database + server-managed storage so   ║
-# ║  the instance comes back up as a brand-new, first-run setup — WITHOUT     ║
-# ║  deleting your original photos / import sources.                          ║
+# ║  One command to redeploy a Docker instance from a branch with EVERYTHING  ║
+# ║  wired in: server image, web bundle, AI face/object models, offline geo   ║
+# ║  dataset, and the Android APK — then (optionally) wipe the DB +           ║
+# ║  server-managed storage so it comes back as a brand-new, first-run setup  ║
+# ║  WITHOUT deleting your original photos / import sources.                   ║
 # ║                                                                           ║
-# ║  Designed to run *inside the host that owns the Docker instance*          ║
-# ║  (e.g. LXC 132 `lxc-photos`), from anywhere — paths are resolved from     ║
-# ║  the compose file, not assumed.                                           ║
+# ║  Run it *inside the host that owns the Docker instance* (e.g. LXC 132     ║
+# ║  `lxc-photos`). Paths are resolved from the compose file, not assumed.    ║
 # ║                                                                           ║
 # ║  Usage:                                                                   ║
 # ║    ./deploy-fresh.sh                      # branch=dev, fresh wipe, keep originals
 # ║    ./deploy-fresh.sh --branch main                                        ║
 # ║    ./deploy-fresh.sh --no-wipe            # update+rebuild only, keep data ║
 # ║    ./deploy-fresh.sh --instance simple-photos                             ║
+# ║    ./deploy-fresh.sh --skip-assets        # don't (re)provision models/geo/apk
 # ║    ./deploy-fresh.sh --yes                # don't prompt before wiping     ║
 # ║                                                                           ║
 # ║  SAFETY: the only data ever deleted is the DB and a fixed allow-list of   ║
 # ║  server-managed subdirectories (blobs, thumbnails, caches…). Originals    ║
-# ║  and import sources (e.g. Takeout/) are NEVER touched. Every deletion is  ║
-# ║  routed through guard-rails that refuse drive roots, system paths,        ║
-# ║  shallow paths, and symlinks. Do not bypass them.                         ║
+# ║  and import sources (e.g. Takeout/) are NEVER touched. Provisioned assets ║
+# ║  (models / geo / apk) live outside the storage root and survive the wipe. ║
+# ║  Every deletion is routed through guard-rails that refuse drive roots,    ║
+# ║  system paths, shallow paths, and symlinks. Do not bypass them.           ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
@@ -35,6 +37,7 @@ BRANCH="dev"
 INSTANCE="simple-photos"
 DO_WIPE=true          # wipe DB + managed storage for a true fresh setup
 WIPE_TAKEOUT=false    # never delete import sources unless explicitly asked
+SKIP_ASSETS=false     # set to skip model/geo/apk provisioning
 AUTO_YES=false
 
 while [[ $# -gt 0 ]]; do
@@ -43,8 +46,9 @@ while [[ $# -gt 0 ]]; do
         --instance)      INSTANCE="$2"; shift 2 ;;
         --no-wipe)       DO_WIPE=false; shift ;;
         --wipe-takeout)  WIPE_TAKEOUT=true; shift ;;
+        --skip-assets)   SKIP_ASSETS=true; shift ;;
         --yes|-y)        AUTO_YES=true; shift ;;
-        -h|--help)       sed -n '2,33p' "$0" | sed 's/^# ║\?\s\?//; s/\s*║$//'; exit 0 ;;
+        -h|--help)       sed -n '2,40p' "$0" | sed 's/^# ║\?\s\?//; s/\s*║$//'; exit 0 ;;
         *) echo "Unknown option: $1 (try --help)" >&2; exit 1 ;;
     esac
 done
@@ -52,6 +56,14 @@ done
 INSTANCE_DIR="$REPO_DIR/docker-instances/$INSTANCE"
 COMPOSE="$INSTANCE_DIR/docker-compose.yml"
 CONFIG="$INSTANCE_DIR/config.toml"
+
+# Asset locations (outside the storage root → untouched by the wipe).
+MODELS_DIR="$REPO_DIR/server/models"
+GEO_DIR="$REPO_DIR/server/data"
+DOWNLOADS_DIR="$REPO_DIR/downloads"
+# Mirror that hosts the two large buffalo_l face models on github.com (the
+# HuggingFace Xet CDN is unreachable on some networks). Same as install.sh.
+MODEL_MIRROR="https://github.com/Wulfic/simple-photos/releases/download/assets-models"
 
 # Server-managed subdirs that are safe to purge for a fresh start. Anything not
 # on this list (your originals, Takeout/, hand-placed files) is preserved.
@@ -108,7 +120,7 @@ safe_purge_managed_subdirs() {
 }
 
 # Extract the HOST side of a compose bind-mount given the CONTAINER target.
-# e.g. host_path_for ":/data/storage"  →  /mnt/vault/Dev_Stuff/TEMP
+# e.g. host_path_for /data/storage  →  /mnt/vault/Dev_Stuff/TEMP
 host_path_for() {
     local container_target="$1"
     grep -E "^[[:space:]]*-[[:space:]]*[^#]+:${container_target}(:|$)" "$COMPOSE" \
@@ -117,12 +129,90 @@ host_path_for() {
         | tr -d '"'
 }
 
+# Download a file to $1 from URL $2 (idempotent; uses a .part temp file).
+_dl() {
+    local out="$1" url="$2"
+    [[ -s "$out" ]] && { info "have $(basename "$out")"; return 0; }
+    info "downloading $(basename "$out")…"
+    curl -fL --retry 3 -o "$out.part" "$url" && mv "$out.part" "$out"
+}
+
+# ── Provision AI models, geo dataset, and the Android APK ─────────────────────
+provision_assets() {
+    step "Provision assets (AI models / geo / APK)"
+    mkdir -p "$MODELS_DIR" "$GEO_DIR" "$DOWNLOADS_DIR"
+
+    # AI face + object models. buffalo_l models come from the github.com mirror
+    # (fall back to HuggingFace); the other two are already on github.com.
+    _dl "$MODELS_DIR/det_10g.onnx"   "$MODEL_MIRROR/det_10g.onnx" \
+        || _dl "$MODELS_DIR/det_10g.onnx"   "https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx"
+    _dl "$MODELS_DIR/w600k_r50.onnx" "$MODEL_MIRROR/w600k_r50.onnx" \
+        || _dl "$MODELS_DIR/w600k_r50.onnx" "https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx"
+    _dl "$MODELS_DIR/mobilenetv2-12.onnx" "https://github.com/onnx/models/raw/refs/heads/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx" || warn "mobilenet (object detection) download failed"
+    _dl "$MODELS_DIR/ultraface-RFB-320.onnx" "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-RFB-320.onnx" || warn "ultraface (fallback detector) download failed"
+
+    # Offline GeoNames reverse-geocoding dataset (+ state/region names).
+    if [[ ! -s "$GEO_DIR/cities500.txt" ]]; then
+        command -v unzip >/dev/null 2>&1 || { (sudo apt-get update -qq && sudo apt-get install -y -qq unzip) || apt-get install -y -qq unzip || warn "unzip unavailable"; }
+        if command -v unzip >/dev/null 2>&1; then
+            local z; z="$(mktemp --suffix=.zip)"
+            if curl -fL --retry 3 -o "$z" "https://download.geonames.org/export/dump/cities500.zip"; then
+                unzip -p "$z" cities500.txt > "$GEO_DIR/cities500.txt" && ok "cities500.txt ($(wc -l < "$GEO_DIR/cities500.txt") rows)"
+            else warn "cities500 download failed (geo will self-heal at runtime via auto_download_dataset)"; fi
+            rm -f "$z"
+        fi
+    else info "have cities500.txt"; fi
+    _dl "$GEO_DIR/admin1CodesASCII.txt" "https://download.geonames.org/export/dump/admin1CodesASCII.txt" || warn "admin1 names download failed (falls back to 2-char codes)"
+
+    # Android APK served at GET /downloads/android. Keep an existing one (e.g. a
+    # locally built dev APK dropped here); otherwise fall back to the matching
+    # GitHub release asset. Building the APK requires the Android SDK and is done
+    # outside this script (locally or in CI) then copied into downloads/.
+    if [[ -s "$DOWNLOADS_DIR/simple-photos.apk" ]]; then
+        info "have simple-photos.apk ($(du -h "$DOWNLOADS_DIR/simple-photos.apk" | cut -f1))"
+    else
+        local ver tag
+        ver="$(grep -E '^[[:space:]]*version[[:space:]]*=' "$REPO_DIR/server/Cargo.toml" 2>/dev/null | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+        tag="v${ver:-latest}"
+        if _dl "$DOWNLOADS_DIR/simple-photos.apk" "https://github.com/Wulfic/simple-photos/releases/download/${tag}/simple-photos-${ver}.apk"; then
+            ok "fetched release APK ($tag)"
+        else
+            warn "No APK present and release download failed — the in-app download page will 404."
+            warn "Build it with: (cd android && ./gradlew assembleDebug) then copy app-debug.apk → downloads/simple-photos.apk"
+        fi
+    fi
+}
+
+# ── Wire AI + geo on, and ensure model/geo/apk mounts exist (idempotent) ─────
+wire_features() {
+    step "Wire features (AI + geo on, mounts)"
+    # Enable AI + geo in the instance config (append section if absent, else flip).
+    grep -qE '^\[ai\]'  "$CONFIG" || printf '\n[ai]\nenabled = true\n'  >> "$CONFIG"
+    grep -qE '^\[geo\]' "$CONFIG" || printf '\n[geo]\nenabled = true\n' >> "$CONFIG"
+    awk 'BEGIN{s=""} /^\[/{s=$0} {if((s=="[ai]"||s=="[geo]")&&$0 ~ /^enabled[[:space:]]*=/){sub(/=.*/,"= true")} print}' \
+        "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+    ok "AI + geo enabled in config.toml"
+
+    # Add the model / geo / apk bind-mounts right after the storage volume.
+    local m
+    for m in "$MODELS_DIR:/app/models:ro" "$GEO_DIR:/app/data:ro" "$DOWNLOADS_DIR:/app/downloads:ro"; do
+        if grep -qF "$m" "$COMPOSE"; then
+            info "mount present: $m"
+        else
+            sed -i "\|:/data/storage|a\\      - $m" "$COMPOSE"
+            ok "added mount: $m"
+        fi
+    done
+}
+
 # ── Pre-flight ───────────────────────────────────────────────────────────────
 step "Pre-flight"
 command -v docker >/dev/null || abort "docker not found on PATH."
 command -v git    >/dev/null || abort "git not found on PATH."
 command -v npm    >/dev/null || abort "npm not found on PATH (needed to build web/dist)."
+command -v curl   >/dev/null || abort "curl not found on PATH (needed to fetch assets)."
 [[ -f "$COMPOSE" ]] || abort "Compose file not found: $COMPOSE"
+[[ -f "$CONFIG"  ]] || abort "Config file not found: $CONFIG"
 
 DB_HOST_DIR="$(host_path_for /data/db)"
 STORAGE_HOST_DIR="$(host_path_for /data/storage)"
@@ -160,12 +250,10 @@ step "Backup"
 TS="$(date +%Y%m%d-%H%M%S)"
 BK="/root/sp-deploy-backups/$TS"
 mkdir -p "$BK"
-# Save any uncommitted working-tree changes as a patch so a hard reset is reversible.
 if [[ -n "$(cd "$REPO_DIR" && git status --porcelain)" ]]; then
     (cd "$REPO_DIR" && git diff --ignore-cr-at-eol) > "$BK/uncommitted.patch" 2>/dev/null || true
     ok "Saved uncommitted changes → $BK/uncommitted.patch"
 fi
-# Snapshot the DB (consistent copy via sqlite .backup when available).
 if [[ -f "$DB_HOST_DIR/simple-photos.db" ]]; then
     if command -v sqlite3 >/dev/null 2>&1 && sqlite3 "$DB_HOST_DIR/simple-photos.db" ".backup '$BK/simple-photos.db'" 2>/dev/null; then
         ok "DB snapshot (sqlite .backup) → $BK/simple-photos.db"
@@ -178,12 +266,15 @@ info "Backups in: $BK"
 # ── Update code ──────────────────────────────────────────────────────────────
 step "Update code → origin/$BRANCH"
 cd "$REPO_DIR"
-# Ensure all branches are fetchable (some clones ship a main-only refspec).
 git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 git fetch origin --quiet
 git checkout "$BRANCH" --quiet 2>/dev/null || git checkout -b "$BRANCH" "origin/$BRANCH"
 git reset --hard "origin/$BRANCH"
 ok "HEAD: $(git log --oneline -1)"
+
+# ── Provision assets + wire features ─────────────────────────────────────────
+$SKIP_ASSETS || provision_assets
+wire_features
 
 # ── Build web bundle (mounted into the container at /app/web/dist) ───────────
 step "Build web frontend"
@@ -208,7 +299,6 @@ if $DO_WIPE; then
     info "Purging server-managed storage (originals preserved)…"
     safe_purge_managed_subdirs "$STORAGE_HOST_DIR" "${SAFE_MANAGED_SUBDIRS[@]}"
     if $WIPE_TAKEOUT; then
-        # Extra-guarded: only a dir literally named Takeout directly under the validated root.
         if [[ -d "$STORAGE_HOST_DIR/Takeout" && ! -L "$STORAGE_HOST_DIR/Takeout" ]]; then
             info "Removing import sources (Takeout/) as requested…"
             rm -rf -- "$STORAGE_HOST_DIR/Takeout" 2>/dev/null || sudo rm -rf -- "$STORAGE_HOST_DIR/Takeout" 2>/dev/null || warn "could not remove Takeout/"
@@ -232,6 +322,10 @@ echo
 if $ready; then
     ok "Healthy."
     echo "  setup/status: $(curl -s "http://127.0.0.1:${HOST_PORT}/api/setup/status")"
+    # Surface AI/geo init + APK availability from the boot logs.
+    sleep 2
+    docker logs "$INSTANCE" 2>&1 | grep -iE "AI engine initialized|model loaded|geo|APK" | tail -6 || true
+    if curl -sfI "http://127.0.0.1:${HOST_PORT}/downloads/android" >/dev/null 2>&1; then ok "APK download endpoint OK (/downloads/android)"; else warn "APK endpoint not serving a file"; fi
 else
     warn "Did not become healthy in time. Recent logs:"
     docker compose logs --tail=40
@@ -240,5 +334,5 @@ fi
 
 echo
 echo -e "${c_bold}Deploy complete.${c_nc}  →  http://127.0.0.1:${HOST_PORT}  (LAN: check the instance IP)"
-$DO_WIPE && echo "Fresh setup: open the URL and complete the first-run wizard."
+$DO_WIPE && echo "Fresh setup: open the URL and complete the first-run wizard. AI + geo are enabled; the APK is on the download page."
 echo "Backups kept at: $BK"
