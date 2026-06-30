@@ -63,8 +63,7 @@ async fn peek_is_chunked(path: &std::path::Path) -> bool {
 /// bounded channel provides backpressure between the decrypt thread and the
 /// network.
 fn chunked_decrypt_body(key: [u8; 32], path: std::path::PathBuf) -> Body {
-    let (tx, mut rx) =
-        tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
     tokio::task::spawn_blocking(move || {
         let res = crate::blobs::chunked::for_each_plaintext_chunk(&key, &path, |chunk| {
             tx.blocking_send(Ok(axum::body::Bytes::from(chunk))).is_ok()

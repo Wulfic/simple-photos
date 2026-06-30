@@ -184,7 +184,10 @@ pub async fn render_photo(
             let resolved = match tokio::fs::canonicalize(&candidate).await {
                 Ok(p) if p.starts_with(&canonical_root) => p,
                 Ok(p) => {
-                    tracing::error!("[render] resolved path '{}' escapes storage root", p.display());
+                    tracing::error!(
+                        "[render] resolved path '{}' escapes storage root",
+                        p.display()
+                    );
                     return Err(AppError::NotFound);
                 }
                 Err(_) => {
@@ -194,7 +197,8 @@ pub async fn render_photo(
             };
             (resolved, None)
         } else if !photo.encrypted_blob_id.is_empty() {
-            let tmp = decrypt_blob_to_temp(&state, &auth.user_id, &photo, &storage_root, ext).await?;
+            let tmp =
+                decrypt_blob_to_temp(&state, &auth.user_id, &photo, &storage_root, ext).await?;
             (tmp.clone(), Some(tmp))
         } else {
             tracing::error!("[render] photo has neither file_path nor encrypted_blob_id");
@@ -284,10 +288,12 @@ async fn decrypt_blob_to_temp(
     // container — see blobs/chunked.rs.
     let raw_bytes = {
         let k = enc_key;
-        tokio::task::spawn_blocking(move || crate::blobs::chunked::decrypt_photo_blob(&k, &enc_data))
-            .await
-            .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
-            .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?
+        tokio::task::spawn_blocking(move || {
+            crate::blobs::chunked::decrypt_photo_blob(&k, &enc_data)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
+        .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?
     };
 
     // nosemgrep: rust.lang.security.temp-dir.temp-dir

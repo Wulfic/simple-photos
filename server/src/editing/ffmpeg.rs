@@ -271,8 +271,20 @@ fn build_ffmpeg_args_with_plan(
 ///
 /// `-loop 0` preserves infinite looping (the default for the GIF muxer, set
 /// explicitly so a future ffmpeg default change can't break it).
+///
+/// `-gifflags -transdiff-offsetting` forces every output frame to be stored as a
+/// full, fully-opaque image. ffmpeg's GIF muxer defaults to `+transdiff` (encode
+/// only the pixels that changed since the previous frame, leaving the rest
+/// transparent) and `+offsetting` (crop each frame to the changed rectangle) for
+/// inter-frame compression. Both rely on the player compositing each frame over
+/// the previous one. The in-app Android GIF renderer (and the thumbnail pass)
+/// instead fill that transparency with their own background, so frames late in
+/// the loop — where little changes between frames — render as a mostly black
+/// (viewer) / white (thumbnail) void. Storing whole frames sidesteps the
+/// mis-compositing entirely, at the cost of a larger file, which is acceptable
+/// for an explicitly-edited copy.
 pub fn build_gif_render_args(source: &Path, dest: &Path, meta: &CropMeta) -> Vec<String> {
-    let mut args: Vec<String> = Vec::with_capacity(10);
+    let mut args: Vec<String> = Vec::with_capacity(12);
     args.push("-y".into());
     args.push("-i".into());
     args.push(source.to_string_lossy().into_owned());
@@ -288,6 +300,10 @@ pub fn build_gif_render_args(source: &Path, dest: &Path, meta: &CropMeta) -> Vec
     };
     args.push("-filter_complex".into());
     args.push(fc);
+    // Disable inter-frame transparency diffing / offsetting so every frame is a
+    // self-contained, opaque image — see the doc comment above for why.
+    args.push("-gifflags".into());
+    args.push("-transdiff-offsetting".into());
     args.push("-loop".into());
     args.push("0".into());
     args.push(dest.to_string_lossy().into_owned());
@@ -561,6 +577,11 @@ mod tests {
         // Infinite loop preserved, no audio/video encoder flags needed.
         assert!(args.windows(2).any(|w| w == ["-loop", "0"]));
         assert!(!args.iter().any(|s| s == "libx264"));
+        // Full-frame output: inter-frame transparency diff/offsetting disabled so
+        // late-loop frames don't render as a transparent (black/white) void.
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["-gifflags", "-transdiff-offsetting"]));
     }
 
     #[test]
@@ -571,7 +592,10 @@ mod tests {
         let args = build_gif_render_args(&src, &dst, &m);
         let fc_idx = args.iter().position(|s| s == "-filter_complex").unwrap();
         let fc = &args[fc_idx + 1];
-        assert!(fc.starts_with("transpose=1,crop="), "rotate→crop first: {fc}");
+        assert!(
+            fc.starts_with("transpose=1,crop="),
+            "rotate→crop first: {fc}"
+        );
         let split_pos = fc.find("split").unwrap();
         let crop_pos = fc.find("crop=").unwrap();
         assert!(crop_pos < split_pos, "user filters precede split: {fc}");

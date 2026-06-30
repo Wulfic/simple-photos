@@ -258,15 +258,21 @@ async fn process_single_photo(
     filename: &str,
 ) -> anyhow::Result<(usize, usize)> {
     // Load the photo file (plain or encrypted)
-    let row: Option<(String, Option<String>, String, i64, Option<String>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT file_path, encrypted_blob_id, media_type, size_bytes, thumb_path, \
+    let row: Option<(
+        String,
+        Option<String>,
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT file_path, encrypted_blob_id, media_type, size_bytes, thumb_path, \
              encrypted_thumb_blob_id FROM photos WHERE id = ?1 AND user_id = ?2",
-        )
-        .bind(photo_id)
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?;
+    )
+    .bind(photo_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
 
     let (file_path, encrypted_blob_id, media_type, size_bytes, thumb_path, encrypted_thumb_blob_id) =
         match row {
@@ -620,7 +626,8 @@ async fn load_thumbnail_bytes(
     if let Some(blob_id) = encrypted_thumb_blob_id {
         if !blob_id.is_empty() {
             let bytes =
-                load_encrypted_photo_bytes(pool, storage_root, jwt_secret, blob_id, user_id).await?;
+                load_encrypted_photo_bytes(pool, storage_root, jwt_secret, blob_id, user_id)
+                    .await?;
             return Ok(Some(bytes));
         }
     }

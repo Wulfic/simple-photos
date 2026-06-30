@@ -100,7 +100,7 @@ export default function ThumbnailTile({
   // always fills its tile, even when the photo's stored dimensions are wrong
   // (which would otherwise leave a gap / mis-position the crop vertically).
   const measureCrop = useCallback(() => {
-    if (!cropData || isGif) { setMeasuredCropStyle(null); return; }
+    if (!cropData) { setMeasuredCropStyle(null); return; }
     const tile = tileRef.current;
     const img = imgRef.current;
     croplog("[CROPDBG:measure]", {
@@ -140,9 +140,9 @@ export default function ThumbnailTile({
   useEffect(() => { setMeasuredCropStyle(null); measureCrop(); }, [cropData, displayUrl, measureCrop]);
 
   // Re-measure on tile resize (window resize / layout changes re-flow the grid,
-  // changing the tile's clamped aspect). Only cropped, non-GIF tiles need this.
+  // changing the tile's clamped aspect). Any cropped tile (incl. GIFs) needs this.
   useEffect(() => {
-    if (!cropData || isGif) return;
+    if (!cropData) return;
     const tile = tileRef.current;
     if (!tile) return;
     const ro = new ResizeObserver(() => measureCrop());
@@ -152,7 +152,7 @@ export default function ThumbnailTile({
 
   // ── [CROPDBG] Trace which style actually wins (measured vs stored fallback) ──
   useEffect(() => {
-    if (!CROP_DEBUG || !cropData || isGif) return;
+    if (!CROP_DEBUG || !cropData) return;
     const tile = tileRef.current;
     const img = imgRef.current;
     const fallback = getThumbnailStyle(cropData, width, height);
@@ -171,17 +171,20 @@ export default function ThumbnailTile({
   // Crop rendering: size the FULL image and offset it so the crop fills the
   // tile, instead of transforming an object-cover image (which clips the crop's
   // overflow pixels before the transform — the metadata-crop "gap" bug). Null
-  // for uncropped/rotated/GIF → keep the object-cover path.
-  const cropFill = isGif ? null : getCropFillStyle(cropData);
+  // for uncropped/rotated → keep the object-cover path. GIFs use the SAME
+  // transform path as photos: a metadata-only Save never regenerates the GIF
+  // thumbnail, so the crop/rotation must be applied here or the tile shows the
+  // unedited frame. CSS transforms (scale/translate/rotate, object-fit) do not
+  // stop GIF animation, so this is safe.
+  const cropFill = getCropFillStyle(cropData);
 
   // Final style applied to the <img>. cropFill (pure rot=0 crop) wins first,
   // then the measured transform (rot=0 cover crop OR the rotated fill branch),
   // then the stored-dims fallback for the first paint. Any style that sizes &
   // positions the image absolutely is a "fill" style — those must NOT also get
   // object-cover (which would re-clip and fight the manual sizing).
-  const appliedCropStyle: CSSProperties | undefined = isGif
-    ? undefined
-    : (cropFill ?? measuredCropStyle ?? getThumbnailStyle(cropData, width, height));
+  const appliedCropStyle: CSSProperties | undefined =
+    cropFill ?? measuredCropStyle ?? getThumbnailStyle(cropData, width, height);
   const usesFill = appliedCropStyle?.position === "absolute";
 
   // Long press for selection mode
@@ -202,8 +205,10 @@ export default function ThumbnailTile({
     >
       {displayUrl ? (
         <>
-          {/* GIFs use object-cover without crop transforms (breaks animation).
-              JustifiedGrid already sizes the tile to match the GIF's aspect ratio. */}
+          {/* Crop/rotation transforms apply to GIFs too (see appliedCropStyle):
+              a metadata-only Save doesn't re-bake the thumbnail, and CSS
+              transforms don't stop GIF animation. JustifiedGrid sizes the tile
+              to the crop-effective aspect via getEffectiveAspectRatio. */}
           <img
             ref={imgRef}
             src={displayUrl}

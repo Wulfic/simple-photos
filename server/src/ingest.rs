@@ -604,21 +604,21 @@ async fn run_conversion_pass_inner(
                 // Best-effort thumbnail straight from the original — the thumbnail
                 // pipeline can often read a format the browser-native conversion
                 // choked on. Only record thumb_path when generation succeeds.
-                let thumb_ext = if orig_mime == "image/gif" { "gif" } else { "jpg" };
+                let thumb_ext = if orig_mime == "image/gif" {
+                    "gif"
+                } else {
+                    "jpg"
+                };
                 let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
                 let thumb_abs = storage_root.join(&thumb_rel);
-                let thumb_for_db: Option<String> = if generate_thumbnail_file(
-                    &candidate.abs_path,
-                    &thumb_abs,
-                    orig_mime,
-                    None,
-                )
-                .await
-                {
-                    Some(thumb_rel)
-                } else {
-                    None
-                };
+                let thumb_for_db: Option<String> =
+                    if generate_thumbnail_file(&candidate.abs_path, &thumb_abs, orig_mime, None)
+                        .await
+                    {
+                        Some(thumb_rel)
+                    } else {
+                        None
+                    };
 
                 let insert_result = sqlx::query(
                     "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
