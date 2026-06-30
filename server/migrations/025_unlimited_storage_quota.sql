@@ -1,0 +1,17 @@
+-- Remove per-user storage quotas — the app was never intended to cap storage.
+--
+-- A 10 GiB default quota (`storage_quota_bytes = 10737418240`) was baked into
+-- the install scaffolds and the `users` row default. On a real library (~100 GB)
+-- this silently broke uploads: once a user crossed 10 GiB, every blob upload was
+-- rejected with `403 Storage quota exceeded` (see blobs/handlers.rs), which read
+-- as "intermittent upload failures" on the clients.
+--
+-- The enforcement path treats `0 = unlimited` (`if quota > 0 && used + cl > quota`),
+-- so making every existing user unlimited is just zeroing the column. New users
+-- now inherit `default_quota_bytes = 0` from config, so they start unlimited too.
+--
+-- NOTE: we intentionally do NOT rebuild the `users` table to change the column
+-- DEFAULT (10737418240) — every INSERT binds the quota explicitly from config, so
+-- the column default is never used in practice. Leaving it avoids a risky table
+-- rebuild. An operator can still re-impose a cap per-user via the admin API.
+UPDATE users SET storage_quota_bytes = 0;

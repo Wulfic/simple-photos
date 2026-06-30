@@ -133,6 +133,18 @@ class GalleryViewModel @Inject constructor(
                 error = "Init failed: ${e.message}"
             }
         }
+        // Reveal the grid the moment any photos are available locally — cached
+        // from a prior sync (instant on reopen) or the first inserted page of a
+        // fresh sync — instead of blocking behind the full multi-minute sync.
+        // logout() wipes the Room DB, so any cached rows belong to the CURRENT
+        // user; there is no stale other-user data to guard against. The full
+        // sync still runs in the background and the reactive Flow updates the
+        // grid as rows arrive. The empty-library case is handled by syncFromServer
+        // setting dataReady=true in its finally block. (#3, #8)
+        viewModelScope.launch {
+            photos.first { it.isNotEmpty() }
+            dataReady = true
+        }
         // Start periodic polling for secure gallery updates
         startActivityPolling()
     }

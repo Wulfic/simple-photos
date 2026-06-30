@@ -94,11 +94,15 @@ export default function ViewerEditPanel({
 }: ViewerEditPanelProps) {
   // Determine which tabs are available for this media type
   const isPhoto = mediaType === "photo";
+  const isGif = mediaType === "gif";
   const isVideo = mediaType === "video";
   const isAudio = mediaType === "audio";
-  const showCrop = isPhoto || isVideo;
-  const showBrightness = isPhoto || isVideo;
-  const showRotate = isPhoto || isVideo;
+  // GIFs support the same still-image edits (crop/brightness/rotate). They have
+  // no trim tab, and bakes are re-encoded server-side via ffmpeg so the
+  // animation is preserved.
+  const showCrop = isPhoto || isGif || isVideo;
+  const showBrightness = isPhoto || isGif || isVideo;
+  const showRotate = isPhoto || isGif || isVideo;
   const showTrim = isVideo || isAudio;
 
   // ── Trim range slider refs for dual-thumb control ──────────────────────

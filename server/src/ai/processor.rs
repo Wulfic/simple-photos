@@ -258,25 +258,66 @@ async fn process_single_photo(
     filename: &str,
 ) -> anyhow::Result<(usize, usize)> {
     // Load the photo file (plain or encrypted)
-    let row: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT file_path, encrypted_blob_id FROM photos WHERE id = ?1 AND user_id = ?2",
-    )
-    .bind(photo_id)
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(String, Option<String>, String, i64, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT file_path, encrypted_blob_id, media_type, size_bytes, thumb_path, \
+             encrypted_thumb_blob_id FROM photos WHERE id = ?1 AND user_id = ?2",
+        )
+        .bind(photo_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
 
-    let (file_path, encrypted_blob_id) = match row {
-        Some(r) => r,
-        None => {
-            tracing::debug!(photo_id = %photo_id, "AI: photo not found in DB, skipping");
-            mark_processed(pool, photo_id, user_id).await?;
-            return Ok((0, 0));
+    let (file_path, encrypted_blob_id, media_type, size_bytes, thumb_path, encrypted_thumb_blob_id) =
+        match row {
+            Some(r) => r,
+            None => {
+                tracing::debug!(photo_id = %photo_id, "AI: photo not found in DB, skipping");
+                mark_processed(pool, photo_id, user_id).await?;
+                return Ok((0, 0));
+            }
+        };
+
+    // ── Choose the decode source ──────────────────────────────────────────
+    // Videos must NEVER be read in full here: a single video blob can be
+    // several GB, and decrypting it whole into RAM just to hand it to
+    // `image::load_from_memory` (which can't decode video anyway) OOM-kills the
+    // server on large libraries — the root cause of issues #5 and #13. Run
+    // detection on the already-generated poster thumbnail instead. Oversized
+    // still images take the same path as a safety net against pathological
+    // multi-hundred-MP files.
+    const MAX_FULL_DECODE_BYTES: i64 = 128 * 1024 * 1024; // 128 MiB
+    let is_video = media_type.eq_ignore_ascii_case("video");
+    let oversized = size_bytes > MAX_FULL_DECODE_BYTES;
+
+    // Read the image bytes: thumbnail for video/oversized, else full media.
+    let image_bytes = if is_video || oversized {
+        match load_thumbnail_bytes(
+            pool,
+            storage_root,
+            jwt_secret,
+            thumb_path.as_deref(),
+            encrypted_thumb_blob_id.as_deref(),
+            user_id,
+        )
+        .await
+        {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                tracing::debug!(
+                    photo_id = %photo_id, is_video, oversized,
+                    "AI: no thumbnail for video/oversized media — skipping (refusing to read full blob)"
+                );
+                mark_processed(pool, photo_id, user_id).await?;
+                return Ok((0, 0));
+            }
+            Err(e) => {
+                tracing::debug!(photo_id = %photo_id, error = %e, "AI: thumbnail load failed, skipping");
+                mark_processed(pool, photo_id, user_id).await?;
+                return Ok((0, 0));
+            }
         }
-    };
-
-    // Read the image bytes: either from plain file or from encrypted blob
-    let image_bytes = if !file_path.is_empty() {
+    } else if !file_path.is_empty() {
         let abs_path = storage_root.join(&file_path);
         match tokio::fs::read(&abs_path).await {
             Ok(bytes) => bytes,
@@ -550,6 +591,40 @@ async fn load_encrypted_photo_bytes(
     .map_err(|e| anyhow::anyhow!("decrypt failed: {e}"))?;
 
     Ok(raw_bytes)
+}
+
+/// Load image bytes for AI detection from a photo's *thumbnail* rather than the
+/// full-resolution media. Used for videos and oversized stills so we never pull
+/// a multi-GB blob into memory (issues #5 / #13). Returns `Ok(None)` when no
+/// thumbnail is available, letting the caller simply skip the photo.
+async fn load_thumbnail_bytes(
+    pool: &SqlitePool,
+    storage_root: &PathBuf,
+    jwt_secret: &str,
+    thumb_path: Option<&str>,
+    encrypted_thumb_blob_id: Option<&str>,
+    user_id: &str,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    // Prefer a plaintext thumbnail on disk when present.
+    if let Some(tp) = thumb_path {
+        if !tp.is_empty() {
+            let abs = storage_root.join(tp);
+            if let Ok(bytes) = tokio::fs::read(&abs).await {
+                if bytes.len() >= 100 {
+                    return Ok(Some(bytes));
+                }
+            }
+        }
+    }
+    // Fall back to the encrypted thumbnail blob (the server's normal mode).
+    if let Some(blob_id) = encrypted_thumb_blob_id {
+        if !blob_id.is_empty() {
+            let bytes =
+                load_encrypted_photo_bytes(pool, storage_root, jwt_secret, blob_id, user_id).await?;
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
 }
 
 /// Run face clustering for a user.

@@ -129,6 +129,7 @@ class BackupWorker @AssistedInject constructor(
             var uploaded = 0
             var skipped = 0
             var failed = 0
+            var purged = 0
 
             for (photo in genuinelyPending) {
                 val localPath = photo.localPath
@@ -143,6 +144,31 @@ class BackupWorker @AssistedInject constructor(
 
                 try {
                     val uri = android.net.Uri.parse(localPath)
+
+                    // Pre-flight: a PENDING/FAILED row whose underlying MediaStore
+                    // item was deleted on-device can never upload. Without this it is
+                    // retried — and re-logs a FileNotFoundException — on every backup
+                    // pass forever. genuinelyPending already excludes anything with a
+                    // serverBlobId, so a "gone" row here was never uploaded; purge the
+                    // dangling reference instead of re-failing it. The serverBlobId
+                    // guard is belt-and-suspenders for a destructive delete: if the
+                    // invariant ever changes, an already-backed-up row is just settled
+                    // to SYNCED rather than deleted.
+                    if (!localMediaExists(uri)) {
+                        if (photo.serverBlobId == null) {
+                            diag.warn(TAG, "Local media deleted — purging dangling pending row", mapOf(
+                                "localId" to photo.localId,
+                                "filename" to photo.filename,
+                                "uri" to localPath
+                            ))
+                            db.photoDao().deleteById(photo.localId)
+                            purged++
+                        } else {
+                            db.photoDao().updateSyncStatus(photo.localId, SyncStatus.SYNCED)
+                            skipped++
+                        }
+                        continue
+                    }
 
                     // Decide the upload path by size BEFORE reading the file. Large
                     // media (videos, the occasional huge photo) streams as a v2
@@ -390,6 +416,7 @@ class BackupWorker @AssistedInject constructor(
                 "uploaded" to uploaded.toString(),
                 "skipped" to skipped.toString(),
                 "failed" to failed.toString(),
+                "purged" to purged.toString(),
                 "totalProcessed" to genuinelyPending.size.toString()
             ))
 
@@ -585,6 +612,25 @@ class BackupWorker @AssistedInject constructor(
      * Returns `-1` when the size can't be determined (caller treats that as the
      * conservative in-memory v1 path).
      */
+    /**
+     * True when the MediaStore item behind [uri] is still present. A deleted item
+     * throws [java.io.FileNotFoundException]; we treat *only* that as "gone" so a
+     * transient permission/IO error never purges a still-present photo. Used to
+     * detect dangling PENDING/FAILED rows whose underlying file the user deleted,
+     * which would otherwise re-fail (and re-log an error) on every backup pass.
+     */
+    private fun localMediaExists(uri: android.net.Uri): Boolean {
+        return try {
+            applicationContext.contentResolver.openAssetFileDescriptor(uri, "r")?.close()
+            true
+        } catch (_: java.io.FileNotFoundException) {
+            false
+        } catch (_: Exception) {
+            // Unknown/transient error — assume present; the normal path will decide.
+            true
+        }
+    }
+
     private fun querySize(uri: android.net.Uri): Long {
         try {
             applicationContext.contentResolver.query(

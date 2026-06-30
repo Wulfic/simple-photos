@@ -557,13 +557,107 @@ async fn run_conversion_pass_inner(
             }
             Err(e) => {
                 conversion::progress_tick();
+                // Conversion failed (unsupported codec, GPU failure with CPU
+                // fallback disabled, a transcode crash, …). Do NOT silently drop
+                // the file — that loses data and makes the library smaller than
+                // the source on disk (issue #1: "reported size lower than actual;
+                // possible missing files"). Register the ORIGINAL in place so it
+                // is counted, encrypted/backed up in step 5, and downloadable. It
+                // may not render natively, but the bytes are preserved.
                 tracing::warn!(
                     file = %candidate.name,
                     category = ?candidate.target.category,
                     elapsed_ms = file_start.elapsed().as_millis(),
                     error = %e,
-                    "[INGEST] Conversion failed, skipping file"
+                    "[INGEST] Conversion failed — registering ORIGINAL to avoid data loss"
                 );
+                // Drop any partial converted output the failed attempt left behind.
+                let _ = tokio::fs::remove_file(&conv_abs).await;
+
+                let photo_id = Uuid::new_v4().to_string();
+                let now = utc_now_iso();
+                let orig_mime = crate::media::mime_from_extension(&candidate.name);
+                let orig_media_type = conversion::media_type_str(candidate.target.category);
+
+                let (img_w, img_h, orig_cam, orig_lat, orig_lon, orig_taken) =
+                    extract_media_metadata_async(candidate.abs_path.clone()).await;
+                let final_taken_at = orig_taken
+                    .map(|t| normalize_iso_timestamp(&t))
+                    .or(candidate.modified.clone());
+
+                // Hash-based dedup against already-registered files.
+                let photo_hash = compute_photo_hash_streaming(&candidate.abs_path).await;
+                if let Some(ref hash) = photo_hash {
+                    let dup_exists: bool = sqlx::query_scalar(
+                        "SELECT COUNT(*) > 0 FROM photos WHERE photo_hash = ? AND user_id = ?",
+                    )
+                    .bind(hash)
+                    .bind(&admin_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or(false);
+                    if dup_exists {
+                        continue;
+                    }
+                }
+
+                // Best-effort thumbnail straight from the original — the thumbnail
+                // pipeline can often read a format the browser-native conversion
+                // choked on. Only record thumb_path when generation succeeds.
+                let thumb_ext = if orig_mime == "image/gif" { "gif" } else { "jpg" };
+                let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
+                let thumb_abs = storage_root.join(&thumb_rel);
+                let thumb_for_db: Option<String> = if generate_thumbnail_file(
+                    &candidate.abs_path,
+                    &thumb_abs,
+                    orig_mime,
+                    None,
+                )
+                .await
+                {
+                    Some(thumb_rel)
+                } else {
+                    None
+                };
+
+                let insert_result = sqlx::query(
+                    "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
+                     size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
+                     created_at, photo_hash, source_path) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&photo_id)
+                .bind(&admin_id)
+                .bind(&candidate.name)
+                .bind(&candidate.rel_path)
+                .bind(orig_mime)
+                .bind(orig_media_type)
+                .bind(candidate.size)
+                .bind(img_w)
+                .bind(img_h)
+                .bind(&final_taken_at)
+                .bind(orig_lat)
+                .bind(orig_lon)
+                .bind(&orig_cam)
+                .bind(&thumb_for_db)
+                .bind(&now)
+                .bind(&photo_hash)
+                .bind(&candidate.rel_path)
+                .execute(&pool)
+                .await;
+                match insert_result {
+                    Ok(result) if result.rows_affected() > 0 => {
+                        registered += 1;
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::error!(
+                            file = %candidate.name,
+                            error = %err,
+                            "[INGEST] Failed to register original after conversion failure"
+                        );
+                    }
+                }
             }
         }
     }

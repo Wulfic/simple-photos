@@ -187,6 +187,11 @@ internal fun PhotoPageContent(
     // Handled here inside detectTapGestures because a child tap detector
     // consumes the tap before any parent .clickable can see it.
     onToggleControls: () -> Unit = {},
+    // Reports whether THIS page is currently zoomed in (scale > 1×). The screen
+    // uses it to disable the swipe-to-dismiss / swipe-to-info detector while
+    // zoomed, so panning the zoomed image doesn't close the photo or open the
+    // info panel. (#9)
+    onZoomChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -300,6 +305,20 @@ internal fun PhotoPageContent(
     var zoomOffsetX by remember { mutableStateOf(0f) }
     var zoomOffsetY by remember { mutableStateOf(0f) }
 
+    // Report zoom state up to the screen (which gates swipe-to-dismiss) and
+    // reset zoom when this page scrolls off-screen so a page never comes back
+    // still zoomed in. Keyed on the boolean so it only re-fires on toggle, not
+    // on every pinch increment. (#9)
+    val isZoomed = zoomScale > 1f
+    LaunchedEffect(isActivePage, isZoomed) {
+        if (!isActivePage && isZoomed) {
+            zoomScale = 1f
+            zoomOffsetX = 0f
+            zoomOffsetY = 0f
+        }
+        onZoomChange(isActivePage && isZoomed)
+    }
+
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -318,6 +337,14 @@ internal fun PhotoPageContent(
                     var isMultiTouch = false
                     var prevCentroid = firstDown.position
                     var initialDist = 0f
+                    // Single-finger pan (while zoomed) must NOT consume events
+                    // until movement exceeds touch slop — otherwise a stationary
+                    // double-tap is swallowed (the sibling detectTapGestures sees
+                    // the consumed move as a cancel) and you can't zoom back out.
+                    // (#2)
+                    var panTriggered = false
+                    var panAccum = Offset.Zero
+                    val touchSlop = viewConfiguration.touchSlop
 
                     while (true) {
                         val event = awaitPointerEvent()
@@ -350,13 +377,21 @@ internal fun PhotoPageContent(
                             prevCentroid = centroid
                             event.changes.forEach { it.consume() }
                         } else if (zoomScale > 1f) {
-                            // Single finger pan while zoomed in
+                            // Single finger pan while zoomed in. Defer consuming
+                            // until past touch slop so a tap/double-tap (which
+                            // barely moves) flows to the tap detector. (#2)
                             val current = pressed[0].position
                             val pan = current - prevCentroid
-                            zoomOffsetX += pan.x
-                            zoomOffsetY += pan.y
                             prevCentroid = current
-                            event.changes.forEach { it.consume() }
+                            if (!panTriggered) {
+                                panAccum += pan
+                                if (panAccum.getDistance() > touchSlop) panTriggered = true
+                            }
+                            if (panTriggered) {
+                                zoomOffsetX += pan.x
+                                zoomOffsetY += pan.y
+                                event.changes.forEach { it.consume() }
+                            }
                         } else {
                             // Single finger at zoom 1× — DON'T consume, let
                             // HorizontalPager handle horizontal swiping

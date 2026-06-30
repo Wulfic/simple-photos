@@ -844,6 +844,13 @@ fn geo_routes() -> Router<AppState> {
             "/geo/trips/{trip_id}/photos",
             get(crate::geo::handlers::list_trip_photos),
         )
+        // Home location (manual override + inferred); excluded from trips
+        .route(
+            "/geo/home",
+            get(crate::geo::handlers::get_home)
+                .put(crate::geo::handlers::set_home)
+                .delete(crate::geo::handlers::clear_home),
+        )
         // Scrub
         .route("/geo/scrub", post(crate::geo::handlers::scrub_geo_data))
 }

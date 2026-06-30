@@ -107,17 +107,32 @@ class AlbumViewModel @Inject constructor(
             try {
                 serverBaseUrl = withContext(Dispatchers.IO) { photoRepository.getServerBaseUrl() }
             } catch (_: Exception) {}
-            // Sync album manifests from server (picks up web-created albums)
+            refresh()
+        }
+    }
+
+    /**
+     * Re-sync album manifests from the server and recompute the non-reactive
+     * snapshots (smart-album counts/covers, shared albums, Discover sections).
+     *
+     * The album *list* itself is a reactive Room Flow, but these snapshots were
+     * previously computed only once in `init`, so web-created albums and newly
+     * synced photos never appeared until the app was restarted (issue #12 —
+     * "Albums on Android do not auto-refresh"). The album screen now calls this
+     * on every ON_RESUME so re-entering the tab reflects the current state.
+     */
+    fun refresh() {
+        // Sync album manifests from server (picks up web-created albums). Writes
+        // to Room, so the reactive `albums` Flow updates the list automatically.
+        viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() }
             } catch (_: Exception) {}
-            // Load photo counts for smart albums
-            loadSmartAlbumCounts()
-            // Load shared albums (displayed at the bottom of the albums page)
-            loadSharedAlbums()
-            // Load Discover sections (people / pets / memories / trips)
-            loadDiscoverSections()
         }
+        // Recompute smart-album counts/covers, shared albums, and Discover.
+        loadSmartAlbumCounts()
+        loadSharedAlbums()
+        loadDiscoverSections()
     }
 
     private fun loadDiscoverSections() {

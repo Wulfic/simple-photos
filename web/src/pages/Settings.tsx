@@ -703,7 +703,7 @@ export default function Settings() {
             <img src="/logo.png" alt="Simple Photos" className="w-20 h-20 mb-3" />
             <h3 className="text-xl font-bold text-fg">Simple Photos</h3>
             <p className="text-sm text-fg-muted">
-              v1.0.0 — Self-hosted, end-to-end encrypted photo &amp; video library
+              v{__APP_VERSION__} — Self-hosted, end-to-end encrypted photo &amp; video library
             </p>
           </div>
           {/* Divider — vertical on wide screens, horizontal when stacked */}

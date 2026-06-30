@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -596,6 +597,7 @@ private fun MediaTile(
         }
 
         if (imageModel != null) {
+            val density = LocalDensity.current
             // Parse cropMetadata for thumbnail transforms (crop rect + rotation + brightness)
             val cropMeta = remember(photo.cropMetadata) {
                 photo.cropMetadata?.let {
@@ -669,10 +671,28 @@ private fun MediaTile(
                 }
             }
 
+            // Decode-size cap (option 7 — scroll perf). Decode each thumbnail at
+            // roughly its on-screen pixel size instead of a fixed 512: small tiles
+            // in dense rows over-decoded (≈2× wasted CPU + bitmap memory), which
+            // starved the UI thread and caused dropped frames on fast scroll over a
+            // large library. Cropped tiles draw a zoomed sub-rect, so they need
+            // proportionally more source resolution to stay sharp.
+            val decodePx = remember(widthDp, heightDp, cropped, cw, ch, density) {
+                val tilePx = with(density) { maxOf(widthDp, heightDp).toPx() }
+                val cropZoom = if (cropped) (1f / minOf(cw, ch)).coerceAtMost(3f) else 1f
+                (tilePx * cropZoom).toInt().coerceIn(256, 720)
+            }
+
             AsyncImage(
                 // GIFs: no size cap — Coil's GifDecoder needs the full data to
-                // produce an animated Drawable.
-                model = rememberThumbnailRequest(data = imageModel, size = if (isGif) null else 512),
+                // produce an animated Drawable. crossfade=false on the grid: the
+                // per-tile fade-in triggered a recomposition cascade during scroll
+                // (GPU was idle at ~2ms while frames still missed vsync).
+                model = rememberThumbnailRequest(
+                    data = imageModel,
+                    size = if (isGif) null else decodePx,
+                    crossfade = false,
+                ),
                 contentDescription = photo.filename,
                 contentScale = thumbScale,
                 modifier = thumbModifier,

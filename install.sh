@@ -1056,7 +1056,7 @@ max_connections = 5
 
 [storage]
 root = "${cfg_storage}"
-default_quota_bytes = 10737418240
+default_quota_bytes = 0
 max_blob_size_bytes = 5368709120
 
 [auth]

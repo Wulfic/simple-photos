@@ -258,6 +258,12 @@ fun PhotoViewerScreen(
     // pano consumes its own pan axis). See android-pano-pending-2026-06-20 #3.
     var liveVerticalDragActive by remember { mutableStateOf(false) }
 
+    // True while the active page is zoomed in (scale > 1×). Gates the
+    // screen-level swipe-to-dismiss / swipe-to-info detector so that panning a
+    // zoomed photo moves the image instead of closing it or opening the info
+    // panel. Reported up from PhotoPageContent. (#9)
+    var photoZoomed by remember { mutableStateOf(false) }
+
     // ── Info panel state ─────────────────────────────────────────────
     var showInfoPanel by remember { mutableStateOf(false) }
     var showTagPanel by remember { mutableStateOf(false) }
@@ -265,6 +271,219 @@ fun PhotoViewerScreen(
     // ── Download state ───────────────────────────────────────────────
     val scope = rememberCoroutineScope()
     var downloadMessage by remember { mutableStateOf<String?>(null) }
+    // Non-null when the converted file has a retained pre-conversion original,
+    // so the user is prompted to pick which one to save.
+    var showDownloadChoice by remember { mutableStateOf<PhotoEntity?>(null) }
+
+    // Save the CONVERTED (browser-native) file to the device Downloads folder.
+    val runConvertedDownload: (PhotoEntity) -> Unit = { photo ->
+        scope.launch {
+            try {
+                // AVIF/HEIC/HEIF have poor cross-app support; transcode to
+                // JPEG on download so the saved file opens in any gallery
+                // app (the "convert AVIF to JPEG" ask). Falls back to saving
+                // the original bytes if decode isn't available on this device.
+                val srcExt = photo.filename.substringAfterLast('.', "").lowercase()
+                if (srcExt == "avif" || srcExt == "heic" || srcExt == "heif") {
+                    val tempFile = java.io.File.createTempFile("save_", ".$srcExt", context.cacheDir)
+                    val staged = try {
+                        if (photo.localPath != null) {
+                            context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
+                                tempFile.outputStream().use { input.copyTo(it) }
+                            }
+                            tempFile.length() > 0
+                        } else {
+                            viewModel.downloadPhotoToFile(photo, tempFile)
+                        }
+                    } catch (_: Exception) { false }
+                    if (!staged) {
+                        tempFile.delete(); downloadMessage = "Download failed"; return@launch
+                    }
+                    val jpegBytes = viewModel.transcodeToJpegIfNeeded(tempFile, photo.filename)
+                    val baseName = if (photo.filename.contains('.'))
+                        photo.filename.substringBeforeLast('.') else photo.filename
+                    val outName = baseName + if (jpegBytes != null) ".jpg" else ".$srcExt"
+                    val outMime = when {
+                        jpegBytes != null -> "image/jpeg"
+                        srcExt == "avif" -> "image/avif"
+                        else -> "image/heif"
+                    }
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, outName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, outMime)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                        }
+                    }
+                    val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                    else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    val destUri = context.contentResolver.insert(collectionUri, values)
+                    if (destUri == null) {
+                        tempFile.delete(); downloadMessage = "Download failed"; return@launch
+                    }
+                    val ok = try {
+                        context.contentResolver.openOutputStream(destUri)?.use { output ->
+                            if (jpegBytes != null) output.write(jpegBytes)
+                            else tempFile.inputStream().buffered().use { it.copyTo(output) }
+                        }
+                        true
+                    } catch (_: Exception) { false }
+                    tempFile.delete()
+                    downloadMessage = if (ok) "Saved to Downloads" else "Download failed"
+                    return@launch
+                }
+
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
+                    put(MediaStore.MediaColumns.MIME_TYPE, when {
+                        photo.filename.endsWith(".png", true) -> "image/png"
+                        photo.filename.endsWith(".gif", true) -> "image/gif"
+                        photo.filename.endsWith(".mp4", true) -> "video/mp4"
+                        photo.filename.endsWith(".webm", true) -> "video/webm"
+                        else -> "image/jpeg"
+                    })
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+                }
+                // MediaStore.Downloads.EXTERNAL_CONTENT_URI requires API 29 (Q).
+                // On older API levels (26-28) fall back to the per-type Media
+                // collections, which are available since API 1.
+                val isVideo = photo.filename.endsWith(".mp4", true) ||
+                    photo.filename.endsWith(".webm", true)
+                val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                } else if (isVideo) {
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                } else {
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                }
+                val destUri = context.contentResolver.insert(
+                    collectionUri, values
+                )
+                if (destUri == null) {
+                    downloadMessage = "Download failed"
+                    return@launch
+                }
+
+                val saved = when {
+                    // Local files: stream from content resolver
+                    photo.localPath != null -> {
+                        try {
+                            context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
+                                context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            true
+                        } catch (_: Exception) { false }
+                    }
+                    // Server files: stream download → temp file → MediaStore
+                    // Uses downloadPhotoToFile() which streams to disk with
+                    // constant ~8 KB heap — safe for large videos.
+                    else -> {
+                        val tempFile = java.io.File.createTempFile("save_", ".tmp", context.cacheDir)
+                        try {
+                            val ok = viewModel.downloadPhotoToFile(photo, tempFile)
+                            if (ok) {
+                                tempFile.inputStream().buffered().use { input ->
+                                    context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                            }
+                            ok
+                        } finally {
+                            tempFile.delete()
+                        }
+                    }
+                }
+
+                downloadMessage = if (saved) "Saved to Downloads" else "Download failed"
+            } catch (e: Exception) {
+                downloadMessage = "Download failed: ${e.message}"
+            }
+        }
+        Unit
+    }
+
+    // Save the ORIGINAL, unconverted source file (the retained pre-conversion
+    // original) to the device Downloads folder.
+    val runOriginalDownload: (PhotoEntity) -> Unit = { photo ->
+        val serverId = photo.serverPhotoId
+        if (serverId == null) {
+            downloadMessage = "Original not available"
+        } else {
+            scope.launch {
+                try {
+                    // Recover the original filename/extension from the source path.
+                    val srcName = photo.sourcePath
+                        ?.substringAfterLast('/')?.substringAfterLast('\\')
+                        ?.takeIf { it.isNotBlank() } ?: photo.filename
+                    val ext = srcName.substringAfterLast('.', "").lowercase()
+                    val mime = when (ext) {
+                        "heic", "heif" -> "image/heic"
+                        "png" -> "image/png"
+                        "gif" -> "image/gif"
+                        "webp" -> "image/webp"
+                        "tiff", "tif" -> "image/tiff"
+                        "bmp" -> "image/bmp"
+                        "mp4" -> "video/mp4"
+                        "mkv" -> "video/x-matroska"
+                        "avi" -> "video/x-msvideo"
+                        "mov" -> "video/quicktime"
+                        "webm" -> "video/webm"
+                        "wmv" -> "video/x-ms-wmv"
+                        "flac" -> "audio/flac"
+                        "wav" -> "audio/wav"
+                        "ogg" -> "audio/ogg"
+                        "mp3" -> "audio/mpeg"
+                        else -> "application/octet-stream"
+                    }
+                    val isVideo = mime.startsWith("video/")
+                    val isAudio = mime.startsWith("audio/")
+                    val tempFile = java.io.File.createTempFile("orig_", ".$ext", context.cacheDir)
+                    try {
+                        val ok = viewModel.downloadSourceToFile(serverId, tempFile)
+                        if (!ok) { downloadMessage = "Download failed"; return@launch }
+                        val values = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, srcName)
+                            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                            }
+                        }
+                        val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                        } else if (isVideo) {
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                        } else if (isAudio) {
+                            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                        } else {
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        }
+                        val destUri = context.contentResolver.insert(collectionUri, values)
+                        if (destUri == null) { downloadMessage = "Download failed"; return@launch }
+                        val saved = try {
+                            tempFile.inputStream().buffered().use { input ->
+                                context.contentResolver.openOutputStream(destUri)?.use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                            true
+                        } catch (_: Exception) { false }
+                        downloadMessage = if (saved) "Saved original to Downloads" else "Download failed"
+                    } finally {
+                        tempFile.delete()
+                    }
+                } catch (e: Exception) {
+                    downloadMessage = "Download failed: ${e.message}"
+                }
+            }
+        }
+        Unit
+    }
 
     // ── Edit mode state ──────────────────────────────────────────────
     var editMode by remember { mutableStateOf(false) }
@@ -452,7 +671,7 @@ fun PhotoViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(editMode, liveVerticalDragActive, showInfoPanel) {
+            .pointerInput(editMode, liveVerticalDragActive, showInfoPanel, photoZoomed) {
                 // Detect vertical swipes: up → info panel, down → close viewer
                 // Only at the top level so it doesn't conflict with zoom panning.
                 //
@@ -470,7 +689,10 @@ fun PhotoViewerScreen(
                 // vertical scroll drags (the long Edit Metadata form could not be
                 // scrolled). The panel has its own ✕ to close. See
                 // android-scroll-in-capped-column-2026-06-21.
-                if (editMode || liveVerticalDragActive || showInfoPanel) return@pointerInput
+                // ALSO disabled while the active photo is zoomed in: the per-page
+                // handler owns single-finger pans then, and reading them here on
+                // the Initial pass would steal the pan and dismiss/open-info. (#9)
+                if (editMode || liveVerticalDragActive || showInfoPanel || photoZoomed) return@pointerInput
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     var totalY = 0f
@@ -575,6 +797,9 @@ fun PhotoViewerScreen(
                             liveVerticalDragActive = live && usesVert
                         }
                     },
+                    // Only the active page may drive the screen-level zoom gate,
+                    // so an adjacent page resetting its zoom can't clobber it. (#9)
+                    onZoomChange = { z -> if (pagerState.currentPage == page) photoZoomed = z },
                     onVideoUriReady = { uri, filename ->
                         // Load the new media item into the shared player.
                         // Only swap if the URI actually changed (avoids re-prepare
@@ -834,8 +1059,8 @@ fun PhotoViewerScreen(
                                 )
                             }
                         }
-                        // Edit button — available for photos, videos, and audio
-                        if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
+                        // Edit button — available for photos, GIFs, videos, and audio
+                        if (currentPhoto.mediaType == "photo" || currentPhoto.mediaType == "gif" || currentPhoto.mediaType == "video" || currentPhoto.mediaType == "audio") {
                             TextButton(
                                 onClick = {
                                     if (editMode) {
@@ -854,136 +1079,16 @@ fun PhotoViewerScreen(
                                 )
                             }
                         }
-                        // Download button
+                        // Download button — converted files prompt original-vs-converted
                         IconButton(modifier = Modifier.size(40.dp), onClick = {
                             val photo = currentPhoto ?: return@IconButton
-                            scope.launch {
-                                try {
-                                    // AVIF/HEIC/HEIF have poor cross-app support; transcode to
-                                    // JPEG on download so the saved file opens in any gallery
-                                    // app (the "convert AVIF to JPEG" ask). Falls back to saving
-                                    // the original bytes if decode isn't available on this device.
-                                    val srcExt = photo.filename.substringAfterLast('.', "").lowercase()
-                                    if (srcExt == "avif" || srcExt == "heic" || srcExt == "heif") {
-                                        val tempFile = java.io.File.createTempFile("save_", ".$srcExt", context.cacheDir)
-                                        val staged = try {
-                                            if (photo.localPath != null) {
-                                                context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
-                                                    tempFile.outputStream().use { input.copyTo(it) }
-                                                }
-                                                tempFile.length() > 0
-                                            } else {
-                                                viewModel.downloadPhotoToFile(photo, tempFile)
-                                            }
-                                        } catch (_: Exception) { false }
-                                        if (!staged) {
-                                            tempFile.delete(); downloadMessage = "Download failed"; return@launch
-                                        }
-                                        val jpegBytes = viewModel.transcodeToJpegIfNeeded(tempFile, photo.filename)
-                                        val baseName = if (photo.filename.contains('.'))
-                                            photo.filename.substringBeforeLast('.') else photo.filename
-                                        val outName = baseName + if (jpegBytes != null) ".jpg" else ".$srcExt"
-                                        val outMime = when {
-                                            jpegBytes != null -> "image/jpeg"
-                                            srcExt == "avif" -> "image/avif"
-                                            else -> "image/heif"
-                                        }
-                                        val values = ContentValues().apply {
-                                            put(MediaStore.MediaColumns.DISPLAY_NAME, outName)
-                                            put(MediaStore.MediaColumns.MIME_TYPE, outMime)
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                                            }
-                                        }
-                                        val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                                            MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                                        else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                                        val destUri = context.contentResolver.insert(collectionUri, values)
-                                        if (destUri == null) {
-                                            tempFile.delete(); downloadMessage = "Download failed"; return@launch
-                                        }
-                                        val ok = try {
-                                            context.contentResolver.openOutputStream(destUri)?.use { output ->
-                                                if (jpegBytes != null) output.write(jpegBytes)
-                                                else tempFile.inputStream().buffered().use { it.copyTo(output) }
-                                            }
-                                            true
-                                        } catch (_: Exception) { false }
-                                        tempFile.delete()
-                                        downloadMessage = if (ok) "Saved to Downloads" else "Download failed"
-                                        return@launch
-                                    }
-
-                                    val values = ContentValues().apply {
-                                        put(MediaStore.MediaColumns.DISPLAY_NAME, photo.filename)
-                                        put(MediaStore.MediaColumns.MIME_TYPE, when {
-                                            photo.filename.endsWith(".png", true) -> "image/png"
-                                            photo.filename.endsWith(".gif", true) -> "image/gif"
-                                            photo.filename.endsWith(".mp4", true) -> "video/mp4"
-                                            photo.filename.endsWith(".webm", true) -> "video/webm"
-                                            else -> "image/jpeg"
-                                        })
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                                        }
-                                    }
-                                    // MediaStore.Downloads.EXTERNAL_CONTENT_URI requires API 29 (Q).
-                                    // On older API levels (26-28) fall back to the per-type Media
-                                    // collections, which are available since API 1.
-                                    val isVideo = photo.filename.endsWith(".mp4", true) ||
-                                        photo.filename.endsWith(".webm", true)
-                                    val collectionUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                                    } else if (isVideo) {
-                                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                                    } else {
-                                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                                    }
-                                    val destUri = context.contentResolver.insert(
-                                        collectionUri, values
-                                    )
-                                    if (destUri == null) {
-                                        downloadMessage = "Download failed"
-                                        return@launch
-                                    }
-
-                                    val saved = when {
-                                        // Local files: stream from content resolver
-                                        photo.localPath != null -> {
-                                            try {
-                                                context.contentResolver.openInputStream(Uri.parse(photo.localPath))?.use { input ->
-                                                    context.contentResolver.openOutputStream(destUri)?.use { output ->
-                                                        input.copyTo(output)
-                                                    }
-                                                }
-                                                true
-                                            } catch (_: Exception) { false }
-                                        }
-                                        // Server files: stream download → temp file → MediaStore
-                                        // Uses downloadPhotoToFile() which streams to disk with
-                                        // constant ~8 KB heap — safe for large videos.
-                                        else -> {
-                                            val tempFile = java.io.File.createTempFile("save_", ".tmp", context.cacheDir)
-                                            try {
-                                                val ok = viewModel.downloadPhotoToFile(photo, tempFile)
-                                                if (ok) {
-                                                    tempFile.inputStream().buffered().use { input ->
-                                                        context.contentResolver.openOutputStream(destUri)?.use { output ->
-                                                            input.copyTo(output)
-                                                        }
-                                                    }
-                                                }
-                                                ok
-                                            } finally {
-                                                tempFile.delete()
-                                            }
-                                        }
-                                    }
-
-                                    downloadMessage = if (saved) "Saved to Downloads" else "Download failed"
-                                } catch (e: Exception) {
-                                    downloadMessage = "Download failed: ${e.message}"
-                                }
+                            // Converted files keep their pre-conversion original — let the
+                            // user pick which to save. Edits download the displayed file, so
+                            // only offer the choice outside edit mode.
+                            if (photo.sourcePath != null && !editMode) {
+                                showDownloadChoice = photo
+                            } else {
+                                runConvertedDownload(photo)
                             }
                         }) {
                             Icon(
@@ -1114,6 +1219,32 @@ fun PhotoViewerScreen(
             ) {
                 Text(msg)
             }
+        }
+
+        // ── Original-vs-converted download choice ──────────────────────
+        showDownloadChoice?.let { photo ->
+            AlertDialog(
+                onDismissRequest = { showDownloadChoice = null },
+                title = { Text("Download") },
+                text = {
+                    Text(
+                        "This file was converted on import. Download the original " +
+                            "unconverted file, or the converted copy?"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDownloadChoice = null
+                        runOriginalDownload(photo)
+                    }) { Text("Original") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showDownloadChoice = null
+                        runConvertedDownload(photo)
+                    }) { Text("Converted") }
+                }
+            )
         }
     }
 }

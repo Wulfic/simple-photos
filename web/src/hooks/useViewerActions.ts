@@ -437,8 +437,12 @@ export default function useViewerActions({
   const handleDownload = useCallback(async () => {
     if (!mediaUrl) return;
 
-    const isImage = mediaType === "photo" || mediaType === "gif";
-    const isVideoOrAudio = mediaType === "video" || mediaType === "audio";
+    // Static images bake edits client-side via Canvas. GIFs must NOT — canvas
+    // would flatten the animation to a single frame — so they route through the
+    // server ffmpeg render path alongside video/audio.
+    const isImage = mediaType === "photo";
+    const isServerRendered =
+      mediaType === "video" || mediaType === "audio" || mediaType === "gif";
 
     // ── Converted file without edits: ask user which version to download ─
     if (!cropData) {
@@ -468,8 +472,8 @@ export default function useViewerActions({
       }
     }
 
-    // ── Video / Audio: send to server ffmpeg render endpoint ───────────────
-    if (cropData && isVideoOrAudio) {
+    // ── Video / Audio / GIF: send to server ffmpeg render endpoint ─────────
+    if (cropData && isServerRendered) {
       // Look up the serverPhotoId — render endpoint is keyed by photos table ID
       const cached = id ? await db.photos.get(id) : undefined;
       const serverPhotoId = cached?.serverPhotoId ?? (cached?.serverSide ? id : undefined);

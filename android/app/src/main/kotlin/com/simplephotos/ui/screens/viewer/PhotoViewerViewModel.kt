@@ -633,6 +633,19 @@ class PhotoViewerViewModel @Inject constructor(
         }
 
     /**
+     * Download the original UNCONVERTED source file (the retained pre-conversion
+     * original) for a converted photo to [outputFile]. Returns true on success.
+     */
+    suspend fun downloadSourceToFile(serverPhotoId: String, outputFile: java.io.File): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                photoRepository.downloadSourceFileToFile(serverPhotoId, outputFile)
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+    /**
      * If [sourceFile] is an AVIF/HEIC/HEIF image (formats many gallery apps
      * can't open), decode it and re-encode as JPEG, returning the JPEG bytes.
      * Returns null when it's not such a format OR decode is unavailable on this

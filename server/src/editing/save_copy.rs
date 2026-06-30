@@ -206,6 +206,10 @@ pub async fn duplicate_photo(
 
     let media_type = original.media_type.as_str();
     let has_edits = meta.is_some();
+    // GIFs are stored with media_type "photo" (mime image/gif). The image crate
+    // decodes only their first frame, so an edited GIF must be re-encoded via
+    // ffmpeg to keep its animation. Detect by mime, not media_type.
+    let is_gif = original.mime_type == "image/gif";
 
     // ── Render or copy the file ──────────────────────────────────────────
     if has_edits && (media_type == "video" || media_type == "audio") {
@@ -223,6 +227,26 @@ pub async fn duplicate_photo(
         )
         .await?;
         tracing::info!("[editing/save_copy] FFmpeg render completed");
+    } else if has_edits && is_gif {
+        tracing::info!(
+            "[editing/save_copy] Rendering animated GIF via ffmpeg: {} → {}",
+            source_abs.display(),
+            copy_abs.display(),
+        );
+        // Preserve animation via ffmpeg. If ffmpeg is unavailable, fall back to
+        // a single-frame render through the image crate so the copy still
+        // succeeds (with a warning) rather than failing outright.
+        if let Err(e) =
+            super::ffmpeg::run_gif_render(&source_abs, &copy_abs, meta.as_ref().unwrap()).await
+        {
+            tracing::warn!(
+                "[editing/save_copy] GIF ffmpeg render failed ({e}) — \
+                 falling back to single-frame image render"
+            );
+            super::image_render::render_image(&source_abs, &copy_abs, meta.as_ref().unwrap())
+                .await?;
+        }
+        tracing::info!("[editing/save_copy] GIF render completed");
     } else if has_edits && media_type == "photo" {
         tracing::info!(
             "[editing/save_copy] Rendering photo via image crate: {} → {}",

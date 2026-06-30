@@ -42,6 +42,44 @@ pub(crate) fn check_etag(headers: &HeaderMap, etag: &str) -> Option<Response> {
     None
 }
 
+/// Cheaply test whether a blob file is a v2 chunked container by reading only
+/// its 8-byte magic prefix. Returns `false` on any I/O error (treat as v1).
+async fn peek_is_chunked(path: &std::path::Path) -> bool {
+    use tokio::io::AsyncReadExt;
+    match tokio::fs::File::open(path).await {
+        Ok(mut f) => {
+            let mut magic = [0u8; 8];
+            f.read_exact(&mut magic)
+                .await
+                .map(|_| crate::blobs::chunked::is_chunked(&magic))
+                .unwrap_or(false)
+        }
+        Err(_) => false,
+    }
+}
+
+/// Build a streaming response body that decrypts a v2 chunked blob one frame at
+/// a time on a blocking thread, so a multi-GB video never lives in memory. A
+/// bounded channel provides backpressure between the decrypt thread and the
+/// network.
+fn chunked_decrypt_body(key: [u8; 32], path: std::path::PathBuf) -> Body {
+    let (tx, mut rx) =
+        tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
+    tokio::task::spawn_blocking(move || {
+        let res = crate::blobs::chunked::for_each_plaintext_chunk(&key, &path, |chunk| {
+            tx.blocking_send(Ok(axum::body::Bytes::from(chunk))).is_ok()
+        });
+        if let Err(e) = res {
+            let _ = tx.blocking_send(Err(std::io::Error::other(e)));
+        }
+    });
+    Body::from_stream(async_stream::stream! {
+        while let Some(item) = rx.recv().await {
+            yield item;
+        }
+    })
+}
+
 /// Internal helper: serve a file with optional HTTP Range + ETag support.
 /// `etag` is optional — if provided, the response includes the ETag header
 /// and If-None-Match is checked for 304 early-return.
@@ -185,7 +223,13 @@ pub async fn serve_photo(
     crate::gallery::access::require_secure_access(&state, &auth.user_id, &photo_id, &gallery_token)
         .await?;
 
-    // ── Encrypted blob fallback (blob-only photos, e.g. rendered duplicates) ─
+    // ── Encrypted blob serving ───────────────────────────────────────────
+    // All encrypted-mode media (every photo AND video) has an empty file_path
+    // and lives in an encrypted blob. Videos here are routinely multi-GB, so we
+    // must NOT decrypt the whole blob into RAM per request (that caused the long
+    // black screen / unresponsive download in issue #10, and is a server-memory
+    // risk under concurrency). Instead: honor HTTP Range by decrypting only the
+    // requested frames, and stream full responses frame-by-frame.
     if file_path.is_empty() {
         if enc_blob_id.is_empty() {
             return Err(AppError::NotFound);
@@ -202,26 +246,138 @@ pub async fn serve_photo(
                 .fetch_optional(&state.read_pool)
                 .await?
                 .ok_or(AppError::NotFound)?;
+        let blob_abs = storage_root.join(&blob_storage_path);
+        let content_type = HeaderValue::from_str(&mime_type)
+            .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+
+        // v2 chunked blobs support seeking + frame-by-frame streaming; v1
+        // monolithic blobs are below the 32 MiB chunk threshold (small).
+        if peek_is_chunked(&blob_abs).await {
+            // photos.size_bytes is 0 for encrypted media, so recover the true
+            // plaintext length from the blob frames (no decryption needed).
+            let path_for_len = blob_abs.clone();
+            let total_size = tokio::task::spawn_blocking(move || {
+                crate::blobs::chunked::plaintext_len_from_file(&path_for_len)
+            })
+            .await
+            .map_err(|e| AppError::Internal(format!("Length probe panicked: {e}")))?
+            .map_err(|e| AppError::Internal(format!("Length probe failed: {e}")))?;
+
+            let etag = format!("\"{}-enc-{}\"", photo_id, total_size);
+            if let Some(not_modified) = check_etag(&headers, &etag) {
+                return Ok(not_modified);
+            }
+
+            // Range request (video seek / download resume): decrypt only the
+            // overlapping chunk frames → 206 Partial Content.
+            if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
+                if let Some((start, end)) =
+                    crate::http_utils::parse_range_header(range_header, total_size)
+                {
+                    let length = end - start + 1;
+                    let path2 = blob_abs.clone();
+                    let bytes = tokio::task::spawn_blocking(move || {
+                        crate::blobs::chunked::decrypt_chunked_range_from_file(
+                            &key, &path2, start, end,
+                        )
+                    })
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Range decrypt panicked: {e}")))?
+                    .map_err(|e| AppError::Internal(format!("Range decrypt failed: {e}")))?;
+
+                    return Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header("Content-Type", content_type)
+                        .header("Content-Length", HeaderValue::from(length))
+                        .header(
+                            "Content-Range",
+                            HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}"))
+                                .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
+                        )
+                        .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+                        .header(
+                            "ETag",
+                            HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+                        )
+                        .header(
+                            "Cache-Control",
+                            HeaderValue::from_static("private, max-age=86400"),
+                        )
+                        .body(Body::from(bytes))
+                        .map_err(|e| AppError::Internal(e.to_string()));
+                } else {
+                    return Response::builder()
+                        .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                        .header(
+                            "Content-Range",
+                            HeaderValue::from_str(&format!("bytes */{total_size}"))
+                                .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
+                        )
+                        .body(Body::empty())
+                        .map_err(|e| AppError::Internal(e.to_string()));
+                }
+            }
+
+            // No Range: stream the whole file frame-by-frame → 200 OK.
+            let body = chunked_decrypt_body(key, blob_abs);
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", content_type)
+                .header("Content-Length", HeaderValue::from(total_size))
+                .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+                .header(
+                    "Cache-Control",
+                    HeaderValue::from_static("private, max-age=86400"),
+                )
+                .header(
+                    "ETag",
+                    HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+                )
+                .body(body)
+                .map_err(|e| AppError::Internal(e.to_string()));
+        }
+
+        // v1 monolithic (small): decrypt whole, slice for Range.
         let enc_data = storage::read_blob(&storage_root, &blob_storage_path).await?;
-        // Format-aware: handles both the legacy monolithic envelope and the v2
-        // chunked container (large videos) — see blobs/chunked.rs.
         let raw_bytes = tokio::task::spawn_blocking(move || {
             crate::blobs::chunked::decrypt_photo_blob(&key, &enc_data)
         })
         .await
         .map_err(|e| AppError::Internal(format!("Decrypt panicked: {e}")))?
         .map_err(|e| AppError::Internal(format!("Decrypt failed: {e}")))?;
-        let etag = format!("\"{}-enc-{}\"", photo_id, raw_bytes.len());
+        let total_size = raw_bytes.len() as u64;
+        let etag = format!("\"{}-enc-{}\"", photo_id, total_size);
         if let Some(not_modified) = check_etag(&headers, &etag) {
             return Ok(not_modified);
         }
-        let ct = HeaderValue::from_str(&mime_type)
-            .unwrap_or(HeaderValue::from_static("application/octet-stream"));
-        let len = raw_bytes.len();
+        if let Some(range_header) = headers.get("range").and_then(|v| v.to_str().ok()) {
+            if let Some((start, end)) =
+                crate::http_utils::parse_range_header(range_header, total_size)
+            {
+                let length = end - start + 1;
+                let slice = raw_bytes[start as usize..=end as usize].to_vec();
+                return Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header("Content-Type", content_type)
+                    .header("Content-Length", HeaderValue::from(length))
+                    .header(
+                        "Content-Range",
+                        HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}"))
+                            .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
+                    )
+                    .header("Accept-Ranges", HeaderValue::from_static("bytes"))
+                    .header(
+                        "ETag",
+                        HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+                    )
+                    .body(Body::from(slice))
+                    .map_err(|e| AppError::Internal(e.to_string()));
+            }
+        }
         return Response::builder()
             .status(StatusCode::OK)
-            .header("Content-Type", ct)
-            .header("Content-Length", HeaderValue::from(len))
+            .header("Content-Type", content_type)
+            .header("Content-Length", HeaderValue::from(total_size))
             .header("Accept-Ranges", HeaderValue::from_static("bytes"))
             .header(
                 "Cache-Control",

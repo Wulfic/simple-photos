@@ -63,11 +63,15 @@ fun ViewerEditPanel(
     ) {
         val currentMediaType = currentPhoto?.mediaType ?: "photo"
         val isPhoto = currentMediaType == "photo"
+        val isGif = currentMediaType == "gif"
         val isVideo = currentMediaType == "video"
         val isAudio = currentMediaType == "audio"
-        val showCrop = isPhoto || isVideo
-        val showBrightness = isPhoto || isVideo
-        val showRotate = isPhoto || isVideo
+        // GIFs support the same still-image edits (crop/brightness/rotate); no
+        // trim tab. Bakes are re-encoded server-side via ffmpeg so the
+        // animation survives.
+        val showCrop = isPhoto || isGif || isVideo
+        val showBrightness = isPhoto || isGif || isVideo
+        val showRotate = isPhoto || isGif || isVideo
         val showTrim = isVideo || isAudio
 
         // The viewer is always dark, so neutral SpButton variants must read the

@@ -25,10 +25,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.local.entities.AlbumEntity
@@ -70,6 +73,20 @@ fun AlbumListScreen(
     // Load cover photos whenever the albums list changes
     LaunchedEffect(albums) {
         viewModel.loadCoverPhotos(albums)
+    }
+
+    // Re-sync albums + recompute smart counts on resume so changes made
+    // elsewhere (e.g. an album created on the web) appear when the user returns
+    // to the app, instead of only on a cold start (issue #12).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refresh()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Scaffold(

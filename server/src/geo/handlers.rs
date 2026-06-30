@@ -672,9 +672,21 @@ pub async fn list_trips(
         cover_thumb: Option<String>,
     }
 
+    // Exclude the user's home city so everyday local photos don't form "trips"
+    // (issue #6). Manual override wins, else the most-photographed city.
+    let home = resolve_home(&state.pool, &auth.user_id).await;
+
     let mut clusters: Vec<Cluster> = Vec::new();
 
     for row in rows {
+        if let Some(ref h) = home {
+            let same_city = h.city.eq_ignore_ascii_case(&row.city);
+            let same_country =
+                h.country_code.is_empty() || h.country_code.eq_ignore_ascii_case(&row.country_code);
+            if same_city && same_country {
+                continue;
+            }
+        }
         let date = match parse_date(&row.taken_date) {
             Some(d) => d,
             None => continue,
@@ -865,6 +877,151 @@ pub async fn scrub_geo_data(
     Ok(Json(serde_json::json!({
         "scrubbed_photos": count,
     })))
+}
+
+// ── Home location ────────────────────────────────────────────────────
+//
+// "Home" is modelled as a city (the offline geocoder is reverse-only, so we
+// can't forward-geocode an arbitrary street address). It is either an explicit
+// manual override or inferred as the most-photographed city. Trip detection
+// excludes the home city so everyday local photos don't form "trips" (issue #6).
+
+const HOME_CITY_KEY: &str = "geo_home_city";
+const HOME_STATE_KEY: &str = "geo_home_state";
+const HOME_COUNTRY_KEY: &str = "geo_home_country_code";
+
+#[derive(Clone, Serialize)]
+pub struct HomeCity {
+    pub city: String,
+    pub state: Option<String>,
+    pub country_code: String,
+}
+
+#[derive(Serialize)]
+pub struct HomeResponse {
+    /// Effective home: the manual override if set, otherwise the inferred city.
+    pub home: Option<HomeCity>,
+    /// "manual" | "inferred" | "none"
+    pub source: String,
+    /// The inferred home regardless of any manual override (lets the settings
+    /// UI show "we think your home is X" next to the override field).
+    pub inferred: Option<HomeCity>,
+}
+
+#[derive(Deserialize)]
+pub struct SetHomeRequest {
+    pub city: String,
+    pub state: Option<String>,
+    pub country_code: Option<String>,
+}
+
+/// Infer the home city as the most-photographed `(country_code, city)` pair.
+async fn infer_home(pool: &SqlitePool, user_id: &str) -> Option<HomeCity> {
+    let row: Option<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT geo_city, geo_state, COALESCE(geo_country_code, '') \
+         FROM photos \
+         WHERE user_id = ?1 AND geo_city IS NOT NULL AND geo_city != '' \
+         GROUP BY geo_country_code, geo_city \
+         ORDER BY COUNT(*) DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    row.map(|(city, state, country_code)| HomeCity {
+        city,
+        state: state.filter(|s| !s.is_empty()),
+        country_code,
+    })
+}
+
+/// Read the explicit manual home override, if one is set.
+async fn manual_home(pool: &SqlitePool, user_id: &str) -> Option<HomeCity> {
+    let city = get_user_setting(pool, user_id, HOME_CITY_KEY)
+        .await
+        .filter(|s| !s.is_empty())?;
+    Some(HomeCity {
+        city,
+        state: get_user_setting(pool, user_id, HOME_STATE_KEY)
+            .await
+            .filter(|s| !s.is_empty()),
+        country_code: get_user_setting(pool, user_id, HOME_COUNTRY_KEY)
+            .await
+            .unwrap_or_default(),
+    })
+}
+
+/// Resolve the effective home (manual override → inferred). Shared by trip
+/// detection so it stays consistent with what the settings UI shows.
+pub(crate) async fn resolve_home(pool: &SqlitePool, user_id: &str) -> Option<HomeCity> {
+    if let Some(h) = manual_home(pool, user_id).await {
+        return Some(h);
+    }
+    infer_home(pool, user_id).await
+}
+
+/// GET /api/geo/home — the effective home plus the inferred suggestion.
+pub async fn get_home(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<HomeResponse>, AppError> {
+    let inferred = infer_home(&state.pool, &auth.user_id).await;
+    let (home, source) = if let Some(m) = manual_home(&state.pool, &auth.user_id).await {
+        (Some(m), "manual")
+    } else if let Some(inf) = inferred.clone() {
+        (Some(inf), "inferred")
+    } else {
+        (None, "none")
+    };
+    Ok(Json(HomeResponse {
+        home,
+        source: source.to_string(),
+        inferred,
+    }))
+}
+
+/// PUT /api/geo/home — set a manual home city override.
+pub async fn set_home(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(req): Json<SetHomeRequest>,
+) -> Result<Json<HomeResponse>, AppError> {
+    let city = req.city.trim();
+    if city.is_empty() {
+        return Err(AppError::BadRequest("Home city must not be empty".into()));
+    }
+    upsert_user_setting(&state.pool, &auth.user_id, HOME_CITY_KEY, city).await?;
+    upsert_user_setting(
+        &state.pool,
+        &auth.user_id,
+        HOME_COUNTRY_KEY,
+        req.country_code.as_deref().unwrap_or("").trim(),
+    )
+    .await?;
+    upsert_user_setting(
+        &state.pool,
+        &auth.user_id,
+        HOME_STATE_KEY,
+        req.state.as_deref().unwrap_or("").trim(),
+    )
+    .await?;
+    get_home(State(state), auth).await
+}
+
+/// DELETE /api/geo/home — clear the manual override (revert to inferred).
+pub async fn clear_home(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<HomeResponse>, AppError> {
+    for key in [HOME_CITY_KEY, HOME_STATE_KEY, HOME_COUNTRY_KEY] {
+        sqlx::query("DELETE FROM user_settings WHERE user_id = ?1 AND key = ?2")
+            .bind(&auth.user_id)
+            .bind(key)
+            .execute(&state.pool)
+            .await?;
+    }
+    get_home(State(state), auth).await
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

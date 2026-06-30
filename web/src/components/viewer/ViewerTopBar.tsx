@@ -86,7 +86,7 @@ export default function ViewerTopBar({
             <AppIcon name="tag" size="w-5 h-5" themed={false} className="invert" />
           </button>
         )}
-        {(mediaType === "photo" || mediaType === "video" || mediaType === "audio") && !isBackupServer && (
+        {(mediaType === "photo" || mediaType === "gif" || mediaType === "video" || mediaType === "audio") && !isBackupServer && (
           <button
             onClick={onToggleEdit}
             className={`flex items-center gap-1 px-2 py-1 rounded text-sm font-medium transition-colors ${

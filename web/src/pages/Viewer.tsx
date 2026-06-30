@@ -599,7 +599,10 @@ export default function Viewer() {
              same React tree position across normal ↔ edit transitions, preventing
              blob-URL reload failures (which caused BMP blanking & alt-text filenames) */}
         {mediaUrl && (mediaType === "photo" || mediaType === "gif") && (() => {
-          const inEdit = editMode && mediaType === "photo";
+          // GIFs are editable too — the live preview applies crop/rotate/
+          // brightness via CSS, which animates fine on an <img> GIF; the bake
+          // is done server-side via ffmpeg so the animation is preserved.
+          const inEdit = editMode && (mediaType === "photo" || mediaType === "gif");
           const rot = inEdit ? ((rotateValue % 360) + 360) % 360 : 0;
           const isSwapped = rot === 90 || rot === 270;
 
@@ -948,7 +951,7 @@ export default function Viewer() {
       </div>
 
       {/* Edit panel */}
-      {editMode && mediaUrl && (mediaType === "photo" || mediaType === "video" || mediaType === "audio") && (
+      {editMode && mediaUrl && (mediaType === "photo" || mediaType === "gif" || mediaType === "video" || mediaType === "audio") && (
         <ViewerEditPanel
           editTab={editTab} setEditTab={setEditTab}
           mediaType={mediaType} brightness={brightness} setBrightness={setBrightness}
