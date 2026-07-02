@@ -14,7 +14,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { thumbnailCache } from "../cache/thumbnailCache";
 import { blobUrlManager } from "../cache/blobUrlManager";
 import { blobsApi } from "../../api/blobs";
-import { decrypt } from "../../crypto/crypto";
+import { decryptPhotoBlob } from "../../crypto/blobEnvelope";
 import { useAuthStore } from "../../store/auth";
 import { appendGalleryTokenParam } from "../../utils/galleryToken";
 import type { ThumbnailSource, ThumbnailState, ThumbnailResult } from "../types";
@@ -88,15 +88,10 @@ export function useThumbnailLoader(
         try {
           const encData = await blobsApi.download(source.encryptedThumbBlobId!);
           if (cancelled) return;
-          const plaintext = await decrypt(encData);
+          const { payload, bytes } = await decryptPhotoBlob(encData);
           if (cancelled) return;
-          const json = JSON.parse(new TextDecoder().decode(plaintext));
-          const b64 = json.data as string;
-          if (!b64) throw new Error("No data in encrypted thumbnail payload");
-          const binary = atob(b64);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          const mime = json.mime_type || "image/jpeg";
+          if (!bytes.byteLength) throw new Error("No data in encrypted thumbnail payload");
+          const mime = payload.mime_type || "image/jpeg";
           const thumbUrl = blobUrlManager.acquire(
             `thumb:${blobId}`,
             bytes.buffer as ArrayBuffer,

@@ -1,5 +1,58 @@
 //! Shared HTTP utilities used across multiple handler modules.
 
+use axum::body::Body;
+use axum::http::response::Builder;
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::Response;
+
+use crate::error::AppError;
+
+/// Begin a `206 Partial Content` response for the inclusive byte range
+/// `start..=end` of a `total`-byte resource.
+///
+/// Sets the four headers every range response needs identically —
+/// `Content-Type`, `Content-Length` (= `end - start + 1`), `Content-Range`
+/// (`bytes {start}-{end}/{total}`), and `Accept-Ranges: bytes`. The caller
+/// chains any response-specific headers (`ETag`, `Cache-Control`, …) and
+/// finishes with `.body(...)`.
+///
+/// Centralises the error-prone `Content-Range` formatting that was previously
+/// hand-written at every range-serving site (`photos/serve.rs`,
+/// `blobs/download.rs`).
+pub fn partial_content_builder(
+    content_type: HeaderValue,
+    start: u64,
+    end: u64,
+    total: u64,
+) -> Result<Builder, AppError> {
+    let length = end - start + 1;
+    Ok(Response::builder()
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header("Content-Type", content_type)
+        .header("Content-Length", HeaderValue::from(length))
+        .header(
+            "Content-Range",
+            HeaderValue::from_str(&format!("bytes {start}-{end}/{total}"))
+                .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
+        )
+        .header("Accept-Ranges", HeaderValue::from_static("bytes")))
+}
+
+/// Build a complete `416 Range Not Satisfiable` response with an empty body and
+/// the required `Content-Range: bytes */{total}` header. Returned when a
+/// client's `Range` header can't be satisfied against a `total`-byte resource.
+pub fn range_not_satisfiable(total: u64) -> Result<Response, AppError> {
+    Response::builder()
+        .status(StatusCode::RANGE_NOT_SATISFIABLE)
+        .header(
+            "Content-Range",
+            HeaderValue::from_str(&format!("bytes */{total}"))
+                .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
+        )
+        .body(Body::empty())
+        .map_err(|e| AppError::Internal(e.to_string()))
+}
+
 /// Parse an HTTP `Range: bytes=START-END` header.
 ///
 /// Supports formats:

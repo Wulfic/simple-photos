@@ -244,7 +244,12 @@ pub(crate) fn apply_aspect_subtype_fallback_with(
     // of the (stricter) generic horizontal gate below.
     if (1.97..=2.03).contains(&aspect) && width >= 4000 {
         info.photo_subtype = Some("equirectangular".to_string());
-        tracing::debug!(width, height, aspect, "[subtype] aspect fallback → equirectangular (360°)");
+        tracing::debug!(
+            width,
+            height,
+            aspect,
+            "[subtype] aspect fallback → equirectangular (360°)"
+        );
         return;
     }
 

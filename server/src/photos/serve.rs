@@ -121,17 +121,8 @@ pub(crate) async fn serve_file_with_range(
                 tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
             let body = Body::from_stream(stream);
 
-            let mut builder = Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header("Content-Type", ct)
-                .header("Content-Length", HeaderValue::from(length))
-                .header(
-                    "Content-Range",
-                    HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}"))
-                        .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
-                )
-                .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header(
+            let mut builder =
+                crate::http_utils::partial_content_builder(ct, start, end, total_size)?.header(
                     "Cache-Control",
                     HeaderValue::from_static("private, max-age=86400"),
                 );
@@ -142,15 +133,7 @@ pub(crate) async fn serve_file_with_range(
                 .body(body)
                 .map_err(|e| AppError::Internal(e.to_string()));
         } else {
-            return Response::builder()
-                .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header(
-                    "Content-Range",
-                    HeaderValue::from_str(&format!("bytes */{total_size}"))
-                        .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
-                )
-                .body(Body::empty())
-                .map_err(|e| AppError::Internal(e.to_string()));
+            return crate::http_utils::range_not_satisfiable(total_size);
         }
     }
 
@@ -273,7 +256,6 @@ pub async fn serve_photo(
                 if let Some((start, end)) =
                     crate::http_utils::parse_range_header(range_header, total_size)
                 {
-                    let length = end - start + 1;
                     let path2 = blob_abs.clone();
                     let bytes = tokio::task::spawn_blocking(move || {
                         crate::blobs::chunked::decrypt_chunked_range_from_file(
@@ -284,36 +266,24 @@ pub async fn serve_photo(
                     .map_err(|e| AppError::Internal(format!("Range decrypt panicked: {e}")))?
                     .map_err(|e| AppError::Internal(format!("Range decrypt failed: {e}")))?;
 
-                    return Response::builder()
-                        .status(StatusCode::PARTIAL_CONTENT)
-                        .header("Content-Type", content_type)
-                        .header("Content-Length", HeaderValue::from(length))
-                        .header(
-                            "Content-Range",
-                            HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}"))
-                                .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
-                        )
-                        .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                        .header(
-                            "ETag",
-                            HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
-                        )
-                        .header(
-                            "Cache-Control",
-                            HeaderValue::from_static("private, max-age=86400"),
-                        )
-                        .body(Body::from(bytes))
-                        .map_err(|e| AppError::Internal(e.to_string()));
+                    return crate::http_utils::partial_content_builder(
+                        content_type,
+                        start,
+                        end,
+                        total_size,
+                    )?
+                    .header(
+                        "ETag",
+                        HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+                    )
+                    .header(
+                        "Cache-Control",
+                        HeaderValue::from_static("private, max-age=86400"),
+                    )
+                    .body(Body::from(bytes))
+                    .map_err(|e| AppError::Internal(e.to_string()));
                 } else {
-                    return Response::builder()
-                        .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                        .header(
-                            "Content-Range",
-                            HeaderValue::from_str(&format!("bytes */{total_size}"))
-                                .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
-                        )
-                        .body(Body::empty())
-                        .map_err(|e| AppError::Internal(e.to_string()));
+                    return crate::http_utils::range_not_satisfiable(total_size);
                 }
             }
 
@@ -353,24 +323,19 @@ pub async fn serve_photo(
             if let Some((start, end)) =
                 crate::http_utils::parse_range_header(range_header, total_size)
             {
-                let length = end - start + 1;
                 let slice = raw_bytes[start as usize..=end as usize].to_vec();
-                return Response::builder()
-                    .status(StatusCode::PARTIAL_CONTENT)
-                    .header("Content-Type", content_type)
-                    .header("Content-Length", HeaderValue::from(length))
-                    .header(
-                        "Content-Range",
-                        HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}"))
-                            .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
-                    )
-                    .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                    .header(
-                        "ETag",
-                        HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
-                    )
-                    .body(Body::from(slice))
-                    .map_err(|e| AppError::Internal(e.to_string()));
+                return crate::http_utils::partial_content_builder(
+                    content_type,
+                    start,
+                    end,
+                    total_size,
+                )?
+                .header(
+                    "ETag",
+                    HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+                )
+                .body(Body::from(slice))
+                .map_err(|e| AppError::Internal(e.to_string()));
             }
         }
         return Response::builder()
@@ -446,36 +411,24 @@ pub async fn serve_photo(
                 tokio_util::io::ReaderStream::with_capacity(file.take(length), STREAM_BUF_SIZE);
             let body = Body::from_stream(stream);
 
-            return Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header("Content-Type", content_type)
-                .header("Content-Length", HeaderValue::from(length))
-                .header(
-                    "Content-Range",
-                    HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}"))
-                        .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
-                )
-                .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header(
-                    "ETag",
-                    HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
-                )
-                .header(
-                    "Cache-Control",
-                    HeaderValue::from_static("private, max-age=86400"),
-                )
-                .body(body)
-                .map_err(|e| AppError::Internal(e.to_string()));
+            return crate::http_utils::partial_content_builder(
+                content_type,
+                start,
+                end,
+                total_size,
+            )?
+            .header(
+                "ETag",
+                HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("")),
+            )
+            .header(
+                "Cache-Control",
+                HeaderValue::from_static("private, max-age=86400"),
+            )
+            .body(body)
+            .map_err(|e| AppError::Internal(e.to_string()));
         } else {
-            return Response::builder()
-                .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header(
-                    "Content-Range",
-                    HeaderValue::from_str(&format!("bytes */{total_size}"))
-                        .map_err(|e| AppError::Internal(format!("Invalid header: {e}")))?,
-                )
-                .body(Body::empty())
-                .map_err(|e| AppError::Internal(e.to_string()));
+            return crate::http_utils::range_not_satisfiable(total_size);
         }
     }
 

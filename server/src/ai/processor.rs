@@ -145,8 +145,7 @@ pub fn spawn_ai_processor(
                     // Throttle clustering so it can't storm the CPU mid-import.
                     if processed > 0 {
                         clustering_dirty = true;
-                        let cooled = last_cluster
-                            .is_none_or(|t| t.elapsed() >= CLUSTER_COOLDOWN);
+                        let cooled = last_cluster.is_none_or(|t| t.elapsed() >= CLUSTER_COOLDOWN);
                         // A short batch means the queue is nearly drained, so the
                         // user should see face groups now; a *full* batch means an
                         // import is still streaming, so wait out the cooldown.
@@ -318,7 +317,11 @@ async fn run_clustering_pass(pool: &SqlitePool, config: &AiConfig) {
                 if let Err(e) =
                     run_clustering(pool, user_id, config.face_similarity_threshold).await
                 {
-                    tracing::warn!("AI processor: clustering failed for user {}: {}", user_id, e);
+                    tracing::warn!(
+                        "AI processor: clustering failed for user {}: {}",
+                        user_id,
+                        e
+                    );
                 }
             }
         }
@@ -345,7 +348,10 @@ async fn run_clustering_pass(pool: &SqlitePool, config: &AiConfig) {
                 }
             }
         }
-        Err(e) => tracing::warn!("AI processor: could not list users for pet clustering: {}", e),
+        Err(e) => tracing::warn!(
+            "AI processor: could not list users for pet clustering: {}",
+            e
+        ),
     }
 }
 

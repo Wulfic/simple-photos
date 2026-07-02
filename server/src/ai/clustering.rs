@@ -334,7 +334,12 @@ mod tests {
             vec![t.cos(), t.sin(), 0.0f32]
         };
         // 0°, 30°, 60°: cos(30°)=0.866 (A-B, B-C pass @0.8), cos(60°)=0.5 (A-C fails).
-        let faces = vec![(1, v(0.0)), (2, v(30.0)), (3, v(60.0)), (4, vec![0.0, 0.0, 1.0])];
+        let faces = vec![
+            (1, v(0.0)),
+            (2, v(30.0)),
+            (3, v(60.0)),
+            (4, vec![0.0, 0.0, 1.0]),
+        ];
         let assignments = cluster_faces(&faces, 0.8);
         let m: std::collections::HashMap<i64, i64> = assignments.iter().copied().collect();
 
@@ -344,6 +349,9 @@ mod tests {
             m[&1], m[&3],
             "A and C must join transitively through B (single-linkage chain)"
         );
-        assert_ne!(m[&1], m[&4], "orthogonal vector must stay in its own cluster");
+        assert_ne!(
+            m[&1], m[&4],
+            "orthogonal vector must stay in its own cluster"
+        );
     }
 }

@@ -123,49 +123,32 @@ pub async fn download(
             let stream = tokio_util::io::ReaderStream::with_capacity(file.take(length), BLOB_BUF);
             let body = Body::from_stream(stream);
 
-            return Response::builder()
-                .status(StatusCode::PARTIAL_CONTENT)
-                .header(
-                    "Content-Type",
-                    HeaderValue::from_static("application/octet-stream"),
-                )
-                // Bypass the global CompressionLayer — encrypted blob bytes are
-                // random and incompressible; attempting gzip/brotli wastes CPU.
-                .header("Content-Encoding", HeaderValue::from_static("identity"))
-                .header("Content-Length", HeaderValue::from(length))
-                .header(
-                    "Content-Range",
-                    HeaderValue::from_str(&format!("bytes {start}-{end}/{total_size}")).map_err(
-                        |e| AppError::Internal(format!("Invalid Content-Range header: {e}")),
-                    )?,
-                )
-                .header("Accept-Ranges", HeaderValue::from_static("bytes"))
-                .header(
-                    "Cache-Control",
-                    HeaderValue::from_static("private, max-age=31536000, immutable"),
-                )
-                .header(
-                    "ETag",
-                    HeaderValue::from_str(&etag)
-                        .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
-                )
-                // Tells the client which decrypt path to use (1 = legacy
-                // monolithic envelope, 2 = chunked container).
-                .header("X-Blob-Format", HeaderValue::from(blob_format))
-                .body(body)
-                .map_err(|e| AppError::Internal(e.to_string()));
+            return crate::http_utils::partial_content_builder(
+                HeaderValue::from_static("application/octet-stream"),
+                start,
+                end,
+                total_size,
+            )?
+            // Bypass the global CompressionLayer — encrypted blob bytes are
+            // random and incompressible; attempting gzip/brotli wastes CPU.
+            .header("Content-Encoding", HeaderValue::from_static("identity"))
+            .header(
+                "Cache-Control",
+                HeaderValue::from_static("private, max-age=31536000, immutable"),
+            )
+            .header(
+                "ETag",
+                HeaderValue::from_str(&etag)
+                    .map_err(|e| AppError::Internal(format!("Invalid ETag header: {e}")))?,
+            )
+            // Tells the client which decrypt path to use (1 = legacy
+            // monolithic envelope, 2 = chunked container).
+            .header("X-Blob-Format", HeaderValue::from(blob_format))
+            .body(body)
+            .map_err(|e| AppError::Internal(e.to_string()));
         } else {
             // Invalid range → 416 Range Not Satisfiable
-            return Response::builder()
-                .status(StatusCode::RANGE_NOT_SATISFIABLE)
-                .header(
-                    "Content-Range",
-                    HeaderValue::from_str(&format!("bytes */{total_size}")).map_err(|e| {
-                        AppError::Internal(format!("Invalid Content-Range header: {e}"))
-                    })?,
-                )
-                .body(Body::empty())
-                .map_err(|e| AppError::Internal(e.to_string()));
+            return crate::http_utils::range_not_satisfiable(total_size);
         }
     }
 

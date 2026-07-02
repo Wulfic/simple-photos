@@ -8,7 +8,7 @@
 import { useEffect, useState, useRef } from "react";
 import { api } from "../../api/client";
 import { db } from "../../db";
-import { decrypt } from "../../crypto/crypto";
+import { decryptPhotoBlob } from "../../crypto/blobEnvelope";
 
 interface BurstFrame {
   id: string;
@@ -92,14 +92,9 @@ export default function BurstStrip({ burstId, currentPhotoId, onSelectFrame, vis
                 }
                 if (sf.encrypted_thumb_blob_id) {
                   const encData = await api.blobs.download(sf.encrypted_thumb_blob_id);
-                  const plaintext = await decrypt(encData);
-                  const json = JSON.parse(new TextDecoder().decode(plaintext));
-                  const b64 = json.data as string;
-                  if (b64) {
-                    const binary = atob(b64);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                    patchThumb(sf.blob_id, URL.createObjectURL(new Blob([bytes], { type: json.mime_type || "image/jpeg" })));
+                  const { payload, bytes } = await decryptPhotoBlob(encData);
+                  if (bytes.byteLength) {
+                    patchThumb(sf.blob_id, URL.createObjectURL(new Blob([bytes as BlobPart], { type: payload.mime_type || "image/jpeg" })));
                   }
                 }
               } catch (e) {

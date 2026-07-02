@@ -1,6 +1,7 @@
 /** Photo editing panel — brightness, rotation, crop controls with live canvas preview. */
 import { useRef, useEffect, useCallback } from "react";
 import type { MediaType } from "../../db";
+import { formatTimecode } from "../../utils/formatters";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,18 +57,6 @@ interface ViewerEditPanelProps {
   /** Ref to the panel root so the Viewer can measure its height and keep the
    *  media area clear of the panel (the panel is an absolute bottom overlay). */
   rootRef?: React.Ref<HTMLDivElement>;
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Format seconds as MM:SS or HH:MM:SS */
-function formatTime(secs: number): string {
-  const s = Math.max(0, Math.round(secs));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return `${m}:${String(sec).padStart(2, "0")}`;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -274,11 +263,11 @@ export default function ViewerEditPanel({
         <div className="max-w-lg mx-auto space-y-2">
           {/* Time labels */}
           <div className="flex justify-between text-xs text-gray-400 tabular-nums">
-            <span>{formatTime(trimStart)}</span>
+            <span>{formatTimecode(trimStart)}</span>
             <span className="text-white font-medium">
-              {formatTime(trimEnd - trimStart)} selected
+              {formatTimecode(trimEnd - trimStart)} selected
             </span>
-            <span>{formatTime(trimEnd)}</span>
+            <span>{formatTimecode(trimEnd)}</span>
           </div>
           {/* Track */}
           <div
@@ -311,7 +300,7 @@ export default function ViewerEditPanel({
           </div>
           {/* Full duration label */}
           <div className="text-center text-xs text-gray-500">
-            Full duration: {formatTime(duration)}
+            Full duration: {formatTimecode(duration)}
           </div>
         </div>
       )}

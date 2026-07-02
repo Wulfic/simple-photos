@@ -172,7 +172,11 @@ pub async fn scan_and_register(
         use std::collections::{HashMap, HashSet};
         let mut names_by_dir: HashMap<PathBuf, Vec<String>> = HashMap::new();
         for c in &candidates {
-            let dir = c.abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            let dir = c
+                .abs_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default();
             names_by_dir.entry(dir).or_default().push(c.name.clone());
         }
         let mut drop_keys: HashSet<(PathBuf, String)> = HashSet::new();
@@ -184,7 +188,11 @@ pub async fn scan_and_register(
         if !drop_keys.is_empty() {
             let before = candidates.len();
             candidates.retain(|c| {
-                let dir = c.abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+                let dir = c
+                    .abs_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_default();
                 !drop_keys.contains(&(dir, c.name.to_lowercase()))
             });
             let dropped = before - candidates.len();

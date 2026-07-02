@@ -132,7 +132,12 @@ mod tests {
 
     #[test]
     fn edited_shadowed_originals_flags_implied_originals() {
-        let names = ["IMG_1.jpg", "IMG_1-edited.jpg", "IMG_2.jpg", "solo-edited.png"];
+        let names = [
+            "IMG_1.jpg",
+            "IMG_1-edited.jpg",
+            "IMG_2.jpg",
+            "solo-edited.png",
+        ];
         let shadowed = edited_shadowed_originals(names.iter().copied());
         // Every "-edited" file contributes its implied original (lowercased).
         assert!(shadowed.contains("img_1.jpg"));
@@ -147,7 +152,10 @@ mod tests {
             .copied()
             .filter(|n| !shadowed.contains(&n.to_lowercase()))
             .collect();
-        assert_eq!(kept, vec!["IMG_1-edited.jpg", "IMG_2.jpg", "solo-edited.png"]);
+        assert_eq!(
+            kept,
+            vec!["IMG_1-edited.jpg", "IMG_2.jpg", "solo-edited.png"]
+        );
     }
 
     #[test]

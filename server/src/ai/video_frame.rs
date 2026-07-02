@@ -54,7 +54,11 @@ impl VideoFrameSource {
         // Small margin before EOF so ffmpeg always lands on a real frame.
         let max_t = (self.duration - 0.1).max(0.0);
         let mut out: Vec<f64> = Vec::with_capacity(3);
-        for t in [PRIMARY_SECS, PRIMARY_SECS - WINDOW_SECS, PRIMARY_SECS + WINDOW_SECS] {
+        for t in [
+            PRIMARY_SECS,
+            PRIMARY_SECS - WINDOW_SECS,
+            PRIMARY_SECS + WINDOW_SECS,
+        ] {
             let c = t.clamp(0.0, max_t);
             if !out.iter().any(|&x| (x - c).abs() < 0.01) {
                 out.push(c);
@@ -89,7 +93,11 @@ impl VideoFrameSource {
             crate::process::status_with_timeout(&mut cmd, FRAME_TIMEOUT).await,
             Ok(s) if s.success()
         );
-        let bytes = if ok { tokio::fs::read(&dst).await.ok() } else { None };
+        let bytes = if ok {
+            tokio::fs::read(&dst).await.ok()
+        } else {
+            None
+        };
         let _ = tokio::fs::remove_file(&dst).await;
         bytes.filter(|b| b.len() >= 100)
     }

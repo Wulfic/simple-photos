@@ -702,7 +702,10 @@ mod tests {
         // it must not corrupt the instant — fall back to assume-UTC.
         for garbage in ["", "   ", ":  ", "+", "abc", "+9", "+09:99", "+15:00"] {
             let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", Some(garbage)).unwrap();
-            assert_eq!(iso, "2024-01-15T14:30:00Z", "offset {garbage:?} should be ignored");
+            assert_eq!(
+                iso, "2024-01-15T14:30:00Z",
+                "offset {garbage:?} should be ignored"
+            );
             assert_eq!(off, None, "offset {garbage:?} should not be stored");
         }
     }

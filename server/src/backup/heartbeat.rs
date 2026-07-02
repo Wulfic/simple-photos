@@ -341,7 +341,10 @@ async fn server_identity(pool: &sqlx::SqlitePool, config: &crate::config::AppCon
 
 /// Candidate keys the receiver verifies against: its own configured backup key
 /// plus every peer's key. Either direction of a pairing can then be validated.
-pub async fn candidate_keys(pool: &sqlx::SqlitePool, config: &crate::config::AppConfig) -> Vec<Vec<u8>> {
+pub async fn candidate_keys(
+    pool: &sqlx::SqlitePool,
+    config: &crate::config::AppConfig,
+) -> Vec<Vec<u8>> {
     let mut keys: Vec<Vec<u8>> = Vec::new();
     if let Some(k) = config.backup.api_key.as_deref().filter(|k| !k.is_empty()) {
         keys.push(k.as_bytes().to_vec());

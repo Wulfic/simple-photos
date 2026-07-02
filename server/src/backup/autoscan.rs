@@ -429,8 +429,15 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
                     // Extract dimensions, camera model, GPS, and date from file
-                    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken, exif_taken_offset) =
-                        extract_media_metadata_async(abs_path.clone()).await;
+                    let (
+                        img_w,
+                        img_h,
+                        cam_model,
+                        exif_lat,
+                        exif_lon,
+                        exif_taken,
+                        exif_taken_offset,
+                    ) = extract_media_metadata_async(abs_path.clone()).await;
 
                     // Extract XMP subtype (motion, panorama, 360, HDR, burst)
                     let mut subtype_info = extract_xmp_subtype_async(abs_path.clone()).await;

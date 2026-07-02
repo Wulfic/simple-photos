@@ -5,21 +5,12 @@
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { castVideoControl } from "../../utils/cast";
+import { formatTimecode } from "../../utils/formatters";
 
 interface VideoControlsProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   /** Controls visibility — tied to the viewer's overlay toggle */
   visible: boolean;
-}
-
-function formatTime(seconds: number): string {
-  if (!isFinite(seconds) || seconds < 0) return "0:00";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0)
-    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 /**
@@ -179,7 +170,7 @@ export default function VideoControls({ videoRef, visible }: VideoControlsProps)
 
           {/* Time */}
           <span className="text-white/80 text-xs font-mono select-none min-w-[5.5rem]">
-            {formatTime(currentTime)} / {formatTime(duration)}
+            {formatTimecode(currentTime)} / {formatTimecode(duration)}
           </span>
 
           <div className="flex-1" />

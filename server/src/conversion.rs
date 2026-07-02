@@ -875,9 +875,7 @@ pub async fn conversion_batch_end(
 /// resume immediately. This is the operator escape hatch that pairs with the
 /// automatic watchdog; the returned snapshot lets the admin UI confirm the
 /// pipeline is back to idle. Idempotent and safe to call when already idle.
-pub async fn conversion_reset(
-    _auth: AuthUser,
-) -> Result<Json<ConversionStatusResponse>, AppError> {
+pub async fn conversion_reset(_auth: AuthUser) -> Result<Json<ConversionStatusResponse>, AppError> {
     force_reset("manual admin reset via /admin/conversion/reset");
     Ok(Json(conversion_status_response()))
 }
@@ -908,7 +906,10 @@ mod tests {
             panic!("boom mid-conversion");
         }));
 
-        assert!(result.is_err(), "panic should propagate out of catch_unwind");
+        assert!(
+            result.is_err(),
+            "panic should propagate out of catch_unwind"
+        );
         assert!(
             !progress_snapshot().0,
             "guard's Drop must clear the active flag after a panic (#18)"
@@ -947,7 +948,10 @@ mod tests {
         // pin + active flag would otherwise starve AI/geo forever.
         batch_start(10);
         progress_add(1);
-        assert!(progress_snapshot().0, "active while a pinned batch is in flight");
+        assert!(
+            progress_snapshot().0,
+            "active while a pinned batch is in flight"
+        );
         assert!(CONV_PINNED.load(Ordering::Relaxed), "pinned by batch_start");
         let before = CONV_STALL_COUNT.load(Ordering::Relaxed);
 
