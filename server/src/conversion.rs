@@ -76,6 +76,22 @@ static CONV_PINNED: AtomicBool = AtomicBool::new(false);
 /// `status::progress_math` throughput estimator.
 static CONV_STARTED_MS: AtomicI64 = AtomicI64::new(0);
 
+/// Epoch-millis of the last *observable* conversion progress — a batch start, a
+/// per-file tick, or a per-upload completion. Drives the stuck-job watchdog
+/// (#18): while the pipeline reports `active` but this timestamp stops
+/// advancing, the pass is wedged (a future hung outside the per-file ffmpeg
+/// timeout, a client that declared a batch then disconnected, etc.). `0` when
+/// idle so the watchdog has nothing to check.
+static CONV_LAST_PROGRESS_MS: AtomicI64 = AtomicI64::new(0);
+
+/// Number of times the watchdog (or a manual admin reset) has force-recovered a
+/// stalled conversion pipeline since boot. Surfaced by the status endpoint so a
+/// recurring stall is visible instead of silently eating the pipeline.
+static CONV_STALL_COUNT: AtomicI64 = AtomicI64::new(0);
+
+/// Epoch-millis of the most recent stall recovery, or `0` if none this boot.
+static CONV_LAST_STALL_MS: AtomicI64 = AtomicI64::new(0);
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -89,10 +105,18 @@ fn arm_start_clock_if_unset() {
     let _ = CONV_STARTED_MS.compare_exchange(0, now_ms(), Ordering::Relaxed, Ordering::Relaxed);
 }
 
-/// Clear the ETA clock when the batch finishes so a stale start time can't leak
-/// into the next batch's estimate.
+/// Clear the ETA + progress clocks when the batch finishes so stale timestamps
+/// can't leak into the next batch's estimate or trip the watchdog while idle.
 fn clear_start_clock() {
     CONV_STARTED_MS.store(0, Ordering::Relaxed);
+    CONV_LAST_PROGRESS_MS.store(0, Ordering::Relaxed);
+}
+
+/// Stamp "progress just happened" for the stuck-job watchdog (#18). Called on
+/// every event that proves the pipeline is alive: batch start, per-file tick,
+/// per-upload completion, and new work arriving.
+fn stamp_progress() {
+    CONV_LAST_PROGRESS_MS.store(now_ms(), Ordering::Relaxed);
 }
 
 /// Unconditionally reset and arm the counters. Internal — callers go through
@@ -101,8 +125,10 @@ fn raw_start(total: i64) {
     CONV_DONE.store(0, Ordering::Relaxed);
     CONV_TOTAL.store(total, Ordering::Relaxed);
     CONV_ACTIVE.store(true, Ordering::Relaxed);
-    // Fresh batch → reset the ETA clock to now.
-    CONV_STARTED_MS.store(now_ms(), Ordering::Relaxed);
+    // Fresh batch → reset the ETA clock and arm the watchdog progress clock.
+    let now = now_ms();
+    CONV_STARTED_MS.store(now, Ordering::Relaxed);
+    CONV_LAST_PROGRESS_MS.store(now, Ordering::Relaxed);
 }
 
 /// Start a new conversion batch (resets counters).
@@ -143,6 +169,7 @@ pub fn batch_end() {
 /// Increment the done counter by 1.
 pub fn progress_tick() {
     CONV_DONE.fetch_add(1, Ordering::Relaxed);
+    stamp_progress();
 }
 
 /// Signal that the conversion batch is complete.
@@ -217,6 +244,9 @@ impl Drop for ConversionBatchGuard {
 /// `done == total` and `active` flips back to false via
 /// [`progress_finish_one`].
 pub fn progress_add(n: i64) {
+    // A file entering the pipeline is a liveness signal for the watchdog (#18),
+    // whether or not the denominator is pinned.
+    stamp_progress();
     // While a client batch is pinned the total is fixed — just keep the banner
     // armed and let `progress_finish_one` advance `done` against the declared
     // denominator (#11).
@@ -236,6 +266,7 @@ pub fn progress_add(n: i64) {
 /// hide when the queue drains.
 pub fn progress_finish_one() {
     let done = CONV_DONE.fetch_add(1, Ordering::Relaxed) + 1;
+    stamp_progress();
     let total = CONV_TOTAL.load(Ordering::Relaxed);
     if done >= total {
         CONV_ACTIVE.store(false, Ordering::Relaxed);
@@ -250,6 +281,75 @@ pub fn progress_snapshot() -> (bool, i64, i64) {
     let total = CONV_TOTAL.load(Ordering::Relaxed);
     let done = CONV_DONE.load(Ordering::Relaxed).min(total);
     (active, total, done)
+}
+
+// ── Stuck-job watchdog (#18) ─────────────────────────────────────────────────
+
+/// Pure stall decision for the watchdog, split out so it can be unit-tested
+/// without the process clock or a running pass.
+///
+/// Stalled ⇔ the pipeline still reports `active` yet no progress has been
+/// observed for at least `stall_threshold_ms`. `last_progress_ms == 0` means the
+/// pipeline is idle (never started or already finalized) → never stalled, even
+/// if `active` momentarily races ahead of the clock.
+fn is_stalled(active: bool, last_progress_ms: i64, now: i64, stall_threshold_ms: i64) -> bool {
+    active && last_progress_ms > 0 && now.saturating_sub(last_progress_ms) >= stall_threshold_ms
+}
+
+/// Watchdog probe: `Some(idle_secs)` when the pipeline is currently stalled per
+/// [`is_stalled`] against `stall_threshold_secs`, where `idle_secs` is how long
+/// it has been stuck. `None` when healthy or idle. A `0` threshold disables the
+/// check (the caller shouldn't even spawn the watchdog in that case, but this is
+/// belt-and-suspenders).
+pub fn stall_check(stall_threshold_secs: u64) -> Option<u64> {
+    if stall_threshold_secs == 0 {
+        return None;
+    }
+    let active = CONV_ACTIVE.load(Ordering::Relaxed);
+    let last = CONV_LAST_PROGRESS_MS.load(Ordering::Relaxed);
+    let now = now_ms();
+    let threshold_ms = (stall_threshold_secs as i64).saturating_mul(1000);
+    if is_stalled(active, last, now, threshold_ms) {
+        Some((now.saturating_sub(last) / 1000).max(0) as u64)
+    } else {
+        None
+    }
+}
+
+/// Force the conversion pipeline back to a clean idle state and record a stall
+/// recovery. Used by the watchdog when it detects a wedged pass, and by the
+/// admin manual-intervention endpoint.
+///
+/// Clears the active flag **and** the client batch pin, so a client that
+/// declared a batch (`batch_start`) then disconnected can't keep the banner —
+/// and the `ingest_pipeline_busy` gate that starves AI/geo — pinned forever.
+/// The `CONV_STALL_COUNT` / `CONV_LAST_STALL_MS` telemetry makes the recovery
+/// visible in the status endpoint. Idempotent: safe to call when already idle.
+pub fn force_reset(reason: &str) {
+    let (active, total, done) = progress_snapshot();
+    CONV_STALL_COUNT.fetch_add(1, Ordering::Relaxed);
+    CONV_LAST_STALL_MS.store(now_ms(), Ordering::Relaxed);
+    CONV_PINNED.store(false, Ordering::Relaxed);
+    CONV_ACTIVE.store(false, Ordering::Relaxed);
+    clear_start_clock();
+    tracing::error!(
+        reason = %reason,
+        was_active = active,
+        done,
+        total,
+        "[INGEST] Conversion pipeline force-reset (stuck-job recovery, #18) — \
+         cleared 'converting' flag and any client batch pin so AI/geo processing \
+         and the banner can resume"
+    );
+}
+
+/// Read the stall telemetry: `(last_progress_ms, stall_count, last_stall_ms)`.
+pub fn stall_telemetry() -> (i64, i64, i64) {
+    (
+        CONV_LAST_PROGRESS_MS.load(Ordering::Relaxed),
+        CONV_STALL_COUNT.load(Ordering::Relaxed),
+        CONV_LAST_STALL_MS.load(Ordering::Relaxed),
+    )
 }
 
 // ── Media categories ─────────────────────────────────────────────────────────
@@ -701,16 +801,28 @@ pub struct ConversionStatusResponse {
     pub done: i64,
     /// Estimated seconds remaining, or `null` until throughput is known (item #4).
     pub eta_seconds: Option<f64>,
+    /// Epoch-ms of the last observed progress (batch start / tick / completion),
+    /// or `0` when idle. Lets the admin surface a frozen pipeline (#18).
+    pub last_progress_at: i64,
+    /// How many times the watchdog (or a manual reset) has recovered a stalled
+    /// pipeline since boot. A climbing value flags a recurring wedge.
+    pub stall_count: i64,
+    /// Epoch-ms of the most recent stall recovery, or `0` if none this boot.
+    pub last_stall_at: i64,
 }
 
-/// Build the status response from the live counters + ETA estimate.
+/// Build the status response from the live counters + ETA + watchdog telemetry.
 fn conversion_status_response() -> ConversionStatusResponse {
     let (active, total, done) = progress_snapshot();
+    let (last_progress_at, stall_count, last_stall_at) = stall_telemetry();
     ConversionStatusResponse {
         active,
         total,
         done,
         eta_seconds: conversion_eta_seconds(),
+        last_progress_at,
+        stall_count,
+        last_stall_at,
     }
 }
 
@@ -752,6 +864,21 @@ pub async fn conversion_batch_end(
     _auth: AuthUser,
 ) -> Result<Json<ConversionStatusResponse>, AppError> {
     batch_end();
+    Ok(Json(conversion_status_response()))
+}
+
+/// POST /api/admin/conversion/reset
+///
+/// Manual intervention for a stuck conversion pipeline (#18). Force-clears the
+/// "converting" flag and any client batch pin so the background AI/geo
+/// processors — gated by `ingest_pipeline_busy` — and the conversion banner
+/// resume immediately. This is the operator escape hatch that pairs with the
+/// automatic watchdog; the returned snapshot lets the admin UI confirm the
+/// pipeline is back to idle. Idempotent and safe to call when already idle.
+pub async fn conversion_reset(
+    _auth: AuthUser,
+) -> Result<Json<ConversionStatusResponse>, AppError> {
+    force_reset("manual admin reset via /admin/conversion/reset");
     Ok(Json(conversion_status_response()))
 }
 
@@ -797,6 +924,55 @@ mod tests {
         assert!(progress_snapshot().0, "active after start");
         guard.finish();
         assert!(!progress_snapshot().0, "finish() ends the batch");
+    }
+
+    #[test]
+    fn watchdog_stall_decision() {
+        // Active with progress older than the threshold ⇒ stalled (#18).
+        let now = 10_000_000i64;
+        assert!(is_stalled(true, now - 200_000, now, 100_000));
+        // Exactly at the threshold counts as stalled (>=).
+        assert!(is_stalled(true, now - 100_000, now, 100_000));
+        // Active but recent progress ⇒ healthy.
+        assert!(!is_stalled(true, now - 50_000, now, 100_000));
+        // Idle (last_progress 0) ⇒ never stalled, even if active races ahead.
+        assert!(!is_stalled(false, 0, now, 100_000));
+        assert!(!is_stalled(true, 0, now, 100_000));
+    }
+
+    #[test]
+    fn force_reset_clears_active_and_pin() {
+        let _lock = global_state_lock();
+        // Simulate a client that declared a batch then vanished mid-flight: the
+        // pin + active flag would otherwise starve AI/geo forever.
+        batch_start(10);
+        progress_add(1);
+        assert!(progress_snapshot().0, "active while a pinned batch is in flight");
+        assert!(CONV_PINNED.load(Ordering::Relaxed), "pinned by batch_start");
+        let before = CONV_STALL_COUNT.load(Ordering::Relaxed);
+
+        force_reset("test");
+
+        assert!(!progress_snapshot().0, "force_reset clears the active flag");
+        assert!(
+            !CONV_PINNED.load(Ordering::Relaxed),
+            "force_reset clears the client batch pin"
+        );
+        assert_eq!(
+            CONV_STALL_COUNT.load(Ordering::Relaxed),
+            before + 1,
+            "force_reset records the recovery for telemetry"
+        );
+        // Leave shared global state clean for the other serialized tests.
+        batch_end();
+    }
+
+    #[test]
+    fn stall_check_disabled_when_threshold_zero() {
+        let _lock = global_state_lock();
+        batch_start(5); // active, no progress ticks
+        assert_eq!(stall_check(0), None, "0 threshold disables the watchdog");
+        batch_end();
     }
 
     #[test]

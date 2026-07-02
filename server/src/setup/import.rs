@@ -379,7 +379,12 @@ async fn collect_importable_files(root: &std::path::Path) -> Vec<(PathBuf, Strin
             }
         }
     }
-    out
+    // Google Photos Takeout dedup (#19): never copy the unedited original when
+    // its baked-in "-edited" sibling is in the same import — keep the edited
+    // pixels. Applied here so the copied-ingest path never even copies the dupes
+    // and the client's queued count is accurate. (The in-place path is deduped
+    // again at scan-registration time; see autoscan.)
+    dedupe_ingest_edits(out)
 }
 
 /// Background worker: copy out-of-tree files into storage (bounded concurrency,
@@ -551,41 +556,44 @@ async fn copy_into_uploads(
 }
 
 // ── Google Photos "-edited" de-duplication ───────────────────────────────────
-
-/// If `name` is a Google Photos Takeout "-edited" variant, return the original
-/// filename it derives from (`IMG_1234.jpg` for `IMG_1234-edited.jpg`). Returns
-/// `None` for anything that isn't an edited variant. The suffix match is
-/// case-insensitive and must sit immediately before the extension.
-fn original_name_for_edited(name: &str) -> Option<String> {
-    const SUFFIX: &str = "-edited";
-    let (stem, ext) = name.rsplit_once('.')?;
-    let cut = stem.len().checked_sub(SUFFIX.len())?;
-    // `get` returns None on a non-char-boundary, keeping this panic-free for
-    // multibyte filenames.
-    if stem.get(cut..)?.eq_ignore_ascii_case(SUFFIX) {
-        Some(format!("{}.{}", &stem[..cut], ext))
-    } else {
-        None
-    }
-}
+//
+// The rule ("keep the edited copy, drop the unedited original") lives in
+// `crate::media::edited_shadowed_originals` so every server import path shares
+// one implementation. The wrappers below just adapt it to each path's item type.
 
 /// Drop each unedited original whose baked-in "-edited" sibling is also present,
-/// so Google Photos Takeout imports don't create duplicates. The edited copy
-/// (with the user's edits applied) is kept. Mirrors the client-side
-/// `web/src/utils/media.ts::dedupeGooglePhotosEdits`.
+/// so Google Photos Takeout imports (legacy scan path) don't surface duplicates.
 fn dedupe_google_photos_edits(files: Vec<MediaFileEntry>) -> Vec<MediaFileEntry> {
-    let originals_with_edit: std::collections::HashSet<String> = files
-        .iter()
-        .filter_map(|f| original_name_for_edited(&f.name))
-        .map(|o| o.to_lowercase())
-        .collect();
-    if originals_with_edit.is_empty() {
+    let shadowed = crate::media::edited_shadowed_originals(files.iter().map(|f| f.name.as_str()));
+    if shadowed.is_empty() {
         return files;
     }
     files
         .into_iter()
-        .filter(|f| !originals_with_edit.contains(&f.name.to_lowercase()))
+        .filter(|f| !shadowed.contains(&f.name.to_lowercase()))
         .collect()
+}
+
+/// Drop each `(path, name)` candidate that is an unedited original shadowed by an
+/// "-edited" sibling anywhere in the collected set. Used by the bulk server-side
+/// ingest, whose walk spans Takeout album subfolders — so it matches globally by
+/// filename (Google exports the same file into every album it belongs to).
+fn dedupe_ingest_edits(mut candidates: Vec<(PathBuf, String)>) -> Vec<(PathBuf, String)> {
+    let shadowed =
+        crate::media::edited_shadowed_originals(candidates.iter().map(|(_, n)| n.as_str()));
+    if shadowed.is_empty() {
+        return candidates;
+    }
+    let before = candidates.len();
+    candidates.retain(|(_, n)| !shadowed.contains(&n.to_lowercase()));
+    let dropped = before - candidates.len();
+    if dropped > 0 {
+        tracing::info!(
+            dropped,
+            "[INGEST] Skipped unedited Google Photos originals with an '-edited' sibling"
+        );
+    }
+    candidates
 }
 
 #[cfg(test)]
@@ -604,25 +612,6 @@ mod tests {
 
     fn names(files: Vec<MediaFileEntry>) -> Vec<String> {
         files.into_iter().map(|f| f.name).collect()
-    }
-
-    #[test]
-    fn original_name_for_edited_recovers_base() {
-        assert_eq!(
-            original_name_for_edited("IMG_1234-edited.jpg").as_deref(),
-            Some("IMG_1234.jpg")
-        );
-        // Suffix match is case-insensitive; the base keeps its original casing.
-        assert_eq!(
-            original_name_for_edited("photo-EDITED.JPG").as_deref(),
-            Some("photo.JPG")
-        );
-        // Plain originals are not edited variants.
-        assert_eq!(original_name_for_edited("IMG_1234.jpg"), None);
-        // "-edited" must sit right before the extension, not mid-name.
-        assert_eq!(original_name_for_edited("my-edited-photo.jpg"), None);
-        // No extension → no match (and no panic).
-        assert_eq!(original_name_for_edited("noext-edited"), None);
     }
 
     #[test]
@@ -650,6 +639,28 @@ mod tests {
         let files = vec![entry("Photo.JPG"), entry("photo-edited.jpg")];
         let kept = names(dedupe_google_photos_edits(files));
         assert_eq!(kept, vec!["photo-edited.jpg".to_string()]);
+    }
+
+    #[test]
+    fn dedupe_ingest_edits_drops_shadowed_originals_across_folders() {
+        // Bulk-ingest walk spans album subfolders: the original and its edited
+        // sibling can live in different Takeout folders but must still dedupe.
+        let candidates = vec![
+            (PathBuf::from("Vacation/IMG_1.jpg"), "IMG_1.jpg".to_string()),
+            (
+                PathBuf::from("Photos from 2023/IMG_1-edited.jpg"),
+                "IMG_1-edited.jpg".to_string(),
+            ),
+            (PathBuf::from("Vacation/IMG_2.jpg"), "IMG_2.jpg".to_string()),
+        ];
+        let kept: Vec<String> = dedupe_ingest_edits(candidates)
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect();
+        assert!(kept.contains(&"IMG_1-edited.jpg".to_string()));
+        assert!(!kept.contains(&"IMG_1.jpg".to_string()), "original dropped");
+        assert!(kept.contains(&"IMG_2.jpg".to_string()));
+        assert_eq!(kept.len(), 2);
     }
 
     // ── Bulk ingest helpers ──────────────────────────────────────────────

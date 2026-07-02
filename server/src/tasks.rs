@@ -67,6 +67,12 @@ pub fn spawn_all(
         config.storage.root.clone(),
         config.auth.jwt_secret.clone(),
     );
+    spawn_conversion_watchdog(
+        pool.clone(),
+        storage_root_swap.clone(),
+        config.auth.jwt_secret.clone(),
+        config.scan.conversion_stall_timeout_secs,
+    );
     spawn_export_cleanup(pool.clone(), storage_root_swap.clone());
     spawn_storage_health_monitor(storage_root_swap.clone(), storage_available.clone());
     spawn_dimension_repair(pool.clone(), config.storage.root.clone());
@@ -265,6 +271,67 @@ fn spawn_auto_scan(
             geo_trigger,
         )
         .await;
+    });
+}
+
+/// Conversion stuck-job watchdog (#18).
+///
+/// Periodically inspects the conversion pipeline. If it reports "converting" but
+/// has made **zero** progress for longer than `stall_timeout_secs`, the pass is
+/// wedged — a future hung outside the per-file 600s ffmpeg timeout, or a client
+/// that declared an upload batch then disconnected. When that happens the
+/// watchdog:
+///   1. Logs the stall loudly (escalation signal for operators/monitoring).
+///   2. Force-recovers via [`crate::conversion::force_reset`] — clears the
+///      "converting" flag and any client batch pin so the AI/geo processors and
+///      the banner resume ("system resumes subsequent jobs").
+///   3. Kicks a fresh conversion pass to retry any files the wedged pass left
+///      behind (best-effort: if the old pass still holds the conversion lock
+///      this just queues a follow-up sweep).
+///
+/// `stall_timeout_secs == 0` disables the watchdog (the task isn't spawned).
+fn spawn_conversion_watchdog(
+    pool: SqlitePool,
+    storage_root_swap: Arc<arc_swap::ArcSwap<PathBuf>>,
+    jwt_secret: String,
+    stall_timeout_secs: u64,
+) {
+    if stall_timeout_secs == 0 {
+        tracing::info!("[WATCHDOG] Conversion stuck-job watchdog disabled (timeout = 0)");
+        return;
+    }
+    tokio::spawn(async move {
+        // Poll at a fraction of the threshold so detection latency stays small
+        // relative to the timeout, floored/capped to sane bounds.
+        let check_every = (stall_timeout_secs / 10).clamp(30, 300);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(check_every));
+        tracing::info!(
+            stall_timeout_secs,
+            check_every,
+            "[WATCHDOG] Conversion stuck-job watchdog started"
+        );
+        loop {
+            interval.tick().await;
+            if let Some(idle_secs) = crate::conversion::stall_check(stall_timeout_secs) {
+                tracing::error!(
+                    idle_secs,
+                    stall_timeout_secs,
+                    "[WATCHDOG] Conversion pipeline STALLED — no progress for {}s \
+                     (threshold {}s). Force-recovering so AI/geo processing resumes.",
+                    idle_secs,
+                    stall_timeout_secs
+                );
+                crate::conversion::force_reset("watchdog: no progress past stall timeout");
+
+                // Best-effort retry of any files the wedged pass left behind.
+                let pool = pool.clone();
+                let root = (**storage_root_swap.load()).clone();
+                let jwt = jwt_secret.clone();
+                tokio::spawn(async move {
+                    crate::ingest::run_conversion_pass(pool, root, jwt).await;
+                });
+            }
+        }
     });
 }
 

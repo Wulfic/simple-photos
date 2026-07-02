@@ -360,6 +360,11 @@ fn photo_routes() -> Router<AppState> {
             "/admin/conversion-batch/end",
             post(crate::conversion::conversion_batch_end),
         )
+        // Manual stuck-conversion recovery (watchdog escape hatch, #18)
+        .route(
+            "/admin/conversion/reset",
+            post(crate::conversion::conversion_reset),
+        )
         // Transcode GPU status
         .route(
             "/transcode/status",

@@ -163,6 +163,40 @@ pub async fn scan_and_register(
         candidates.retain(|c| c.media_type != "audio");
     }
 
+    // Google Photos Takeout dedup (#19): within each directory, drop the
+    // unedited original when its baked-in "-edited" sibling was also collected —
+    // keep the edited pixels. Same shared rule as the autoscan + ingest paths
+    // (crate::media::edited_shadowed_originals), scoped per directory because
+    // Takeout always ships the original and its edited copy side by side.
+    {
+        use std::collections::{HashMap, HashSet};
+        let mut names_by_dir: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        for c in &candidates {
+            let dir = c.abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            names_by_dir.entry(dir).or_default().push(c.name.clone());
+        }
+        let mut drop_keys: HashSet<(PathBuf, String)> = HashSet::new();
+        for (dir, names) in &names_by_dir {
+            for orig in crate::media::edited_shadowed_originals(names.iter().map(|s| s.as_str())) {
+                drop_keys.insert((dir.clone(), orig));
+            }
+        }
+        if !drop_keys.is_empty() {
+            let before = candidates.len();
+            candidates.retain(|c| {
+                let dir = c.abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+                !drop_keys.contains(&(dir, c.name.to_lowercase()))
+            });
+            let dropped = before - candidates.len();
+            if dropped > 0 {
+                tracing::info!(
+                    dropped,
+                    "Scan: skipped unedited Google Photos originals with an '-edited' sibling (#19)"
+                );
+            }
+        }
+    }
+
     tracing::info!(
         "Scan phase 1: found {} unregistered native media files",
         candidates.len()

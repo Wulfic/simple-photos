@@ -339,6 +339,25 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     let mut queue = vec![storage_root.to_path_buf()];
 
     while let Some(dir) = queue.pop() {
+        // Google Photos Takeout dedup (#19): a first, names-only pass over this
+        // directory lets us spot "-edited" pairs before registering — a single
+        // streaming walk can't look ahead to a sibling that sorts later. Cheap
+        // (one extra read_dir of names, one directory at a time) next to the
+        // per-file hashing/metadata below. Keeps the edited copy, drops the
+        // unedited original — the same rule the upload + ingest paths use.
+        let shadowed_originals = {
+            let mut names_in_dir: Vec<String> = Vec::new();
+            if let Ok(mut probe) = tokio::fs::read_dir(&dir).await {
+                while let Ok(Some(e)) = probe.next_entry().await {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    if !n.starts_with('.') && is_media_file(&n) {
+                        names_in_dir.push(n);
+                    }
+                }
+            }
+            crate::media::edited_shadowed_originals(names_in_dir.iter().map(|s| s.as_str()))
+        };
+
         let mut entries = match tokio::fs::read_dir(&dir).await {
             Ok(e) => e,
             Err(e) => {
@@ -357,6 +376,15 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                 if ft.is_dir() {
                     queue.push(entry.path());
                 } else if ft.is_file() && is_media_file(&name) {
+                    // Skip the unedited Google Photos original when its baked-in
+                    // "-edited" sibling is in this same folder (#19).
+                    if shadowed_originals.contains(&name.to_lowercase()) {
+                        tracing::info!(
+                            file = %name,
+                            "[DIAG:AUTOSCAN] Skipping unedited Google Photos original ('-edited' sibling present)"
+                        );
+                        continue;
+                    }
                     let abs_path = entry.path();
                     // Normalize to forward slashes so DB paths are consistent across OS
                     let rel_path = abs_path

@@ -42,9 +42,21 @@
         <!-- MainActivity must be exported so the launcher can start it via the
              MAIN/LAUNCHER intent filter. No other intent filters are exposed. -->
         <!-- nosemgrep: java.android.security.exported_activity.exported_activity -->
+        <!-- configChanges: this is a single-activity, 100% Compose host. We
+             handle every runtime configuration change ourselves so Android does
+             NOT destroy+recreate the activity for them — Compose recomposes
+             against the updated LocalConfiguration instead. This is required for
+             the app-lock (TODO #17): the biometric gate stores `authenticated`
+             in a `remember`, so an activity recreation (the default on rotation)
+             reset it to false and re-fired the biometric prompt — i.e. rotating
+             to landscape with biometrics enabled spuriously re-locked the app
+             and tore down any in-flight BiometricPrompt. Keeping the activity
+             alive across these changes preserves the unlocked session; a true
+             process death still cold-starts onCreate and re-locks (by design). -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|density|fontScale|locale|layoutDirection"
             android:theme="@style/Theme.SimplePhotos">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

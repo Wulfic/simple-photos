@@ -16,6 +16,13 @@ export interface ConversionStatus {
   done: number;
   /** Server-authoritative seconds remaining, or null until throughput is known. */
   eta_seconds: number | null;
+  /** Epoch-ms of the last observed progress, or 0 when idle. Frozen while a
+   *  pass is wedged — the client uses this to offer a manual reset (#18). */
+  last_progress_at: number;
+  /** Times the watchdog / a manual reset has recovered a stall since boot. */
+  stall_count: number;
+  /** Epoch-ms of the most recent stall recovery, or 0 if none this boot. */
+  last_stall_at: number;
 }
 
 // ── Admin API ────────────────────────────────────────────────────────────────
@@ -266,6 +273,15 @@ export const adminApi = {
   conversionBatchEnd: () =>
     request<ConversionStatus>(
       "/admin/conversion-batch/end",
+      { method: "POST" },
+    ),
+
+  /** Manual intervention (#18): force-clear a stuck conversion pipeline so the
+   *  AI/geo processors and the banner resume. Pairs with the server-side
+   *  watchdog for cases where the operator wants to recover immediately. */
+  conversionReset: () =>
+    request<ConversionStatus>(
+      "/admin/conversion/reset",
       { method: "POST" },
     ),
 
