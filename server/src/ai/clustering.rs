@@ -62,23 +62,27 @@ pub fn cluster_faces(faces: &[(i64, Vec<f32>)], threshold: f32) -> Vec<ClusterAs
         "Face clustering: similarity pairs computed"
     );
 
-    // Merge clusters greedily (single-linkage)
+    // Merge clusters greedily (single-linkage) via union-find.
+    //
+    // Previously each merge relabelled every element in the source cluster
+    // (`for k in 0..n { … }`), making the merge loop O(n) per union and the
+    // whole pass O(n³) worst-case — a CPU hotspot that destabilised the server
+    // on large libraries where this runs repeatedly during an import (item #16).
+    // A plain union (point one root at the other) is O(1); `find_root` still
+    // resolves the chain, and path compression keeps lookups near-constant.
     let mut merges = 0usize;
     for (i, j, sim) in &similarities {
         if *sim < threshold {
             break;
         }
-        let ci = find_root(&cluster_ids, *i);
-        let cj = find_root(&cluster_ids, *j);
+        let ci = find_root(&mut cluster_ids, *i);
+        let cj = find_root(&mut cluster_ids, *j);
         if ci != cj {
-            // Merge: assign all members of cj to ci
+            // Union: attach the higher-indexed root under the lower so cluster
+            // IDs stay deterministic (matches the old min/max relabel result).
             let target = ci.min(cj);
             let source = ci.max(cj);
-            for k in 0..n {
-                if find_root(&cluster_ids, k) == source {
-                    cluster_ids[k] = target;
-                }
-            }
+            cluster_ids[source] = target;
             merges += 1;
         }
     }
@@ -91,7 +95,7 @@ pub fn cluster_faces(faces: &[(i64, Vec<f32>)], threshold: f32) -> Vec<ClusterAs
         .iter()
         .enumerate()
         .map(|(idx, (face_id, _))| {
-            let root = find_root(&cluster_ids, idx);
+            let root = find_root(&mut cluster_ids, idx);
             let cid = *cluster_map.entry(root).or_insert_with(|| {
                 let id = next_id;
                 next_id += 1;
@@ -112,12 +116,24 @@ pub fn cluster_faces(faces: &[(i64, Vec<f32>)], threshold: f32) -> Vec<ClusterAs
     result
 }
 
-/// Find the root cluster for an element (path compression style but iterative).
-fn find_root(clusters: &[usize], mut idx: usize) -> usize {
-    while clusters[idx] != idx {
-        idx = clusters[idx];
+/// Find the root cluster for an element using iterative union-find with path
+/// compression. Compression flattens the chain so repeated lookups stay near
+/// O(1) even after many single-linkage unions — essential now that merges are
+/// O(1) unions rather than full relabels (item #16 clustering hotspot).
+fn find_root(clusters: &mut [usize], idx: usize) -> usize {
+    // First pass: walk to the root.
+    let mut root = idx;
+    while clusters[root] != root {
+        root = clusters[root];
     }
-    idx
+    // Second pass: point every node on the path directly at the root.
+    let mut cur = idx;
+    while clusters[cur] != root {
+        let next = clusters[cur];
+        clusters[cur] = root;
+        cur = next;
+    }
+    root
 }
 
 /// Compute the average (centroid) embedding for a group of face embeddings.
@@ -302,5 +318,32 @@ mod tests {
             lenient_map[&1], lenient_map[&2],
             "threshold=0.5 should merge pairs with sim={sim:.3}"
         );
+    }
+
+    /// Regression for the item #16 union-find rewrite: single-linkage must stay
+    /// transitive. A≈B and B≈C (each pair over threshold) but A vs C just under
+    /// threshold — all three must still land in ONE cluster via the chain, and
+    /// a fourth unrelated vector must stay separate. This proves the O(1)-union
+    /// + path-compression change preserves the old full-relabel semantics.
+    #[test]
+    fn test_single_linkage_chain_merges_transitively() {
+        // Vectors placed at increasing angles in the xy-plane so neighbours are
+        // similar but the endpoints are not.
+        let v = |deg: f32| {
+            let t = deg.to_radians();
+            vec![t.cos(), t.sin(), 0.0f32]
+        };
+        // 0°, 30°, 60°: cos(30°)=0.866 (A-B, B-C pass @0.8), cos(60°)=0.5 (A-C fails).
+        let faces = vec![(1, v(0.0)), (2, v(30.0)), (3, v(60.0)), (4, vec![0.0, 0.0, 1.0])];
+        let assignments = cluster_faces(&faces, 0.8);
+        let m: std::collections::HashMap<i64, i64> = assignments.iter().copied().collect();
+
+        assert_eq!(m[&1], m[&2], "A and B (cos 0.866) must share a cluster");
+        assert_eq!(m[&2], m[&3], "B and C (cos 0.866) must share a cluster");
+        assert_eq!(
+            m[&1], m[&3],
+            "A and C must join transitively through B (single-linkage chain)"
+        );
+        assert_ne!(m[&1], m[&4], "orthogonal vector must stay in its own cluster");
     }
 }

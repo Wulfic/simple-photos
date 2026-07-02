@@ -383,7 +383,8 @@ fun ViewerEditPanel(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     SpButton("Save", onClick = onSave, variant = SpButtonVariant.Primary, fontSize = 14)
-                    SpButton("Save Copy", onClick = onSaveCopy, variant = SpButtonVariant.Success, fontSize = 14)
+                    // Save Copy is non-destructive → theme secondary, not green (TODO #6).
+                    SpButton("Save Copy", onClick = onSaveCopy, variant = SpButtonVariant.Secondary, fontSize = 14)
                     if (currentPhoto?.cropMetadata != null) {
                         SpButton("Reset", onClick = onReset, variant = SpButtonVariant.Secondary, fontSize = 14)
                     }

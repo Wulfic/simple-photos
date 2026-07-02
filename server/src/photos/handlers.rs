@@ -406,6 +406,10 @@ pub async fn register_encrypted_photo(
         "register-encrypted: created photos row"
     );
 
+    // Notify the user's other connected clients so their gallery refetches the
+    // new photo within seconds instead of at the next periodic sync (item #11).
+    state.emit_sync(&auth.user_id, "photo", &photo_id);
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({

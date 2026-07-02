@@ -14,8 +14,7 @@ use crate::sanitize;
 use crate::state::AppState;
 
 use super::metadata::{
-    apply_aspect_subtype_fallback, extract_media_metadata_async,
-    extract_media_metadata_from_bytes_async, extract_xmp_subtype,
+    extract_media_metadata_async, extract_media_metadata_from_bytes_async, extract_xmp_subtype,
 };
 use super::thumbnail::generate_thumbnail_file;
 use super::utils::{
@@ -333,19 +332,27 @@ pub async fn upload_photo(
         .as_ref()
         .map(|(orig_bytes, _)| orig_bytes.clone());
 
-    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
+    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken, exif_taken_offset) =
         if let Some((orig_bytes, orig_filename)) = original_upload {
-            let (_, _, orig_cam, orig_lat, orig_lon, orig_taken) =
+            let (_, _, orig_cam, orig_lat, orig_lon, orig_taken, orig_taken_offset) =
                 extract_media_metadata_from_bytes_async(orig_bytes, orig_filename).await;
-            let (conv_w, conv_h, conv_cam, conv_lat, conv_lon, conv_taken) =
+            let (conv_w, conv_h, conv_cam, conv_lat, conv_lon, conv_taken, conv_taken_offset) =
                 extract_media_metadata_async(file_path.clone()).await;
+            // Keep taken_at and its zone offset paired: take the offset from
+            // whichever source supplied the timestamp we keep, never a mix.
+            let (taken, taken_offset) = if orig_taken.is_some() {
+                (orig_taken, orig_taken_offset)
+            } else {
+                (conv_taken, conv_taken_offset)
+            };
             (
                 conv_w,
                 conv_h,
                 orig_cam.or(conv_cam),
                 orig_lat.or(conv_lat),
                 orig_lon.or(conv_lon),
-                orig_taken.or(conv_taken),
+                taken,
+                taken_offset,
             )
         } else {
             extract_media_metadata_async(file_path.clone()).await
@@ -365,8 +372,16 @@ pub async fn upload_photo(
     // When XMP is missing/stripped (common for scanned/exported panoramas
     // and 360° photos that lost their GPano markers), fall back to the
     // image dimensions so the gallery still routes them to the correct
-    // viewer.
-    apply_aspect_subtype_fallback(&mut subtype_info, img_w, img_h);
+    // viewer. Sensitivity honours the user's AI toggle (item #7): precise
+    // thresholds by default, loose only when AI categorisation is off.
+    let pano_sensitivity =
+        crate::photos::metadata::pano_sensitivity_for_user(&state.read_pool, &auth.user_id).await;
+    crate::photos::metadata::apply_aspect_subtype_fallback_with(
+        &mut subtype_info,
+        img_w,
+        img_h,
+        pano_sensitivity,
+    );
 
     match &subtype_info.photo_subtype {
         Some(subtype) => {
@@ -431,6 +446,13 @@ pub async fn upload_photo(
         .or(header_file_modified_at)
         .unwrap_or_else(|| now.clone());
 
+    // Original capture-zone offset (e.g. "+09:00"). The extractor only sets
+    // this alongside an EXIF DateTimeOriginal, and EXIF wins the `taken_at`
+    // chain above, so whenever this is `Some` the stored `final_taken_at`
+    // genuinely came from that zoned EXIF value. Sidecar epochs (Google
+    // Takeout) and file mtimes carry no zone, so it stays `None` for those.
+    let final_taken_offset = exif_taken_offset;
+
     let resolved_lat = exif_lat.or(header_latitude);
     let resolved_lon = exif_lon.or(header_longitude);
     // GPS is meaningless without both coordinates — drop the partial value
@@ -458,8 +480,8 @@ pub async fn upload_photo(
     let insert_result = sqlx::query(
         "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
          size_bytes, width, height, taken_at, latitude, longitude, camera_model, \
-         thumb_path, created_at, photo_hash, photo_subtype, burst_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         thumb_path, created_at, photo_hash, photo_subtype, burst_id, taken_at_offset) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&photo_id)
     .bind(&auth.user_id)
@@ -479,6 +501,7 @@ pub async fn upload_photo(
     .bind(&photo_hash)
     .bind(&subtype_info.photo_subtype)
     .bind(&subtype_info.burst_id)
+    .bind(&final_taken_offset)
     .execute(&state.pool)
     .await?;
 

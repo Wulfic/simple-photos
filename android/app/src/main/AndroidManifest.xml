@@ -18,6 +18,16 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+    <!-- Background backup runs as a WorkManager foreground service so long
+         uploads (large videos) survive Doze and background execution limits
+         instead of being killed mid-batch (TODO #9). DATA_SYNC is the correct
+         type for uploading user media; POST_NOTIFICATIONS (API 33+) is needed
+         to show the required user-visible progress notification. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:name=".SimplePhotosApplication"
         android:allowBackup="false"

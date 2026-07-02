@@ -266,6 +266,11 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
     // Check audio-backup toggle — skip audio files unless enabled.
     let audio_enabled: bool = crate::photos::utils::audio_backup_enabled(pool).await;
 
+    // Panorama-detection sensitivity for dropped-in files, resolved once per
+    // scan (item #7): precise thresholds unless AI categorisation is off.
+    let pano_sensitivity =
+        crate::photos::metadata::pano_sensitivity_for_user(pool, &admin_id).await;
+
     // Build set of already-registered paths (from both active photos and trash)
     // using a streaming cursor so we never hold the full Vec<String> + HashSet
     // simultaneously in memory.
@@ -396,7 +401,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
                     // Extract dimensions, camera model, GPS, and date from file
-                    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
+                    let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken, exif_taken_offset) =
                         extract_media_metadata_async(abs_path.clone()).await;
 
                     // Extract XMP subtype (motion, panorama, 360, HDR, burst)
@@ -408,10 +413,11 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     // this, files dropped into the storage folder were the ONLY
                     // ingest path missing the fallback — scan/upload/ingest all
                     // apply it — so XMP-less panoramas never got a subtype.
-                    crate::photos::metadata::apply_aspect_subtype_fallback(
+                    crate::photos::metadata::apply_aspect_subtype_fallback_with(
                         &mut subtype_info,
                         img_w,
                         img_h,
+                        pano_sensitivity,
                     );
 
                     if let Some(ref st) = subtype_info.photo_subtype {
@@ -444,8 +450,8 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     let insert_result = sqlx::query(
                         "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                          size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                         created_at, photo_hash, photo_subtype, burst_id) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         created_at, photo_hash, photo_subtype, burst_id, taken_at_offset) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(&photo_id)
                     .bind(&admin_id)
@@ -465,6 +471,7 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                     .bind(&photo_hash)
                     .bind(&subtype_info.photo_subtype)
                     .bind(&subtype_info.burst_id)
+                    .bind(&exif_taken_offset)
                     .execute(pool)
                     .await;
 

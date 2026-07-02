@@ -149,70 +149,126 @@ fn extract_container_video_offset(text: &str) -> Option<u64> {
     Some(len + pad)
 }
 
-/// Aspect-ratio fallback for panorama / equirectangular detection.
+/// How aggressively the XMP-less panorama fallback tags wide/tall images.
 ///
-/// Many real-world panoramic images — especially scanned/stitched JPEGs
-/// and 360° photos exported by tools that strip XMP — carry **no**
-/// `GPano:ProjectionType` marker.  When `extract_xmp_subtype` returns
-/// `None`, we still want the gallery to designate them so the proper
-/// viewer (panorama scrubber or 360° sphere) is offered.
+/// The distinction implements item #7: when the user has AI categorisation on
+/// (the default), we use the *precise* [`PanoSensitivity::Strict`] thresholds so
+/// ordinary wide-landscape photos stop getting mislabelled as panoramas; when
+/// the user has explicitly turned AI off, we fall back to the *loose* dimension
+/// heuristic so obvious panoramas are still auto-routed to the pano viewer
+/// without any classifier.
+///
+/// Note: a genuine on-device ML panorama classifier would slot in ahead of this
+/// heuristic (the `Strict` path is its stand-in until a model is hosted). Real
+/// stitched panoramas almost always carry `GPano` XMP — handled upstream in
+/// [`extract_xmp_subtype`] — so tightening this fallback removes the vast
+/// majority of false positives with negligible recall loss.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PanoSensitivity {
+    /// Permissive — AI categorisation is off; favour recall.
+    Loose,
+    /// Precise — AI categorisation on (default); favour precision (item #7).
+    Strict,
+}
+
+/// Resolve the panorama sensitivity for a user. Defaults to
+/// [`PanoSensitivity::Strict`]; only an explicit `ai_enabled = 'false'` opt-out
+/// drops to [`PanoSensitivity::Loose`]. This deliberately does NOT depend on the
+/// server-config AI default: erring toward `Strict` (fewer false positives) is
+/// aligned with the goal of item #7, and keeps every ingest call site free of
+/// config plumbing.
+pub(crate) async fn pano_sensitivity_for_user(
+    pool: &sqlx::SqlitePool,
+    user_id: &str,
+) -> PanoSensitivity {
+    let ai_off = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM user_settings \
+             WHERE user_id = ?1 AND key = 'ai_enabled' AND value = 'false')",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    if ai_off == 1 {
+        PanoSensitivity::Loose
+    } else {
+        PanoSensitivity::Strict
+    }
+}
+
+/// Sensitivity-aware aspect-ratio fallback for panorama / equirectangular
+/// detection (item #7).
+///
+/// Many real-world panoramic images — especially scanned/stitched JPEGs and
+/// 360° photos exported by tools that strip XMP — carry **no**
+/// `GPano:ProjectionType` marker. When `extract_xmp_subtype` returns `None`, we
+/// still want the gallery to designate them so the proper viewer (panorama
+/// scrubber or 360° sphere) is offered.
 ///
 /// Rules (only applied when `info.photo_subtype` is `None`):
 /// * `width.max(height) >= 2048` — avoids mis-tagging banners/screenshots.
-/// * Horizontal: aspect `>= 2.0` ⇒ `panorama` (cylindrical / wide stitch).
-///   Tightened from the previous 1.8 threshold which over-matched cinematic
-///   crops and 16:9 landscape shots.
-/// * Vertical: `h/w >= 2.5` ⇒ `panorama` (rare Samsung "vertical pano").
 /// * Equirectangular (360°): aspect ∈ [1.97, 2.03] **and** `width >= 4000`.
-///   Real 360° photo spheres are 4K+ wide; tightening this avoids false
-///   positives on ordinary 2:1 wallpapers.
+///   Checked first and independent of the horizontal gate because a real 360°
+///   sphere is legitimately a tight 2:1. Real spheres are 4K+ wide
+///   (Pixel 7680×3840, RICOH Theta 5376×2688), so ordinary 2:1 wallpapers are
+///   excluded.
+/// * Horizontal panorama: aspect ≥ threshold ⇒ `panorama`.
+///   - `Loose`: ≥ 2.0 (higher recall).
+///   - `Strict`: ≥ 2.5 — removes the 2.0–2.5 band where ultra-wide landscape
+///     crops and 20:9 cinematic shots produced the false positives item #7
+///     targets. Genuine ≥2.5:1 stitched panos are kept.
+/// * Vertical panorama: `h/w >=` threshold ⇒ `panorama` (Samsung "vertical
+///   pano"). `Loose` 2.5, `Strict` 3.0.
 ///
 /// Width/height of `0` (unknown) are treated as a no-op.
-pub(crate) fn apply_aspect_subtype_fallback(info: &mut SubtypeInfo, width: i64, height: i64) {
+pub(crate) fn apply_aspect_subtype_fallback_with(
+    info: &mut SubtypeInfo,
+    width: i64,
+    height: i64,
+    sensitivity: PanoSensitivity,
+) {
     if info.photo_subtype.is_some() {
         return;
     }
     if width <= 0 || height <= 0 {
         return;
     }
-    // Long edge must be at least 2048 px so we don't tag wide-but-small
-    // crops, banners, screenshots, or social-media exports.  Real panoramas
-    // are stitched from multiple frames and almost always have a long edge
-    // well above 2K pixels.
     if width.max(height) < 2048 {
         return;
     }
     let w = width as f64;
     let h = height as f64;
     let aspect = w / h;
-    // Horizontal panorama: w/h ≥ 2.0.  The previous 1.8 threshold was too
-    // permissive — common ultra-wide phone landscape shots (~1.8:1) and
-    // 18:9 / 19.5:9 cinematic crops were getting tagged as panoramas.
-    // Vertical panorama: h/w ≥ 2.5.  True vertical panos (Samsung "vertical
-    // pano") are extremely tall; raising this floor stops portrait videos
-    // and tall screenshots from being misclassified.
-    let is_horizontal_pano = aspect >= 2.0;
-    let is_vertical_pano = (1.0 / aspect) >= 2.5;
+
+    // 360° equirectangular: legitimately a tight 2:1, so recognise it regardless
+    // of the (stricter) generic horizontal gate below.
+    if (1.97..=2.03).contains(&aspect) && width >= 4000 {
+        info.photo_subtype = Some("equirectangular".to_string());
+        tracing::debug!(width, height, aspect, "[subtype] aspect fallback → equirectangular (360°)");
+        return;
+    }
+
+    let (h_aspect_min, v_aspect_min) = match sensitivity {
+        PanoSensitivity::Loose => (2.0_f64, 2.5_f64),
+        PanoSensitivity::Strict => (2.5_f64, 3.0_f64),
+    };
+
+    let is_horizontal_pano = aspect >= h_aspect_min;
+    let is_vertical_pano = (1.0 / aspect) >= v_aspect_min;
     if !is_horizontal_pano && !is_vertical_pano {
         return;
     }
-    // Equirectangular requires a TIGHT 2:1 ratio AND a high-resolution
-    // long edge.  A real 360° photo sphere is typically ≥ 4K wide
-    // (Pixel: 7680×3840, RICOH Theta: 5376×2688).  A random 2:1 wallpaper
-    // or landscape crop should NOT be flagged as 360°.
-    let subtype = if is_horizontal_pano && (1.97..=2.03).contains(&aspect) && width >= 4000 {
-        "equirectangular"
-    } else {
-        "panorama"
-    };
+    // Telemetry hook (item #7): log every heuristic assignment with the aspect
+    // and sensitivity so misflags can be audited from the server logs.
     tracing::debug!(
         width,
         height,
         aspect,
-        chosen = subtype,
+        ?sensitivity,
+        chosen = "panorama",
         "[subtype] aspect-ratio fallback assigned panorama subtype"
     );
-    info.photo_subtype = Some(subtype.to_string());
+    info.photo_subtype = Some("panorama".to_string());
 }
 
 /// How much of a file the XMP subtype scanner actually needs.  XMP packets
@@ -349,7 +405,7 @@ pub async fn backfill_photo_subtypes_all_users(
                             .and_then(|s| s.to_str())
                             .unwrap_or("")
                             .to_string();
-                        let (rw, rh, _, _, _, _) =
+                        let (rw, rh, _, _, _, _, _) =
                             extract_media_metadata_from_bytes_async(bytes.clone(), fname).await;
                         if rw > 0 && rh > 0 {
                             eff_w = rw;
@@ -364,7 +420,15 @@ pub async fn backfill_photo_subtypes_all_users(
                         }
                     }
 
-                    apply_aspect_subtype_fallback(&mut sub, eff_w, eff_h);
+                    // Boot backfill uses the precise thresholds (item #7): the
+                    // whole point is to stop mislabelling wide landscapes, and
+                    // this only ever fills NULL subtypes so it never un-tags.
+                    apply_aspect_subtype_fallback_with(
+                        &mut sub,
+                        eff_w,
+                        eff_h,
+                        PanoSensitivity::Strict,
+                    );
 
                     if let Some(ref subtype) = sub.photo_subtype {
                         let res = sqlx::query(
@@ -505,7 +569,16 @@ mod xmp_tests {
     //! Each test injects a JPEG byte stream containing an APP1/XMP packet
     //! and asserts the extractor produces the expected `SubtypeInfo`.
 
-    use super::{apply_aspect_subtype_fallback, extract_xmp_subtype, SubtypeInfo};
+    use super::{
+        apply_aspect_subtype_fallback_with, extract_xmp_subtype, PanoSensitivity, SubtypeInfo,
+    };
+
+    /// Test shim for the loose-sensitivity aspect fallback — keeps the existing
+    /// (loose-behaviour) assertions terse now that production always passes an
+    /// explicit [`PanoSensitivity`].
+    fn apply_aspect_subtype_fallback(info: &mut SubtypeInfo, width: i64, height: i64) {
+        apply_aspect_subtype_fallback_with(info, width, height, PanoSensitivity::Loose)
+    }
 
     fn jpeg_with_xmp(xmp: &str) -> Vec<u8> {
         // SOI (FFD8) + APP1 with XMP packet + EOI (FFD9).
@@ -775,5 +848,65 @@ mod xmp_tests {
         let mut info = SubtypeInfo::default();
         apply_aspect_subtype_fallback(&mut info, 2160, 3840);
         assert_eq!(info.photo_subtype, None);
+    }
+
+    // ── item #7: Strict (AI-enabled) sensitivity cuts landscape false positives ──
+
+    #[test]
+    fn strict_rejects_2to1_wide_landscape() {
+        // A 2:1 wide landscape crop with no XMP: Loose tags it panorama, but
+        // Strict (the default / AI-enabled path) leaves it untagged — this is
+        // the core false-positive fix.
+        let mut loose = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut loose, 3000, 1500, PanoSensitivity::Loose);
+        assert_eq!(loose.photo_subtype.as_deref(), Some("panorama"));
+
+        let mut strict = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut strict, 3000, 1500, PanoSensitivity::Strict);
+        assert_eq!(strict.photo_subtype, None);
+    }
+
+    #[test]
+    fn strict_rejects_20by9_cinematic_crop() {
+        // ~2.4:1 ultra-wide/cinematic crop — a classic landscape false positive.
+        let mut strict = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut strict, 5760, 2400, PanoSensitivity::Strict);
+        assert_eq!(strict.photo_subtype, None);
+    }
+
+    #[test]
+    fn strict_keeps_genuine_wide_panorama() {
+        // 3.5:1 stitched pano — kept under Strict.
+        let mut strict = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut strict, 7000, 2000, PanoSensitivity::Strict);
+        assert_eq!(strict.photo_subtype.as_deref(), Some("panorama"));
+    }
+
+    #[test]
+    fn strict_keeps_equirectangular_360() {
+        // Real 360° sphere (2:1, ≥4000px) — still recognised under Strict.
+        let mut strict = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut strict, 5760, 2880, PanoSensitivity::Strict);
+        assert_eq!(strict.photo_subtype.as_deref(), Some("equirectangular"));
+    }
+
+    #[test]
+    fn strict_rejects_mild_vertical_pano() {
+        // h/w ≈ 2.68 — Loose tags it, Strict (≥3.0) does not.
+        let mut loose = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut loose, 1080, 2900, PanoSensitivity::Loose);
+        assert_eq!(loose.photo_subtype.as_deref(), Some("panorama"));
+
+        let mut strict = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut strict, 1080, 2900, PanoSensitivity::Strict);
+        assert_eq!(strict.photo_subtype, None);
+    }
+
+    #[test]
+    fn strict_keeps_extreme_vertical_pano() {
+        // h/w ≈ 3.7 — kept under Strict.
+        let mut strict = SubtypeInfo::default();
+        apply_aspect_subtype_fallback_with(&mut strict, 1080, 4000, PanoSensitivity::Strict);
+        assert_eq!(strict.photo_subtype.as_deref(), Some("panorama"));
     }
 }

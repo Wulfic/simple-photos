@@ -27,6 +27,7 @@ pub fn spawn_all(
     audit_tx: &tokio::sync::broadcast::Sender<AuditBroadcast>,
     storage_available: &Arc<AtomicBool>,
     ai_active: &Arc<AtomicBool>,
+    ai_health: &Arc<crate::state::AiHealth>,
     geo_active: &Arc<AtomicBool>,
     geo_dataset_available: &Arc<AtomicBool>,
     geo_dataset_downloading: &Arc<AtomicBool>,
@@ -52,6 +53,7 @@ pub fn spawn_all(
     );
     spawn_broadcast(pool.clone(), config.server.port);
     spawn_discovery_listener(pool.clone(), Arc::new(config.clone()));
+    spawn_heartbeat_sender(pool.clone(), Arc::new(config.clone()));
     spawn_auto_scan(
         pool.clone(),
         storage_root_swap.clone(),
@@ -76,6 +78,7 @@ pub fn spawn_all(
         config.storage.root.clone(),
         config.auth.jwt_secret.clone(),
         ai_active.clone(),
+        ai_health.clone(),
     );
     crate::geo::processor::spawn_geo_processor(
         pool.clone(),
@@ -232,6 +235,14 @@ fn spawn_broadcast(pool: SqlitePool, server_port: u16) {
 fn spawn_discovery_listener(pool: SqlitePool, config: Arc<AppConfig>) {
     tokio::spawn(async move {
         crate::backup::discovery::run_discovery_listener(pool, config).await;
+    });
+}
+
+/// Periodic authenticated peer heartbeat + self-healing over the discovery port
+/// (item #10). No-op in practice until backup peers with shared keys exist.
+fn spawn_heartbeat_sender(pool: SqlitePool, config: Arc<AppConfig>) {
+    tokio::spawn(async move {
+        crate::backup::heartbeat::run_heartbeat_sender(pool, config).await;
     });
 }
 

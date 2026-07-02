@@ -71,12 +71,38 @@ static CONV_DONE: AtomicI64 = AtomicI64::new(0);
 /// shows the true batch size.
 static CONV_PINNED: AtomicBool = AtomicBool::new(false);
 
+/// Epoch-millis when the current conversion batch became active, or `0` when
+/// idle. Drives the conversion-banner ETA (item #4) via the shared
+/// `status::progress_math` throughput estimator.
+static CONV_STARTED_MS: AtomicI64 = AtomicI64::new(0);
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Arm the ETA clock the first time a batch goes active (no-op if already set),
+/// so concurrent per-upload passes don't keep resetting the start time.
+fn arm_start_clock_if_unset() {
+    let _ = CONV_STARTED_MS.compare_exchange(0, now_ms(), Ordering::Relaxed, Ordering::Relaxed);
+}
+
+/// Clear the ETA clock when the batch finishes so a stale start time can't leak
+/// into the next batch's estimate.
+fn clear_start_clock() {
+    CONV_STARTED_MS.store(0, Ordering::Relaxed);
+}
+
 /// Unconditionally reset and arm the counters. Internal — callers go through
 /// [`progress_start`] (pin-aware) or [`batch_start`] (pin-setting).
 fn raw_start(total: i64) {
     CONV_DONE.store(0, Ordering::Relaxed);
     CONV_TOTAL.store(total, Ordering::Relaxed);
     CONV_ACTIVE.store(true, Ordering::Relaxed);
+    // Fresh batch → reset the ETA clock to now.
+    CONV_STARTED_MS.store(now_ms(), Ordering::Relaxed);
 }
 
 /// Start a new conversion batch (resets counters).
@@ -111,6 +137,7 @@ pub fn batch_start(total: i64) {
 pub fn batch_end() {
     CONV_PINNED.store(false, Ordering::Relaxed);
     CONV_ACTIVE.store(false, Ordering::Relaxed);
+    clear_start_clock();
 }
 
 /// Increment the done counter by 1.
@@ -121,6 +148,62 @@ pub fn progress_tick() {
 /// Signal that the conversion batch is complete.
 pub fn progress_finish() {
     CONV_ACTIVE.store(false, Ordering::Relaxed);
+    clear_start_clock();
+}
+
+/// RAII guard around a conversion batch that guarantees the global "active"
+/// flag is cleared on **every** exit path — normal completion, early return,
+/// a panic inside the pass, or future cancellation.
+///
+/// This is the watchdog for todo #18's "stuck job blocks subsequent jobs":
+/// `run_conversion_pass_inner` sets `CONV_ACTIVE = true` up front and clears it
+/// at the very end, with a long convert → register → encrypt loop (dozens of
+/// `.await` points) in between. If any of those panics or the spawned task is
+/// dropped mid-pass, the old explicit `progress_finish()` was skipped and
+/// `CONV_ACTIVE` stayed `true` forever — and because `ingest_pipeline_busy()`
+/// keys off that flag, the background AI and geo processors would defer
+/// indefinitely, silently wedging the server on large imports. The guard's
+/// `Drop` closes that hole regardless of how the pass unwinds.
+///
+/// On the happy path the caller invokes [`finish`](Self::finish) at the point
+/// the batch truly ends (before any follow-on encryption step, to preserve
+/// banner timing), which disarms the drop so the flag isn't cleared twice or,
+/// worse, cleared out from under a concurrently-pinned client batch.
+#[must_use = "hold the guard for the whole pass; dropping it ends the batch"]
+pub struct ConversionBatchGuard {
+    finished: bool,
+}
+
+impl ConversionBatchGuard {
+    /// Start a conversion batch of `total` items and arm the drop-guard.
+    /// Mirrors [`progress_start`] semantics (a no-op reset while a client batch
+    /// is pinned).
+    pub fn start(total: i64) -> Self {
+        progress_start(total);
+        Self { finished: false }
+    }
+
+    /// Normal-path completion: end the batch now and disarm the drop-guard so
+    /// `Drop` becomes a no-op. Consumes the guard.
+    pub fn finish(mut self) {
+        self.finished = true;
+        progress_finish();
+    }
+}
+
+impl Drop for ConversionBatchGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            // Only reached on panic / early return / cancellation — the normal
+            // path calls `finish()`. Clear the flag so the pipeline unwedges.
+            tracing::warn!(
+                "[INGEST] Conversion pass ended without finishing normally \
+                 (panic or cancellation) — clearing stuck 'converting' flag so \
+                 AI/geo processing can resume"
+            );
+            progress_finish();
+        }
+    }
 }
 
 /// Register an additional `n` items to the in-flight conversion total
@@ -143,6 +226,8 @@ pub fn progress_add(n: i64) {
     }
     CONV_TOTAL.fetch_add(n, Ordering::Relaxed);
     CONV_ACTIVE.store(true, Ordering::Relaxed);
+    // First upload of a per-file batch arms the ETA clock; later ones no-op.
+    arm_start_clock_if_unset();
 }
 
 /// Counterpart to [`progress_add`] — increments `done` and clears the
@@ -154,6 +239,7 @@ pub fn progress_finish_one() {
     let total = CONV_TOTAL.load(Ordering::Relaxed);
     if done >= total {
         CONV_ACTIVE.store(false, Ordering::Relaxed);
+        clear_start_clock();
     }
 }
 
@@ -589,23 +675,50 @@ async fn convert_audio(input: &str, output: &str) -> bool {
 
 // ── Conversion status endpoint ───────────────────────────────────────────────
 
+/// Estimated seconds remaining for the active conversion batch (item #4).
+/// Uses the same throughput estimator as the encryption banner
+/// ([`crate::status::progress_math`]); `None` until at least one item finishes
+/// (no throughput sample yet) or when idle.
+pub fn conversion_eta_seconds() -> Option<f64> {
+    let (active, total, done) = progress_snapshot();
+    if !active {
+        return None;
+    }
+    let started = CONV_STARTED_MS.load(Ordering::Relaxed);
+    if started == 0 {
+        return None;
+    }
+    let elapsed = (now_ms() - started) as f64 / 1000.0;
+    let remaining = (total - done).max(0);
+    let (_done, eta) = crate::status::progress_math(total, remaining, elapsed);
+    eta
+}
+
 #[derive(Debug, Serialize)]
 pub struct ConversionStatusResponse {
     pub active: bool,
     pub total: i64,
     pub done: i64,
+    /// Estimated seconds remaining, or `null` until throughput is known (item #4).
+    pub eta_seconds: Option<f64>,
+}
+
+/// Build the status response from the live counters + ETA estimate.
+fn conversion_status_response() -> ConversionStatusResponse {
+    let (active, total, done) = progress_snapshot();
+    ConversionStatusResponse {
+        active,
+        total,
+        done,
+        eta_seconds: conversion_eta_seconds(),
+    }
 }
 
 /// GET /api/admin/conversion-status
 pub async fn conversion_status(
     _auth: AuthUser,
 ) -> Result<Json<ConversionStatusResponse>, AppError> {
-    let (active, total, done) = progress_snapshot();
-    Ok(Json(ConversionStatusResponse {
-        active,
-        total,
-        done,
-    }))
+    Ok(Json(conversion_status_response()))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -629,12 +742,7 @@ pub async fn conversion_batch_start(
         ));
     }
     batch_start(req.total);
-    let (active, total, done) = progress_snapshot();
-    Ok(Json(ConversionStatusResponse {
-        active,
-        total,
-        done,
-    }))
+    Ok(Json(conversion_status_response()))
 }
 
 /// POST /api/admin/conversion-batch/end
@@ -644,17 +752,52 @@ pub async fn conversion_batch_end(
     _auth: AuthUser,
 ) -> Result<Json<ConversionStatusResponse>, AppError> {
     batch_end();
-    let (active, total, done) = progress_snapshot();
-    Ok(Json(ConversionStatusResponse {
-        active,
-        total,
-        done,
-    }))
+    Ok(Json(conversion_status_response()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serializes tests that mutate the global conversion-progress atomics so
+    /// cargo's parallel test threads don't race on shared state. Poison-tolerant
+    /// so a panic in one test (e.g. the guard-on-panic test) can't wedge others.
+    fn global_state_lock() -> std::sync::MutexGuard<'static, ()> {
+        static L: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        L.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    #[test]
+    fn batch_guard_finishes_on_panic() {
+        let _lock = global_state_lock();
+        // Known clean baseline (unpinned + inactive).
+        batch_end();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = ConversionBatchGuard::start(5);
+            assert!(progress_snapshot().0, "batch is active after start");
+            panic!("boom mid-conversion");
+        }));
+
+        assert!(result.is_err(), "panic should propagate out of catch_unwind");
+        assert!(
+            !progress_snapshot().0,
+            "guard's Drop must clear the active flag after a panic (#18)"
+        );
+    }
+
+    #[test]
+    fn batch_guard_explicit_finish_ends_batch() {
+        let _lock = global_state_lock();
+        batch_end();
+
+        let guard = ConversionBatchGuard::start(3);
+        assert!(progress_snapshot().0, "active after start");
+        guard.finish();
+        assert!(!progress_snapshot().0, "finish() ends the batch");
+    }
 
     #[test]
     fn conversion_priority_orders_videos_last() {
@@ -669,6 +812,7 @@ mod tests {
 
     #[test]
     fn pinned_batch_keeps_denominator_stable() {
+        let _lock = global_state_lock();
         // Simulate the web upload loop declaring a 4-file convertible batch and
         // the inline upload path converting them one at a time. The denominator
         // must stay at 4 the whole way (#11), never tracking one ahead.

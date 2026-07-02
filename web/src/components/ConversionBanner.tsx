@@ -20,9 +20,6 @@ export default function ConversionBanner() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { startTask, endTask } = useProcessingStore();
 
-  const batchStartRef = useRef(0);
-  const prevDoneRef = useRef(0);
-
   const poll = useCallback(async () => {
     try {
       const res = await api.admin.conversionStatus();
@@ -31,29 +28,15 @@ export default function ConversionBanner() {
         setCounts(null);
         setEta(null);
         endTask("conversion");
-        batchStartRef.current = 0;
-        prevDoneRef.current = 0;
         return;
-      }
-
-      // New batch detected
-      if (batchStartRef.current === 0 && res.done === 0) {
-        batchStartRef.current = Date.now();
       }
 
       setCounts({ total: res.total, done: Math.min(res.done, res.total) });
       startTask("conversion");
 
-      // ETA estimation
-      if (res.done > 0 && batchStartRef.current > 0) {
-        const elapsedMs = Date.now() - batchStartRef.current;
-        const msPerItem = elapsedMs / res.done;
-        const remaining = res.total - res.done;
-        const remainingSec = Math.max(0, (remaining * msPerItem) / 1000);
-        setEta(formatEta(remainingSec));
-      }
-
-      prevDoneRef.current = res.done;
+      // ETA is now server-authoritative (item #4) — same throughput estimator
+      // as the encryption banner, so no client-side clock to drift.
+      setEta(res.eta_seconds != null ? formatEta(res.eta_seconds) : null);
     } catch {
       // Non-critical — will retry on next interval
     }

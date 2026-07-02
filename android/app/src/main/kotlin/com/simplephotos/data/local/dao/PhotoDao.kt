@@ -26,6 +26,15 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE syncStatus = :status")
     suspend fun getByStatus(status: SyncStatus): List<PhotoEntity>
 
+    /**
+     * Count items still queued for upload/encryption on this device — PENDING or
+     * FAILED rows that were never successfully uploaded (no serverBlobId). Fed to
+     * the server's `/status/encryption/contribute` so the unified banner total
+     * includes local backup work the server can't see yet (TODO #2).
+     */
+    @Query("SELECT COUNT(*) FROM photos WHERE (syncStatus = 'PENDING' OR syncStatus = 'FAILED') AND serverBlobId IS NULL")
+    suspend fun countPendingUploads(): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(photo: PhotoEntity)
 

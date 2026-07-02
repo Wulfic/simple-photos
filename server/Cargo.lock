@@ -2985,6 +2985,7 @@ dependencies = [
  "dashmap",
  "futures-util",
  "hex",
+ "hmac",
  "http-body-util",
  "image",
  "imagesize",

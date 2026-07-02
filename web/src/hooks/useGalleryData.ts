@@ -11,6 +11,7 @@ import { hasCryptoKey } from "../crypto/crypto";
 import type { CachedPhoto } from "../db";
 import { useSecureBlobFilter } from "../gallery/hooks/useSecureBlobFilter";
 import { usePhotoSync } from "../gallery/hooks/usePhotoSync";
+import { useSyncSignal } from "../store/syncSignal";
 import type { PhotoPayload, ThumbnailPayload } from "../types/media";
 export type { PhotoPayload, ThumbnailPayload };
 
@@ -36,6 +37,7 @@ export function useGalleryData(): GalleryDataResult {
   const [error, setError] = useState("");
   const { secureBlobIds, refreshSecureBlobIds, startPolling } = useSecureBlobFilter();
   const { encryptedPhotos, loading, loadEncryptedPhotos } = usePhotoSync();
+  const syncVersion = useSyncSignal((s) => s.version);
 
   useEffect(() => {
     async function init() {
@@ -56,6 +58,16 @@ export function useGalleryData(): GalleryDataResult {
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Real-time refetch: when the server pushes an album/gallery change (item #11)
+  // re-pull from the server so the grid reflects it within seconds. Skips the
+  // initial mount (version 0) — that's already covered by init() above.
+  useEffect(() => {
+    if (syncVersion === 0) return;
+    loadEncryptedPhotos().catch(() => {});
+    refreshSecureBlobIds().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncVersion]);
 
   return {
     loading,

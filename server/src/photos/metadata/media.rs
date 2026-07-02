@@ -3,9 +3,20 @@
 
 use super::*;
 
-/// Convert an EXIF `DateTimeOriginal` string (`"YYYY:MM:DD HH:MM:SS"`) to an
-/// ISO-8601 instant (`"YYYY-MM-DDTHH:MM:SSZ"`). Returns `None` for anything
-/// that doesn't match the canonical EXIF layout.
+/// Convert an EXIF `DateTimeOriginal` string (`"YYYY:MM:DD HH:MM:SS"`) plus an
+/// optional `OffsetTimeOriginal` (`"+09:00"`, `"-08:00"`, `"Z"`, …) into a
+/// canonical UTC ISO-8601 instant, returning `(utc_iso, offset)`.
+///
+/// EXIF `DateTimeOriginal` is *local wall-clock time* with no embedded zone.
+/// The previous implementation appended `"Z"` unconditionally, which silently
+/// treated that local time as UTC — every photo captured outside UTC then
+/// landed in the wrong timeline slot by its zone offset (the core Google
+/// Takeout "wrong dates" bug). When the file also carries the zone via
+/// `OffsetTimeOriginal`, we now apply it to recover the true instant and
+/// report the normalised offset (e.g. `"+09:00"`) so callers can persist the
+/// original zone. When no offset is present the instant is genuinely
+/// unknowable, so we fall back to the legacy assume-UTC behaviour and report
+/// `None` for the offset.
 ///
 /// The input is derived from attacker-controlled file bytes, so slicing must
 /// be char-boundary safe: we require a pure-ASCII string of at least 19 bytes
@@ -13,7 +24,7 @@ use super::*;
 /// implementation sliced by byte index after a *byte*-length check, which
 /// panicked when a crafted EXIF field placed a multi-byte UTF-8 char on a
 /// slice boundary.
-fn exif_datetime_to_iso(dt_str: &str) -> Option<String> {
+fn exif_datetime_to_iso(dt_str: &str, offset: Option<&str>) -> Option<(String, Option<String>)> {
     if !dt_str.is_ascii() || dt_str.len() < 19 {
         return None;
     }
@@ -21,7 +32,54 @@ fn exif_datetime_to_iso(dt_str: &str) -> Option<String> {
     let month = dt_str.get(5..7)?;
     let day = dt_str.get(8..10)?;
     let time = dt_str.get(11..19)?;
-    Some(format!("{year}-{month}-{day}T{time}Z"))
+    let naive = format!("{year}-{month}-{day}T{time}");
+
+    // When the file records the capture zone, apply it to get the true UTC
+    // instant. Build an RFC-3339 string and let chrono do the arithmetic.
+    if let Some(off) = offset.and_then(normalize_exif_offset) {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&format!("{naive}{off}")) {
+            let utc = dt
+                .with_timezone(&chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            return Some((utc, Some(off)));
+        }
+    }
+
+    // No usable offset — assume UTC (legacy behaviour), zone unknown.
+    Some((format!("{naive}Z"), None))
+}
+
+/// Normalise a raw EXIF offset field (`OffsetTimeOriginal` / `OffsetTime`) into
+/// a strict `"+HH:MM"` / `"-HH:MM"` form suitable for RFC-3339. Returns `None`
+/// for the "undefined" placeholder EXIF writers emit (blank, `":  "`, etc.) or
+/// anything out of range. Accepts `"Z"`/`"z"` and both `±HH:MM` and `±HHMM`.
+fn normalize_exif_offset(raw: &str) -> Option<String> {
+    let s = raw.trim().trim_matches('"').trim();
+    if s.is_empty() {
+        return None;
+    }
+    if s.eq_ignore_ascii_case("z") {
+        return Some("+00:00".to_string());
+    }
+    let bytes = s.as_bytes();
+    let sign = match bytes.first()? {
+        b'+' => '+',
+        b'-' => '-',
+        _ => return None,
+    };
+    // Pull the digits out of the remainder so both "+09:00" and "+0900" work.
+    let digits: String = s[1..].chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() != 4 {
+        return None;
+    }
+    let hh: i32 = digits.get(0..2)?.parse().ok()?;
+    let mm: i32 = digits.get(2..4)?.parse().ok()?;
+    // Real-world zones span -12:00..=+14:00; reject garbage that would still
+    // parse as RFC-3339 but represent no real offset.
+    if hh > 14 || mm > 59 {
+        return None;
+    }
+    Some(format!("{sign}{hh:02}:{mm:02}"))
 }
 
 /// Extract image dimensions, camera model, and GPS coordinates from a file.
@@ -37,6 +95,7 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
     let mut latitude: Option<f64> = None;
     let mut longitude: Option<f64> = None;
     let mut taken_at: Option<String> = None;
+    let mut taken_at_offset: Option<String> = None;
 
     // Try to get dimensions using imagesize (fast, header-only read)
     if let Ok(size) = imagesize::size(file_path) {
@@ -102,7 +161,12 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                 }
             }
 
-            // Date taken (EXIF DateTimeOriginal)
+            // Date taken (EXIF DateTimeOriginal), zone-corrected via
+            // OffsetTimeOriginal (falling back to OffsetTime) when present.
+            let offset_str: Option<String> = exif_reader
+                .get_field(exif::Tag::OffsetTimeOriginal, exif::In::PRIMARY)
+                .or_else(|| exif_reader.get_field(exif::Tag::OffsetTime, exif::In::PRIMARY))
+                .map(|f| f.display_value().to_string());
             if let Some(dt_field) =
                 exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
             {
@@ -111,9 +175,10 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
                     .to_string()
                     .trim_matches('"')
                     .to_string();
-                // EXIF format: "2024:01:15 14:30:00" → convert to ISO 8601
-                if let Some(iso) = exif_datetime_to_iso(&dt_str) {
+                // EXIF format: "2024:01:15 14:30:00" → convert to UTC ISO 8601
+                if let Some((iso, off)) = exif_datetime_to_iso(&dt_str, offset_str.as_deref()) {
                     taken_at = Some(iso);
+                    taken_at_offset = off;
                 }
             }
 
@@ -168,35 +233,35 @@ pub(crate) fn extract_media_metadata(file_path: &std::path::Path) -> MediaMetada
     }
 
     tracing::debug!(
-        "[metadata] Final metadata for {}: {}×{}, camera={:?}, taken_at={:?}",
+        "[metadata] Final metadata for {}: {}×{}, camera={:?}, taken_at={:?} (offset={:?})",
         file_path.display(),
         width,
         height,
         camera_model,
         taken_at,
+        taken_at_offset,
     );
 
-    (width, height, camera_model, latitude, longitude, taken_at)
+    (
+        width,
+        height,
+        camera_model,
+        latitude,
+        longitude,
+        taken_at,
+        taken_at_offset,
+    )
 }
 
 /// Extract metadata from raw bytes (for upload_photo where file is in memory).
-pub(crate) fn extract_media_metadata_from_bytes(
-    data: &[u8],
-    filename: &str,
-) -> (
-    i64,
-    i64,
-    Option<String>,
-    Option<f64>,
-    Option<f64>,
-    Option<String>,
-) {
+pub(crate) fn extract_media_metadata_from_bytes(data: &[u8], filename: &str) -> MediaMetadata {
     let mut width: i64 = 0;
     let mut height: i64 = 0;
     let mut camera_model: Option<String> = None;
     let mut latitude: Option<f64> = None;
     let mut longitude: Option<f64> = None;
     let mut taken_at: Option<String> = None;
+    let mut taken_at_offset: Option<String> = None;
 
     // Get dimensions from bytes
     if let Ok(size) = imagesize::blob_size(data) {
@@ -260,6 +325,10 @@ pub(crate) fn extract_media_metadata_from_bytes(
             }
         }
 
+        let offset_str: Option<String> = exif_reader
+            .get_field(exif::Tag::OffsetTimeOriginal, exif::In::PRIMARY)
+            .or_else(|| exif_reader.get_field(exif::Tag::OffsetTime, exif::In::PRIMARY))
+            .map(|f| f.display_value().to_string());
         if let Some(dt_field) =
             exif_reader.get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
         {
@@ -268,8 +337,9 @@ pub(crate) fn extract_media_metadata_from_bytes(
                 .to_string()
                 .trim_matches('"')
                 .to_string();
-            if let Some(iso) = exif_datetime_to_iso(&dt_str) {
+            if let Some((iso, off)) = exif_datetime_to_iso(&dt_str, offset_str.as_deref()) {
                 taken_at = Some(iso);
+                taken_at_offset = off;
             }
         }
 
@@ -305,7 +375,15 @@ pub(crate) fn extract_media_metadata_from_bytes(
     }
 
     let _ = filename; // suppress unused warning
-    (width, height, camera_model, latitude, longitude, taken_at)
+    (
+        width,
+        height,
+        camera_model,
+        latitude,
+        longitude,
+        taken_at,
+        taken_at_offset,
+    )
 }
 
 // ── Async wrappers ──────────────────────────────────────────────────────────
@@ -313,12 +391,12 @@ pub(crate) fn extract_media_metadata_from_bytes(
 /// Async wrapper around [`extract_media_metadata`] that offloads the blocking
 /// file I/O and EXIF parsing to a `spawn_blocking` thread.
 pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) -> MediaMetadata {
-    let (mut w, mut h, cam, lat, lon, taken) = tokio::task::spawn_blocking({
+    let (mut w, mut h, cam, lat, lon, taken, taken_offset) = tokio::task::spawn_blocking({
         let p = file_path.clone();
         move || extract_media_metadata(&p)
     })
     .await
-    .unwrap_or((0, 0, None, None, None, None));
+    .unwrap_or((0, 0, None, None, None, None, None));
 
     // For video files, `imagesize` returns coded pixel dimensions which
     // ignore SAR/DAR.  Use ffprobe to get display dimensions so the gallery
@@ -357,7 +435,7 @@ pub(crate) async fn extract_media_metadata_async(file_path: std::path::PathBuf) 
         is_video,
     );
 
-    (w, h, cam, lat, lon, taken)
+    (w, h, cam, lat, lon, taken, taken_offset)
 }
 
 /// Use ffprobe to get the display dimensions of a video, accounting for
@@ -455,7 +533,7 @@ pub(crate) async fn extract_media_metadata_from_bytes_async(
 ) -> MediaMetadata {
     tokio::task::spawn_blocking(move || extract_media_metadata_from_bytes(&data, &filename))
         .await
-        .unwrap_or((0, 0, None, None, None, None))
+        .unwrap_or((0, 0, None, None, None, None, None))
 }
 
 /// One-time startup repair: re-read EXIF orientation for every photo that has
@@ -511,7 +589,7 @@ pub async fn repair_orientation_dimensions(
         }
 
         let path_clone = abs_path.clone();
-        let (new_w, new_h, _, _, _, _) = extract_media_metadata_async(path_clone).await;
+        let (new_w, new_h, _, _, _, _, _) = extract_media_metadata_async(path_clone).await;
 
         if new_w > 0 && new_h > 0 && (new_w != *db_w || new_h != *db_h) {
             if let Err(e) = sqlx::query("UPDATE photos SET width = ?, height = ? WHERE id = ?")
@@ -549,4 +627,104 @@ pub async fn repair_orientation_dimensions(
     )
     .execute(pool)
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{exif_datetime_to_iso, normalize_exif_offset};
+
+    #[test]
+    fn exif_no_offset_assumes_utc_and_reports_no_zone() {
+        // Legacy behaviour is preserved when the file records no zone: the
+        // local wall-clock is treated as UTC and the offset is unknown.
+        let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", None).unwrap();
+        assert_eq!(iso, "2024-01-15T14:30:00Z");
+        assert_eq!(off, None);
+    }
+
+    #[test]
+    fn exif_positive_offset_converts_to_utc() {
+        // Tokyo capture (UTC+9): 14:30 local == 05:30 UTC.
+        let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", Some("+09:00")).unwrap();
+        assert_eq!(iso, "2024-01-15T05:30:00Z");
+        assert_eq!(off.as_deref(), Some("+09:00"));
+    }
+
+    #[test]
+    fn exif_negative_offset_converts_to_utc() {
+        // Pacific capture (UTC-8): 14:30 local == 22:30 UTC.
+        let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", Some("-08:00")).unwrap();
+        assert_eq!(iso, "2024-01-15T22:30:00Z");
+        assert_eq!(off.as_deref(), Some("-08:00"));
+    }
+
+    #[test]
+    fn exif_half_hour_offset_converts_to_utc() {
+        // India (UTC+5:30): 14:30 local == 09:00 UTC.
+        let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", Some("+05:30")).unwrap();
+        assert_eq!(iso, "2024-01-15T09:00:00Z");
+        assert_eq!(off.as_deref(), Some("+05:30"));
+    }
+
+    #[test]
+    fn exif_offset_rolls_date_backwards() {
+        // 02:00 local at UTC+9 lands on the previous calendar day in UTC.
+        let (iso, _) = exif_datetime_to_iso("2024:01:15 02:00:00", Some("+09:00")).unwrap();
+        assert_eq!(iso, "2024-01-14T17:00:00Z");
+    }
+
+    #[test]
+    fn exif_z_offset_is_utc() {
+        let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", Some("Z")).unwrap();
+        assert_eq!(iso, "2024-01-15T14:30:00Z");
+        assert_eq!(off.as_deref(), Some("+00:00"));
+    }
+
+    #[test]
+    fn exif_colonless_offset_is_accepted() {
+        // Some writers emit "+0900" instead of "+09:00".
+        let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", Some("+0900")).unwrap();
+        assert_eq!(iso, "2024-01-15T05:30:00Z");
+        assert_eq!(off.as_deref(), Some("+09:00"));
+    }
+
+    #[test]
+    fn exif_quoted_offset_from_display_value_is_trimmed() {
+        // `Field::display_value()` renders ASCII fields wrapped in quotes.
+        let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", Some("\"-05:00\"")).unwrap();
+        assert_eq!(iso, "2024-01-15T19:30:00Z");
+        assert_eq!(off.as_deref(), Some("-05:00"));
+    }
+
+    #[test]
+    fn exif_undefined_offset_falls_back_to_utc() {
+        // EXIF writers emit a blank/placeholder offset when the zone is unknown;
+        // it must not corrupt the instant — fall back to assume-UTC.
+        for garbage in ["", "   ", ":  ", "+", "abc", "+9", "+09:99", "+15:00"] {
+            let (iso, off) = exif_datetime_to_iso("2024:01:15 14:30:00", Some(garbage)).unwrap();
+            assert_eq!(iso, "2024-01-15T14:30:00Z", "offset {garbage:?} should be ignored");
+            assert_eq!(off, None, "offset {garbage:?} should not be stored");
+        }
+    }
+
+    #[test]
+    fn exif_malformed_datetime_returns_none() {
+        assert!(exif_datetime_to_iso("2024:01:15", Some("+09:00")).is_none());
+        assert!(exif_datetime_to_iso("", None).is_none());
+        // Non-ASCII must not panic on slice boundaries.
+        assert!(exif_datetime_to_iso("2024:01:15 14:30:0é", None).is_none());
+    }
+
+    #[test]
+    fn normalize_offset_edge_cases() {
+        assert_eq!(normalize_exif_offset("+09:00").as_deref(), Some("+09:00"));
+        assert_eq!(normalize_exif_offset("-0800").as_deref(), Some("-08:00"));
+        assert_eq!(normalize_exif_offset("Z").as_deref(), Some("+00:00"));
+        assert_eq!(normalize_exif_offset("+14:00").as_deref(), Some("+14:00"));
+        // Out of range / malformed / undefined → None.
+        assert_eq!(normalize_exif_offset("+15:00"), None);
+        assert_eq!(normalize_exif_offset("+09:99"), None);
+        assert_eq!(normalize_exif_offset(""), None);
+        assert_eq!(normalize_exif_offset("09:00"), None);
+    }
 }

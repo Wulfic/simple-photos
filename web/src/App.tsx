@@ -25,6 +25,8 @@ const Search = lazy(() => import("./pages/Search"));
 const Diagnostics = lazy(() => import("./pages/Diagnostics"));
 const ExportDownloads = lazy(() => import("./pages/ExportDownloads"));
 const CastReceiver = lazy(() => import("./pages/CastReceiver"));
+import useSyncEvents from "./hooks/useSyncEvents";
+import BannerHost from "./components/BannerHost";
 import EncryptionBanner from "./components/EncryptionBanner";
 import ConversionBanner from "./components/ConversionBanner";
 import SavingBanner from "./components/SavingBanner";
@@ -47,6 +49,10 @@ function ProtectedLayout() {
   const [setupChecked, setSetupChecked] = useState(false);
   const [wizardCompleted, setWizardCompleted] = useState(true);
   const [serverUnreachable, setServerUnreachable] = useState(false);
+
+  // Subscribe to the server's real-time album/gallery change stream so this
+  // client refetches within seconds of a change made elsewhere (item #11).
+  useSyncEvents();
 
   useEffect(() => {
     fetch("/api/setup/status")
@@ -108,6 +114,9 @@ function ProtectedLayout() {
   return (
     <>
       <ToastHost />
+      {/* Single fixed container all progress banners portal into — see item #3.
+          Must render before the banners so the portal target exists. */}
+      <BannerHost />
       <ConversionBanner />
       <EncryptionBanner />
       <AiBanner />

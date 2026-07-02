@@ -689,6 +689,24 @@ fn client_log_routes() -> Router<AppState> {
             "/status/activity",
             get(crate::health::handlers::activity_status),
         )
+        // Server-authoritative encryption progress — single source of truth for
+        // the encryption banner on every client (item #1).
+        .route(
+            "/status/encryption",
+            get(crate::status::encryption_status),
+        )
+        // Clients report their own queued-upload counts so the server total
+        // reflects work it can't see yet, e.g. Android local backup (item #2).
+        .route(
+            "/status/encryption/contribute",
+            post(crate::status::contribute),
+        )
+        // Real-time album/gallery change stream (SSE) so clients refetch within
+        // seconds instead of waiting for the next periodic sync (item #11).
+        .route(
+            "/sync/events",
+            get(crate::health::handlers::sync_events),
+        )
 }
 
 // ── Server diagnostics & audit ───────────────────────────────────────

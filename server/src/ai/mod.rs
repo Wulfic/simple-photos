@@ -19,3 +19,4 @@ pub mod object;
 pub mod processor;
 pub mod session;
 pub mod tagging;
+pub mod video_frame;

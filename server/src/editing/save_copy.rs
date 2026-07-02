@@ -277,7 +277,7 @@ pub async fn duplicate_photo(
         .map_err(|e| AppError::Internal(format!("Failed to stat rendered copy: {e}")))?;
     let size_bytes = file_meta.len() as i64;
 
-    let (new_w, new_h, _, _, _, _) = extract_media_metadata_async(copy_abs.clone()).await;
+    let (new_w, new_h, _, _, _, _, _) = extract_media_metadata_async(copy_abs.clone()).await;
 
     tracing::info!(
         "[editing/save_copy] Rendered file metadata: {}×{}, size={} bytes, \

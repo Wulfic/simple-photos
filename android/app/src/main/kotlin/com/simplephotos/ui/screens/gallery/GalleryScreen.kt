@@ -51,6 +51,7 @@ import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import com.simplephotos.ui.components.CloudBackupBadge
 import com.simplephotos.ui.components.TileSelectionCircle
+import com.simplephotos.ui.components.rememberGalleryRowHeight
 import com.simplephotos.ui.components.rememberThumbnailRequest
 import com.simplephotos.data.local.AppDatabase
 import com.simplephotos.data.local.entities.AlbumEntity
@@ -282,8 +283,12 @@ fun GalleryScreen(
                         }
                     }
                 } else {
-                    // Day-grouped justified photo grid — aspect-ratio-preserving layout
-                    val targetRowHeight = if (viewModel.thumbnailSize == "large") 240.dp else 180.dp
+                    // Day-grouped justified photo grid — aspect-ratio-preserving layout.
+                    // Uses the shared REACTIVE row-height helper (TODO #14) so a
+                    // Settings → Thumbnail Size change is reflected immediately,
+                    // instead of the ViewModel's one-time-loaded `thumbnailSize`
+                    // (which only updated on ViewModel recreation).
+                    val targetRowHeight = rememberGalleryRowHeight()
 
                     // Build a map: photo localId → header info for the first photo in each day
                     val headerMap = remember(gridItems) {
@@ -374,10 +379,16 @@ fun GalleryScreen(
                     .zIndex(50f),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                ConversionBanner(api = viewModel.apiService)
-                EncryptionBanner(api = viewModel.apiService)
+                // Ordering mirrors the web stack (top → bottom: geo, ai,
+                // conversion, encryption) so the most important banner sits
+                // lowest, nearest the FAB (TODO #5).
                 GeoBanner(api = viewModel.apiService)
                 AiBanner(api = viewModel.apiService)
+                ConversionBanner(api = viewModel.apiService)
+                EncryptionBanner(
+                    api = viewModel.apiService,
+                    reportLocalPending = { viewModel.countPendingUploads() },
+                )
             }
         }
     }

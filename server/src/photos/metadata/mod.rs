@@ -20,8 +20,9 @@ pub(crate) use media::{
     repair_orientation_dimensions,
 };
 pub(crate) use subtype::{
-    apply_aspect_subtype_fallback, backfill_photo_subtypes_all_users, extract_motion_video,
-    extract_xmp_subtype, extract_xmp_subtype_async, read_file_prefix, XMP_SCAN_PREFIX_BYTES,
+    apply_aspect_subtype_fallback_with, backfill_photo_subtypes_all_users, extract_motion_video,
+    extract_xmp_subtype, extract_xmp_subtype_async, pano_sensitivity_for_user, read_file_prefix,
+    XMP_SCAN_PREFIX_BYTES,
 };
 
 // Crate-wide API kept for completeness; currently only referenced from within
@@ -31,13 +32,20 @@ pub(crate) use media::{extract_media_metadata, extract_media_metadata_from_bytes
 #[allow(unused_imports)]
 pub(crate) use subtype::extract_xmp_subtype_from_file;
 
-/// Metadata tuple returned by both extraction functions.
+/// Metadata tuple returned by both extraction functions:
+/// `(width, height, camera_model, latitude, longitude, taken_at, taken_at_offset)`.
+///
+/// `taken_at` is always normalised to a UTC ISO-8601 instant. `taken_at_offset`
+/// carries the *original* capture-zone offset (e.g. `"+09:00"`) when the file
+/// recorded it via EXIF `OffsetTimeOriginal`/`OffsetTime`, else `None` — see
+/// migration 026 (`photos.taken_at_offset`).
 pub(crate) type MediaMetadata = (
     i64,
     i64,
     Option<String>,
     Option<f64>,
     Option<f64>,
+    Option<String>,
     Option<String>,
 );
 

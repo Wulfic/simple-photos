@@ -9,6 +9,15 @@ import { request, tryRefresh, BASE } from "./core";
 import { useAuthStore } from "../store/auth";
 import type { TotpSetupResponse } from "./types";
 
+/** Conversion-pipeline progress, mirrors the server `ConversionStatusResponse`. */
+export interface ConversionStatus {
+  active: boolean;
+  total: number;
+  done: number;
+  /** Server-authoritative seconds remaining, or null until throughput is known. */
+  eta_seconds: number | null;
+}
+
 // ── Admin API ────────────────────────────────────────────────────────────────
 
 export const adminApi = {
@@ -239,22 +248,23 @@ export const adminApi = {
       method: "POST",
     }),
 
-  /** Get conversion pipeline status */
+  /** Get conversion pipeline status. `eta_seconds` is the server-authoritative
+   *  estimate of time remaining (item #4), null until throughput is known. */
   conversionStatus: () =>
-    request<{ active: boolean; total: number; done: number }>("/admin/conversion-status"),
+    request<ConversionStatus>("/admin/conversion-status"),
 
   /** Declare an upcoming convertible-upload batch so the conversion banner
    *  pins its denominator to `total` instead of tracking one ahead (#11).
    *  Pair every successful call with `conversionBatchEnd()`. */
   conversionBatchStart: (total: number) =>
-    request<{ active: boolean; total: number; done: number }>(
+    request<ConversionStatus>(
       "/admin/conversion-batch/start",
       { method: "POST", body: JSON.stringify({ total }) },
     ),
 
   /** Release the conversion batch pin set by `conversionBatchStart()`. */
   conversionBatchEnd: () =>
-    request<{ active: boolean; total: number; done: number }>(
+    request<ConversionStatus>(
       "/admin/conversion-batch/end",
       { method: "POST" },
     ),

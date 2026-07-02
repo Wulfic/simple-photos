@@ -22,6 +22,7 @@ pub mod diagnostics;
 pub mod discover;
 pub mod discovery;
 pub mod handlers;
+pub mod heartbeat;
 pub mod mode;
 pub mod models;
 pub mod proxy;

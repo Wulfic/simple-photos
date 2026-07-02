@@ -61,6 +61,7 @@ mod security;
 mod setup;
 mod sharing;
 mod state;
+mod status;
 mod tags;
 mod tasks;
 mod transcode;
@@ -171,10 +172,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Broadcast channel for real-time audit log events (SSE + backup forwarding).
     let (audit_tx, _) = tokio::sync::broadcast::channel(256);
+    // Real-time album/gallery sync notifications (item #11).
+    let (sync_tx, _) = tokio::sync::broadcast::channel(256);
 
     // Launch all background tasks (housekeeping, backup sync, auto-scan, etc.)
     let storage_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let ai_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ai_health = Arc::new(state::AiHealth::default());
     let geo_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
     // Optimistic default: assume the dataset is fine until the geo processor
     // actually tries (and possibly fails) to load it.  Avoids a spurious
@@ -192,6 +196,7 @@ async fn main() -> anyhow::Result<()> {
         &audit_tx,
         &storage_available,
         &ai_active,
+        &ai_health,
         &geo_active,
         &geo_dataset_available,
         &geo_dataset_downloading,
@@ -229,9 +234,11 @@ async fn main() -> anyhow::Result<()> {
         storage_root: storage_root_swap,
         scan_lock,
         audit_tx,
+        sync_tx,
         storage_available,
         hw_accel,
         ai_active,
+        ai_health,
         geo_active,
         geo_dataset_available,
         geo_dataset_downloading,

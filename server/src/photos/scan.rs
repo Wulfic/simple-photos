@@ -53,6 +53,11 @@ pub async fn scan_and_register(
     // Lock-free read via ArcSwap.
     let storage_root = (**state.storage_root.load()).clone();
 
+    // Panorama-detection sensitivity for this scan, resolved once (item #7):
+    // precise thresholds unless the user turned AI categorisation off.
+    let pano_sensitivity =
+        super::metadata::pano_sensitivity_for_user(&state.read_pool, &auth.user_id).await;
+
     // Build set of already-registered paths using a streaming cursor so we
     // never hold the full Vec<String> + HashSet simultaneously in memory.
     // Include trash_items so that files deleted on the primary (which are
@@ -185,7 +190,7 @@ pub async fn scan_and_register(
             let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
             // Extract dimensions, camera model, GPS, and date from file
-            let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken) =
+            let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken, exif_taken_offset) =
                 extract_media_metadata_async(candidate.abs_path.clone()).await;
 
             let final_taken_at = exif_taken
@@ -211,14 +216,19 @@ pub async fn scan_and_register(
             };
             // Aspect-ratio fallback for panoramas / 360° photos missing XMP.
             if candidate.media_type == "photo" {
-                super::metadata::apply_aspect_subtype_fallback(&mut subtype_info, img_w, img_h);
+                super::metadata::apply_aspect_subtype_fallback_with(
+                    &mut subtype_info,
+                    img_w,
+                    img_h,
+                    pano_sensitivity,
+                );
             }
 
             let insert_result = sqlx::query(
                 "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                  size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                 created_at, photo_hash, photo_subtype, burst_id) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 created_at, photo_hash, photo_subtype, burst_id, taken_at_offset) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&photo_id)
             .bind(&user_id)
@@ -238,6 +248,7 @@ pub async fn scan_and_register(
             .bind(&photo_hash)
             .bind(&subtype_info.photo_subtype)
             .bind(&subtype_info.burst_id)
+            .bind(&exif_taken_offset)
             .execute(&pool)
             .await;
 
@@ -341,7 +352,8 @@ pub async fn scan_and_register(
                     return;
                 }
                 let _ = tokio::spawn(async move {
-                let (w, h, cam, lat, lon, taken) = extract_media_metadata_async(abs.clone()).await;
+                let (w, h, cam, lat, lon, taken, taken_offset) =
+                    extract_media_metadata_async(abs.clone()).await;
                 let file_hash = compute_photo_hash_streaming(&abs).await;
 
                 if w > 0 || h > 0 || cam.is_some() || lat.is_some() || file_hash.is_some() {
@@ -362,6 +374,7 @@ pub async fn scan_and_register(
                          latitude = COALESCE(latitude, ?), \
                          longitude = COALESCE(longitude, ?), \
                          taken_at = COALESCE(taken_at, ?), \
+                         taken_at_offset = COALESCE(taken_at_offset, ?), \
                          photo_hash = COALESCE(photo_hash, ?) \
                          WHERE id = ?",
                     )
@@ -375,6 +388,7 @@ pub async fn scan_and_register(
                     .bind(lat)
                     .bind(lon)
                     .bind(&taken)
+                    .bind(&taken_offset)
                     .bind(&file_hash)
                     .bind(&pid)
                     .execute(&pool)
@@ -462,7 +476,7 @@ pub async fn scan_and_register(
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_string();
-                    let (rw, rh, _, _, _, _) =
+                    let (rw, rh, _, _, _, _, _) =
                         super::metadata::extract_media_metadata_from_bytes_async(
                             file_bytes.clone(),
                             fname,
@@ -486,7 +500,12 @@ pub async fn scan_and_register(
 
                 // Aspect-ratio fallback for panoramas / 360° photos
                 // missing XMP markers (e.g. scanned or re-exported files).
-                super::metadata::apply_aspect_subtype_fallback(&mut sub, eff_w, eff_h);
+                super::metadata::apply_aspect_subtype_fallback_with(
+                    &mut sub,
+                    eff_w,
+                    eff_h,
+                    pano_sensitivity,
+                );
 
                 if let Some(ref subtype) = sub.photo_subtype {
                     sqlx::query(

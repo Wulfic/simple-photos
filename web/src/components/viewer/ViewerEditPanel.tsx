@@ -339,7 +339,7 @@ export default function ViewerEditPanel({
         </button>
         <button
           onClick={onSaveCopy}
-          className="btn btn-success btn-md"
+          className="btn btn-secondary btn-md"
           title="Save as a new copy — keeps the original unchanged"
         >
           Save Copy

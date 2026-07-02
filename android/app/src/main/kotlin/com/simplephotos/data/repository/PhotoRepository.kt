@@ -156,6 +156,10 @@ class PhotoRepository @Inject constructor(
 
     suspend fun getPhoto(id: String): PhotoEntity? = db.photoDao().getById(id)
 
+    /** Items still queued for upload on this device — fed to the server's unified
+     *  encryption banner as this device's contribution (TODO #2/#5). */
+    suspend fun countPendingUploads(): Int = db.photoDao().countPendingUploads()
+
     /**
      * Resolve the ordered photo list for an album — handles BOTH virtual
      * "smart" albums (favorites/photos/gifs/videos/audio/recents) AND

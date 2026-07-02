@@ -324,7 +324,9 @@ data class SslStatusResponse(
 data class ConversionStatusResponse(
     val active: Boolean,
     val total: Int,
-    val done: Int
+    val done: Int,
+    /** Server-authoritative seconds remaining, null until throughput is known (TODO #4/#5). */
+    @SerializedName("eta_seconds") val etaSeconds: Double? = null,
 )
 
 // ── Batch dimension update ───────────────────────────────────────────────────

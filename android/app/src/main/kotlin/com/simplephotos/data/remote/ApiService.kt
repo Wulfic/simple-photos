@@ -477,6 +477,18 @@ interface ApiService {
     @GET("api/status/activity")
     suspend fun getActivityStatus(): ActivityStatusResponse
 
+    /** Server-authoritative encryption progress — single source of truth for
+     *  the encryption banner (TODO #1). */
+    @GET("api/status/encryption")
+    suspend fun getEncryptionStatus(): EncryptionStatusResponse
+
+    /** Report this device's queued-upload count so the server total includes
+     *  local backup work it can't see yet (TODO #2). */
+    @POST("api/status/encryption/contribute")
+    suspend fun contributeEncryption(
+        @Body request: EncryptionContributeRequest
+    ): EncryptionContributeResponse
+
     @GET("api/transcode/status")
     suspend fun getTranscodeStatus(): TranscodeStatusResponse
 

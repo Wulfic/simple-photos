@@ -161,6 +161,11 @@ async fn run_conversion_pass_inner(
         }
     };
 
+    // Panorama-detection sensitivity for the admin's imported media, resolved
+    // once for this pass (item #7): precise thresholds unless AI is off.
+    let pano_sensitivity =
+        crate::photos::metadata::pano_sensitivity_for_user(&pool, &admin_id).await;
+
     // ── Wait for Phase 1 encryption to finish ────────────────────────────
     // The ingest engine must not start until ALL native files are encrypted.
     // Poll the unencrypted count with a timeout so we don't spin forever if
@@ -338,7 +343,12 @@ async fn run_conversion_pass_inner(
     );
 
     // ── Step 3: Convert all files to .converted/ staging folder ──────────
-    conversion::progress_start(candidates.len() as i64);
+    // The guard guarantees the global "converting" flag is cleared even if the
+    // loop below panics or the task is cancelled mid-pass — otherwise a stuck
+    // flag would starve the AI/geo processors forever (todo #18). We call
+    // `.finish()` explicitly after the loop to preserve banner timing; the drop
+    // is purely the panic/cancellation safety net.
+    let batch_guard = conversion::ConversionBatchGuard::start(candidates.len() as i64);
 
     let conv_dir = storage_root.join(".converted");
     let mut registered = 0i64;
@@ -399,12 +409,12 @@ async fn run_conversion_pass_inner(
                 // EXIF DateTimeOriginal, GPS, and camera data.  Conversion
                 // (FFmpeg/ImageMagick) typically strips EXIF from the output,
                 // so reading the converted file would lose the original dates.
-                let (_, _, orig_cam, orig_lat, orig_lon, orig_taken) =
+                let (_, _, orig_cam, orig_lat, orig_lon, orig_taken, orig_taken_offset) =
                     extract_media_metadata_async(candidate.abs_path.clone()).await;
 
                 // Extract dimensions from the converted file (the output format
                 // may have different dimensions due to SAR correction, etc.).
-                let (img_w, img_h, conv_cam, conv_lat, conv_lon, conv_taken) =
+                let (img_w, img_h, conv_cam, conv_lat, conv_lon, conv_taken, _) =
                     extract_media_metadata_async(conv_abs.clone()).await;
 
                 // ── Subtype detection from the ORIGINAL file ─────────────
@@ -424,10 +434,11 @@ async fn run_conversion_pass_inner(
                         Default::default()
                     };
                 if candidate.target.category == conversion::MediaCategory::Image {
-                    crate::photos::metadata::apply_aspect_subtype_fallback(
+                    crate::photos::metadata::apply_aspect_subtype_fallback_with(
                         &mut subtype_info,
                         img_w,
                         img_h,
+                        pano_sensitivity,
                     );
                 }
 
@@ -439,6 +450,8 @@ async fn run_conversion_pass_inner(
                     .map(|t| normalize_iso_timestamp(&t))
                     .or(conv_taken.map(|t| normalize_iso_timestamp(&t)))
                     .or(candidate.modified.clone());
+                // Only the original carries EXIF; conversion strips the zone.
+                let final_taken_offset = orig_taken_offset;
 
                 let photo_hash = compute_photo_hash_streaming(&conv_abs).await;
 
@@ -476,8 +489,8 @@ async fn run_conversion_pass_inner(
                 let insert_result = sqlx::query(
                     "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                      size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                     created_at, photo_hash, source_path, photo_subtype, burst_id) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     created_at, photo_hash, source_path, photo_subtype, burst_id, taken_at_offset) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&photo_id)
                 .bind(&admin_id)
@@ -498,6 +511,7 @@ async fn run_conversion_pass_inner(
                 .bind(&source_path)
                 .bind(&subtype_info.photo_subtype)
                 .bind(&subtype_info.burst_id)
+                .bind(&final_taken_offset)
                 .execute(&pool)
                 .await;
 
@@ -579,7 +593,7 @@ async fn run_conversion_pass_inner(
                 let orig_mime = crate::media::mime_from_extension(&candidate.name);
                 let orig_media_type = conversion::media_type_str(candidate.target.category);
 
-                let (img_w, img_h, orig_cam, orig_lat, orig_lon, orig_taken) =
+                let (img_w, img_h, orig_cam, orig_lat, orig_lon, orig_taken, orig_taken_offset) =
                     extract_media_metadata_async(candidate.abs_path.clone()).await;
                 let final_taken_at = orig_taken
                     .map(|t| normalize_iso_timestamp(&t))
@@ -623,8 +637,8 @@ async fn run_conversion_pass_inner(
                 let insert_result = sqlx::query(
                     "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
                      size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                     created_at, photo_hash, source_path) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     created_at, photo_hash, source_path, taken_at_offset) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&photo_id)
                 .bind(&admin_id)
@@ -643,6 +657,7 @@ async fn run_conversion_pass_inner(
                 .bind(&now)
                 .bind(&photo_hash)
                 .bind(&candidate.rel_path)
+                .bind(&orig_taken_offset)
                 .execute(&pool)
                 .await;
                 match insert_result {
@@ -662,7 +677,7 @@ async fn run_conversion_pass_inner(
         }
     }
 
-    conversion::progress_finish();
+    batch_guard.finish();
 
     tracing::info!(
         "[INGEST] Conversion pass complete: {}/{} files converted and registered",
@@ -690,5 +705,39 @@ async fn run_conversion_pass_inner(
         if let Err(e) = crate::photos::burst::detect_bursts_for_user(&pool, &admin_id).await {
             tracing::warn!(error = %e, "[INGEST] Post-conversion burst detection failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod phase_order_tests {
+    //! Locks in the encrypt → convert → AI/geo phase ordering (item #12): AI and
+    //! geo processors call [`ingest_pipeline_busy`] and defer while any earlier
+    //! phase is active, so conversions never contend with encryption and
+    //! post-processing never contends with either.
+    use super::pipeline_busy_decision;
+
+    #[test]
+    fn idle_pipeline_is_not_busy() {
+        assert!(!pipeline_busy_decision(false, false, true, false));
+    }
+
+    #[test]
+    fn encryption_migration_blocks_downstream() {
+        // While native files are being encrypted, AI/geo must wait.
+        assert!(pipeline_busy_decision(true, false, true, false));
+    }
+
+    #[test]
+    fn conversion_blocks_downstream() {
+        // Conversions run after encryption; AI/geo wait until they finish too.
+        assert!(pipeline_busy_decision(false, true, true, false));
+    }
+
+    #[test]
+    fn pending_unencrypted_blocks_only_with_key() {
+        // Files awaiting encryption keep the pipeline busy — but only when a key
+        // exists to encrypt them, else a no-key install would starve AI/geo.
+        assert!(pipeline_busy_decision(false, false, true, true));
+        assert!(!pipeline_busy_decision(false, false, false, true));
     }
 }

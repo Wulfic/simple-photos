@@ -93,6 +93,12 @@ object SyncScheduler {
                     .setRequiredNetworkType(NetworkType.CONNECTED)
                     .build()
             )
+            // Expedited so a user-initiated backup starts immediately even under
+            // Doze; falls back to a normal job if the app is out of expedited
+            // quota (TODO #9). The worker's getForegroundInfo() backs this on
+            // API < 31. Content-URI-triggered work can't be expedited, so only
+            // this manual trigger uses it.
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
 
         // Use unique work with KEEP policy to prevent concurrent backup workers

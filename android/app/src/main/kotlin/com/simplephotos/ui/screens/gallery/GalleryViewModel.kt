@@ -85,6 +85,10 @@ class GalleryViewModel @Inject constructor(
     val photos = photoRepository.getAllPhotos()
     /** Exposed for banner composables that need to poll the server. */
     val apiService get() = photoRepository.apiService
+
+    /** This device's queued-upload count, reported to the unified encryption
+     *  banner so its total reflects local backup work (TODO #2/#5). */
+    suspend fun countPendingUploads(): Int = photoRepository.countPendingUploads()
     var error by mutableStateOf<String?>(null)
     var isSyncing by mutableStateOf(false)
         private set
