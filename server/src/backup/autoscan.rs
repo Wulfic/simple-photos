@@ -11,20 +11,18 @@
 //! separate conversion pass for non-native formats.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use axum::extract::State;
 use axum::Json;
+use futures_util::stream::{self, StreamExt};
 use futures_util::TryStreamExt;
-use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
 use crate::media::{is_media_file, mime_from_extension};
-use crate::photos::metadata::{extract_media_metadata_async, extract_xmp_subtype_async};
-use crate::photos::thumbnail::generate_thumbnail_file;
-use crate::photos::utils::compute_photo_hash_streaming;
 use crate::state::AppState;
 
 /// Background task: automatically scan the storage directory for new files
@@ -335,16 +333,23 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
         return 0;
     }
 
-    let mut new_count = 0i64;
+    // ── Phase 1: walk the tree and collect unregistered native files ──
+    // The walk is cheap (directory reads + names/metadata), so it stays
+    // sequential; the expensive per-file work (EXIF, full-file hashing, ffmpeg
+    // thumbnails) is fanned out with bounded concurrency below. This was
+    // previously ONE fully-sequential loop, which throttled a 100GB import to
+    // many hours.
+    use crate::photos::register::{register_native_file, NativeCandidate, RegisterContext};
+
+    let mut candidates: Vec<NativeCandidate> = Vec::new();
     let mut queue = vec![storage_root.to_path_buf()];
 
     while let Some(dir) = queue.pop() {
         // Google Photos Takeout dedup (#19): a first, names-only pass over this
         // directory lets us spot "-edited" pairs before registering — a single
-        // streaming walk can't look ahead to a sibling that sorts later. Cheap
-        // (one extra read_dir of names, one directory at a time) next to the
-        // per-file hashing/metadata below. Keeps the edited copy, drops the
-        // unedited original — the same rule the upload + ingest paths use.
+        // streaming walk can't look ahead to a sibling that sorts later. Keeps
+        // the edited copy, drops the unedited original — the same rule the
+        // upload + ingest paths use.
         let shadowed_originals = {
             let mut names_in_dir: Vec<String> = Vec::new();
             if let Ok(mut probe) = tokio::fs::read_dir(&dir).await {
@@ -372,182 +377,114 @@ async fn run_auto_scan(pool: &sqlx::SqlitePool, storage_root: &std::path::Path) 
                 continue;
             }
 
-            if let Ok(ft) = entry.file_type().await {
-                if ft.is_dir() {
-                    queue.push(entry.path());
-                } else if ft.is_file() && is_media_file(&name) {
-                    // Skip the unedited Google Photos original when its baked-in
-                    // "-edited" sibling is in this same folder (#19).
-                    if shadowed_originals.contains(&name.to_lowercase()) {
-                        tracing::info!(
-                            file = %name,
-                            "[DIAG:AUTOSCAN] Skipping unedited Google Photos original ('-edited' sibling present)"
-                        );
-                        continue;
-                    }
-                    let abs_path = entry.path();
-                    // Normalize to forward slashes so DB paths are consistent across OS
-                    let rel_path = abs_path
-                        .strip_prefix(storage_root)
-                        .unwrap_or(&abs_path)
-                        .to_string_lossy()
-                        .replace('\\', "/");
-
-                    if existing_set.contains(&rel_path) {
-                        continue;
-                    }
-
-                    let file_meta = entry.metadata().await.ok();
-                    let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
-                    let modified = file_meta.and_then(|m| {
-                        m.modified().ok().map(|t| {
-                            let dt: chrono::DateTime<chrono::Utc> = t.into();
-                            crate::photos::utils::normalize_iso_timestamp(&dt.to_rfc3339())
-                        })
-                    });
-
-                    // Native format — determine MIME and media type directly.
-                    let mime = mime_from_extension(&name).to_string();
-                    let media_type: &str = if mime.starts_with("video/") {
-                        "video"
-                    } else if mime.starts_with("audio/") {
-                        "audio"
-                    } else if mime == "image/gif" {
-                        "gif"
-                    } else {
-                        "photo"
-                    };
-
-                    if media_type == "audio" && !audio_enabled {
-                        continue;
-                    }
-
-                    let photo_id = Uuid::new_v4().to_string();
-                    let now = crate::photos::utils::utc_now_iso();
-                    // Use .thumb.gif for GIFs so the thumbnail preserves animation
-                    let thumb_ext = if mime == "image/gif" { "gif" } else { "jpg" };
-                    let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
-
-                    // Extract dimensions, camera model, GPS, and date from file
-                    let (
-                        img_w,
-                        img_h,
-                        cam_model,
-                        exif_lat,
-                        exif_lon,
-                        exif_taken,
-                        exif_taken_offset,
-                    ) = extract_media_metadata_async(abs_path.clone()).await;
-
-                    // Extract XMP subtype (motion, panorama, 360, HDR, burst)
-                    let mut subtype_info = extract_xmp_subtype_async(abs_path.clone()).await;
-
-                    // Aspect-ratio fallback for panoramas / 360° photos whose
-                    // XMP GPano markers are missing or stripped (real-world
-                    // stitched/exported panoramas frequently lack them). Without
-                    // this, files dropped into the storage folder were the ONLY
-                    // ingest path missing the fallback — scan/upload/ingest all
-                    // apply it — so XMP-less panoramas never got a subtype.
-                    crate::photos::metadata::apply_aspect_subtype_fallback_with(
-                        &mut subtype_info,
-                        img_w,
-                        img_h,
-                        pano_sensitivity,
-                    );
-
-                    if let Some(ref st) = subtype_info.photo_subtype {
-                        tracing::info!(
-                            file = %rel_path,
-                            photo_subtype = %st,
-                            burst_id = ?subtype_info.burst_id,
-                            motion_video_offset = ?subtype_info.motion_video_offset,
-                            "[DIAG:AUTOSCAN] Special photo subtype detected"
-                        );
-                    }
-
-                    let final_taken_at = exif_taken
-                        .map(|t| crate::photos::utils::normalize_iso_timestamp(&t))
-                        .or(modified);
-
-                    let photo_hash = compute_photo_hash_streaming(&abs_path).await;
-
-                    // Skip files whose content hash matches a gallery-hidden original.
-                    if let Some(ref h) = photo_hash {
-                        if gallery_hashes.contains(h) {
-                            tracing::info!(
-                                "[DIAG:AUTOSCAN] Skipping {} — content hash {} matches gallery-hidden original",
-                                rel_path, h
-                            );
-                            continue;
-                        }
-                    }
-
-                    let insert_result = sqlx::query(
-                        "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                         size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                         created_at, photo_hash, photo_subtype, burst_id, taken_at_offset) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    )
-                    .bind(&photo_id)
-                    .bind(&admin_id)
-                    .bind(&name)
-                    .bind(&rel_path)
-                    .bind(&mime)
-                    .bind(media_type)
-                    .bind(size)
-                    .bind(img_w)
-                    .bind(img_h)
-                    .bind(&final_taken_at)
-                    .bind(exif_lat)
-                    .bind(exif_lon)
-                    .bind(&cam_model)
-                    .bind(&thumb_rel)
-                    .bind(&now)
-                    .bind(&photo_hash)
-                    .bind(&subtype_info.photo_subtype)
-                    .bind(&subtype_info.burst_id)
-                    .bind(&exif_taken_offset)
-                    .execute(pool)
-                    .await;
-
-                    match insert_result {
-                        Ok(result) if result.rows_affected() == 0 => {
-                            tracing::debug!(file = %rel_path, "Already registered (concurrent scan), skipping");
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "Autoscan: failed to register photo {}: {}",
-                                rel_path,
-                                e
-                            );
-                            continue;
-                        }
-                        Ok(_) => { /* inserted successfully */ }
-                    }
-
-                    // Generate thumbnail
-                    {
-                        let thumb_abs = storage_root.join(&thumb_rel);
-                        if generate_thumbnail_file(&abs_path, &thumb_abs, &mime, None).await {
-                            tracing::debug!(file = %rel_path, "Autoscan: generated thumbnail");
-                        } else {
-                            tracing::warn!(file = %rel_path, "Autoscan: failed to generate thumbnail");
-                        }
-                    }
-
-                    new_count += 1;
-                    tracing::info!(
-                        "[DIAG:AUTOSCAN] Registered: {} (type={}, mime={}, size={})",
-                        name,
-                        media_type,
-                        mime,
-                        size
-                    );
-                }
+            let Ok(ft) = entry.file_type().await else {
+                continue;
+            };
+            if ft.is_dir() {
+                queue.push(entry.path());
+                continue;
             }
+            if !(ft.is_file() && is_media_file(&name)) {
+                continue;
+            }
+
+            // Skip the unedited Google Photos original when its baked-in
+            // "-edited" sibling is in this same folder (#19).
+            if shadowed_originals.contains(&name.to_lowercase()) {
+                tracing::info!(
+                    file = %name,
+                    "[DIAG:AUTOSCAN] Skipping unedited Google Photos original ('-edited' sibling present)"
+                );
+                continue;
+            }
+
+            let abs_path = entry.path();
+            // Normalize to forward slashes so DB paths are consistent across OS.
+            let rel_path = abs_path
+                .strip_prefix(storage_root)
+                .unwrap_or(&abs_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            if existing_set.contains(&rel_path) {
+                continue;
+            }
+
+            let file_meta = entry.metadata().await.ok();
+            let size = file_meta.as_ref().map(|m| m.len() as i64).unwrap_or(0);
+            let modified = file_meta.and_then(|m| {
+                m.modified().ok().map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    crate::photos::utils::normalize_iso_timestamp(&dt.to_rfc3339())
+                })
+            });
+
+            // Native format — determine MIME and media type directly.
+            let mime = mime_from_extension(&name).to_string();
+            let media_type: &'static str = if mime.starts_with("video/") {
+                "video"
+            } else if mime.starts_with("audio/") {
+                "audio"
+            } else if mime == "image/gif" {
+                "gif"
+            } else {
+                "photo"
+            };
+
+            if media_type == "audio" && !audio_enabled {
+                continue;
+            }
+
+            candidates.push(NativeCandidate {
+                abs_path,
+                rel_path,
+                name,
+                mime,
+                media_type,
+                size,
+                modified,
+            });
         }
     }
 
-    new_count
+    tracing::info!(
+        "[DIAG:AUTOSCAN] run_auto_scan: {} new candidate files to register",
+        candidates.len()
+    );
+
+    // ── Phase 2: register candidates with bounded concurrency ──
+    // Registration is memory-light (header metadata, streaming hash, one INSERT,
+    // a subprocess thumbnail); encryption is a separate, memory-budgeted pass —
+    // so scaling this with CPU cores speeds a large import up without adding the
+    // decode/OOM pressure a naive fan-out would. Shared with the manual `/scan`
+    // path via crate::photos::register (single source of truth).
+    let ctx = Arc::new(RegisterContext {
+        user_id: admin_id,
+        pano_sensitivity,
+        gallery_hashes: Arc::new(gallery_hashes),
+    });
+    let new_count = Arc::new(AtomicI64::new(0));
+
+    stream::iter(candidates)
+        .map(|cand| {
+            let pool = pool.clone();
+            let storage_root = storage_root.to_path_buf();
+            let ctx = ctx.clone();
+            let new_count = new_count.clone();
+            async move {
+                // Inner spawn keeps multi-core parallelism and isolates a
+                // per-file panic from the rest of the pass.
+                let _ = tokio::spawn(async move {
+                    if register_native_file(&pool, &storage_root, &cand, &ctx).await {
+                        new_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .await;
+            }
+        })
+        .buffer_unordered(crate::photos::scan::scan_parallelism())
+        .for_each(|_| async {})
+        .await;
+
+    new_count.load(Ordering::Relaxed)
 }

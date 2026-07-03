@@ -3,6 +3,7 @@
  */
 package com.simplephotos.ui.screens.settings
 
+import com.simplephotos.BuildConfig
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -475,10 +476,19 @@ fun SettingsScreen(
             // ── About ────────────────────────────────────────────────────
             SettingsCard(title = "About", icon = Icons.Default.Info) {
                 Text("Simple Photos", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Version 1.0.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Read from BuildConfig so the bump-version script (which edits
+                // build.gradle.kts versionName/versionCode) is the single source
+                // of truth — no more hardcoded string drifting out of date.
+                Text(
+                    "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "A self-hosted photo storage solution with optional end-to-end encryption.",
+                    // Encryption is always on — it is not optional — matching the
+                    // README and web app copy.
+                    "A self-hosted photo & video library with end-to-end encryption.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

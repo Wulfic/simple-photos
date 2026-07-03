@@ -62,14 +62,28 @@ pub fn cluster_faces(faces: &[(i64, Vec<f32>)], threshold: f32) -> Vec<ClusterAs
         "Face clustering: similarity pairs computed"
     );
 
-    // Merge clusters greedily (single-linkage) via union-find.
+    // Merge clusters greedily via union-find with a **centroid-linkage** guard.
     //
-    // Previously each merge relabelled every element in the source cluster
-    // (`for k in 0..n { … }`), making the merge loop O(n) per union and the
-    // whole pass O(n³) worst-case — a CPU hotspot that destabilised the server
-    // on large libraries where this runs repeatedly during an import (item #16).
-    // A plain union (point one root at the other) is O(1); `find_root` still
-    // resolves the chain, and path compression keeps lookups near-constant.
+    // Pure single-linkage (merge whenever *any* cross-cluster pair clears the
+    // threshold) chains: if A≈B and B≈C, A and C fuse even when A and C look
+    // nothing alike. On a large library there are always enough borderline
+    // faces (odd crops, similar lighting, glasses) to form a chain bridging two
+    // genuinely different people into one giant cluster — the "combining people
+    // who don't look alike" bug.
+    //
+    // The fix: before fusing two clusters, also require their running mean
+    // embeddings (centroids) to agree at `threshold`. A single bridge face can
+    // still join the cluster it truly belongs to, but it can no longer drag a
+    // whole *other* identity along, because two distinct people's centroids stay
+    // far apart. First-time single-vs-single merges are unaffected (a lone
+    // cluster's centroid == its one face, so the centroid check == the pair
+    // check). `cosine_similarity` is scale-invariant, so summed (un-normalised)
+    // centroids compare identically to normalised ones.
+    //
+    // Union stays O(1) (point one root at the other); `find_root` + path
+    // compression keep lookups near-constant, so the pass is still ~O(n²) on the
+    // candidate pairs (item #16 performance work preserved).
+    let mut centroid_sums: Vec<Vec<f32>> = faces.iter().map(|(_, emb)| emb.clone()).collect();
     let mut merges = 0usize;
     for (i, j, sim) in &similarities {
         if *sim < threshold {
@@ -77,14 +91,31 @@ pub fn cluster_faces(faces: &[(i64, Vec<f32>)], threshold: f32) -> Vec<ClusterAs
         }
         let ci = find_root(&mut cluster_ids, *i);
         let cj = find_root(&mut cluster_ids, *j);
-        if ci != cj {
-            // Union: attach the higher-indexed root under the lower so cluster
-            // IDs stay deterministic (matches the old min/max relabel result).
-            let target = ci.min(cj);
-            let source = ci.max(cj);
-            cluster_ids[source] = target;
-            merges += 1;
+        if ci == cj {
+            continue;
         }
+        // Centroid-linkage guard: skip merges that would bridge two clusters
+        // whose means have drifted apart (chaining across distinct identities).
+        // Only compares equal-dimensionality centroids — mixed 512-d ArcFace vs
+        // fallback vectors are already filtered out of `similarities`.
+        if centroid_sums[ci].len() == centroid_sums[cj].len() {
+            let centroid_sim = cosine_similarity(&centroid_sums[ci], &centroid_sums[cj]);
+            if centroid_sim < threshold {
+                continue;
+            }
+        }
+        // Union: attach the higher-indexed root under the lower so cluster IDs
+        // stay deterministic. Fold the source centroid sum into the target so
+        // the running mean tracks every member.
+        let target = ci.min(cj);
+        let source = ci.max(cj);
+        let source_sum = std::mem::take(&mut centroid_sums[source]);
+        let target_sum = &mut centroid_sums[target];
+        for k in 0..target_sum.len().min(source_sum.len()) {
+            target_sum[k] += source_sum[k];
+        }
+        cluster_ids[source] = target;
+        merges += 1;
     }
 
     // Flatten cluster IDs to contiguous values
@@ -320,20 +351,21 @@ mod tests {
         );
     }
 
-    /// Regression for the item #16 union-find rewrite: single-linkage must stay
-    /// transitive. A≈B and B≈C (each pair over threshold) but A vs C just under
-    /// threshold — all three must still land in ONE cluster via the chain, and
-    /// a fourth unrelated vector must stay separate. This proves the O(1)-union
-    /// + path-compression change preserves the old full-relabel semantics.
+    /// Centroid-linkage must resist chaining. Neighbours A-B and B-C each clear
+    /// the pair threshold, but once A and B form a cluster its centroid sits
+    /// between them, so C (a full step further out) no longer agrees with that
+    /// centroid and is NOT dragged in. This is the opposite of the old
+    /// single-linkage behaviour and is exactly what stops distinct identities
+    /// fusing through a bridge face on large libraries.
     #[test]
-    fn test_single_linkage_chain_merges_transitively() {
-        // Vectors placed at increasing angles in the xy-plane so neighbours are
-        // similar but the endpoints are not.
+    fn test_centroid_linkage_resists_chaining() {
         let v = |deg: f32| {
             let t = deg.to_radians();
             vec![t.cos(), t.sin(), 0.0f32]
         };
-        // 0°, 30°, 60°: cos(30°)=0.866 (A-B, B-C pass @0.8), cos(60°)=0.5 (A-C fails).
+        // 0°, 30°, 60°: cos(30°)=0.866 clears the 0.8 pair gate for both
+        // adjacent pairs. Centroid of {0°,30°} ≈ 15°; 60° vs 15° = cos(45°)=0.707
+        // < 0.8, so the C merge is correctly rejected.
         let faces = vec![
             (1, v(0.0)),
             (2, v(30.0)),
@@ -344,14 +376,52 @@ mod tests {
         let m: std::collections::HashMap<i64, i64> = assignments.iter().copied().collect();
 
         assert_eq!(m[&1], m[&2], "A and B (cos 0.866) must share a cluster");
-        assert_eq!(m[&2], m[&3], "B and C (cos 0.866) must share a cluster");
-        assert_eq!(
-            m[&1], m[&3],
-            "A and C must join transitively through B (single-linkage chain)"
+        assert_ne!(
+            m[&2], m[&3],
+            "C must NOT chain into {{A,B}} — its centroid (15°) vs C (60°) is below threshold"
         );
         assert_ne!(
             m[&1], m[&4],
             "orthogonal vector must stay in its own cluster"
+        );
+    }
+
+    /// Regression for the reported bug: on large libraries, distinct people were
+    /// being merged. Two tight, well-separated clusters (person P near 0°, person
+    /// Q near 45°) plus one borderline "bridge" face that is individually within
+    /// threshold of a member of EACH cluster. Pure single-linkage fuses all of
+    /// them into one identity; centroid-linkage must keep P and Q apart and only
+    /// attach the bridge to the single closest cluster.
+    #[test]
+    fn test_bridge_face_does_not_fuse_distinct_identities() {
+        let v = |deg: f32| {
+            let t: f32 = deg.to_radians();
+            vec![t.cos(), t.sin(), 0.0f32]
+        };
+        let faces = vec![
+            // Person P — tightly grouped around 0°.
+            (1, v(-5.0)),
+            (2, v(0.0)),
+            (3, v(5.0)),
+            // Person Q — tightly grouped around 45°.
+            (4, v(40.0)),
+            (5, v(45.0)),
+            (6, v(50.0)),
+            // Bridge face at 22°: cos(22°)≈0.93 to P's 0°, cos(18°)≈0.95 to Q's
+            // 40° — over threshold to a member of BOTH clusters.
+            (7, v(22.0)),
+        ];
+        let assignments = cluster_faces(&faces, 0.8);
+        let m: std::collections::HashMap<i64, i64> = assignments.iter().copied().collect();
+
+        // P stays one identity, Q stays one identity, and the two are distinct.
+        assert_eq!(m[&1], m[&2], "P faces must cluster together");
+        assert_eq!(m[&2], m[&3], "P faces must cluster together");
+        assert_eq!(m[&4], m[&5], "Q faces must cluster together");
+        assert_eq!(m[&5], m[&6], "Q faces must cluster together");
+        assert_ne!(
+            m[&2], m[&5],
+            "distinct people P and Q must NOT be fused by the bridge face"
         );
     }
 }

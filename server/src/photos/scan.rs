@@ -18,7 +18,6 @@ use axum::extract::State;
 use axum::Json;
 use futures_util::stream::{self, StreamExt};
 use futures_util::TryStreamExt;
-use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
 use crate::error::AppError;
@@ -28,10 +27,21 @@ use crate::state::AppState;
 
 use super::metadata::{extract_media_metadata_async, extract_xmp_subtype};
 use super::thumbnail::generate_thumbnail_file;
-use super::utils::{compute_photo_hash_streaming, normalize_iso_timestamp, utc_now_iso};
+use super::utils::{compute_photo_hash_streaming, normalize_iso_timestamp};
 
-/// Maximum concurrent file processing tasks during scan.
-const SCAN_PARALLELISM: usize = 4;
+/// Concurrency for the per-file registration passes.
+///
+/// The per-file body is deliberately memory-light — header-only metadata, a
+/// streaming hash, an XMP prefix read, one `INSERT`, and a subprocess thumbnail
+/// — so throughput scales with CPU cores. The old fixed `4` throttled large
+/// (100GB+) imports to many hours. Encryption is a SEPARATE, memory-budgeted
+/// pass, so raising this does NOT add to the decode/OOM pressure the
+/// conservative value was guarding against. Clamped to `[4, 16]` so small boxes
+/// don't overcommit and large boxes don't spawn an unbounded thundering herd of
+/// `ffmpeg` thumbnail processes.
+pub(crate) fn scan_parallelism() -> usize {
+    num_cpus::get().clamp(4, 16)
+}
 
 /// For each new file: extracts EXIF metadata, generates a thumbnail, and
 /// computes a content hash for deduplication.
@@ -83,17 +93,11 @@ pub async fn scan_and_register(
     }
 
     // ── Phase 1: Collect all unregistered native media files (fast directory walk) ──
-    struct ScanCandidate {
-        abs_path: PathBuf,
-        rel_path: String,
-        name: String,
-        mime: String,
-        media_type: &'static str,
-        size: i64,
-        modified: Option<String>,
-    }
+    // The per-file registration body is shared with the background / bulk-import
+    // autoscan through crate::photos::register (single source of truth).
+    use crate::photos::register::NativeCandidate;
 
-    let mut candidates: Vec<ScanCandidate> = Vec::new();
+    let mut candidates: Vec<NativeCandidate> = Vec::new();
     let mut queue = vec![storage_root.clone()];
 
     while let Some(dir) = queue.pop() {
@@ -144,7 +148,7 @@ pub async fn scan_and_register(
                         })
                     });
 
-                    candidates.push(ScanCandidate {
+                    candidates.push(NativeCandidate {
                         abs_path,
                         rel_path,
                         name,
@@ -215,138 +219,53 @@ pub async fn scan_and_register(
     // than spawning one task per candidate up front; on a large library that
     // up-front fan-out was a heap spike that could OOM the process. The inner
     // spawn preserves multi-core parallelism and isolates per-file panics.
+    // Content hashes of gallery-hidden originals (secure gallery) to exclude, so
+    // `/scan` can never re-import a secure item's plaintext original — the same
+    // protection the background autoscan already applied (previously missing
+    // here, a divergence between the two hand-copied registration bodies).
+    let mut gallery_hashes = std::collections::HashSet::new();
+    {
+        let mut rows = sqlx::query_scalar::<_, String>(
+            "SELECT original_photo_hash FROM encrypted_gallery_items WHERE original_photo_hash IS NOT NULL",
+        )
+        .fetch(&state.pool);
+        while let Some(hash) = rows.try_next().await? {
+            gallery_hashes.insert(hash);
+        }
+    }
+
+    let ctx = Arc::new(crate::photos::register::RegisterContext {
+        user_id: auth.user_id.clone(),
+        pano_sensitivity,
+        gallery_hashes: Arc::new(gallery_hashes),
+    });
+
     let new_count = Arc::new(AtomicI64::new(0));
     stream::iter(candidates)
         .map(|candidate| {
             let new_count = new_count.clone();
             let pool = state.pool.clone();
             let storage_root = storage_root.clone();
-            let user_id = auth.user_id.clone();
+            let ctx = ctx.clone();
             async move {
+                // Inner spawn keeps multi-core parallelism and isolates a
+                // per-file panic from the rest of the pass.
                 let _ = tokio::spawn(async move {
-                    // Native format — register directly (no conversion needed).
-            let photo_id = Uuid::new_v4().to_string();
-            let now = utc_now_iso();
-            // GIFs get an animated GIF thumbnail; everything else gets JPEG
-            let thumb_ext = if candidate.mime == "image/gif" { "gif" } else { "jpg" };
-            let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
-
-            // Extract dimensions, camera model, GPS, and date from file
-            let (img_w, img_h, cam_model, exif_lat, exif_lon, exif_taken, exif_taken_offset) =
-                extract_media_metadata_async(candidate.abs_path.clone()).await;
-
-            let final_taken_at = exif_taken
-                .map(|t| normalize_iso_timestamp(&t))
-                .or(candidate.modified);
-
-            // Compute content-based hash using streaming I/O
-            let photo_hash = compute_photo_hash_streaming(&candidate.abs_path).await;
-
-            // ── XMP subtype detection (motion, panorama, burst, HDR) ────
-            // Photos only, and only the file prefix: scanning a video's
-            // bytes for XMP is meaningless, and reading whole files here
-            // used to pull multi-GB videos into RAM four at a time.
-            let mut subtype_info = if candidate.media_type == "photo" {
-                let prefix = super::metadata::read_file_prefix(
-                    &candidate.abs_path,
-                    super::metadata::XMP_SCAN_PREFIX_BYTES,
-                )
-                .await;
-                extract_xmp_subtype(&prefix)
-            } else {
-                Default::default()
-            };
-            // Aspect-ratio fallback for panoramas / 360° photos missing XMP.
-            if candidate.media_type == "photo" {
-                super::metadata::apply_aspect_subtype_fallback_with(
-                    &mut subtype_info,
-                    img_w,
-                    img_h,
-                    pano_sensitivity,
-                );
-            }
-
-            let insert_result = sqlx::query(
-                "INSERT OR IGNORE INTO photos (id, user_id, filename, file_path, mime_type, media_type, \
-                 size_bytes, width, height, taken_at, latitude, longitude, camera_model, thumb_path, \
-                 created_at, photo_hash, photo_subtype, burst_id, taken_at_offset) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&photo_id)
-            .bind(&user_id)
-            .bind(&candidate.name)
-            .bind(&candidate.rel_path)
-            .bind(&candidate.mime)
-            .bind(candidate.media_type)
-            .bind(candidate.size)
-            .bind(img_w)
-            .bind(img_h)
-            .bind(&final_taken_at)
-            .bind(exif_lat)
-            .bind(exif_lon)
-            .bind(&cam_model)
-            .bind(&thumb_rel)
-            .bind(&now)
-            .bind(&photo_hash)
-            .bind(&subtype_info.photo_subtype)
-            .bind(&subtype_info.burst_id)
-            .bind(&exif_taken_offset)
-            .execute(&pool)
-            .await;
-
-            match insert_result {
-                Ok(result) if result.rows_affected() == 0 => {
-                    tracing::debug!(file = %candidate.rel_path, "Already registered (concurrent scan), skipping");
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!(file = %candidate.rel_path, error = %e, "Failed to register photo");
-                    return;
-                }
-                Ok(_) => {}
-            }
-
-            // ── Extract and store motion video blob ─────────────────────
-            // Only now read the full file — motion photos are stills, so
-            // this stays bounded; videos never reach this branch.
-            if subtype_info.photo_subtype.as_deref() == Some("motion") {
-                let file_bytes = tokio::fs::read(&candidate.abs_path).await.unwrap_or_default();
-                if !file_bytes.is_empty() {
-                    super::motion::extract_and_store_motion_video(
+                    if crate::photos::register::register_native_file(
                         &pool,
                         &storage_root,
-                        &user_id,
-                        &photo_id,
-                        &file_bytes,
-                        subtype_info.motion_video_offset,
+                        &candidate,
+                        &ctx,
                     )
-                    .await;
-                }
-            }
-
-            if let Some(ref st) = subtype_info.photo_subtype {
-                tracing::info!(
-                    file = %candidate.rel_path,
-                    photo_subtype = %st,
-                    burst_id = ?subtype_info.burst_id,
-                    "Scan: special photo subtype detected"
-                );
-            }
-
-            // Generate thumbnail
-            let thumb_abs = storage_root.join(&thumb_rel);
-            if generate_thumbnail_file(&candidate.abs_path, &thumb_abs, &candidate.mime, None).await {
-                tracing::debug!(file = %candidate.rel_path, "Generated thumbnail");
-            } else {
-                tracing::warn!(file = %candidate.rel_path, "Failed to generate thumbnail");
-            }
-
-            new_count.fetch_add(1, Ordering::Relaxed);
+                    .await
+                    {
+                        new_count.fetch_add(1, Ordering::Relaxed);
+                    }
                 })
                 .await;
             }
         })
-        .buffer_unordered(SCAN_PARALLELISM)
+        .buffer_unordered(scan_parallelism())
         .for_each(|_| async {})
         .await;
 
@@ -446,7 +365,7 @@ pub async fn scan_and_register(
                 .await;
             }
         })
-        .buffer_unordered(SCAN_PARALLELISM)
+        .buffer_unordered(scan_parallelism())
         .for_each(|_| async {})
         .await;
     let fixed_count = fixed_count.load(Ordering::Relaxed);
@@ -589,7 +508,7 @@ pub async fn scan_and_register(
                 .await;
             }
         })
-        .buffer_unordered(SCAN_PARALLELISM)
+        .buffer_unordered(scan_parallelism())
         .for_each(|_| async {})
         .await;
 
@@ -630,7 +549,7 @@ pub async fn scan_and_register(
                 .await;
             }
         })
-        .buffer_unordered(SCAN_PARALLELISM)
+        .buffer_unordered(scan_parallelism())
         .for_each(|_| async {})
         .await;
 

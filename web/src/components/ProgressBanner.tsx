@@ -78,7 +78,7 @@ export function ProgressBanner({
 
   return (
     <BannerSlot id={id} priority={BANNERS[id]}>
-      <div className="card shadow-card-hover pointer-events-auto max-w-md mx-auto flex items-center gap-3 px-4 py-3">
+      <div className="card shadow-card-hover pointer-events-auto w-full max-w-md mx-auto flex items-center gap-3 px-4 py-3">
         <div
           className={`w-5 h-5 border-2 border-edge-strong ${t.spinner} rounded-full animate-spin flex-shrink-0`}
         />

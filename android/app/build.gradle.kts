@@ -67,6 +67,10 @@ android {
 
     buildFeatures {
         compose = true
+        // Needed so the About screen can read VERSION_NAME/VERSION_CODE from
+        // BuildConfig instead of a hardcoded string that never tracked the
+        // bump-version script (AGP 8+ defaults buildConfig to false).
+        buildConfig = true
     }
 }
 
