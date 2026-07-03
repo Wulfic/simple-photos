@@ -190,7 +190,10 @@ mod tests {
 
         cache.put("u1", s);
         std::thread::sleep(Duration::from_millis(60));
-        assert!(cache.get_fresh("u1").is_none(), "entry should expire after TTL");
+        assert!(
+            cache.get_fresh("u1").is_none(),
+            "entry should expire after TTL"
+        );
     }
 
     // DB-backed test: the summary counts must equal an independent hand-count of
