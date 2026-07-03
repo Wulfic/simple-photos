@@ -265,6 +265,14 @@ fn photo_routes() -> Router<AppState> {
             get(crate::gallery::sync::encrypted_sync),
         )
         .route(
+            "/photos/source-albums",
+            get(crate::import::takeout::list_source_albums),
+        )
+        .route(
+            "/photos/summary",
+            get(crate::gallery::summary::photos_summary),
+        )
+        .route(
             "/photos/register",
             post(crate::photos::handlers::register_photo),
         )

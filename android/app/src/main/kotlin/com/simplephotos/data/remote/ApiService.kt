@@ -64,6 +64,16 @@ interface ApiService {
         @Query("limit") limit: Int? = null
     ): EncryptedSyncResponse
 
+    /** Cheap precomputed gallery counts — smart-album badges render instantly
+     *  on a cold Room mirror without paginating encrypted-sync (Issue 3). */
+    @GET("api/photos/summary")
+    suspend fun photosSummary(): PhotoSummaryDto
+
+    /** Authoritative Takeout album membership (photo-id keyed), for rebuilding
+     *  album manifests on-device without fragile filename matching (Issue 2). */
+    @GET("api/photos/source-albums")
+    suspend fun sourceAlbums(): SourceAlbumsResponse
+
     @GET("api/photos/crop-sync")
     suspend fun cropSync(): List<CropSyncRecord>
 

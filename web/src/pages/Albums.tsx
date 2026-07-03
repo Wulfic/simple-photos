@@ -3,7 +3,7 @@
  * smart/default albums (Favorites, Photos, Videos, GIFs, Audio),
  * and shared albums (server-managed, multi-user).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppNavigate } from "../hooks/useAppNavigate";
 import { api } from "../api/client";
 import { decrypt, encrypt, sha256Hex } from "../crypto/crypto";
@@ -15,6 +15,8 @@ import { getErrorMessage } from "../utils/formatters";
 import { randomUuid } from "../utils/uuid";
 import { toast } from "../store/toast";
 import { useIsBackupServer } from "../hooks/useIsBackupServer";
+import { usePhotoSummary } from "../hooks/usePhotoSummary";
+import { recreateAlbumsFromServer } from "../utils/takeoutAlbums";
 import { useAuthStore } from "../store/auth";
 import { useSecureAdd } from "../store/secureAdd";
 import type { FaceCluster, PetCluster } from "../api/ai";
@@ -89,6 +91,13 @@ export default function Albums() {
   // Encrypted photos from IndexedDB (for smart album counts)
   const encryptedPhotos = useLiveQuery(() => db.photos.toArray());
 
+  // Server-precomputed counts (Issue 3): render smart-album badges instantly on
+  // a cold/empty cache — before the local IndexedDB mirror has finished syncing
+  // — instead of showing 0 until a full re-sync completes. Once IDB holds photos
+  // the live local counts below take over (they reflect instant favorite
+  // toggles etc.); the summary is purely the cold-start bridge.
+  const photoSummary = usePhotoSummary();
+
   const albums = useLiveQuery(() => db.albums.orderBy("name").toArray());
 
   useEffect(() => {
@@ -99,6 +108,21 @@ export default function Albums() {
     loadMemories();
     loadTrips();
   }, []);
+
+  // Materialize Google Takeout albums automatically once the local photo mirror
+  // has data — the server captured album membership at import time, so albums
+  // just appear here with no manual "rebuild" step. Idempotent + best-effort;
+  // runs once per mount. `saveAlbumManifest` writes to db.albums, so the
+  // reactive `albums` live query above picks up any new albums on its own.
+  const takeoutMaterializedRef = useRef(false);
+  useEffect(() => {
+    if (takeoutMaterializedRef.current) return;
+    if (!encryptedPhotos || encryptedPhotos.length === 0) return;
+    takeoutMaterializedRef.current = true;
+    recreateAlbumsFromServer().catch((e) =>
+      console.error("[Albums] automatic Takeout album recreation failed", e),
+    );
+  }, [encryptedPhotos]);
 
   async function loadPeopleClusters() {
     try {
@@ -240,7 +264,10 @@ export default function Albums() {
   }, [trips, accessToken]);
 
   // Compute encrypted smart album counts + first thumbnails from IndexedDB
-  const encryptedPhotoCounts = encryptedPhotos ? {
+  // Live local counts from the IndexedDB mirror. Preferred whenever the mirror
+  // holds any photos: they update instantly (favorite toggle, trash) with no
+  // round-trip. Null while the Dexie query is still resolving.
+  const localCounts = encryptedPhotos && encryptedPhotos.length > 0 ? {
     all: encryptedPhotos.length,
     // "Recently Added" is capped at the 100 most-recently-imported items.
     recent: Math.min(encryptedPhotos.length, 100),
@@ -250,6 +277,21 @@ export default function Albums() {
     videos: encryptedPhotos.filter(p => p.mediaType === "video").length,
     audio: encryptedPhotos.filter(p => p.mediaType === "audio").length,
   } : null;
+
+  // Fall back to the server summary until the local mirror has data, so a cold
+  // cache shows real counts immediately instead of zeros/spinner (Issue 3). The
+  // "Photos" card counts photos+gifs, mirroring the local filter above.
+  const summaryCounts = photoSummary ? {
+    all: photoSummary.total,
+    recent: Math.min(photoSummary.total, 100),
+    favorites: photoSummary.favorites,
+    photos: photoSummary.photos + photoSummary.gifs,
+    gifs: photoSummary.gifs,
+    videos: photoSummary.videos,
+    audio: photoSummary.audio,
+  } : null;
+
+  const encryptedPhotoCounts = localCounts ?? summaryCounts;
 
   // Find the first photo with a thumbnail for each category.
   function findCoverPhoto(filter: (p: CachedPhoto) => boolean): CachedPhoto | undefined {

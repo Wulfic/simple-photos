@@ -8,6 +8,7 @@
 //! - `access`       — Serve-path gate for secure items (token extractor + check)
 //! - `shared`       — Shared album CRUD, member/photo management
 //! - `sync`         — Encrypted-sync endpoint for client→server photo metadata
+//! - `summary`      — Cheap precomputed gallery count summary (smart-album badges)
 //! - `models`       — Re-exports of model types used across gallery operations
 
 pub mod access;
@@ -15,4 +16,5 @@ pub mod models;
 pub mod secure;
 pub mod secure_token;
 pub mod shared;
+pub mod summary;
 pub mod sync;

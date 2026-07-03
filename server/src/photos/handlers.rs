@@ -446,6 +446,10 @@ pub async fn toggle_favorite(
 
     let is_favorite = new_fav.ok_or(AppError::NotFound)?;
 
+    // Favorite count changed — drop the cached summary so the next
+    // /photos/summary recomputes immediately instead of waiting out the TTL.
+    state.summary_cache.invalidate(&auth.user_id);
+
     audit::log(
         &state,
         AuditEvent::PhotoFavorite,

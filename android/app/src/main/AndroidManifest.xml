@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -77,6 +78,26 @@
                 android:value="androidx.startup"
                 tools:node="remove" />
         </provider>
+
+        <!-- WorkManager's SystemForegroundService is declared by the androidx.work
+             library WITHOUT a foregroundServiceType attribute (0x0). BackupWorker
+             promotes itself to a DATA_SYNC foreground service at runtime
+             (ForegroundInfo type = FOREGROUND_SERVICE_TYPE_DATA_SYNC). On
+             targetSdk 34 / Android 14+ the OS requires the runtime type to be a
+             *subset* of the type declared on the <service> element in the merged
+             manifest, and throws IllegalArgumentException("foregroundServiceType
+             0x00000001 is not a subset of ... 0x00000000") from inside
+             SystemForegroundService.startForeground() — an UNCATCHABLE main-thread
+             crash (it fires on the service's own Handler, not in the coroutine
+             that called setForeground, so BackupWorker's try/catch can't stop it).
+             WorkManager then retries the FGS worker on every process restart →
+             the "app keeps stopping" crash loop on launch. Merging the attribute
+             onto the library's service element fixes it. Must match the runtime
+             type and the FOREGROUND_SERVICE_DATA_SYNC permission above. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
     </application>
 

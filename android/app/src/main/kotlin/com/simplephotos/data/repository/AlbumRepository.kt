@@ -204,4 +204,83 @@ class AlbumRepository @Inject constructor(
             }
         }
     }
+
+    /** Outcome of a Takeout source-album rebuild (Issue 2). */
+    data class SourceAlbumRebuildResult(
+        val albumsCreated: Int = 0,
+        val albumsUpdated: Int = 0,
+        val photosAdded: Int = 0,
+        /** Albums whose photos aren't in the local mirror yet (still syncing). */
+        val albumsUnmatched: Int = 0,
+        /** Individual photo ids not yet synced locally (skipped, re-run to fill). */
+        val photosUnmatched: Int = 0,
+    )
+
+    /**
+     * Rebuild local albums from the server's **authoritative** Takeout
+     * source-album mapping (`GET /api/photos/source-albums`), keyed by photo id
+     * (Issue 2). This is the Android equivalent of the web
+     * `recreateAlbumsFromServer` and the deterministic, cross-platform
+     * replacement for filename matching: the server captured each album folder
+     * at import time, so it survives `-edited` dedup and `(1)` collision renames
+     * and needs no folder re-selection.
+     *
+     * The album id is derived deterministically from `(source, name)` with the
+     * **same formula the web client uses**, so a rebuild on either platform
+     * converges into one album after sync instead of duplicating. A photo id not
+     * yet in the local Room mirror is skipped and counted; re-run after the sync
+     * finishes to fill it in. Idempotent — re-running adds nothing new.
+     */
+    suspend fun recreateAlbumsFromServer(): SourceAlbumRebuildResult {
+        val resp = api.sourceAlbums()
+        var created = 0
+        var updated = 0
+        var photosAdded = 0
+        var albumsUnmatched = 0
+        var photosUnmatched = 0
+
+        for (album in resp.albums) {
+            // Resolve server photo ids → local photos (batched). Ids not yet in
+            // the local mirror are counted and skipped.
+            val localPhotos = db.photoDao().getByServerPhotoIds(album.photoIds)
+            val foundServerIds = localPhotos.mapNotNull { it.serverPhotoId }.toSet()
+            photosUnmatched += album.photoIds.count { it !in foundServerIds }
+            val localPhotoIds = localPhotos.map { it.localId }
+            if (localPhotoIds.isEmpty()) {
+                albumsUnmatched++
+                continue
+            }
+
+            // Deterministic id — MUST match web (utils/takeoutAlbums.ts):
+            // "src-" + sha256Hex(utf8("<source> <name>")).
+            val albumId = "src-" + crypto.sha256Hex("${album.source} ${album.name}".toByteArray())
+
+            val existing = db.albumDao().getById(albumId)
+            if (existing == null) {
+                db.albumDao().insert(
+                    AlbumEntity(
+                        localId = albumId,
+                        name = album.name,
+                        coverPhotoLocalId = localPhotoIds.first(),
+                        syncStatus = SyncStatus.PENDING,
+                    )
+                )
+                for (id in localPhotoIds) db.albumDao().insertXRef(PhotoAlbumXRef(id, albumId))
+                created++
+                photosAdded += localPhotoIds.size
+                db.albumDao().getById(albumId)?.let { syncAlbum(it) }
+            } else {
+                // Only add xrefs not already present, so we never double-insert
+                // the composite-key row (idempotent merge).
+                val alreadyIn = db.albumDao().getPhotoIdsForAlbum(albumId).toSet()
+                val toAdd = localPhotoIds.filter { it !in alreadyIn }
+                if (toAdd.isEmpty()) continue
+                for (id in toAdd) db.albumDao().insertXRef(PhotoAlbumXRef(id, albumId))
+                updated++
+                photosAdded += toAdd.size
+                syncAlbum(existing)
+            }
+        }
+        return SourceAlbumRebuildResult(created, updated, photosAdded, albumsUnmatched, photosUnmatched)
+    }
 }

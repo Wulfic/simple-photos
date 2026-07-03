@@ -49,7 +49,6 @@ import com.simplephotos.ui.navigation.NavViewModel.Companion.KEY_BIOMETRIC_ENABL
 import com.simplephotos.ui.theme.SimplePhotosTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 /**
@@ -70,12 +69,6 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Check if biometric is enabled in settings
-        val biometricEnabled = runBlocking {
-            val prefs = dataStore.data.first()
-            prefs[KEY_BIOMETRIC_ENABLED] ?: false
-        }
-
         // Allowed authenticators for the app-lock. On API 30+ we add
         // DEVICE_CREDENTIAL so a biometric lockout (after repeated failed
         // fingerprints) falls back to the phone PIN/password instead of locking
@@ -93,6 +86,32 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             SimplePhotosTheme {
+                // Read the biometric-lock preference asynchronously. Previously
+                // this was a `runBlocking { dataStore.data.first() }` in onCreate,
+                // which blocks the main thread on every cold start — a slow,
+                // contended, or corrupt DataStore read there manifests as an ANR
+                // / "app keeps stopping". `produceState` moves it off the UI
+                // thread; we show a neutral splash until it resolves.
+                val biometricEnabledState = produceState<Boolean?>(initialValue = null) {
+                    value = try {
+                        dataStore.data.first()[KEY_BIOMETRIC_ENABLED] ?: false
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "Failed to read biometric pref", e)
+                        false
+                    }
+                }
+                val biometricEnabled = biometricEnabledState.value
+
+                if (biometricEnabled == null) {
+                    // Preference still loading — neutral splash, no work on main thread.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    )
+                    return@SimplePhotosTheme
+                }
+
                 var authenticated by remember { mutableStateOf(!biometricEnabled || !biometricAvailable) }
                 var authFailed by remember { mutableStateOf(false) }
 

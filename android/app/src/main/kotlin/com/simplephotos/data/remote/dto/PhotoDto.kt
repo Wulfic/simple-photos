@@ -92,6 +92,37 @@ data class EncryptedSyncResponse(
     @SerializedName("next_cursor") val nextCursor: String?
 )
 
+// ── Precomputed gallery count summary (Issue 3) ──────────────────────────────
+// GET /api/photos/summary — cheap server-side aggregate so smart-album badges
+// render instantly on a cold Room mirror instead of showing 0 until a full
+// encrypted-sync pagination completes. `collapsedTotal` accounts for burst
+// collapse; per-category counts are raw (match the local filters).
+
+data class PhotoSummaryDto(
+    val total: Long = 0,
+    @SerializedName("collapsed_total") val collapsedTotal: Long = 0,
+    val photos: Long = 0,
+    val gifs: Long = 0,
+    val videos: Long = 0,
+    val audio: Long = 0,
+    val favorites: Long = 0,
+)
+
+// ── Authoritative Takeout source albums (Issue 2) ────────────────────────────
+// GET /api/photos/source-albums — album membership captured at import time,
+// keyed by photo id (survives filename collisions and `-edited` dedup). Used to
+// rebuild album manifests deterministically and cross-platform.
+
+data class SourceAlbumDto(
+    val name: String,
+    val source: String,
+    @SerializedName("photo_ids") val photoIds: List<String>,
+)
+
+data class SourceAlbumsResponse(
+    val albums: List<SourceAlbumDto>
+)
+
 // ── Crop-metadata sync (lightweight delta for non-destructive edits) ─────────
 
 data class CropSyncRecord(

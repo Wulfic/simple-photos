@@ -20,8 +20,9 @@ export interface GalleryDataResult {
   error: string;
   setError: (msg: string) => void;
   /** Encrypted-mode photos from IndexedDB (live query, auto-updates).
-   *  Returns undefined until the first server sync completes to prevent
-   *  flashing stale data from a previous user's session. */
+   *  Shows persisted cached data immediately; the server sync is a background
+   *  refresh. Safe against previous-user flash because IDB is wiped on
+   *  login/logout/401 (clearAllUserData). Undefined only until Dexie resolves. */
   encryptedPhotos: CachedPhoto[] | undefined;
   secureBlobIds: Set<string>;
   loadEncryptedPhotos: () => Promise<void>;

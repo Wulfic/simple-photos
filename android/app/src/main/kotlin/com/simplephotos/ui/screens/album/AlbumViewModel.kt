@@ -122,12 +122,25 @@ class AlbumViewModel @Inject constructor(
      * on every ON_RESUME so re-entering the tab reflects the current state.
      */
     fun refresh() {
-        // Sync album manifests from server (picks up web-created albums). Writes
-        // to Room, so the reactive `albums` Flow updates the list automatically.
+        // Sync album manifests from server (picks up web-created albums), then
+        // materialize any Google Takeout source albums automatically. Both write
+        // to Room, so the reactive `albums` Flow updates the list on its own.
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { albumRepository.syncAlbumsFromServer() }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.w("AlbumViewModel", "album sync failed: ${e.message}")
+            }
+            // Takeout albums are captured server-side at import time and rebuilt
+            // into local manifests here automatically — no manual "rebuild" step
+            // (Issue 2). Idempotent and best-effort; runs after the server sync so
+            // it merges on top rather than fighting it. Photos not synced yet are
+            // skipped and picked up on a later refresh.
+            try {
+                withContext(Dispatchers.IO) { albumRepository.recreateAlbumsFromServer() }
+            } catch (e: Exception) {
+                android.util.Log.w("AlbumViewModel", "takeout album materialize failed: ${e.message}")
+            }
         }
         // Recompute smart-album counts/covers, shared albums, and Discover.
         loadSmartAlbumCounts()
@@ -146,22 +159,47 @@ class AlbumViewModel @Inject constructor(
 
     private fun loadSmartAlbumCounts() {
         viewModelScope.launch {
+            // Fast path (Issue 3): server-precomputed counts render the smart-album
+            // badges INSTANTLY on a cold/empty Room mirror — before the local
+            // encrypted-sync finishes filling it — instead of showing 0 until a
+            // full pagination completes. The burst-collapsed local counts below
+            // override these as soon as Room actually holds photos.
+            try {
+                val summary = withContext(Dispatchers.IO) { photoRepository.apiService.photosSummary() }
+                totalCount = summary.total.toInt()
+                recentCount = minOf(summary.total, 100L).toInt()
+                favoritesCount = summary.favorites.toInt()
+                photosCount = (summary.photos + summary.gifs).toInt()
+                gifsCount = summary.gifs.toInt()
+                videosCount = summary.videos.toInt()
+                audioCount = summary.audio.toInt()
+            } catch (e: Exception) {
+                // Non-fatal: local Room counts below are the fallback. Log so a
+                // broken endpoint (stale server) is visible rather than silent.
+                android.util.Log.w("AlbumViewModel", "photos/summary fetch failed: ${e.message}")
+            }
+
             try {
                 val allPhotos = withContext(Dispatchers.IO) {
                     photoRepository.getAllPhotos().first()
                 }
-                totalCount = allPhotos.size
-                // "Recently Added" mirrors the web smart album: capped at 100,
-                // with bursts collapsed so a burst counts as one item (the
-                // detail list does the same — see AlbumDetailViewModel).
-                recentCount = minOf(allPhotos.collapseBursts().size, 100)
-                // Counts match the collapsed grids (Favorites/Photos collapse
-                // bursts in getAlbumPhotos) so the card count equals the tiles.
-                favoritesCount = allPhotos.filter { it.isFavorite }.collapseBursts().size
-                photosCount = allPhotos.filter { it.mediaType == "photo" || it.mediaType == "gif" }.collapseBursts().size
-                gifsCount = allPhotos.count { it.mediaType == "gif" }
-                videosCount = allPhotos.count { it.mediaType == "video" }
-                audioCount = allPhotos.count { it.mediaType == "audio" }
+                // Only override the server summary once the local mirror actually
+                // holds photos — otherwise an empty cold Room would reset the
+                // instant counts above back to 0.
+                if (allPhotos.isNotEmpty()) {
+                    totalCount = allPhotos.size
+                    // "Recently Added" mirrors the web smart album: capped at 100,
+                    // with bursts collapsed so a burst counts as one item (the
+                    // detail list does the same — see AlbumDetailViewModel).
+                    recentCount = minOf(allPhotos.collapseBursts().size, 100)
+                    // Counts match the collapsed grids (Favorites/Photos collapse
+                    // bursts in getAlbumPhotos) so the card count equals the tiles.
+                    favoritesCount = allPhotos.filter { it.isFavorite }.collapseBursts().size
+                    photosCount = allPhotos.filter { it.mediaType == "photo" || it.mediaType == "gif" }.collapseBursts().size
+                    gifsCount = allPhotos.count { it.mediaType == "gif" }
+                    videosCount = allPhotos.count { it.mediaType == "video" }
+                    audioCount = allPhotos.count { it.mediaType == "audio" }
+                }
 
                 // Load cover photos for smart albums (most recent photo matching each filter)
                 val sorted = allPhotos.sortedByDescending { it.takenAt }
@@ -174,7 +212,9 @@ class AlbumViewModel @Inject constructor(
                 sorted.firstOrNull { it.mediaType == "video" }?.let { covers["smart-videos"] = it }
                 sorted.firstOrNull { it.mediaType == "audio" }?.let { covers["smart-audio"] = it }
                 smartAlbumCoverPhotos = covers
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.w("AlbumViewModel", "local smart-album counts failed: ${e.message}")
+            }
         }
     }
 

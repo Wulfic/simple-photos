@@ -172,6 +172,8 @@ pub struct TakeoutImportRequest {
 pub struct TakeoutImportResponse {
     pub photos_imported: usize,
     pub metadata_imported: usize,
+    /// Number of (photo, album) memberships recorded from parent-folder names.
+    pub albums_recorded: usize,
     pub errors: Vec<String>,
 }
 
@@ -227,6 +229,7 @@ pub async fn import_takeout(
 
     let mut photos_imported = 0usize;
     let mut metadata_imported = 0usize;
+    let mut albums_recorded = 0usize;
     let mut errors: Vec<String> = Vec::new();
 
     for media_path in &media_files {
@@ -374,6 +377,38 @@ pub async fn import_takeout(
             photo_id
         };
 
+        // Capture the album membership authoritatively, keyed by photo_id, from
+        // the parent folder name. Runs for both freshly-imported and
+        // already-existing (deduped) photos so a re-import backfills albums.
+        // Idempotent via the (photo_id, album_name) primary key.
+        if let Some(album_name) = derive_takeout_album(media_path) {
+            let now = Utc::now().to_rfc3339();
+            match sqlx::query(
+                "INSERT OR IGNORE INTO photo_source_albums \
+                 (photo_id, user_id, album_name, source, created_at) \
+                 VALUES (?, ?, ?, 'google_takeout', ?)",
+            )
+            .bind(&photo_id)
+            .bind(&auth.user_id)
+            .bind(&album_name)
+            .bind(&now)
+            .execute(&state.pool)
+            .await
+            {
+                Ok(res) if res.rows_affected() > 0 => albums_recorded += 1,
+                Ok(_) => {} // already recorded — idempotent no-op
+                Err(e) => {
+                    tracing::warn!(
+                        photo_id = %photo_id,
+                        album = %album_name,
+                        error = %e,
+                        "Failed to record Takeout source album"
+                    );
+                    errors.push(format!("Album record failed for {filename}: {e}"));
+                }
+            }
+        }
+
         // Look for Google Photos sidecar: filename.supplemental-metadata.json
         let supplemental_path =
             media_path.with_file_name(format!("{filename}.supplemental-metadata.json"));
@@ -438,6 +473,9 @@ pub async fn import_takeout(
         }
     }
 
+    // New photos were inserted — invalidate the cached count summary.
+    state.summary_cache.invalidate(&auth.user_id);
+
     audit::log(
         &state,
         AuditEvent::BlobUpload,
@@ -456,6 +494,7 @@ pub async fn import_takeout(
         user_id = %auth.user_id,
         photos = photos_imported,
         metadata = metadata_imported,
+        albums = albums_recorded,
         errors = errors.len(),
         "Google Photos Takeout import complete"
     );
@@ -463,11 +502,98 @@ pub async fn import_takeout(
     Ok(Json(TakeoutImportResponse {
         photos_imported,
         metadata_imported,
+        albums_recorded,
         errors,
     }))
 }
 
+// ── List authoritative source albums ─────────────────────────────────────────
+
+/// A single source album with its authoritative photo-id membership.
+#[derive(Debug, serde::Serialize)]
+pub struct SourceAlbum {
+    pub name: String,
+    pub source: String,
+    pub photo_ids: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SourceAlbumsResponse {
+    pub albums: Vec<SourceAlbum>,
+}
+
+/// GET /api/photos/source-albums
+///
+/// Returns the authoritative `album_name → [photo_id]` mapping captured at
+/// import time (see [`import_takeout`]). Clients use this to rebuild album
+/// manifests deterministically — keyed by photo id, so it survives filename
+/// collisions and `-edited` dedup, and works identically on web and Android.
+/// This is *not* admin-gated: each user reads only their own albums.
+pub async fn list_source_albums(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<SourceAlbumsResponse>, AppError> {
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT album_name, source, photo_id FROM photo_source_albums \
+         WHERE user_id = ? ORDER BY album_name ASC, photo_id ASC",
+    )
+    .bind(&auth.user_id)
+    .fetch_all(&state.read_pool)
+    .await?;
+
+    // Group consecutively by album_name (rows are ordered by album_name).
+    let mut albums: Vec<SourceAlbum> = Vec::new();
+    for (name, source, photo_id) in rows {
+        match albums.last_mut() {
+            Some(last) if last.name == name => last.photo_ids.push(photo_id),
+            _ => albums.push(SourceAlbum {
+                name,
+                source,
+                photo_ids: vec![photo_id],
+            }),
+        }
+    }
+
+    Ok(Json(SourceAlbumsResponse { albums }))
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Derive the Takeout album name from a media file's immediate parent folder.
+///
+/// Google Takeout puts each photo under its album folder. This mirrors the
+/// web allowlist ([`web/src/utils/takeoutAlbums.ts`]): it skips Google's
+/// non-album "Photos from YYYY" date folders and the `Takeout` / `Google Photos`
+/// container folders. Returns `None` when the parent is a date/container folder
+/// (i.e. the photo has no meaningful album membership).
+fn derive_takeout_album(media_path: &std::path::Path) -> Option<String> {
+    let folder = media_path
+        .parent()?
+        .file_name()?
+        .to_string_lossy()
+        .to_string();
+    if is_non_album_folder(&folder) {
+        None
+    } else {
+        Some(folder)
+    }
+}
+
+/// Matches Google's non-album container/date folders (case-insensitive, mirrors
+/// `DATE_FOLDER_RE` + `NON_ALBUM_FOLDERS` in takeoutAlbums.ts).
+fn is_non_album_folder(folder: &str) -> bool {
+    let lower = folder.trim().to_lowercase();
+    if lower.is_empty() {
+        return true;
+    }
+    // "Photos from 2023", "Photos from 1998", …
+    if let Some(rest) = lower.strip_prefix("photos from ") {
+        if rest.len() >= 4 && rest.as_bytes()[..4].iter().all(|b| b.is_ascii_digit()) {
+            return true;
+        }
+    }
+    matches!(lower.as_str(), "takeout" | "google photos" | "google fotos")
+}
 
 /// Heuristic: is this filename a Google Photos sidecar JSON?
 /// Google Takeout uses patterns like:
@@ -483,5 +609,64 @@ fn is_google_photos_json(name: &str) -> bool {
         is_media_file(stem)
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn album_folder_becomes_album_name() {
+        assert_eq!(
+            derive_takeout_album(Path::new("/t/Takeout/Google Photos/Summer 2023/IMG_1.jpg")),
+            Some("Summer 2023".to_string())
+        );
+        assert_eq!(
+            derive_takeout_album(Path::new("/t/Google Photos/Trip to Rome/a.jpg")),
+            Some("Trip to Rome".to_string())
+        );
+    }
+
+    #[test]
+    fn date_folders_are_not_albums() {
+        assert_eq!(
+            derive_takeout_album(Path::new("/t/Google Photos/Photos from 2023/IMG_2.jpg")),
+            None
+        );
+        assert_eq!(
+            derive_takeout_album(Path::new("/t/Google Photos/Photos from 1998/x.png")),
+            None
+        );
+    }
+
+    #[test]
+    fn container_folders_are_not_albums() {
+        // Directly under the container folders → no album.
+        assert_eq!(
+            derive_takeout_album(Path::new("/t/Takeout/loose.jpg")),
+            None
+        );
+        assert_eq!(
+            derive_takeout_album(Path::new("/t/Google Photos/loose.jpg")),
+            None
+        );
+        // Localised container name (Google Fotos).
+        assert_eq!(
+            derive_takeout_album(Path::new("/t/Google Fotos/loose.jpg")),
+            None
+        );
+    }
+
+    #[test]
+    fn non_album_predicate_is_case_insensitive() {
+        assert!(is_non_album_folder("TAKEOUT"));
+        assert!(is_non_album_folder("Google Photos"));
+        assert!(is_non_album_folder("photos from 2020"));
+        assert!(is_non_album_folder(""));
+        assert!(!is_non_album_folder("Vacation"));
+        // "Photos from Grandma" is a real album — only YYYY date folders skip.
+        assert!(!is_non_album_folder("Photos from Grandma"));
     }
 }

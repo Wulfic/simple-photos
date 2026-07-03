@@ -243,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
         geo_dataset_available,
         geo_dataset_downloading,
         geo_trigger,
+        summary_cache: Arc::new(crate::gallery::summary::SummaryCache::default()),
     };
 
     let mut app = Router::new()

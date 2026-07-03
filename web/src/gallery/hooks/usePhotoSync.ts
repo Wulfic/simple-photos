@@ -27,7 +27,8 @@ import type { PhotoPayload, ThumbnailPayload } from "../../types/media";
 
 export interface PhotoSyncResult {
   /** Encrypted-mode photos from IndexedDB (live query, auto-updates).
-   *  Returns `undefined` until the first server sync completes. */
+   *  Returns `undefined` only until the Dexie query first resolves, then the
+   *  cached array — the network sync refreshes it in the background. */
   encryptedPhotos: CachedPhoto[] | undefined;
   /** True during the initial sync only (not background polls). */
   loading: boolean;
@@ -48,7 +49,16 @@ export function usePhotoSync(): PhotoSyncResult {
     db.photos.orderBy("takenAt").reverse().toArray(),
   );
 
-  const encryptedPhotos = encryptedDataReady ? rawEncryptedPhotos : undefined;
+  // Show whatever IndexedDB already holds **immediately**, and treat the network
+  // sync as a background refresh rather than a precondition for display. This is
+  // safe against "flash of the previous user's photos" because IDB is wiped by
+  // `clearAllUserData()` on every login/logout/401 (see db/index.ts), so any
+  // cached rows always belong to the current session. Previously this returned
+  // `undefined` until `encryptedDataReady` flipped true — which only happened
+  // after a full network re-sync completed — so Albums/Gallery showed a spinner
+  // on *every* open even though the persisted data was right there. `undefined`
+  // now means only "the Dexie query hasn't resolved yet" (near-instant).
+  const encryptedPhotos = rawEncryptedPhotos;
 
   // ── Periodic re-sync ──────────────────────────────────────────────────
   useEffect(() => {

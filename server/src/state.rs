@@ -171,6 +171,10 @@ pub struct AppState {
     /// registering new files. Without this, flipping the toggle (or importing)
     /// sat idle for minutes with a frozen "0/N" banner that looked like a hang.
     pub geo_trigger: Arc<tokio::sync::Notify>,
+    /// Per-user TTL cache of precomputed gallery counts, backing
+    /// `GET /api/photos/summary`. Lets clients render smart-album counts in one
+    /// cheap round-trip instead of paginating the whole gallery to recount.
+    pub summary_cache: Arc<crate::gallery::summary::SummaryCache>,
 }
 
 impl AppState {

@@ -133,6 +133,29 @@ export const photosApi = {
     }>(`/photos/encrypted-sync${qs ? `?${qs}` : ""}`);
   },
 
+  /** Cheap precomputed gallery counts (server-side aggregate, TTL-cached).
+   *  Lets smart-album badges render instantly on a cold cache without
+   *  paginating the whole encrypted-sync to recount. Counts mirror the grid's
+   *  eligibility filter; `collapsed_total` accounts for burst collapse. */
+  summary: () =>
+    request<{
+      total: number;
+      collapsed_total: number;
+      photos: number;
+      gifs: number;
+      videos: number;
+      audio: number;
+      favorites: number;
+    }>("/photos/summary"),
+
+  /** Authoritative `album_name → [photo_id]` mapping captured at Takeout import
+   *  time (server-side, keyed by photo id — survives filename collisions and
+   *  `-edited` dedup). Used to rebuild album manifests deterministically. */
+  sourceAlbums: () =>
+    request<{
+      albums: Array<{ name: string; source: string; photo_ids: string[] }>;
+    }>("/photos/source-albums"),
+
   /** URL for serving the embedded motion video for a motion photo */
   motionVideoUrl: (photoId: string) => `${BASE}/photos/${photoId}/motion-video`,
 

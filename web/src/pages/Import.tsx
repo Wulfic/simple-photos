@@ -32,7 +32,6 @@ import {
 } from "../utils/media";
 import { formatBytes } from "../utils/formatters";
 import ImportFileList from "./import/ImportFileList";
-import TakeoutAlbumsImport from "../components/TakeoutAlbumsImport";
 
 type ImportMode = "server" | "local";
 
@@ -502,8 +501,6 @@ export default function Import() {
                 />
               </label>
             </div>
-
-            <TakeoutAlbumsImport />
           </>
         )}
 

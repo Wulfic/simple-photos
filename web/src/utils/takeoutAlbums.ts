@@ -1,114 +1,95 @@
 /**
- * Google Takeout album recreation.
+ * Google Takeout album recreation (automatic).
  *
- * Google Takeout lays photos out in per-album folders (plus non-album
- * "Photos from YYYY" date folders). Regular albums in Simple Photos are
- * end-to-end-encrypted manifests keyed by a photo's **blobId**, created
- * entirely client-side — the server can't build them. blobIds are only known
- * once a photo has synced, so album recreation runs as a post-sync pass that
- * matches each album folder's filenames against the user's already-synced
- * photos and writes the album manifests (reusing the same encrypt → upload →
- * Dexie pattern as `AddToAlbumModal`).
+ * Google Takeout lays photos out in per-album folders. The server now captures
+ * that album membership **at import time**, keyed by each photo's id
+ * (`GET /api/photos/source-albums`) — see `server/src/import/takeout.rs`.
  *
- * Photo *edits* are already handled upstream: `dedupeGooglePhotosEdits` keeps
- * the baked-in `-edited` copy, so the edited pixels are what gets imported.
+ * Regular albums in Simple Photos are end-to-end-encrypted manifests keyed by a
+ * photo's **blobId**, created entirely client-side (the server can't build them
+ * because it can't read the encryption key). So album recreation runs client-
+ * side as an automatic, idempotent pass that maps the server's authoritative
+ * `photo_id → album` mapping onto locally-synced photos and writes the album
+ * manifests. It runs on its own after a sync — there is no manual "rebuild"
+ * step (it used to be a fragile, manual, filename-matching folder re-selection).
  */
 import { db, type CachedAlbum } from "../db";
 import { encrypt, sha256Hex } from "../crypto/crypto";
 import { api } from "../api/client";
-import { randomUuid } from "./uuid";
 
-/** Google's non-album date folders, e.g. "Photos from 2023". Not real albums. */
-const DATE_FOLDER_RE = /^Photos from \d{4}/i;
-
-/** Generic Takeout container folders (any language variant is matched loosely). */
-const NON_ALBUM_FOLDERS = new Set(["takeout", "google photos", "google fotos", ""]);
-
-/**
- * Build a map of `album-name → set of media filenames` from a Takeout folder
- * selection (files carry `webkitRelativePath`). The album is each file's
- * immediate parent directory, excluding Google's date folders and the Takeout
- * container folders. Sidecar `.json` files are ignored.
- */
-export function parseTakeoutFolders(files: FileList | File[]): Map<string, Set<string>> {
-  const map = new Map<string, Set<string>>();
-  for (const file of Array.from(files)) {
-    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || "";
-    if (!rel) continue;
-    const parts = rel.split("/").filter(Boolean);
-    if (parts.length < 2) continue;
-    const filename = parts[parts.length - 1];
-    if (filename.toLowerCase().endsWith(".json")) continue;
-    const folder = parts[parts.length - 2];
-    if (
-      !folder ||
-      DATE_FOLDER_RE.test(folder) ||
-      NON_ALBUM_FOLDERS.has(folder.toLowerCase())
-    ) {
-      continue;
-    }
-    let set = map.get(folder);
-    if (!set) {
-      set = new Set();
-      map.set(folder, set);
-    }
-    set.add(filename);
-  }
-  return map;
-}
-
-export interface RecreateResult {
+export interface ServerRecreateResult {
   albumsCreated: number;
   albumsUpdated: number;
   photosAdded: number;
-  /** Albums whose filenames matched no synced photos (e.g. not synced yet). */
+  /** Albums whose photos aren't in the local mirror yet (still syncing). */
   albumsUnmatched: number;
+  /** Individual photo ids not yet synced locally (skipped, re-run to fill). */
+  photosUnmatched: number;
 }
 
 /**
- * Recreate (or merge into) local albums from a parsed Takeout folder map by
- * matching each album's filenames against the user's already-synced photos.
- * Idempotent: an album with the same name is merged into rather than
- * duplicated, and re-running adds nothing new.
+ * Recreate (or merge into) local albums from the server's **authoritative**
+ * source-album mapping (`GET /api/photos/source-albums`), keyed by photo id.
+ *
+ * Deterministic and cross-platform: the server captured each Takeout album
+ * folder at import time keyed by the photo's id, so this survives `-edited`
+ * dedup and `IMG_1234(1).jpg` collision renames, and needs no manual folder
+ * re-selection. A photo id that isn't in the local IndexedDB mirror yet (still
+ * syncing) is skipped and counted; re-running after the sync completes fills it
+ * in. Idempotent — albums key on a deterministic id (and fall back to a
+ * same-named existing album), so re-running merges rather than duplicating.
  */
-export async function recreateTakeoutAlbums(
-  albumMap: Map<string, Set<string>>,
-): Promise<RecreateResult> {
-  const result: RecreateResult = {
+export async function recreateAlbumsFromServer(): Promise<ServerRecreateResult> {
+  const result: ServerRecreateResult = {
     albumsCreated: 0,
     albumsUpdated: 0,
     photosAdded: 0,
     albumsUnmatched: 0,
+    photosUnmatched: 0,
   };
 
-  // filename (lowercased) → blobIds. A filename can map to several blobs if the
-  // library has duplicates; add them all so the album is complete.
+  const { albums } = await api.photos.sourceAlbums();
+  if (!albums || albums.length === 0) return result;
+
+  // serverPhotoId → blobId. Album manifests are keyed by blobId, but the server
+  // mapping is keyed by photo id, so bridge via the id we stored at sync time.
   const photos = await db.photos.toArray();
-  const byName = new Map<string, string[]>();
+  const blobByServerId = new Map<string, string>();
   for (const p of photos) {
-    const key = p.filename.toLowerCase();
-    const arr = byName.get(key);
-    if (arr) arr.push(p.blobId);
-    else byName.set(key, [p.blobId]);
+    if (p.serverPhotoId) blobByServerId.set(p.serverPhotoId, p.blobId);
   }
 
+  const allAlbums = await db.albums.toArray();
   const existingByName = new Map<string, CachedAlbum>();
-  for (const a of await db.albums.toArray()) {
+  const existingById = new Map<string, CachedAlbum>();
+  for (const a of allAlbums) {
     existingByName.set(a.name.toLowerCase(), a);
+    existingById.set(a.albumId, a);
   }
 
-  for (const [name, filenames] of albumMap) {
+  for (const album of albums) {
     const blobIds = new Set<string>();
-    for (const fn of filenames) {
-      const matches = byName.get(fn.toLowerCase());
-      if (matches) for (const b of matches) blobIds.add(b);
+    for (const pid of album.photo_ids) {
+      const blob = blobByServerId.get(pid);
+      if (blob) blobIds.add(blob);
+      else result.photosUnmatched++;
     }
     if (blobIds.size === 0) {
       result.albumsUnmatched++;
       continue;
     }
 
-    const existing = existingByName.get(name.toLowerCase());
+    // Deterministic album id derived from (source, name) so a rebuild run on
+    // web and on Android produces the *same* id and converges into one album
+    // after sync — instead of two identically-named albums. Both platforms use
+    // this exact formula (see AlbumRepository.recreateAlbumsFromServer).
+    const albumId = "src-" + (await sha256Hex(
+      new TextEncoder().encode(`${album.source} ${album.name}`),
+    ));
+
+    // Prefer an album already carrying this deterministic id; otherwise merge
+    // into a user's manually-created same-named album rather than duplicating.
+    const existing = existingById.get(albumId) ?? existingByName.get(album.name.toLowerCase());
     if (existing) {
       const merged = [...new Set([...existing.photoBlobIds, ...blobIds])];
       const added = merged.length - existing.photoBlobIds.length;
@@ -123,9 +104,9 @@ export async function recreateTakeoutAlbums(
     } else {
       const ids = [...blobIds];
       await saveAlbumManifest({
-        albumId: randomUuid(),
+        albumId,
         manifestBlobId: "",
-        name,
+        name: album.name,
         createdAt: Date.now(),
         coverPhotoBlobId: ids[0],
         photoBlobIds: ids,
