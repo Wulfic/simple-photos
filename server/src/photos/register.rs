@@ -78,7 +78,11 @@ pub(crate) async fn register_native_file(
     let photo_id = Uuid::new_v4().to_string();
     let now = utc_now_iso();
     // GIFs keep an animated GIF thumbnail; everything else gets a JPEG.
-    let thumb_ext = if cand.mime == "image/gif" { "gif" } else { "jpg" };
+    let thumb_ext = if cand.mime == "image/gif" {
+        "gif"
+    } else {
+        "jpg"
+    };
     let thumb_rel = format!(".thumbnails/{photo_id}.thumb.{thumb_ext}");
 
     // Header-only metadata extraction (dimensions, camera, GPS, capture date).
