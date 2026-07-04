@@ -10,7 +10,13 @@ import com.simplephotos.data.local.entities.AlbumEntity
 import com.simplephotos.data.local.entities.PhotoAlbumXRef
 import com.simplephotos.data.local.entities.SyncStatus
 import com.simplephotos.data.remote.ApiService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -239,6 +245,11 @@ class AlbumRepository @Inject constructor(
         var albumsUnmatched = 0
         var photosUnmatched = 0
 
+        // Phase 1 (cheap, sequential): apply the idempotent local DB mutations and
+        // collect the albums whose manifest actually changed. Albums already fully
+        // materialized are skipped here so a re-run (every ON_RESUME) costs zero
+        // network round-trips — the common steady state after the first pass.
+        val toSync = mutableListOf<AlbumEntity>()
         for (album in resp.albums) {
             // Resolve server photo ids → local photos (batched). Ids not yet in
             // the local mirror are counted and skipped.
@@ -268,19 +279,47 @@ class AlbumRepository @Inject constructor(
                 for (id in localPhotoIds) db.albumDao().insertXRef(PhotoAlbumXRef(id, albumId))
                 created++
                 photosAdded += localPhotoIds.size
-                db.albumDao().getById(albumId)?.let { syncAlbum(it) }
+                db.albumDao().getById(albumId)?.let { toSync.add(it) }
             } else {
                 // Only add xrefs not already present, so we never double-insert
                 // the composite-key row (idempotent merge).
                 val alreadyIn = db.albumDao().getPhotoIdsForAlbum(albumId).toSet()
                 val toAdd = localPhotoIds.filter { it !in alreadyIn }
-                if (toAdd.isEmpty()) continue
+                if (toAdd.isEmpty()) continue // no-op: nothing new, skip the upload
                 for (id in toAdd) db.albumDao().insertXRef(PhotoAlbumXRef(id, albumId))
                 updated++
                 photosAdded += toAdd.size
-                syncAlbum(existing)
+                toSync.add(existing)
             }
         }
+
+        // Phase 2 (expensive, parallel): each syncAlbum encrypts a manifest and does
+        // a delete+upload network round-trip. Running these sequentially is what made
+        // reconstruction crawl (~an hour) on large libraries; a bounded pool collapses
+        // it into ~toSync/CONCURRENCY waves. Bounded so we don't flood the server
+        // mid-import. Mirrors the web worker-pool fix (utils/takeoutAlbums.ts).
+        if (toSync.isNotEmpty()) {
+            val gate = Semaphore(6)
+            coroutineScope {
+                toSync.map { album ->
+                    async(Dispatchers.IO) {
+                        gate.withPermit {
+                            try {
+                                syncAlbum(album)
+                            } catch (e: Exception) {
+                                // One album failing must not abort the rest; a later
+                                // refresh retries it.
+                                android.util.Log.w(
+                                    "AlbumRepository",
+                                    "takeout manifest sync failed for '${album.name}': ${e.message}",
+                                )
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+
         return SourceAlbumRebuildResult(created, updated, photosAdded, albumsUnmatched, photosUnmatched)
     }
 }

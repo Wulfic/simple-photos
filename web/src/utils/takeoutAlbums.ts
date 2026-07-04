@@ -67,6 +67,12 @@ export async function recreateAlbumsFromServer(): Promise<ServerRecreateResult> 
     existingById.set(a.albumId, a);
   }
 
+  // Phase 1 (cheap, sequential): resolve each source album to the manifest we'd
+  // need to write, WITHOUT touching the network. Albums that are already fully
+  // materialized (every matched photo present in the existing manifest) are
+  // short-circuited here so a re-run costs zero encrypt/upload round-trips — the
+  // common steady state once the first pass completes.
+  const jobs: CachedAlbum[] = [];
   for (const album of albums) {
     const blobIds = new Set<string>();
     for (const pid of album.photo_ids) {
@@ -93,8 +99,8 @@ export async function recreateAlbumsFromServer(): Promise<ServerRecreateResult> 
     if (existing) {
       const merged = [...new Set([...existing.photoBlobIds, ...blobIds])];
       const added = merged.length - existing.photoBlobIds.length;
-      if (added === 0) continue;
-      await saveAlbumManifest({
+      if (added === 0) continue; // no-op: nothing new to write, skip the upload
+      jobs.push({
         ...existing,
         photoBlobIds: merged,
         coverPhotoBlobId: existing.coverPhotoBlobId || merged[0],
@@ -103,7 +109,7 @@ export async function recreateAlbumsFromServer(): Promise<ServerRecreateResult> 
       result.photosAdded += added;
     } else {
       const ids = [...blobIds];
-      await saveAlbumManifest({
+      jobs.push({
         albumId,
         manifestBlobId: "",
         name: album.name,
@@ -115,6 +121,28 @@ export async function recreateAlbumsFromServer(): Promise<ServerRecreateResult> 
       result.photosAdded += ids.length;
     }
   }
+
+  // Phase 2 (expensive, parallel): encrypt + upload each manifest. Each job is an
+  // independent network round-trip, so a bounded worker pool collapses what was a
+  // sequential per-album stall (an hour on large libraries) into ~jobs/CONCURRENCY
+  // waves. Bounded so we don't flood the server mid-import. Mirrors the upload
+  // worker-pool pattern in pages/Import.tsx.
+  const CONCURRENCY = 6;
+  let next = 0;
+  const worker = async () => {
+    while (next < jobs.length) {
+      const job = jobs[next++];
+      try {
+        await saveAlbumManifest(job);
+      } catch (e) {
+        // One album failing must not abort the rest; a later re-run retries it.
+        console.error(`[takeoutAlbums] manifest upload failed for "${job.name}"`, e); // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, () => worker()),
+  );
   return result;
 }
 

@@ -89,6 +89,12 @@ class AlbumViewModel @Inject constructor(
     var trips by mutableStateOf<List<GeoTrip>>(emptyList())
         private set
 
+    // Once a Takeout reconstruction pass reports every source photo matched, the
+    // local albums are fully materialized and there is nothing left to do — so we
+    // stop re-running it on subsequent ON_RESUME cycles (each run otherwise costs a
+    // /source-albums fetch + per-album DB reads for no gain).
+    private var takeoutFullyMaterialized = false
+
     // ── Shared albums ────────────────────────────────────────────────────
     var sharedAlbums by mutableStateOf<List<SharedAlbumInfo>>(emptyList())
         private set
@@ -136,10 +142,15 @@ class AlbumViewModel @Inject constructor(
             // (Issue 2). Idempotent and best-effort; runs after the server sync so
             // it merges on top rather than fighting it. Photos not synced yet are
             // skipped and picked up on a later refresh.
-            try {
-                withContext(Dispatchers.IO) { albumRepository.recreateAlbumsFromServer() }
-            } catch (e: Exception) {
-                android.util.Log.w("AlbumViewModel", "takeout album materialize failed: ${e.message}")
+            if (!takeoutFullyMaterialized) {
+                try {
+                    val r = withContext(Dispatchers.IO) { albumRepository.recreateAlbumsFromServer() }
+                    // Every source photo matched → albums are fully materialized;
+                    // don't re-run on later resumes.
+                    if (r.photosUnmatched == 0) takeoutFullyMaterialized = true
+                } catch (e: Exception) {
+                    android.util.Log.w("AlbumViewModel", "takeout album materialize failed: ${e.message}")
+                }
             }
         }
         // Recompute smart-album counts/covers, shared albums, and Discover.

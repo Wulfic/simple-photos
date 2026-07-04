@@ -109,19 +109,38 @@ export default function Albums() {
     loadTrips();
   }, []);
 
-  // Materialize Google Takeout albums automatically once the local photo mirror
-  // has data — the server captured album membership at import time, so albums
-  // just appear here with no manual "rebuild" step. Idempotent + best-effort;
-  // runs once per mount. `saveAlbumManifest` writes to db.albums, so the
-  // reactive `albums` live query above picks up any new albums on its own.
-  const takeoutMaterializedRef = useRef(false);
+  // Materialize Google Takeout albums automatically — but only ONCE the local
+  // photo mirror has stopped growing (sync settled), NOT on every mount. Firing
+  // mid-sync produced albums with partial membership that then needed repeated
+  // re-runs (each re-encrypting + re-uploading manifests), which is what made
+  // reconstruction crawl on large libraries. We debounce on the local photo
+  // count: when it holds steady for a beat the current sync pass is done, so we
+  // run a single reconstruction. It re-runs only if more photos have since
+  // synced in (to fill albums that were still unmatched) and stops for good once
+  // a run reports every photo matched. Idempotent + best-effort; the parallel,
+  // no-op-skipping reconstruction (utils/takeoutAlbums.ts) makes any redundant
+  // pass cheap. saveAlbumManifest writes to db.albums, so the reactive `albums`
+  // live query above picks up new albums on its own.
+  const lastMaterializedCountRef = useRef(-1);
+  const fullyMaterializedRef = useRef(false);
   useEffect(() => {
-    if (takeoutMaterializedRef.current) return;
-    if (!encryptedPhotos || encryptedPhotos.length === 0) return;
-    takeoutMaterializedRef.current = true;
-    recreateAlbumsFromServer().catch((e) =>
-      console.error("[Albums] automatic Takeout album recreation failed", e),
-    );
+    if (fullyMaterializedRef.current) return;
+    const count = encryptedPhotos?.length ?? 0;
+    if (count === 0) return;
+    if (count === lastMaterializedCountRef.current) return; // nothing new synced
+    // Wait for the count to hold steady (~sync settled) before doing the work;
+    // each new photo synced resets this timer via the effect cleanup.
+    const timer = setTimeout(() => {
+      lastMaterializedCountRef.current = count;
+      recreateAlbumsFromServer()
+        .then((r) => {
+          if (r.photosUnmatched === 0) fullyMaterializedRef.current = true;
+        })
+        .catch((e) =>
+          console.error("[Albums] automatic Takeout album recreation failed", e),
+        );
+    }, 4000);
+    return () => clearTimeout(timer);
   }, [encryptedPhotos]);
 
   async function loadPeopleClusters() {
